@@ -12,6 +12,7 @@ use crate::traits::{
     deployment_store::{DeploymentGroupRecord, DeploymentRecord},
     release_store::ReleaseRecord,
 };
+use alien_commands::server::CommandAccessContext;
 
 /// Context for create operations. Carries the parent identifiers + workspace
 /// the create is targeting; the entity itself does not exist yet.
@@ -47,7 +48,17 @@ pub trait Authz: Send + Sync {
 
     // -- Commands ----------------------------------------------------------
     fn can_dispatch_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Callers that may act on the target deployment may complete its command
+    /// execution lifecycle. This remains distinct from dispatch authorization:
+    /// deployment tokens can execute commands but cannot create them.
+    fn can_execute_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
+        self.can_act_on_deployment(subject, deployment)
+    }
     fn can_read_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Authorize a read from the canonical command record without loading its
+    /// deployment. Deployment-group scope is intentionally handled through
+    /// `can_read_command`, because the command record does not carry the group.
+    fn can_read_command_context(&self, subject: &Subject, command: &CommandAccessContext) -> bool;
 
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;

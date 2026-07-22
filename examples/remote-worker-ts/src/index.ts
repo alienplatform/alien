@@ -1,5 +1,6 @@
 import { command, storage } from "@alienplatform/sdk"
 import { Hono } from "hono"
+import { z } from "zod"
 
 const app = new Hono()
 
@@ -22,13 +23,17 @@ const tools: Record<string, { description: string; execute: (params: any) => Pro
   },
 }
 
-command("execute-tool", async ({ tool, params }: { tool: string; params: any }) => {
-  const handler = tools[tool]
-  if (!handler) {
-    throw new Error(`Unknown tool: ${tool}. Available: ${Object.keys(tools).join(", ")}`)
-  }
-  return handler.execute(params)
-})
+command(
+  "execute-tool",
+  z.object({ tool: z.string(), params: z.unknown() }),
+  async ({ tool, params }) => {
+    const handler = tools[tool]
+    if (!handler) {
+      throw new Error(`Unknown tool: ${tool}. Available: ${Object.keys(tools).join(", ")}`)
+    }
+    return handler.execute(params)
+  },
+)
 
 command("list-tools", async () =>
   Object.entries(tools).map(([name, t]) => ({ name, description: t.description })),

@@ -96,6 +96,7 @@ impl StackMutation for AzureServiceActivationMutation {
 
             // Add it to the stack as a frozen resource
             let service_entry = ResourceEntry {
+                enabled_when: None,
                 config: alien_core::Resource::new(service_activation),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![resource_group_ref.clone()], // Depend on resource group

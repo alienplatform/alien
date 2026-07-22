@@ -83,10 +83,9 @@ async fn receiver_round_trips_success_response() {
     let mut receiver = Receiver::from_env_vars(&env)
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle("sync-data", move |ctx| {
+    receiver.command("sync-data", move |input: serde_json::Value, ctx| {
         let ctx_tx = ctx_tx.clone();
         async move {
-            let input: serde_json::Value = ctx.input_json()?;
             ctx_tx
                 .send((
                     ctx.command_id.clone(),
@@ -151,7 +150,7 @@ async fn receiver_does_not_lease_beyond_max_concurrency() {
         .expect("receiver should build from env")
         .with_max_leases(1)
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle("bounded", {
+    receiver.handle_raw("bounded", {
         let calls = Arc::clone(&calls);
         let first_started = Arc::clone(&first_started);
         let release_first = Arc::clone(&release_first);
@@ -216,7 +215,7 @@ async fn panicked_handler_releases_receiver_capacity() {
         .expect("receiver should build from env")
         .with_max_leases(1)
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle("panic-once", {
+    receiver.handle_raw("panic-once", {
         let calls = Arc::clone(&calls);
         move |_ctx| {
             let calls = Arc::clone(&calls);
@@ -261,7 +260,7 @@ async fn receiver_submits_unknown_command_error() {
     let mut receiver = Receiver::from_env_vars(&env)
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle(
+    receiver.handle_raw(
         "something-else",
         |_ctx| async move { Ok(serde_json::json!({})) },
     );
@@ -299,7 +298,7 @@ async fn receiver_aborts_handler_at_lease_expiry_budget() {
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL)
         .with_lease_seconds(1);
-    receiver.handle("slow-command", |_ctx| async move {
+    receiver.handle_raw("slow-command", |_ctx| async move {
         tokio::time::sleep(Duration::from_secs(300)).await;
         Ok(serde_json::json!({ "should": "never happen" }))
     });
@@ -354,7 +353,7 @@ async fn receiver_passes_attempt_through_on_redelivery() {
     let mut receiver = Receiver::from_env_vars(&env)
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle("retry-me", move |ctx| {
+    receiver.handle_raw("retry-me", move |ctx| {
         let attempt_tx = attempt_tx.clone();
         async move {
             attempt_tx.send(ctx.attempt).expect("test channel open");
@@ -394,7 +393,7 @@ async fn receiver_shutdown_drains_in_flight_and_stops_leasing() {
     let mut receiver = Receiver::from_env_vars(&env)
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle("drain-me", move |_ctx| {
+    receiver.handle_raw("drain-me", move |_ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx.send(()).expect("test channel open");
@@ -456,7 +455,7 @@ async fn receiver_shutdown_timeout_cancels_and_releases_in_flight_lease() {
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL)
         .with_drain_timeout(Duration::from_millis(10));
-    receiver.handle("release-me", move |ctx| {
+    receiver.handle_raw("release-me", move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx.send(()).expect("test channel open");
@@ -498,7 +497,7 @@ async fn receiver_round_trips_large_response_via_storage() {
     let mut receiver = Receiver::from_env_vars(&env)
         .expect("receiver should build from env")
         .with_poll_interval(POLL_INTERVAL);
-    receiver.handle("big-report", move |_ctx| {
+    receiver.handle_raw("big-report", move |_ctx| {
         let large_payload = large_payload.clone();
         async move { Ok(serde_json::json!({ "report": large_payload })) }
     });

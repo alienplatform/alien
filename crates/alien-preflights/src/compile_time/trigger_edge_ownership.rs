@@ -142,6 +142,7 @@ mod tests {
                 lifecycle: storage_lifecycle,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -151,6 +152,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

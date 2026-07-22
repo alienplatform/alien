@@ -909,6 +909,7 @@ impl SingleControllerExecutorBuilder {
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: vec![],
                     remote_access: false,
+                    enabled_when: None,
                 },
             );
 
@@ -952,6 +953,7 @@ impl SingleControllerExecutorBuilder {
                     .map(|(ref_obj, _, _)| ref_obj.clone())
                     .collect(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

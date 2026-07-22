@@ -1,7 +1,7 @@
 /**
  * Command sender — invoke commands on remote Alien deployments.
  *
- * Migrated from the former `@alienplatform/sdk/commands` subpath. Pure `fetch`; no gRPC, no
+ * Migrated from the former `@alienplatform/sdk/commands` subpath. Pure `fetch`; no
  * bindings. Handles:
  * - Base64 encoding/decoding of input and responses
  * - Large payload download via storage presigned transfers
@@ -78,14 +78,17 @@ export interface InvokeOptions {
 }
 
 /**
- * Serialize `data` (JSON-stringifying anything that isn't already a string) and
+ * Serialize `data` as JSON and
  * base64-encode it. This is the one place the send-side serialize decision
  * lives. `@alienplatform/commands` is a Node-only package — the receiver decodes
  * with `Buffer` too — so this uses `Buffer` directly rather than branching on a
  * browser `btoa`.
  */
 function base64Encode(data: unknown): string {
-  const json = typeof data === "string" ? data : JSON.stringify(data)
+  const json = JSON.stringify(data)
+  if (json === undefined) {
+    throw new TypeError("Command input must be JSON-serializable")
+  }
   return Buffer.from(json, "utf-8").toString("base64")
 }
 

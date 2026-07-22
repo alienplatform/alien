@@ -2,13 +2,13 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sea_query::{Expr, Query, SqliteQueryBuilder};
+use sea_query::{Alias, Expr, JoinType, Query, SqliteQueryBuilder};
 use std::sync::Arc;
 
 use alien_commands::error::ErrorData as CommandErrorData;
 use alien_commands::server::{
-    delivery_mode_for, select_command_target, CommandEnvelopeData, CommandMetadata,
-    CommandRegistry, CommandStatus, ResolvedCommandTarget,
+    delivery_mode_for, select_command_target, CommandAccessContext, CommandEnvelopeData,
+    CommandMetadata, CommandRegistry, CommandStatus, ResolvedCommandTarget,
 };
 use alien_core::{
     CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType, DeploymentModel, Platform,
@@ -16,7 +16,7 @@ use alien_core::{
 use alien_error::IntoAlienError;
 
 use super::database::{RowParser, SqliteDatabase};
-use super::migrations::Commands;
+use super::migrations::{Commands, Deployments};
 
 pub struct SqliteCommandRegistry {
     db: Arc<SqliteDatabase>,
@@ -97,6 +97,8 @@ impl SqliteCommandRegistry {
 
         Ok(CommandStatus {
             command_id: p.string(0, "id").map_err(to_cmd_err)?,
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
             deployment_id: p.string(1, "deployment_id").map_err(to_cmd_err)?,
             command: p.string(2, "name").map_err(to_cmd_err)?,
             state: deserialize_command_state(&state_str),
@@ -404,6 +406,53 @@ impl CommandRegistry for SqliteCommandRegistry {
 
         match rows.next().await.into_alien_error().map_err(to_cmd_err)? {
             Some(row) => Ok(Some(Self::parse_command_status(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_command_access_context(
+        &self,
+        command_id: &str,
+    ) -> alien_commands::error::Result<Option<CommandAccessContext>> {
+        let sql = Query::select()
+            .expr_as(
+                Expr::col((Deployments::Table, Deployments::WorkspaceId)),
+                Alias::new("workspace_id"),
+            )
+            .expr_as(
+                Expr::col((Deployments::Table, Deployments::ProjectId)),
+                Alias::new("project_id"),
+            )
+            .expr_as(
+                Expr::col((Commands::Table, Commands::DeploymentId)),
+                Alias::new("deployment_id"),
+            )
+            .from(Commands::Table)
+            .join(
+                JoinType::InnerJoin,
+                Deployments::Table,
+                Expr::col((Commands::Table, Commands::DeploymentId))
+                    .equals((Deployments::Table, Deployments::Id)),
+            )
+            .and_where(Expr::col((Commands::Table, Commands::Id)).eq(command_id))
+            .to_string(SqliteQueryBuilder);
+
+        let conn = self.db.conn().lock().await;
+        let mut rows = conn
+            .query(&sql, ())
+            .await
+            .into_alien_error()
+            .map_err(to_cmd_err)?;
+
+        match rows.next().await.into_alien_error().map_err(to_cmd_err)? {
+            Some(row) => {
+                let p = RowParser::new(&row);
+                Ok(Some(CommandAccessContext {
+                    workspace_id: p.string(0, "workspace_id").map_err(to_cmd_err)?,
+                    project_id: p.string(1, "project_id").map_err(to_cmd_err)?,
+                    deployment_id: p.string(2, "deployment_id").map_err(to_cmd_err)?,
+                }))
+            }
             None => Ok(None),
         }
     }
@@ -744,6 +793,40 @@ mod tests {
             err.message.contains("predates command-target columns"),
             "expected a loud legacy error, got: {}",
             err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn command_access_context_comes_from_owning_deployment() {
+        let (db, reg) = registry().await;
+        db.execute(
+            "INSERT INTO deployments \
+             (id, name, deployment_group_id, platform, status, stack_settings, workspace_id, project_id) \
+             VALUES ('dep-1', 'deployment', 'dg-1', 'local', 'running', '{}', 'workspace-a', 'project-a')",
+        )
+        .await
+        .unwrap();
+        db.execute(
+            "INSERT INTO commands \
+             (id, deployment_id, name, state, deployment_model, attempt, created_at) \
+             VALUES ('command-1', 'dep-1', 'run', 'PENDING', 'pull', 1, '2020-01-01T00:00:00Z')",
+        )
+        .await
+        .unwrap();
+
+        let context = reg
+            .get_command_access_context("command-1")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            context,
+            CommandAccessContext {
+                workspace_id: "workspace-a".to_string(),
+                project_id: "project-a".to_string(),
+                deployment_id: "dep-1".to_string(),
+            }
         );
     }
 

@@ -835,6 +835,7 @@ async fn re_import_replaces_stack_state() {
         .await
         .unwrap()
         .expect("deployment must persist");
+    assert_eq!(persisted.status, "update-pending");
     let state = persisted.stack_state.expect("stack state is updated");
     let outputs = state
         .resources
@@ -846,6 +847,102 @@ async fn re_import_replaces_stack_state() {
         outputs_json.to_string().contains("acme-imports-v2"),
         "updated import data should replace the persisted stack state: {outputs_json:#}"
     );
+}
+
+#[tokio::test]
+async fn re_import_advances_setup_registration_replay_baseline() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut first_request =
+        aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    first_request.setup_metadata = Some(serde_json::json!({
+        "setupRegistrationOperationId": "operation-1",
+        "stackName": "customer-stack"
+    }));
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &first_request).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let imported: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let deployment = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: deployment.id,
+                session: "test-reconcile".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: deployment.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_storage("assets"),
+                    }),
+                    target_release: None,
+                    stack_state: deployment.stack_state,
+                    error: None,
+                    environment_info: deployment.environment_info,
+                    runtime_metadata: deployment.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: deployment.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("deployment should reach running before re-import");
+
+    let mut second_request = first_request;
+    second_request.setup_metadata = Some(serde_json::json!({
+        "setupRegistrationOperationId": "operation-2"
+    }));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &second_request).await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let setup_metadata = persisted
+        .setup_metadata
+        .expect("new replay baseline must persist");
+    assert_eq!(
+        setup_metadata["setupRegistrationOperationId"],
+        "operation-2"
+    );
+    assert!(setup_metadata["setupRegistrationImportHash"].is_string());
+    assert_eq!(setup_metadata["stackName"], "customer-stack");
+
+    fixture
+        .deployment_store
+        .set_redeploy(
+            &alien_manager::auth::Subject::system(),
+            &imported.deployment_id,
+        )
+        .await
+        .expect("deployment should advance beyond a re-importable state");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &second_request).await;
+    assert_eq!(status, StatusCode::OK, "exact retry body = {json:#}");
 }
 
 #[tokio::test]
@@ -1018,4 +1115,62 @@ async fn invalid_resource_prefix_returns_400() {
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+}
+
+/// Build a Stack whose second storage is gated on a declared deployer boolean.
+fn stack_with_gated_storage(ungated_id: &str, gated_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .inputs(vec![alien_core::StackInputDefinition::deployer_boolean(
+            "extrasEnabled",
+            "Enable extras",
+            "Whether to create the extras store.",
+            Some(true),
+        )])
+        .add(
+            Storage::new(ungated_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Storage::new(gated_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "extrasEnabled",
+        )
+        .build()
+}
+
+/// A setup import that omitted a gated resource: the stored prepared stack
+/// must exclude it, or provisioning would create the very resource the
+/// deployer declined.
+#[tokio::test]
+async fn a_declined_gated_resource_is_stripped_from_the_prepared_stack() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let prepared_stack = persisted
+        .runtime_metadata
+        .as_ref()
+        .expect("runtime_metadata must be persisted")
+        .prepared_stack
+        .as_ref()
+        .expect("prepared_stack must be persisted for imported provisioning");
+
+    assert!(
+        !prepared_stack.resources.contains_key("extras"),
+        "the import omitted the gated store, so the prepared stack must not \
+         carry it into provisioning"
+    );
+    assert!(prepared_stack.resources.contains_key("assets"));
 }

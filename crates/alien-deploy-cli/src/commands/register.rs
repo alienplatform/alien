@@ -452,4 +452,55 @@ mod tests {
         assert_eq!(request.base_platform, Some(Platform::Aws));
         assert_eq!(request.setup_target, "eks");
     }
+
+    /// The exact `DeploymentResources` shape read back from a live stack that was
+    /// deployed with a gated `Kv` declined beside an ungated `Queue`. Captured
+    /// from `describe-stacks` rather than written by hand, because this value only
+    /// exists after CloudFormation resolves the conditions; the account id and
+    /// stack name were normalized after capture.
+    const DECLINED_RESOURCE_PAYLOAD: &str = r#"[{"id":"jobs","type":"queue","importData":{"queueName":"example-gate-Jobs-Xy2Abc3dEfGh","queueUrl":"https://sqs.us-east-1.amazonaws.com/123456789012/example-gate-Jobs-Xy2Abc3dEfGh","queueArn":"arn:aws:sqs:us-east-1:123456789012:example-gate-Jobs-Xy2Abc3dEfGh"}}]"#;
+
+    fn outputs_with_resources(payload: &str) -> CfnOutputs {
+        CfnOutputs {
+            resources_chunks: vec![
+                parse_json_output("DeploymentResources", payload).expect("payload is JSON"),
+            ],
+            ..base_outputs()
+        }
+    }
+
+    #[test]
+    fn a_declined_resource_is_absent_from_the_import_request() {
+        let request = build_import_request(
+            &outputs_with_resources(DECLINED_RESOURCE_PAYLOAD),
+            "dg_token",
+            "app",
+            "stack",
+        )
+        .expect("a payload with a declined resource omitted should import");
+
+        assert_eq!(request.resources.len(), 1);
+        assert_eq!(request.resources[0].id, "jobs");
+        assert_eq!(request.resources[0].resource_type, ResourceType::from("queue"));
+    }
+
+    /// The reason the payload has to be correct at the source: there is no
+    /// skip-on-null anywhere in this path, so a declined resource left behind as
+    /// a null fails the whole import. Making this pass by tolerating nulls would
+    /// hide the next producer that emits one.
+    #[test]
+    fn a_null_entry_fails_the_import_rather_than_being_skipped() {
+        let error = build_import_request(
+            &outputs_with_resources(r#"[null,{"id":"jobs","type":"queue","importData":{}}]"#),
+            "dg_token",
+            "app",
+            "stack",
+        )
+        .expect_err("a null entry must not be silently dropped");
+
+        assert!(
+            format!("{error:?}").contains("deserialize ImportedResource"),
+            "expected the typed importer to reject the null: {error:?}"
+        );
+    }
 }

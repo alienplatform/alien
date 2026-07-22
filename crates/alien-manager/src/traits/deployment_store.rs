@@ -68,6 +68,11 @@ pub struct DeploymentRecord {
     /// configure registry credentials (Container App secrets, K8s imagePullSecrets).
     #[serde(default, skip_serializing)]
     pub deployment_token: Option<String>,
+    /// Deployer-provided stack input values, keyed by input id. Gated live
+    /// resources resolve against these on every reconcile; without them a
+    /// stored deployment would fall back to declared defaults.
+    #[serde(default)]
+    pub input_values: HashMap<String, serde_json::Value>,
     pub retry_requested: bool,
     pub locked_by: Option<String>,
     pub locked_at: Option<DateTime<Utc>>,
@@ -113,6 +118,7 @@ impl std::fmt::Debug for DeploymentRecord {
                 "deployment_token",
                 &self.deployment_token.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("input_values", &self.input_values)
             .field("retry_requested", &self.retry_requested)
             .field("locked_by", &self.locked_by)
             .field("locked_at", &self.locked_at)
@@ -168,6 +174,24 @@ pub struct CreateImportedDeploymentParams {
     pub deployment_token: Option<String>,
     pub management_config: Option<ManagementConfig>,
     /// Stack input values collected by setup artifacts.
+    pub input_values: HashMap<String, serde_json::Value>,
+}
+
+/// Import-owned fields replaced when setup re-registers a deployment.
+#[derive(Debug, Clone)]
+pub struct UpdateImportedDeploymentParams {
+    pub stack_state: StackState,
+    pub environment_info: Option<EnvironmentInfo>,
+    pub runtime_metadata: RuntimeMetadata,
+    pub setup_metadata: Option<serde_json::Value>,
+    pub current_release_id: Option<String>,
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
+    /// Move the deployment to `update-pending` in the same write as the import data.
+    pub schedule_reconciliation: bool,
+    /// Deployer stack input values carried by the re-import; they overwrite
+    /// the stored map — the edit surface for gate flips.
     pub input_values: HashMap<String, serde_json::Value>,
 }
 
@@ -287,18 +311,13 @@ pub trait DeploymentStore: Send + Sync {
     /// upgrades all fire this path. Implementations must update only
     /// import-owned fields/resources from the import payload and leave fields outside the
     /// import contract (status, deployment token, environment variables, …)
-    /// untouched.
+    /// untouched. `setup_metadata` advances the durable replay baseline for
+    /// the registration operation that produced this update.
     async fn update_imported_stack_state(
         &self,
         caller: &crate::auth::Subject,
         deployment_id: &str,
-        stack_state: StackState,
-        environment_info: Option<EnvironmentInfo>,
-        runtime_metadata: RuntimeMetadata,
-        current_release_id: Option<String>,
-        setup_target: String,
-        setup_fingerprint: String,
-        setup_fingerprint_version: u32,
+        params: UpdateImportedDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
 
     async fn get_deployment(

@@ -25,8 +25,16 @@ const files = storage(process.env.FILES_BUCKET ?? "files")
 // the Redis job loop still runs.
 if (process.env.ALIEN_COMMANDS_URL) {
   const receiver = createCommandReceiver()
-  receiver.handle("reprocess", async ctx => {
-    const { issueId } = JSON.parse(new TextDecoder().decode(ctx.input)) as { issueId: string }
+  receiver.command("reprocess", async input => {
+    if (
+      typeof input !== "object" ||
+      input === null ||
+      !("issueId" in input) ||
+      typeof input.issueId !== "string"
+    ) {
+      throw new TypeError("issueId must be a string")
+    }
+    const { issueId } = input
     await redis.lpush("work:issues", JSON.stringify({ issueId, requestedAt: Date.now() }))
     return { requeued: true, issueId }
   })

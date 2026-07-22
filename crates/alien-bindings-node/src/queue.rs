@@ -3,10 +3,10 @@
 
 use crate::error::map_alien_error;
 use alien_bindings::error::ErrorData;
-use alien_bindings::traits::{MessagePayload, Queue, QueueMessage};
+use alien_bindings::traits::{MessagePayload, QueueMessage};
+use alien_bindings::BoundQueue;
 use alien_error::AlienError;
 use napi_derive::napi;
-use std::sync::Arc;
 
 /// A message received from a queue.
 ///
@@ -71,11 +71,11 @@ fn message_to_js(message: QueueMessage) -> napi::Result<QueueMessageJs> {
 /// Handle to a resolved queue binding.
 #[napi]
 pub struct QueueHandle {
-    inner: Arc<dyn Queue>,
+    inner: BoundQueue,
 }
 
 impl QueueHandle {
-    pub(crate) fn new(inner: Arc<dyn Queue>) -> Self {
+    pub(crate) fn new(inner: BoundQueue) -> Self {
         Self { inner }
     }
 }
@@ -84,52 +84,49 @@ impl QueueHandle {
 impl QueueHandle {
     /// Send a JSON message. `json_string` must be valid JSON.
     #[napi]
-    pub async fn send_json(&self, queue: String, json_string: String) -> napi::Result<()> {
+    pub async fn send_json(&self, json_string: String) -> napi::Result<()> {
         let payload = parse_json_payload(&json_string)?;
         let inner = self.inner.clone();
-        inner.send(&queue, payload).await.map_err(map_alien_error)
+        inner.send(payload).await.map_err(map_alien_error)
     }
 
     /// Send a text message.
     #[napi]
-    pub async fn send_text(&self, queue: String, text: String) -> napi::Result<()> {
+    pub async fn send_text(&self, text: String) -> napi::Result<()> {
         let inner = self.inner.clone();
         inner
-            .send(&queue, MessagePayload::Text(text))
+            .send(MessagePayload::Text(text))
             .await
             .map_err(map_alien_error)
     }
 
     /// Receive up to `max` messages.
     #[napi]
-    pub async fn receive(&self, queue: String, max: u32) -> napi::Result<Vec<QueueMessageJs>> {
+    pub async fn receive(&self, max: u32) -> napi::Result<Vec<QueueMessageJs>> {
         let inner = self.inner.clone();
-        let messages = inner
-            .receive(&queue, max as usize)
-            .await
-            .map_err(map_alien_error)?;
+        let messages = inner.receive(max as usize).await.map_err(map_alien_error)?;
         messages.into_iter().map(message_to_js).collect()
     }
 
     /// Acknowledge a message by its receipt handle.
     #[napi]
-    pub async fn ack(&self, queue: String, receipt: String) -> napi::Result<()> {
+    pub async fn ack(&self, receipt: String) -> napi::Result<()> {
         let inner = self.inner.clone();
-        inner.ack(&queue, &receipt).await.map_err(map_alien_error)
+        inner.ack(&receipt).await.map_err(map_alien_error)
     }
 
     /// Negative-acknowledge a message, making it immediately redeliverable.
     #[napi]
-    pub async fn nack(&self, queue: String, receipt: String) -> napi::Result<()> {
+    pub async fn nack(&self, receipt: String) -> napi::Result<()> {
         let inner = self.inner.clone();
-        inner.nack(&queue, &receipt).await.map_err(map_alien_error)
+        inner.nack(&receipt).await.map_err(map_alien_error)
     }
 
     /// Delete every message in the queue.
     #[napi]
-    pub async fn purge(&self, queue: String) -> napi::Result<()> {
+    pub async fn purge(&self) -> napi::Result<()> {
         let inner = self.inner.clone();
-        inner.purge(&queue).await.map_err(map_alien_error)
+        inner.purge().await.map_err(map_alien_error)
     }
 }
 

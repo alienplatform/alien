@@ -3,11 +3,11 @@
  *
  * Behavior-identical twin of the Rust `alien_commands::Receiver`. It leases
  * commands addressed to its own target resource from the command server over
- * outbound HTTPS (no inbound connections, no gRPC), dispatches them to
+ * outbound HTTPS (no inbound connections), dispatches them to
  * in-process handlers, and submits responses through the envelope's
  * response-handling flow (inline or presigned storage upload).
  *
- * Pure `fetch`; no bindings, no gRPC. The receiver implements these public
+ * Pure `fetch`; no bindings. The receiver implements these public
  * command-delivery semantics:
  * - required identity plus token-or-token-file env, with fail-fast validation
  * - execution budget = `min(envelope.deadline, leaseExpiresAt − safety margin)`;
@@ -27,8 +27,7 @@
  * import { createCommandReceiver } from "@alienplatform/commands"
  *
  * const receiver = createCommandReceiver()
- * receiver.handle("generate-report", async ctx => {
- *   const params = JSON.parse(new TextDecoder().decode(ctx.input))
+ * receiver.command("generate-report", async params => {
  *   return { report: params }
  * })
  * await receiver.run() // call receiver.stop() to drain and return
@@ -162,16 +161,53 @@ export interface CommandContext {
  * (`JSON.stringify`-encoded). Throwing/rejecting submits the error's non-empty
  * string `code` when present, otherwise `HANDLER_ERROR`.
  */
-export type CommandHandler = (ctx: CommandContext) => unknown | Promise<unknown>
+export type RawCommandHandler = (ctx: CommandContext) => unknown | Promise<unknown>
+
+/** The part of Standard Schema v1 used to validate command inputs. */
+export interface StandardSchema<Input = unknown, Output = Input> {
+  readonly "~standard": {
+    readonly version: 1
+    readonly vendor: string
+    readonly validate: (
+      value: unknown,
+    ) =>
+      | { readonly value: Output; readonly issues?: undefined }
+      | { readonly issues: ReadonlyArray<{ readonly message: string }> }
+      | Promise<
+          | { readonly value: Output; readonly issues?: undefined }
+          | { readonly issues: ReadonlyArray<{ readonly message: string }> }
+        >
+    readonly types?: { readonly input: Input; readonly output: Output }
+  }
+}
+
+/** Infer the validated output type of a Standard Schema. */
+export type StandardSchemaOutput<Schema extends StandardSchema> = NonNullable<
+  Schema["~standard"]["types"]
+>["output"]
+
+/** A JSON command handler. */
+export type CommandHandler<Input = unknown> = (
+  input: Input,
+  context: CommandContext,
+) => unknown | Promise<unknown>
 
 /**
- * The pull receiver handle. Register handlers with {@link CommandReceiver.handle},
+ * The pull receiver handle. Register handlers with {@link CommandReceiver.command},
  * drive the lease loop with {@link CommandReceiver.run}, and stop it with
  * {@link CommandReceiver.stop}.
  */
 export interface CommandReceiver {
-  /** Register a handler for a command name. Registering a name twice replaces it. */
-  handle(name: string, handler: CommandHandler): CommandReceiver
+  /** Register a schema-less JSON command. Its input is deliberately `unknown`. */
+  command(name: string, handler: CommandHandler<unknown>): CommandReceiver
+  /** Register a JSON command validated by a Standard Schema v1 validator. */
+  command<Schema extends StandardSchema>(
+    name: string,
+    schema: Schema,
+    handler: CommandHandler<StandardSchemaOutput<Schema>>,
+  ): CommandReceiver
+  /** Register an advanced handler that receives the encoded input bytes. */
+  handleRaw(name: string, handler: RawCommandHandler): CommandReceiver
   /**
    * Drive the lease loop until {@link CommandReceiver.stop} is called. No new
    * lease poll *starts* once draining begins; a poll already in flight
@@ -449,7 +485,7 @@ class PullCommandReceiver implements CommandReceiver {
   private readonly pollJitter: number
   private readonly drainTimeoutMs: number
   private readonly tokenSource: TokenSource
-  private readonly handlers = new Map<string, CommandHandler>()
+  private readonly handlers = new Map<string, RawCommandHandler>()
   private readonly shutdown = new AbortController()
   private readonly active = new Map<string, ActiveLease>()
 
@@ -465,7 +501,39 @@ class PullCommandReceiver implements CommandReceiver {
     this.tokenSource = new TokenSource(config.token, config.tokenFile)
   }
 
-  handle(name: string, handler: CommandHandler): CommandReceiver {
+  command(name: string, handler: CommandHandler<unknown>): CommandReceiver
+  command<Schema extends StandardSchema>(
+    name: string,
+    schema: Schema,
+    handler: CommandHandler<StandardSchemaOutput<Schema>>,
+  ): CommandReceiver
+  command<Schema extends StandardSchema>(
+    name: string,
+    schemaOrHandler: Schema | CommandHandler<unknown>,
+    validatedHandler?: CommandHandler<StandardSchemaOutput<Schema>>,
+  ): CommandReceiver {
+    const schema = validatedHandler === undefined ? undefined : (schemaOrHandler as Schema)
+    const handler = (validatedHandler ?? schemaOrHandler) as CommandHandler<unknown>
+    return this.handleRaw(name, async context => {
+      let input: unknown
+      try {
+        input = JSON.parse(new TextDecoder().decode(context.input))
+      } catch {
+        throw new Error("Command input is not valid JSON")
+      }
+      if (schema !== undefined) {
+        const result = await schema["~standard"].validate(input)
+        if (result.issues !== undefined) {
+          const details = result.issues.map(issue => issue.message).join("; ")
+          throw new Error(`Command input failed validation${details ? `: ${details}` : ""}`)
+        }
+        input = result.value
+      }
+      return await handler(input, context)
+    })
+  }
+
+  handleRaw(name: string, handler: RawCommandHandler): CommandReceiver {
     this.handlers.set(name, handler)
     return this
   }
@@ -1034,7 +1102,7 @@ function handlerTimeoutResponse(command: string, budget: Date): CommandResponse 
 
 /** Invoke and JSON-encode a handler without creating a new execution budget. */
 async function invokeHandler(
-  handler: CommandHandler,
+  handler: RawCommandHandler,
   ctx: CommandContext,
 ): Promise<CommandResponse> {
   let value: unknown

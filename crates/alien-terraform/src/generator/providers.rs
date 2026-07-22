@@ -206,7 +206,7 @@ pub(super) fn resource_prefix_body() -> Body {
 pub(super) fn locals_body(
     target: TerraformTarget,
     stack_settings: &StackSettings,
-    registration_resources: Vec<Expression>,
+    registration_resources: Vec<(Option<String>, Expression)>,
     extra: &IndexMap<String, Expression>,
     has_remote_management: bool,
 ) -> Result<Body> {
@@ -299,7 +299,7 @@ pub(super) fn locals_body(
     ));
     body.push(attr(
         "deployment_resources",
-        Expression::Array(registration_resources),
+        crate::emitters::enabled::registration_list(registration_resources),
     ));
 
     if target.is_kubernetes() {

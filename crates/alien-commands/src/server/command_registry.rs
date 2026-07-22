@@ -59,6 +59,8 @@ pub struct CommandEnvelopeData {
 #[derive(Debug, Clone)]
 pub struct CommandStatus {
     pub command_id: String,
+    pub workspace_id: String,
+    pub project_id: String,
     pub deployment_id: String,
     pub command: String, // command name
     pub state: CommandState,
@@ -71,6 +73,14 @@ pub struct CommandStatus {
     pub request_size_bytes: Option<u64>,
     pub response_size_bytes: Option<u64>,
     pub target: CommandTarget,
+}
+
+/// Canonical ownership fields needed to authorize command reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandAccessContext {
+    pub workspace_id: String,
+    pub project_id: String,
+    pub deployment_id: String,
 }
 
 /// Internal command record stored in memory
@@ -249,6 +259,24 @@ pub trait CommandRegistry: Send + Sync {
     /// Returns None if command doesn't exist.
     async fn get_command_status(&self, command_id: &str) -> Result<Option<CommandStatus>>;
 
+    /// Get the canonical ownership fields used to authorize command reads.
+    ///
+    /// The status record is the command registry's source of truth for these
+    /// fields, so this does not require a deployment lookup.
+    async fn get_command_access_context(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandAccessContext>> {
+        Ok(self
+            .get_command_status(command_id)
+            .await?
+            .map(|status| CommandAccessContext {
+                workspace_id: status.workspace_id,
+                project_id: status.project_id,
+                deployment_id: status.deployment_id,
+            }))
+    }
+
     /// Atomically update a non-terminal command's lifecycle state.
     ///
     /// Returns `false` when the command became terminal before the update.
@@ -417,7 +445,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
             error: None,
             target: target.target.clone(),
             delivery_mode: target.delivery_mode,
-            project_id: "local-dev".to_string(),
+            project_id: "default".to_string(),
         };
 
         self.commands
@@ -429,7 +457,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
             command_id,
             target: target.target.clone(),
             delivery_mode: target.delivery_mode,
-            project_id: "local-dev".to_string(),
+            project_id: "default".to_string(),
         })
     }
 
@@ -453,6 +481,8 @@ impl CommandRegistry for InMemoryCommandRegistry {
 
         Ok(commands.get(command_id).map(|r| CommandStatus {
             command_id: r.id.clone(),
+            workspace_id: "default".to_string(),
+            project_id: r.project_id.clone(),
             deployment_id: r.deployment_id.clone(),
             command: r.command.clone(),
             state: r.state,
@@ -802,6 +832,34 @@ mod tests {
                 .unwrap()
                 .state,
             CommandState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_command_access_uses_oss_tenant_context() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-1", CommandTargetType::Worker)
+            .await
+            .unwrap();
+        let target = registry.resolve_target("dep-1", None).await.unwrap();
+        let command = registry
+            .create_command("dep-1", "run", &target, CommandState::Pending, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(command.project_id, "default");
+        assert_eq!(
+            registry
+                .get_command_access_context(&command.command_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            CommandAccessContext {
+                workspace_id: "default".to_string(),
+                project_id: "default".to_string(),
+                deployment_id: "dep-1".to_string(),
+            }
         );
     }
 

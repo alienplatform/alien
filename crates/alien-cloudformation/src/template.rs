@@ -201,7 +201,9 @@ impl CfExpression {
     }
 
     /// `Fn::Sub` two-argument form: substitutes named variables whose values
-    /// are arbitrary expressions (e.g. `Fn::Join` results).
+    /// are arbitrary expressions (e.g. `Fn::Join` results). Substitution is a
+    /// single pass, so a `${...}` sequence inside a substituted value is left
+    /// alone.
     pub fn sub_with<I, K>(template: impl Into<String>, variables: I) -> Self
     where
         I: IntoIterator<Item = (K, CfExpression)>,
@@ -247,6 +249,13 @@ impl CfExpression {
                 when_true,
                 when_false,
             ]),
+        )])
+    }
+
+    pub fn join(delimiter: impl Into<String>, values: CfExpression) -> Self {
+        Self::object([(
+            "Fn::Join",
+            Self::List(vec![Self::String(delimiter.into()), values]),
         )])
     }
 

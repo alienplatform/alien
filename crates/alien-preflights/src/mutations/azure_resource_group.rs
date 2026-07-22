@@ -71,6 +71,7 @@ impl StackMutation for AzureResourceGroupMutation {
 
         // Add it to the stack as a frozen resource (created once during setup)
         let resource_group_entry = ResourceEntry {
+            enabled_when: None,
             config: alien_core::Resource::new(resource_group),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(), // No dependencies on other resources

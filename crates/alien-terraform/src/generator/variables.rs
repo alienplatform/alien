@@ -62,7 +62,13 @@ pub(super) fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition
 }
 
 pub(super) fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
-    format!("input_{}", snake_case_identifier(&input.id))
+    stack_input_variable_name(&input.id)
+}
+
+/// Variable name for a stack input id. Shared with the gating helpers, which
+/// only know the id.
+pub(crate) fn stack_input_variable_name(input_id: &str) -> String {
+    format!("input_{}", snake_case_identifier(input_id))
 }
 
 fn snake_case_identifier(value: &str) -> String {

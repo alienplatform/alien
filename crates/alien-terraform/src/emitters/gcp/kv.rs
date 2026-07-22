@@ -7,6 +7,7 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::enabled,
     emitters::gcp::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
@@ -21,7 +22,7 @@ impl TfEmitter for GcpKvEmitter {
         let kv = downcast::<Kv>(ctx, Kv::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        let database = resource_block(
+        let mut database = resource_block(
             "google_firestore_database",
             label,
             [
@@ -44,6 +45,7 @@ impl TfEmitter for GcpKvEmitter {
                 attr("deletion_policy", Expression::String("DELETE".to_string())),
             ],
         );
+        enabled::gate_own(ctx, &mut database)?;
 
         Ok(TfFragment::default().with_resource(database))
     }
@@ -54,13 +56,22 @@ impl TfEmitter for GcpKvEmitter {
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "databaseId",
-                expr::traversal(["google_firestore_database", label, "name"]),
+                enabled::self_attribute(ctx, "google_firestore_database", label, "name"),
             ),
             (
                 "location",
-                expr::traversal(["google_firestore_database", label, "location_id"]),
+                enabled::self_attribute(
+                    ctx,
+                    "google_firestore_database",
+                    label,
+                    "location_id",
+                ),
             ),
         ]))
+    }
+
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -71,7 +82,7 @@ impl TfEmitter for GcpKvEmitter {
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "databaseId",
-                expr::traversal(["google_firestore_database", label, "name"]),
+                enabled::self_attribute(ctx, "google_firestore_database", label, "name"),
             ),
             ("collectionName", Expression::String(kv.id().to_string())),
         ])))

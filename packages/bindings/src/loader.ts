@@ -98,12 +98,17 @@ export interface RawKvHandle {
 
 /** Raw napi queue handle. Every method takes the queue name as its first arg. */
 export interface RawQueueHandle {
-  sendJson(queue: string, jsonString: string): Promise<void>
-  sendText(queue: string, text: string): Promise<void>
-  receive(queue: string, max: number): Promise<RawQueueMessage[]>
-  ack(queue: string, receipt: string): Promise<void>
-  nack(queue: string, receipt: string): Promise<void>
-  purge(queue: string): Promise<void>
+  sendJson(jsonString: string): Promise<void>
+  sendText(text: string): Promise<void>
+  receive(max: number): Promise<RawQueueMessage[]>
+  ack(receipt: string): Promise<void>
+  nack(receipt: string): Promise<void>
+  purge(): Promise<void>
+}
+
+export interface RawContainerHandle {
+  getInternalUrl(): Promise<string>
+  getPublicUrl(): Promise<string | null>
 }
 
 /** Raw napi vault handle. */
@@ -120,6 +125,7 @@ export interface RawBindingsHandle {
   kv(name: string): Promise<RawKvHandle>
   queue(name: string): Promise<RawQueueHandle>
   vault(name: string): Promise<RawVaultHandle>
+  container(name: string): Promise<RawContainerHandle>
 }
 
 /** The complete napi addon module surface consumed by the wrapper. */

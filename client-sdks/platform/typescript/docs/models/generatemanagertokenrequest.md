@@ -5,11 +5,13 @@
 ```typescript
 import { GenerateManagerTokenRequest } from "@alienplatform/platform-api/models";
 
-let value: GenerateManagerTokenRequest = {};
+let value: GenerateManagerTokenRequest = {
+  project: "<value>",
+};
 ```
 
 ## Fields
 
-| Field                                                                                                                          | Type                                                                                                                           | Required                                                                                                                       | Description                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `project`                                                                                                                      | *string*                                                                                                                       | :heavy_minus_sign:                                                                                                             | Project ID or name to scope token access to. When omitted, the token is scoped to all projects accessible by the current user. |
+| Field                                        | Type                                         | Required                                     | Description                                  |
+| -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- |
+| `project`                                    | *string*                                     | :heavy_check_mark:                           | Project ID or name to scope token access to. |

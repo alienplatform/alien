@@ -5,6 +5,7 @@ mod parameters;
 mod tests;
 
 use crate::{
+    emitters::enabled,
     registry::CfRegistry,
     template::{CfExpression, CfMapping, CfParameter, CfResource, CfTemplate},
 };
@@ -17,7 +18,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 use expressions::{
-    domains_expression, kubernetes_settings_expression, management_config_expression,
+    domains_expression, equals_ref, kubernetes_settings_expression, management_config_expression,
     network_expression, output,
 };
 use indexmap::{indexmap, IndexMap};
@@ -73,6 +74,8 @@ const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
 const STANDARD_OUTPUT_COUNT: usize = 12;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
+/// `Fn::Sub` variable carrying one registration entry's JSON text.
+const ENTRY_JSON_SUB_VARIABLE: &str = "entry";
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
 const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
@@ -282,7 +285,7 @@ pub fn generate_cloudformation_template(
         &stack_inputs,
     );
 
-    let mut registration_resources = Vec::new();
+    let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
 
     for (resource_id, resource) in stack.resources() {
@@ -304,7 +307,54 @@ pub fn generate_cloudformation_template(
             names: &names,
         };
 
-        let emitted_resources = emitter.emit_resources_with_registry(&ctx, options.registry)?;
+        let enabled_when = resource.enabled_when.as_deref();
+        let declared_condition = if let Some(input_id) = enabled_when {
+            if !emitter.supports_enabled_when() {
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("enabled() on resource type '{resource_type}'"),
+                    reason: format!(
+                        "the CloudFormation emitter for '{resource_type}' does not render \
+                         conditionally yet, so resource '{resource_id}' would be created \
+                         regardless of the deployer's answer"
+                    ),
+                }));
+            }
+            Some(declare_enabled_condition(
+                &mut template,
+                &stack_inputs,
+                input_id,
+                resource_id,
+            )?)
+        } else {
+            None
+        };
+
+        let mut emitted_resources = emitter.emit_resources_with_registry(&ctx, options.registry)?;
+        if let Some(condition) = declared_condition {
+            for emitted in &mut emitted_resources {
+                // A resource carries at most one Condition, so an emitter that
+                // already set its own leaves nowhere to put the deployer's gate.
+                // Expressing both would need an `Fn::And` over the two, which
+                // nothing needs yet — until it does, refuse rather than pick one
+                // and create the resource the deployer declined.
+                //
+                // No shipped emitter reaches this: the ones that set conditions
+                // (aws/network.rs, aws/kubernetes_cluster.rs) return false from
+                // `supports_enabled_when`, so they fail the check above first.
+                if let Some(existing) = &emitted.condition {
+                    return Err(AlienError::new(ErrorData::OperationNotSupported {
+                        operation: format!("enabled() on resource type '{resource_type}'"),
+                        reason: format!(
+                            "the CloudFormation emitter for '{resource_type}' already puts \
+                             condition '{existing}' on '{}', and a resource can carry only one \
+                             condition",
+                            emitted.logical_id
+                        ),
+                    }));
+                }
+                emitted.condition = Some(condition.clone());
+            }
+        }
         emitted_resource_ids.insert(
             resource_id.clone(),
             emitted_resources
@@ -318,11 +368,14 @@ pub fn generate_cloudformation_template(
         }
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
-        registration_resources.push(CfExpression::object([
-            ("id", CfExpression::from(resource_id.as_str())),
-            ("type", CfExpression::from(resource_type.as_ref())),
-            ("importData", registration_data),
-        ]));
+        registration_resources.push(RegistrationEntry {
+            enabled_when: enabled_when.map(str::to_string),
+            entry: CfExpression::object([
+                ("id", CfExpression::from(resource_id.as_str())),
+                ("type", CfExpression::from(resource_type.as_ref())),
+                ("importData", registration_data),
+            ]),
+        });
     }
 
     let kubernetes_namespace = if options.target.is_kubernetes() {
@@ -339,8 +392,6 @@ pub fn generate_cloudformation_template(
         kubernetes_namespace.clone(),
         supports_custom_domain,
     );
-    let resources = CfExpression::list(registration_resources);
-
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
@@ -350,7 +401,11 @@ pub fn generate_cloudformation_template(
             management_config.clone(),
             stack_settings.clone(),
             &options,
-            resources.clone(),
+            CfExpression::list(
+                registration_resources
+                    .iter()
+                    .map(RegistrationEntry::custom_resource_element),
+            ),
             stack_input_values_expression(&stack_inputs),
             options.registration.callback_url(),
         );
@@ -362,7 +417,7 @@ pub fn generate_cloudformation_template(
             management_config,
             stack_settings,
             &options,
-            resources,
+            &registration_resources,
         )?;
     }
 
@@ -399,7 +454,13 @@ fn stack_inputs_for_cloudformation(
 }
 
 fn stack_input_parameter_name(input: &StackInputDefinition) -> String {
-    format!("Input{}", sanitize_logical_id(&input.id))
+    stack_input_parameter_name_for_id(&input.id)
+}
+
+/// Parameter name for a stack input id. Shared with the gating helpers, which
+/// only know the id.
+pub(crate) fn stack_input_parameter_name_for_id(input_id: &str) -> String {
+    format!("Input{}", sanitize_logical_id(input_id))
 }
 
 fn add_stack_input_parameters(template: &mut CfTemplate, inputs: &[StackInputDefinition]) {
@@ -694,6 +755,51 @@ fn sanitize_logical_id(input: &str) -> String {
     }
 
     out
+}
+
+/// Declares the condition a gated resource renders under, once per gating input.
+///
+/// Boolean stack inputs reach CloudFormation as string parameters constrained to
+/// `"true"` / `"false"`, so the gate is an equality test against `"true"`.
+///
+/// The "input is declared" and "input is boolean" rules below are also enforced
+/// by `ResourceEnabledValidCheck`, repeated here on purpose: a caller that
+/// renders without running preflights must not get a template that silently
+/// drops the gate.
+fn declare_enabled_condition(
+    template: &mut CfTemplate,
+    stack_inputs: &[StackInputDefinition],
+    input_id: &str,
+    resource_id: &str,
+) -> Result<String> {
+    let condition_name = enabled::condition_name(input_id);
+    if template.conditions.contains_key(&condition_name) {
+        // A sibling resource on the same gate already validated the input
+        // and declared the condition.
+        return Ok(condition_name);
+    }
+
+    let input = alien_core::find_boolean_gate_input(stack_inputs, input_id).map_err(|issue| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("enabled('{input_id}')"),
+            reason: match issue {
+                alien_core::GateInputIssue::Undeclared => format!(
+                    "resource '{resource_id}' is gated on stack input '{input_id}', which this \
+                     template never asks the deployer for"
+                ),
+                alien_core::GateInputIssue::NotBoolean(kind) => format!(
+                    "resource '{resource_id}' is gated on stack input '{input_id}', which is a \
+                     {kind:?} input rather than a boolean"
+                ),
+            },
+        })
+    })?;
+
+    template.conditions.insert(
+        condition_name.clone(),
+        equals_ref(&stack_input_parameter_name(input), "true"),
+    );
+    Ok(condition_name)
 }
 
 fn insert_resource(template: &mut CfTemplate, resource: CfResource) -> Result<()> {
@@ -1174,7 +1280,7 @@ fn add_outputs(
     management_config: CfExpression,
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
-    resources: CfExpression,
+    resources: &[RegistrationEntry],
 ) -> Result<()> {
     template.outputs.insert(
         OUTPUT_SOURCE_KIND.to_string(),
@@ -1269,8 +1375,90 @@ fn json_output_value(value: CfExpression) -> CfExpression {
     }
 }
 
-fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> Result<()> {
-    let chunks = chunk_resource_expression(resources)?;
+/// One resource's registration entry, kept beside the gate that decides whether
+/// the deployer wanted it.
+///
+/// The two registration paths need different forms of the same two pieces, so
+/// the gate stays separate until each one renders it: the custom resource gates
+/// the entry object, the Outputs fallback gates the entry's JSON text.
+struct RegistrationEntry {
+    /// Stack input id the deployer answers, or `None` when the resource is
+    /// created unconditionally.
+    enabled_when: Option<String>,
+    entry: CfExpression,
+}
+
+impl RegistrationEntry {
+    /// Gates a rendered value on this entry's input: a declined entry
+    /// resolves to `AWS::NoValue`, which removes the element from its list.
+    fn gated(&self, value: CfExpression) -> CfExpression {
+        enabled::when_enabled(self.enabled_when.as_deref(), value, CfExpression::no_value())
+    }
+
+    /// Element for the custom resource's `Resources` property.
+    fn custom_resource_element(&self) -> CfExpression {
+        self.gated(self.entry.clone())
+    }
+
+    /// The entry's JSON text for the Outputs fallback, gated so a declined entry
+    /// resolves to `AWS::NoValue`.
+    ///
+    /// `Fn::ToJsonString` sits *inside* the gate on purpose. Wrapping the gate
+    /// instead — `ToJsonString(Fn::If(..))` — serializes a declined entry as the
+    /// literal `null`, which is the bug this construction exists to avoid.
+    ///
+    /// The `Fn::Sub` around it only launders the type. CloudFormation resolves a
+    /// bare `Fn::ToJsonString` inside `Fn::Join` correctly, but cfn-lint does not
+    /// infer that it returns a string and fails the template with E6101, and the
+    /// only way to silence that is a template-wide suppression that would also
+    /// mask real E6101s. Substitution is a single pass, so JSON containing a
+    /// literal `${...}` passes through untouched.
+    fn outputs_element(&self) -> CfExpression {
+        let json_text = CfExpression::sub_with(
+            format!("${{{ENTRY_JSON_SUB_VARIABLE}}}"),
+            [(
+                ENTRY_JSON_SUB_VARIABLE,
+                CfExpression::to_json_string(self.entry.clone()),
+            )],
+        );
+        self.gated(json_text)
+    }
+}
+
+/// Renders a chunk of entries as the JSON array text a stack output carries.
+///
+/// With no gated entry this is `Fn::ToJsonString` over the whole list, which
+/// keeps an ungated stack's output unchanged on re-apply.
+///
+/// Once any entry is gated that no longer works. `Fn::ToJsonString` does not
+/// honour `AWS::NoValue`: a declined entry survives as a literal `null`, and
+/// registration runs the typed importer over every element it receives, so the
+/// null fails deserialization rather than being skipped. `Fn::Join` does drop
+/// `AWS::NoValue` elements — without leaving a stray delimiter, and collapsing
+/// to `[]` when every entry is declined — so gated chunks convert each entry to
+/// JSON text on its own and join the array together.
+fn resources_json(entries: &[RegistrationEntry]) -> CfExpression {
+    if entries.iter().all(|entry| entry.enabled_when.is_none()) {
+        return CfExpression::to_json_string(CfExpression::list(
+            entries.iter().map(|entry| entry.entry.clone()),
+        ));
+    }
+
+    CfExpression::join(
+        "",
+        CfExpression::list([
+            CfExpression::from("["),
+            CfExpression::join(
+                ",",
+                CfExpression::list(entries.iter().map(RegistrationEntry::outputs_element)),
+            ),
+            CfExpression::from("]"),
+        ]),
+    )
+}
+
+fn add_resource_outputs(template: &mut CfTemplate, entries: &[RegistrationEntry]) -> Result<()> {
+    let chunks = chunk_registration_entries(entries)?;
     if STANDARD_OUTPUT_COUNT + chunks.len() > CLOUDFORMATION_MAX_OUTPUTS {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "generate_cloudformation_template".to_string(),
@@ -1284,9 +1472,10 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
 
     if chunks.len() == 1 {
         let chunk = chunks.into_iter().next().expect("one chunk");
-        let value = match &chunk {
-            CfExpression::List(items) if items.is_empty() => CfExpression::from("[]"),
-            _ => CfExpression::to_json_string(chunk),
+        let value = if chunk.is_empty() {
+            CfExpression::from("[]")
+        } else {
+            resources_json(chunk)
         };
         template.outputs.insert(
             OUTPUT_RESOURCES.to_string(),
@@ -1300,7 +1489,7 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
             format!("{OUTPUT_RESOURCES}{index}"),
             output(
                 "Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.",
-                CfExpression::to_json_string(chunk),
+                resources_json(chunk),
             ),
         );
     }
@@ -1321,20 +1510,19 @@ fn kubernetes_cluster_namespace(stack: &Stack) -> Option<String> {
     })
 }
 
-fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression>> {
-    let CfExpression::List(items) = resources else {
-        return Ok(vec![resources]);
-    };
-    if items.is_empty() {
-        return Ok(vec![CfExpression::list([])]);
+/// Splits entries into contiguous groups that each stay under the per-output
+/// byte budget, sized against the JSON text an entry renders to.
+fn chunk_registration_entries(entries: &[RegistrationEntry]) -> Result<Vec<&[RegistrationEntry]>> {
+    if entries.is_empty() {
+        return Ok(vec![&[]]);
     }
 
     let mut chunks = Vec::new();
-    let mut current = Vec::new();
+    let mut start = 0usize;
     let mut current_len = 2usize;
 
-    for item in items {
-        let item_len = serde_json::to_string(&item)
+    for (index, entry) in entries.iter().enumerate() {
+        let item_len = serde_json::to_string(&entry.entry)
             .map_err(|error| {
                 AlienError::new(ErrorData::JsonSerializationFailed {
                     reason: format!(
@@ -1343,22 +1531,21 @@ fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression
                 })
             })?
             .len();
-        let separator_len = usize::from(!current.is_empty());
-        let next_len = current_len + separator_len + item_len;
-        if !current.is_empty() && next_len > OUTPUT_RESOURCES_CHUNK_BYTES {
-            chunks.push(CfExpression::List(current));
-            current = Vec::new();
-            current_len = 2;
+        let is_first_in_chunk = index == start;
+        let separator_len = usize::from(!is_first_in_chunk);
+        if !is_first_in_chunk
+            && current_len + separator_len + item_len > OUTPUT_RESOURCES_CHUNK_BYTES
+        {
+            chunks.push(&entries[start..index]);
+            start = index;
+            current_len = 2 + item_len;
+            continue;
         }
 
-        let separator_len = usize::from(!current.is_empty());
         current_len += separator_len + item_len;
-        current.push(item);
     }
 
-    if !current.is_empty() {
-        chunks.push(CfExpression::List(current));
-    }
+    chunks.push(&entries[start..]);
 
     Ok(chunks)
 }

@@ -10,3 +10,4 @@
 //! top of [`crate::CfRegistry::built_in`].
 
 pub mod aws;
+pub mod enabled;

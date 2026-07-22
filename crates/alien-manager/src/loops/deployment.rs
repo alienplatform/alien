@@ -580,6 +580,14 @@ impl DeploymentLoop {
             if config.monitoring.is_none() {
                 config.monitoring = monitoring;
             }
+            // A control plane that predates gate answers omits inputValues
+            // entirely; resolving gates from declared defaults instead of the
+            // stored answers would deprovision an enabled resource. Whenever
+            // gates exist their answers are materialized at install, so a
+            // legitimately supplied map is never empty.
+            if config.input_values.is_empty() {
+                config.input_values = deployment.input_values.clone();
+            }
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -590,6 +598,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
+                input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
                 management_config,
@@ -1065,6 +1074,7 @@ mod tests {
             user_environment_variables: None,
             management_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             deployment_config: None,
             retry_requested: false,
             locked_by: None,

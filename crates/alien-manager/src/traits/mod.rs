@@ -19,7 +19,7 @@ pub use credential_resolver::{CredentialResolver, ResolvedCredentials};
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,
-    DeploymentRecord, DeploymentStore, ReconcileData,
+    DeploymentRecord, DeploymentStore, ReconcileData, UpdateImportedDeploymentParams,
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;

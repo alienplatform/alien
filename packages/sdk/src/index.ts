@@ -13,9 +13,10 @@
  *
  * @example
  * ```typescript
- * import { command, kv, storage, waitUntil } from "@alienplatform/sdk"
+ * import { command, kv } from "@alienplatform/sdk"
+ * import { z } from "zod"
  *
- * command("greet", async ({ name }: { name: string }) => {
+ * command("greet", z.object({ name: z.string() }), async ({ name }) => {
  *   const store = kv("greetings")
  *   await store.set(name, `Hello, ${name}!`)
  *   return { ok: true }
@@ -45,6 +46,8 @@ export type {
   QueueMessage,
   QueueMessageEvent,
   ScheduledEvent,
+  StandardSchema,
+  StandardSchemaOutput,
   WorkerCommandContext,
 } from "./worker-runtime/registry.js"
 
@@ -52,8 +55,8 @@ export type {
 // Binding factories — re-exported from @alienplatform/bindings
 // ============================================================================
 
-export { storage, kv, queue, vault } from "@alienplatform/bindings"
-export type { Storage, Kv, Queue, Vault } from "@alienplatform/bindings"
+export { storage, kv, queue, vault, container } from "@alienplatform/bindings"
+export type { Storage, Kv, Queue, Vault, Container } from "@alienplatform/bindings"
 
 // ============================================================================
 // Errors — re-exported from @alienplatform/bindings and @alienplatform/core
