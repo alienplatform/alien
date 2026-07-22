@@ -21,7 +21,7 @@ use crate::error::ErrorData;
 use crate::ids::sha256_hash;
 use crate::traits::DeploymentRecord;
 
-use super::{auth, AppState};
+use super::{auth, current_release_resource, load_current_release, AppState};
 
 // --- Mint constants ---
 
@@ -314,40 +314,16 @@ async fn validate_mint_resource_link(
             .into_response()
     })?;
 
-    let release = state
-        .release_store
-        .get_release(&Subject::system(), release_id)
-        .await
-        .map_err(|error| {
-            error
-                .context(ErrorData::InternalError {
-                    message: format!(
-                        "Failed to load current release '{release_id}' for credential minting"
-                    ),
-                })
-                .into_response()
-        })?
-        .ok_or_else(|| {
-            ErrorData::internal(format!(
-                "Current release '{release_id}' for deployment '{}' does not exist",
-                deployment.id
-            ))
-            .into_response()
-        })?;
-
-    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
-        ErrorData::internal(format!(
-            "Current release '{release_id}' has no {} stack",
-            deployment.platform
-        ))
-        .into_response()
-    })?;
-    let resource = stack.resources.get(resource_id).ok_or_else(|| {
-        ErrorData::bad_request(format!(
-            "Resource '{resource_id}' is not part of the deployment's current release"
-        ))
-        .into_response()
-    })?;
+    let release = load_current_release(
+        state.release_store.as_ref(),
+        deployment,
+        release_id,
+        "credential minting",
+    )
+    .await
+    .map_err(IntoResponse::into_response)?;
+    let (stack, resource) = current_release_resource(&release, deployment, release_id, resource_id)
+        .map_err(IntoResponse::into_response)?;
 
     let resource_type = resource.config.resource_type();
     if resource_type != Container::RESOURCE_TYPE

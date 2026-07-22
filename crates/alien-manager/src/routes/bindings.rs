@@ -20,8 +20,7 @@ use axum::{
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{auth, AppState};
-use crate::auth::Subject;
+use super::{auth, current_release_resource, load_current_release, AppState};
 use crate::credential_materialization::{
     materialize_remote_storage_lease, MaterializedCredentialLease, RemoteStorageCredentialScope,
     AZURE_REMOTE_STORAGE_PERMISSIONS,
@@ -669,32 +668,14 @@ async fn require_current_release_remote_access(
         )
     })?;
 
-    let release = release_store
-        .get_release(&Subject::system(), release_id)
-        .await
-        .context(ErrorData::InternalError {
-            message: format!(
-                "Failed to load current release '{release_id}' for remote binding resolution"
-            ),
-        })?
-        .ok_or_else(|| {
-            ErrorData::internal(format!(
-                "Current release '{release_id}' for deployment '{}' does not exist",
-                deployment.id
-            ))
-        })?;
-
-    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
-        ErrorData::internal(format!(
-            "Current release '{release_id}' has no {} stack",
-            deployment.platform
-        ))
-    })?;
-    let resource = stack.resources.get(resource_id).ok_or_else(|| {
-        ErrorData::bad_request(format!(
-            "Resource '{resource_id}' is not part of the deployment's current release"
-        ))
-    })?;
+    let release = load_current_release(
+        release_store,
+        deployment,
+        release_id,
+        "remote binding resolution",
+    )
+    .await?;
+    let (_, resource) = current_release_resource(&release, deployment, release_id, resource_id)?;
 
     if resource.config.resource_type() != Storage::RESOURCE_TYPE {
         return Err(ErrorData::bad_request(format!(

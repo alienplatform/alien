@@ -8,6 +8,7 @@ use alien_error::AlienError;
 use async_trait::async_trait;
 
 use super::*;
+use crate::auth::Subject;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
 
 #[derive(Default)]
@@ -111,6 +112,7 @@ fn deployment_on_platform(stack_state: StackState, platform: Platform) -> Deploy
         management_config: None,
         deployment_config: None,
         deployment_token: None,
+        input_values: Default::default(),
         retry_requested: false,
         locked_by: None,
         locked_at: None,

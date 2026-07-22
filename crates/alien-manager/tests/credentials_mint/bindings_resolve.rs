@@ -107,6 +107,7 @@ async fn persist_remote_storage_state(fixture: &Fixture) {
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
                 schedule_reconciliation: false,
+                input_values: Default::default(),
             },
         )
         .await
@@ -308,9 +309,9 @@ async fn resolves_remote_storage_with_scoped_provider_credentials_and_disables_r
 }
 
 #[tokio::test]
-async fn denies_viewer_before_resolving_credentials() {
+async fn denies_unscoped_deployment_token_before_resolving_credentials() {
     let (fixture, calls) = fixture().await;
-    let viewer_token = mint_token(
+    let unscoped_token = mint_token(
         &fixture.state.token_store,
         TokenType::Deployment,
         "ax_deploy_",
@@ -321,7 +322,7 @@ async fn denies_viewer_before_resolving_credentials() {
 
     let (status, _, _) = post_resolve_binding(
         &fixture,
-        &viewer_token,
+        &unscoped_token,
         serde_json::json!({
             "deploymentId": fixture.deployment_a,
             "resourceId": "files",
