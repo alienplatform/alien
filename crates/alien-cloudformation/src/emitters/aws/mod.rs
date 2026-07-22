@@ -5,6 +5,7 @@
 //! Built-ins are wired through [`crate::CfRegistry::built_in`]; plugins
 //! register additional implementations against the same registry.
 
+pub mod ai;
 pub mod artifact_registry;
 pub mod build;
 pub mod email;
@@ -20,6 +21,7 @@ pub mod storage;
 pub mod vault;
 pub mod worker;
 
+pub use ai::AwsAiEmitter;
 pub use artifact_registry::AwsArtifactRegistryEmitter;
 pub use build::AwsBuildEmitter;
 pub use email::AwsEmailEmitter;

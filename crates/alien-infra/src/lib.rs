@@ -59,6 +59,19 @@ mod container;
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 pub use container::*;
 
+mod ai;
+pub use ai::AwsAiController;
+#[cfg(feature = "aws")]
+pub use ai::AwsAiImporter;
+#[cfg(feature = "gcp")]
+pub use ai::GcpAiController;
+#[cfg(feature = "gcp")]
+pub use ai::GcpAiImporter;
+#[cfg(feature = "azure")]
+pub use ai::AzureAiController;
+#[cfg(feature = "azure")]
+pub use ai::AzureAiImporter;
+
 mod kv;
 #[cfg(feature = "aws")]
 pub use kv::AwsKvImporter;

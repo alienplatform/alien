@@ -156,6 +156,8 @@ pub enum ResourceHeartbeatData {
     AzureContainerAppsEnvironment(AzureContainerAppsEnvironmentHeartbeatData),
     #[serde(rename = "azure_service_bus_namespace")]
     AzureServiceBusNamespace(AzureServiceBusNamespaceHeartbeatData),
+    #[serde(rename = "ai")]
+    Ai(AiHeartbeatData),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1529,6 +1531,43 @@ impl Default for PostgresHeartbeatStatus {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "backend", rename_all = "camelCase")]
+pub enum AiHeartbeatData {
+    AwsBedrock(AwsBedrockAiHeartbeatData),
+    GcpVertex(GcpVertexAiHeartbeatData),
+    AzureFoundry(AzureFoundryAiHeartbeatData),
+    External(ExternalAiHeartbeatData),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AiHeartbeatStatus {
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    pub message: Option<String>,
+    pub stale: bool,
+    pub partial: bool,
+    pub collection_issues: Vec<HeartbeatCollectionIssue>,
+}
+
+impl Default for AiHeartbeatStatus {
+    fn default() -> Self {
+        // No per-stack resource to poll, so unobserved = healthy/running;
+        // errors surface at inference time via the SDK.
+        Self {
+            health: ObservedHealth::Healthy,
+            lifecycle: ProviderLifecycleState::Running,
+            message: None,
+            stale: false,
+            partial: false,
+            collection_issues: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LocalPostgresHeartbeatData {
     pub status: PostgresHeartbeatStatus,
@@ -1578,6 +1617,44 @@ pub struct AzureFlexibleServerPostgresHeartbeatData {
     pub state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsBedrockAiHeartbeatData {
+    pub status: AiHeartbeatStatus,
+    pub region: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GcpVertexAiHeartbeatData {
+    pub status: AiHeartbeatStatus,
+    pub project: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AzureFoundryAiHeartbeatData {
+    pub status: AiHeartbeatStatus,
+    pub account_name: String,
+    pub endpoint: Option<String>,
+    pub resource_group: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAiHeartbeatData {
+    pub status: AiHeartbeatStatus,
+    /// The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
+    /// platform, where the app brings its own provider key instead of an ambient cloud.
+    pub provider: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2725,5 +2802,54 @@ mod tests {
         assert_eq!(kv["data"]["backend"], "awsDynamoDb");
         assert!(kv["data"].get("summary").is_none());
         assert_eq!(kv["data"]["itemCount"], json!(null));
+    }
+
+    #[test]
+    fn ai_heartbeat_serializes_stable_tags() {
+        let aws = serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::AwsBedrock(
+            AwsBedrockAiHeartbeatData {
+                status: AiHeartbeatStatus::default(),
+                region: "us-east-1".to_string(),
+            },
+        )))
+        .unwrap();
+        let gcp =
+            serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::GcpVertex(
+                GcpVertexAiHeartbeatData {
+                    status: AiHeartbeatStatus::default(),
+                    project: "my-project".to_string(),
+                    location: "us-central1".to_string(),
+                },
+            )))
+            .unwrap();
+        let azure =
+            serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(
+                AzureFoundryAiHeartbeatData {
+                    status: AiHeartbeatStatus::default(),
+                    account_name: "my-ai-account".to_string(),
+                    endpoint: Some("https://my-ai-account.openai.azure.com/".to_string()),
+                    resource_group: Some("my-rg".to_string()),
+                    location: Some("eastus".to_string()),
+                },
+            )))
+            .unwrap();
+
+        assert_eq!(aws["resourceType"], "ai");
+        assert_eq!(aws["data"]["backend"], "awsBedrock");
+        assert_eq!(aws["data"]["region"], "us-east-1");
+        assert!(aws["data"].get("summary").is_none());
+
+        assert_eq!(gcp["resourceType"], "ai");
+        assert_eq!(gcp["data"]["backend"], "gcpVertex");
+        assert_eq!(gcp["data"]["project"], "my-project");
+        assert_eq!(gcp["data"]["location"], "us-central1");
+
+        assert_eq!(azure["resourceType"], "ai");
+        assert_eq!(azure["data"]["backend"], "azureFoundry");
+        assert_eq!(azure["data"]["accountName"], "my-ai-account");
+        assert_eq!(
+            azure["data"]["endpoint"],
+            "https://my-ai-account.openai.azure.com/"
+        );
     }
 }

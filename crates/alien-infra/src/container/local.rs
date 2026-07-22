@@ -252,35 +252,40 @@ impl LocalContainerController {
         // same-name value from the deployment environment snapshot.
         env_vars.extend(crate::core::direct_monitoring_auth_headers(ctx));
 
-        // Local Postgres inlines its password in the binding (no secret store) and `get_binding_params`
-        // strips it from the synced copy, so re-resolve the full binding from the manager's 0600
-        // metadata straight into the container env.
-        for link in &config.links {
-            if link.resource_type() != &Postgres::RESOURCE_TYPE {
-                continue;
-            }
-            let manager = ctx
+        // A linked binding that carries a runtime-only secret (Postgres password, BYO-key AI) is
+        // stripped from the synced copy by `get_binding_params`; re-resolve the full binding
+        // straight into the container env, which is never persisted in Alien state. Unlike the
+        // worker recover path, at container start the linked resource must exist — fail loud if
+        // nothing resolves.
+        for binding_ref in alien_local::RuntimeOnlyBindingRef::from_links(&config.links) {
+            let bindings_provider = ctx
                 .service_provider
-                .get_local_postgres_manager()
+                .get_local_bindings_provider()
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::LocalServicesNotAvailable {
-                        service_name: "postgres_manager".to_string(),
+                        service_name: "bindings_provider".to_string(),
                     })
                 })?;
-            let binding = manager.get_binding(link.id()).context(
-                ErrorData::ResourceControllerConfigError {
-                    resource_id: link.id().to_string(),
-                    message: format!("Failed to read binding for local Postgres '{}'", link.id()),
-                },
-            )?;
-            env_vars.extend(
-                alien_core::bindings::serialize_binding_as_env_var(link.id(), &binding).context(
-                    ErrorData::ResourceControllerConfigError {
-                        resource_id: link.id().to_string(),
-                        message: "Failed to serialize Postgres binding".to_string(),
-                    },
-                )?,
-            );
+            let entry = bindings_provider
+                .resolve_runtime_only_binding_env(&binding_ref.name, &binding_ref.resource_type)
+                .await
+                .context(ErrorData::ResourceControllerConfigError {
+                    resource_id: binding_ref.name.clone(),
+                    message: format!(
+                        "Failed to resolve runtime-only binding '{}'",
+                        binding_ref.name
+                    ),
+                })?
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ResourceControllerConfigError {
+                        resource_id: binding_ref.name.clone(),
+                        message: format!(
+                            "runtime-only binding '{}' resolved to nothing",
+                            binding_ref.name
+                        ),
+                    })
+                })?;
+            env_vars.extend(entry);
         }
 
         // Rewrite binding env vars to use container paths instead of host paths

@@ -341,10 +341,15 @@ fn validate_aws_actions(
                         }
                     }
                     None => {
-                        invalid_actions.push(format!(
-                            "{} - service '{}' not found",
-                            action, action_service
-                        ));
+                        // The pinned dataset can be missing a whole service, not just one
+                        // of its actions, when the service is newer than the snapshot. A
+                        // documented gap is still a real action.
+                        if !is_known_aws_dataset_gap(action) {
+                            invalid_actions.push(format!(
+                                "{} - service '{}' not found",
+                                action, action_service
+                            ));
+                        }
                     }
                 }
             } else {
@@ -371,10 +376,18 @@ fn validate_aws_actions(
 }
 
 fn is_known_aws_dataset_gap(action: &str) -> bool {
-    // API Gateway v2 authorizes tagged CreateStage calls through TagResource.
-    // The pinned IAM dataset still models API Gateway mostly through method-like
-    // actions such as POST/PATCH and does not list this action.
-    matches!(action, "apigateway:TagResource")
+    matches!(
+        action,
+        // API Gateway v2 authorizes tagged CreateStage calls through TagResource.
+        // The pinned IAM dataset still models API Gateway mostly through method-like
+        // actions such as POST/PATCH and does not list this action.
+        | "apigateway:TagResource"
+        // bedrock-mantle (the OpenAI/Anthropic-compatible inference endpoint) is newer
+        // than the pinned dataset snapshot, which carries no entry for the service at
+        // all. The action is real: AWS's own AmazonBedrockMantleInferenceAccess managed
+        // policy grants bedrock-mantle:CreateInference.
+        | "bedrock-mantle:CreateInference"
+    )
 }
 
 /// Validate GCP permissions in a permission set

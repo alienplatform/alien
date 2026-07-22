@@ -155,13 +155,14 @@ jobs:
 
       - name: TypeScript unit tests
         # The per-package vitest suites (commands receiver twins, bindings
-        # loader/error mapping, core schemas) — `test:ts` above is
-        # typecheck-only, so without this step they never ran in CI. Must run
-        # after the dev-addon build: the bindings kv/queue/storage/vault
-        # suites load the native addon.
+        # loader/error mapping, core schemas, ai-gateway client/gateway) —
+        # `test:ts` above is typecheck-only, so without this step they never
+        # ran in CI. Must run after the dev-addon build: the bindings
+        # kv/queue/storage/vault suites load the native addon. The ai-gateway
+        # suites inject a mock addon, so they need no built .node here.
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
+        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Rust fast tests (non-cloud)
         env:

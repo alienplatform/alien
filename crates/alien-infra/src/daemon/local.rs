@@ -12,7 +12,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
     LocalDaemonHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs, ResourceStatus, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context};
@@ -159,21 +159,16 @@ impl LocalDaemonController {
         runtime_only_env_names.sort();
         runtime_only_env_names.dedup();
 
-        // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
-        // worker manager delivers the binding to the process but never persists it to metadata.
-        let runtime_only_binding_names: Vec<String> = config
-            .links
-            .iter()
-            .filter(|link| link.resource_type() == &Postgres::RESOURCE_TYPE)
-            .map(|link| link.id().to_string())
-            .collect();
+        // Links whose binding carries a runtime-only secret (Postgres password, BYO-key AI): the
+        // supervisor delivers the binding to the process but never persists it to metadata.
+        let runtime_only_bindings = alien_local::RuntimeOnlyBindingRef::from_links(&config.links);
 
         manager
             .start_daemon(
                 &config.id,
                 env_vars,
                 alien_local::DaemonLaunchOptions {
-                    runtime_only_binding_names,
+                    runtime_only_bindings,
                     runtime_only_env_names,
                     command_override: config.command.clone(),
                     stop_grace_period_seconds: config.stop_grace_period_seconds,

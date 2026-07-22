@@ -11,6 +11,7 @@
 //! Per-resource design notes cover storage-account naming convergence,
 //! cross-tenant federated-identity trust, and AKS overlay activation.
 
+pub mod ai;
 pub mod artifact_registry;
 pub mod build;
 pub mod container_apps_environment;
@@ -28,6 +29,7 @@ pub mod storage_account;
 pub mod vault;
 pub mod worker;
 
+pub use ai::AzureAiEmitter;
 pub use artifact_registry::AzureArtifactRegistryEmitter;
 pub use build::AzureBuildEmitter;
 pub use container_apps_environment::AzureContainerAppsEnvironmentEmitter;

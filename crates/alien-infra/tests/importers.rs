@@ -24,17 +24,18 @@
 
 use alien_core::import::{
     data::{
-        AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
-        AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
+        AwsAiImportData, AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
+        AwsStorageImportData, AzureAiImportData,
+        AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
         AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
-        GcpBuildImportData, GcpKvImportData, GcpNetworkImportData, GcpServiceActivationImportData,
+        GcpAiImportData, GcpBuildImportData, GcpKvImportData, GcpNetworkImportData, GcpServiceActivationImportData,
         GcpStorageImportData, KubernetesClusterImportData,
     },
     ImportContext,
 };
 use alien_core::{
-    ArtifactRegistry, AwsManagementConfig, AwsOpenSearch, AwsOpenSearchOutputs,
+    Ai, ArtifactRegistry, AwsManagementConfig, AwsOpenSearch, AwsOpenSearchOutputs,
     AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentOutputs, AzureManagementConfig,
     AzureResourceGroup, AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
     AzureStorageAccountOutputs, Build, Email, EmailInbound, EmailOutputs, GcpManagementConfig,
@@ -865,10 +866,138 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
 }
 
 #[test]
+fn aws_ai_round_trip() {
+    let entry = entry(Ai::new("llm".to_string()).build());
+    let data = AwsAiImportData {
+        region: "us-east-1".to_string(),
+    };
+    let state = run_through_registry(
+        &Ai::RESOURCE_TYPE,
+        Platform::Aws,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-east-1",
+        &aws_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    // binding params must carry the region and identify Bedrock
+    let binding = state
+        .remote_binding_params
+        .as_ref()
+        .expect("AWS AI import must produce binding params");
+    assert_eq!(binding["service"], "bedrock");
+    assert_eq!(binding["region"], "us-east-1");
+
+    // outputs must expose provider "bedrock"
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|o| o.downcast_ref::<alien_core::AiOutputs>())
+        .expect("AWS AI import must produce AiOutputs");
+    assert_eq!(outputs.provider, "bedrock");
+    assert!(
+        outputs
+            .endpoint
+            .as_ref()
+            .is_some_and(|ep| ep.contains("us-east-1")),
+        "endpoint must contain the region"
+    );
+}
+
+#[test]
+fn gcp_ai_round_trip() {
+    let entry = entry(Ai::new("llm".to_string()).build());
+    let data = GcpAiImportData {
+        project_id: "my-project".to_string(),
+        location: "us-central1".to_string(),
+    };
+    let state = run_through_registry(
+        &Ai::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-central1",
+        &gcp_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    // binding params must carry project + location and identify Vertex AI
+    let binding = state
+        .remote_binding_params
+        .as_ref()
+        .expect("GCP AI import must produce binding params");
+    assert_eq!(binding["service"], "vertex");
+    assert_eq!(binding["project"], "my-project");
+    assert_eq!(binding["location"], "us-central1");
+
+    // outputs must expose provider "vertex"
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|o| o.downcast_ref::<alien_core::AiOutputs>())
+        .expect("GCP AI import must produce AiOutputs");
+    assert_eq!(outputs.provider, "vertex");
+    assert!(
+        outputs
+            .endpoint
+            .as_ref()
+            .is_some_and(|ep| ep.contains("us-central1") && ep.contains("my-project")),
+        "endpoint must contain the location and project"
+    );
+}
+
+#[test]
+fn azure_ai_round_trip() {
+    let entry = entry(Ai::new("llm".to_string()).build());
+    let data = AzureAiImportData {
+        account_name: "myprefix-llm".to_string(),
+        endpoint: "https://myprefix-llm.cognitiveservices.azure.com/".to_string(),
+        resource_group: "rg-alien".to_string(),
+        location: "eastus".to_string(),
+    };
+    let state = run_through_registry(
+        &Ai::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    // binding params must carry the endpoint + account and identify Foundry
+    let binding = state
+        .remote_binding_params
+        .as_ref()
+        .expect("Azure AI import must produce binding params");
+    assert_eq!(binding["service"], "foundry");
+    assert_eq!(
+        binding["endpoint"],
+        "https://myprefix-llm.cognitiveservices.azure.com/"
+    );
+    assert_eq!(binding["account"], "myprefix-llm");
+
+    // outputs must expose provider "foundry"
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|o| o.downcast_ref::<alien_core::AiOutputs>())
+        .expect("Azure AI import must produce AiOutputs");
+    assert_eq!(outputs.provider, "foundry");
+    assert_eq!(
+        outputs.endpoint.as_deref(),
+        Some("https://myprefix-llm.cognitiveservices.azure.com/")
+    );
+    assert_eq!(outputs.account.as_deref(), Some("myprefix-llm"));
+}
+
+#[test]
 fn registry_built_in_covers_all_oss_pairs() {
     let registry = ImporterRegistry::built_in();
 
     let aws_pairs: &[ResourceType] = &[
+        Ai::RESOURCE_TYPE,
         Storage::RESOURCE_TYPE,
         Kv::RESOURCE_TYPE,
         Vault::RESOURCE_TYPE,
@@ -891,6 +1020,7 @@ fn registry_built_in_covers_all_oss_pairs() {
     }
 
     let gcp_pairs: &[ResourceType] = &[
+        Ai::RESOURCE_TYPE,
         Storage::RESOURCE_TYPE,
         Kv::RESOURCE_TYPE,
         Vault::RESOURCE_TYPE,
@@ -912,6 +1042,7 @@ fn registry_built_in_covers_all_oss_pairs() {
     }
 
     let azure_pairs: &[ResourceType] = &[
+        Ai::RESOURCE_TYPE,
         Storage::RESOURCE_TYPE,
         Kv::RESOURCE_TYPE,
         Vault::RESOURCE_TYPE,

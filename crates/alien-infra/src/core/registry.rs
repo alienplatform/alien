@@ -15,7 +15,7 @@ use alien_core::Daemon;
 #[cfg(feature = "local")]
 use alien_core::Postgres;
 use alien_core::{
-    ArtifactRegistry, AwsOpenSearch, AzureContainerAppsEnvironment, AzureResourceGroup,
+    Ai, ArtifactRegistry, AwsOpenSearch, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, Build, Email, Kv, Network,
     RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
@@ -667,6 +667,32 @@ impl ResourceRegistry {
             Box::new(DefaultControllerFactory::<
                 crate::postgres::LocalPostgresController,
             >::new()),
+        );
+
+        // Register built-in Ai controllers
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            Ai::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<crate::ai::AwsAiController>::new()),
+        );
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            Ai::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<crate::ai::GcpAiController>::new()),
+        );
+        #[cfg(feature = "azure")]
+        registry.register_controller_factory(
+            Ai::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<crate::ai::AzureAiController>::new()),
+        );
+        #[cfg(feature = "local")]
+        registry.register_controller_factory(
+            Ai::RESOURCE_TYPE,
+            Platform::Local,
+            Box::new(DefaultControllerFactory::<crate::ai::LocalAiController>::new()),
         );
 
         // Register Local ComputeCluster controller

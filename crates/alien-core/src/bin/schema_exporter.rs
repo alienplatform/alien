@@ -91,6 +91,8 @@ use utoipa::OpenApi;
     AwsOpenSearchOutputs,
     Postgres,
     PostgresOutputs,
+    Ai,
+    AiOutputs,
     Queue,
     QueueOutputs,
     Email,

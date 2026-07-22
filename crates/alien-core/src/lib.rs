@@ -60,6 +60,7 @@ pub use stack_settings::*;
 mod public_urls;
 pub use public_urls::*;
 
+pub mod ai_catalog;
 pub mod bindings;
 pub use bindings::*;
 

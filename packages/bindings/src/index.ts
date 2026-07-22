@@ -25,7 +25,13 @@ export const vault = factories.vault
 /** Resolve the linked-container binding named `name`. */
 export const container = factories.container
 
-export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
+export {
+  AlienError,
+  BindingNotConfiguredError,
+  BindingNotFoundError,
+  defineError,
+  PostgresSecretResolutionError,
+} from "./errors.js"
 
 export type {
   Container,
@@ -42,3 +48,8 @@ export type {
   Storage,
   Vault,
 } from "./types.js"
+
+// Postgres is connection-only (no gRPC service): the binding env var carries the
+// connection details and the workload dials the database directly.
+export { getPostgresConnection, encodeUserinfo } from "./postgres.js"
+export type { PostgresConnection } from "./postgres.js"

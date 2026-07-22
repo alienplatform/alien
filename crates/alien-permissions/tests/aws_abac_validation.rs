@@ -296,7 +296,32 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
 fn documented_external_resource_scope(resource: &str) -> bool {
     // Runtime compute pulls images from the manager-owned artifact registry. Target-account
     // isolation is enforced by the repository resource policy that grants this role access.
-    resource == "arn:aws:ecr:*:${managingAccountId}:repository/*"
+    if resource == "arn:aws:ecr:*:${managingAccountId}:repository/*" {
+        return true;
+    }
+
+    // AWS Bedrock foundation models are a global AWS namespace owned by AWS, not the
+    // customer account. There is no per-stack or per-account ARN to scope to; the
+    // wildcard path is required and does not widen customer data access.
+    if resource == "arn:aws:bedrock:*::foundation-model/*" {
+        return true;
+    }
+
+    // AWS Bedrock cross-region inference profiles are system-defined by AWS
+    // (us.anthropic.*, etc.) and not per-stack resources. They live in the
+    // invoking account, so the ARN pins the account and wildcards only region
+    // and profile name. See AWS docs: "Prerequisites for inference profiles"
+    // (bedrock:InvokeModel* on both foundation-model/* and inference-profile/*).
+    if resource == "arn:aws:bedrock:*:${awsAccountId}:inference-profile/*" {
+        return true;
+    }
+
+    // The bedrock-mantle endpoint (native Anthropic Messages + OpenAI Responses)
+    // authorizes inference against the account's system-defined default project
+    // (`project/default`), which, like inference profiles, exists per account
+    // rather than per stack. The grant is pinned to that one project (not
+    // `project/*`) since the gateway only ever uses the default project.
+    resource == "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"
 }
 
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {

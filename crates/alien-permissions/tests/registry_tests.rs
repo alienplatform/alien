@@ -1,6 +1,204 @@
 use alien_permissions::{get_permission_set, has_permission_set, list_permission_set_ids};
 
 #[test]
+fn test_ai_permission_sets_resolve_via_registry() {
+    assert!(has_permission_set("ai/provision"));
+    assert!(has_permission_set("ai/management"));
+    assert!(has_permission_set("ai/heartbeat"));
+    assert!(has_permission_set("ai/invoke"));
+
+    let ids = list_permission_set_ids();
+    assert!(ids.contains(&"ai/provision"));
+    assert!(ids.contains(&"ai/management"));
+    assert!(ids.contains(&"ai/heartbeat"));
+    assert!(ids.contains(&"ai/invoke"));
+}
+
+#[test]
+fn test_ai_invoke_is_inference_only() {
+    let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
+
+    // AWS: inference actions only, enforced as an explicit allowlist. A substring
+    // denylist ("contains Create/Delete/Deploy") both over- and under-fires: it
+    // rejects `bedrock-mantle:CreateInference`, which IS an inference call (it
+    // creates an inference — it runs the model), while still passing any
+    // control-plane action whose name happens to lack those words. Adding an entry
+    // here is deliberate: it must be a data-plane inference call, never a
+    // deployment or other control-plane write, which belong in ai/provision.
+    const AWS_INFERENCE_ACTIONS: &[&str] = &[
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock-mantle:CreateInference",
+    ];
+    if let Some(aws) = &invoke.platforms.aws {
+        for entry in aws {
+            if let Some(actions) = &entry.grant.actions {
+                for action in actions {
+                    assert!(
+                        AWS_INFERENCE_ACTIONS.contains(&action.as_str()),
+                        "ai/invoke AWS grant must contain only inference actions; found \
+                         {action}, which is not in {AWS_INFERENCE_ACTIONS:?}. If it is a \
+                         data-plane inference call, add it deliberately; deployment and \
+                         control-plane actions belong in ai/provision."
+                    );
+                }
+            }
+        }
+    }
+
+    // GCP: must use a custom role (permissions list), never a predefined role.
+    // roles/aiplatform.user includes control-plane writes and sensitive-data reads
+    // that a workload must never hold.
+    if let Some(gcp) = &invoke.platforms.gcp {
+        for (i, entry) in gcp.iter().enumerate() {
+            assert!(
+                entry.grant.predefined_roles.is_none(),
+                "ai/invoke GCP entry {i} must not use predefinedRoles (grants over-broad control-plane access); use a permissions list instead"
+            );
+            let permissions = entry.grant.permissions.as_ref().unwrap_or_else(|| {
+                panic!("ai/invoke GCP entry {i} must have a permissions list")
+            });
+            for perm in permissions {
+                // No control-plane write actions.
+                assert!(
+                    !perm.contains("deploy") && !perm.contains("upload") && !perm.contains("delete"),
+                    "ai/invoke GCP grant must not contain control-plane write permissions, found: {perm}"
+                );
+                // No sensitive-data read actions.
+                assert!(
+                    !perm.starts_with("datasets.")
+                        && !perm.contains("featurestores")
+                        && !perm.contains("ragCorpora")
+                        && !perm.contains("sessions"),
+                    "ai/invoke GCP grant must not contain sensitive-data read permissions, found: {perm}"
+                );
+            }
+        }
+    }
+
+    // Azure: must NOT grant deployments/write (the key deploy-on-demand invariant)
+    if let Some(azure) = &invoke.platforms.azure {
+        for entry in azure {
+            if let Some(actions) = &entry.grant.actions {
+                for action in actions {
+                    assert_ne!(
+                        action,
+                        "Microsoft.CognitiveServices/accounts/deployments/write",
+                        "ai/invoke must not grant deployments/write; that belongs in ai/provision"
+                    );
+                }
+            }
+            // predefinedRoles on invoke must not be management-class roles
+            if let Some(roles) = &entry.grant.predefined_roles {
+                for role in roles {
+                    assert_ne!(
+                        role, "Contributor",
+                        "ai/invoke must not use Contributor role"
+                    );
+                    assert_ne!(role, "Owner", "ai/invoke must not use Owner role");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_ai_provision_has_deployment_writes() {
+    // The predefined model set is deployed at provision time, so deployments/{write,read}
+    // live in ai/provision (control plane), not in ai/management or ai/invoke.
+    let provision = get_permission_set("ai/provision").expect("ai/provision must resolve");
+    let azure = provision
+        .platforms
+        .azure
+        .as_ref()
+        .expect("ai/provision must have Azure platform");
+    let has_write = azure.iter().any(|entry| {
+        entry
+            .grant
+            .actions
+            .as_ref()
+            .map(|actions| {
+                actions.contains(
+                    &"Microsoft.CognitiveServices/accounts/deployments/write".to_string(),
+                )
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        has_write,
+        "ai/provision Azure must grant deployments/write for the predefined model set"
+    );
+
+    // ai/management is read-only metadata; deployment writes live in ai/provision.
+    let management = get_permission_set("ai/management").expect("ai/management must resolve");
+    let mgmt_azure = management
+        .platforms
+        .azure
+        .as_ref()
+        .expect("ai/management must have Azure platform");
+    let mgmt_has_write = mgmt_azure.iter().any(|entry| {
+        entry
+            .grant
+            .actions
+            .as_ref()
+            .map(|actions| {
+                actions.contains(
+                    &"Microsoft.CognitiveServices/accounts/deployments/write".to_string(),
+                )
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        !mgmt_has_write,
+        "ai/management must not grant deployments/write"
+    );
+}
+
+#[test]
+fn test_ai_invoke_uses_openai_user_role() {
+    let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
+    let azure = invoke
+        .platforms
+        .azure
+        .as_ref()
+        .expect("ai/invoke must have Azure platform");
+    let uses_openai_user = azure.iter().any(|entry| {
+        entry
+            .grant
+            .predefined_roles
+            .as_ref()
+            .map(|roles| roles.contains(&"Cognitive Services OpenAI User".to_string()))
+            .unwrap_or(false)
+    });
+    assert!(
+        uses_openai_user,
+        "ai/invoke Azure must use the least-privilege 'Cognitive Services OpenAI User' role"
+    );
+}
+
+#[test]
+fn test_openai_user_role_id_resolves() {
+    use alien_permissions::generators::azure_runtime::azure_predefined_role_id;
+    assert_eq!(
+        azure_predefined_role_id("Cognitive Services OpenAI User"),
+        Some("5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"),
+        "the OpenAI-User role GUID must be registered"
+    );
+}
+
+#[test]
+fn test_ai_permission_sets_have_all_platforms() {
+    for id in ["ai/provision", "ai/management", "ai/heartbeat", "ai/invoke"] {
+        let perm_set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));
+        assert_eq!(perm_set.id, id);
+        assert!(!perm_set.description.is_empty(), "{id} must have a description");
+        assert!(perm_set.platforms.aws.is_some(), "{id} must have AWS platform");
+        assert!(perm_set.platforms.gcp.is_some(), "{id} must have GCP platform");
+        assert!(perm_set.platforms.azure.is_some(), "{id} must have Azure platform");
+    }
+}
+
+#[test]
 fn test_registry_basic_functionality() {
     // Test that the registry contains expected permission sets
     assert!(has_permission_set("storage/data-read"));

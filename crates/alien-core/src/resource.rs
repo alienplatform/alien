@@ -214,6 +214,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::Postgres>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "ai" => Box::new(
+                serde_json::from_value::<crate::resources::Ai>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "network" => Box::new(
                 serde_json::from_value::<crate::resources::Network>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -273,6 +277,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "email",
                         "kv",
                         "postgres",
+                        "ai",
                         "network",
                         "build",
                         "service-account",
@@ -560,6 +565,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::PostgresOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "ai" => Box::new(
+                serde_json::from_value::<crate::resources::AiOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "network" => Box::new(
                 serde_json::from_value::<crate::resources::NetworkOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -624,6 +633,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "email",
                         "kv",
                         "postgres",
+                        "ai",
                         "network",
                         "build",
                         "service-account",

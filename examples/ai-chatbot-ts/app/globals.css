@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* Alien-brand dark theme tokens: near-black surfaces,
+   terminal-green brand, green-tinted landing text, borders for depth. */
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-brand: #5aff75;
+  --color-brand-200: #7dff93;
+  --color-brand-foreground: #021a06;
+  --color-landing-foreground: #d0e4d3;
+  --color-landing-foreground-200: #7eb78a;
+  --color-card: color-mix(in oklab, #27272a 55%, #000);
+  --color-edge: rgb(255 255 255 / 7.5%);
+}

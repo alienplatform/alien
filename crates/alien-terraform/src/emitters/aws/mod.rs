@@ -4,6 +4,7 @@
 //! returns `hcl::Block` / `hcl::Expression` directly (no intermediate IR).
 //! Shared helpers live in [`helpers`].
 
+pub mod ai;
 pub mod artifact_registry;
 pub mod build;
 pub mod helpers;
@@ -16,6 +17,7 @@ pub mod storage;
 pub mod vault;
 pub mod worker;
 
+pub use ai::AwsAiEmitter;
 pub use artifact_registry::AwsArtifactRegistryEmitter;
 pub use build::AwsBuildEmitter;
 pub use kv::AwsKvEmitter;

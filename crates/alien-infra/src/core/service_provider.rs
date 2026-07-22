@@ -46,6 +46,7 @@ use alien_azure_clients::{
         AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
         ServiceBusManagementApi,
     },
+    cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi},
     storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi},
     tables::{AzureTableManagementClient, TableManagementApi},
     AzureClientConfig, AzureTokenCache,
@@ -225,6 +226,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn StorageAccountsApi>>;
+    fn get_azure_cognitive_services_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn CognitiveServicesAccountsApi>>;
     fn get_azure_key_vault_management_client(
         &self,
         config: &AzureClientConfig,
@@ -943,6 +948,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn StorageAccountsApi>> {
         Ok(Arc::new(AzureStorageAccountsClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_cognitive_services_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn CognitiveServicesAccountsApi>> {
+        Ok(Arc::new(AzureCognitiveServicesClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

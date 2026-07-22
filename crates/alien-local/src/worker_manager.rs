@@ -58,6 +58,36 @@ struct WorkerRuntime {
     metadata: WorkerMetadata,
 }
 
+/// A linked resource whose binding carries a runtime-only secret (a local Postgres password, a
+/// local BYO-key AI binding). The name locates the binding env var; the resource type routes live
+/// re-resolution to the right local source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeOnlyBindingRef {
+    /// The linked resource's binding name (`ALIEN_<NAME>_BINDING`).
+    pub name: String,
+    /// The linked resource's type (e.g. "postgres", "ai").
+    pub resource_type: String,
+}
+
+impl RuntimeOnlyBindingRef {
+    /// Refs for the links whose Local binding carries a runtime-only secret — the single list of
+    /// types `LocalBindingsProvider::resolve_runtime_only_binding_env` knows how to re-resolve.
+    pub fn from_links(links: &[alien_core::ResourceRef]) -> Vec<Self> {
+        links
+            .iter()
+            .filter(|link| {
+                link.resource_type() == &alien_core::Postgres::RESOURCE_TYPE
+                    || link.resource_type() == &alien_core::Ai::RESOURCE_TYPE
+            })
+            .map(|link| Self {
+                name: link.id().to_string(),
+                resource_type: link.resource_type().to_string(),
+            })
+            .collect()
+    }
+}
+
 /// Persistent metadata for a worker (saved to disk)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WorkerMetadata {
@@ -74,9 +104,13 @@ pub(crate) struct WorkerMetadata {
     /// Transport port for the runtime (persisted to enable transparent recovery)
     #[serde(default)]
     pub(crate) transport_port: Option<u16>,
-    /// Names of linked resources whose binding is a runtime-only secret (a local Postgres password),
-    /// persisted so recovery/restart can re-resolve it live; the secret itself is never written here.
+    /// Linked resources whose binding is a runtime-only secret, persisted so recovery/restart
+    /// can re-resolve it live by resource type; the secret itself is never written here.
     #[serde(default)]
+    pub(crate) runtime_only_bindings: Vec<RuntimeOnlyBindingRef>,
+    /// Names-only form written by older CLIs (no resource type recorded); folded into
+    /// `runtime_only_bindings` on read, never written back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) runtime_only_binding_names: Vec<String>,
     /// Env var NAMES whose resolved values are deployment secrets; the values
     /// are stripped from this persisted file (see `plan_worker_launch`) and
@@ -88,6 +122,23 @@ pub(crate) struct WorkerMetadata {
     /// restarts keep the configured window; absent in pre-existing metadata.
     #[serde(default)]
     pub(crate) stop_grace_period_seconds: Option<u32>,
+}
+
+impl WorkerMetadata {
+    /// Typed runtime-only refs for (re)start, folding legacy names-only entries in as Postgres —
+    /// the only type that existed when the names-only format was written.
+    fn runtime_only_binding_refs(&self) -> Vec<RuntimeOnlyBindingRef> {
+        let mut refs = self.runtime_only_bindings.clone();
+        for name in &self.runtime_only_binding_names {
+            if !refs.iter().any(|r| &r.name == name) {
+                refs.push(RuntimeOnlyBindingRef {
+                    name: name.clone(),
+                    resource_type: alien_core::Postgres::RESOURCE_TYPE.to_string(),
+                });
+            }
+        }
+        refs
+    }
 }
 
 impl LocalWorkerManager {
@@ -261,10 +312,11 @@ impl LocalWorkerManager {
         info!(worker_id = %metadata.worker_id, "Recovering worker from previous run");
 
         // Restart the worker using metadata
+        let runtime_only_bindings = metadata.runtime_only_binding_refs();
         Self::start_worker_internal(
             &metadata.worker_id,
             metadata.env_vars,
-            metadata.runtime_only_binding_names,
+            runtime_only_bindings,
             metadata.runtime_only_env_names,
             state_dir,
             workers,
@@ -330,10 +382,11 @@ impl LocalWorkerManager {
                 warn!(worker_id = %worker_id, "Auto-restarting worker...");
 
                 // Restart using metadata
+                let runtime_only_bindings = metadata.runtime_only_binding_refs();
                 if let Err(e) = Self::start_worker_internal(
                     &metadata.worker_id,
                     metadata.env_vars,
-                    metadata.runtime_only_binding_names,
+                    runtime_only_bindings,
                     metadata.runtime_only_env_names,
                     state_dir,
                     workers,
@@ -486,13 +539,13 @@ impl LocalWorkerManager {
         &self,
         id: &str,
         env_vars: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
+        runtime_only_bindings: Vec<RuntimeOnlyBindingRef>,
         runtime_only_env_names: Vec<String>,
     ) -> Result<String> {
         Self::start_worker_internal(
             id,
             env_vars,
-            runtime_only_binding_names,
+            runtime_only_bindings,
             runtime_only_env_names,
             &self.state_dir,
             &self.workers,
@@ -502,7 +555,7 @@ impl LocalWorkerManager {
     }
 
     /// Builds the worker's persisted metadata and its live process env. The persisted metadata has
-    /// each named runtime-only binding's key removed — keyed on the names, not on what re-resolved,
+    /// each marked runtime-only binding's key removed — keyed on the refs, not on what re-resolved,
     /// so a secret never persists even if live re-resolution returns nothing (e.g. the resource
     /// vanished between env-build and start) — while the live env keeps the re-resolved secret. Pure
     /// (no IO) so the "password never persisted" invariant is unit-testable on the artifact we
@@ -514,7 +567,7 @@ impl LocalWorkerManager {
         existing: &WorkerMetadata,
         transport_port: Option<u16>,
         passed_env: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
+        runtime_only_bindings: Vec<RuntimeOnlyBindingRef>,
         runtime_only_env_names: &[String],
         resolved: &[(String, HashMap<String, String>)],
     ) -> (WorkerMetadata, HashMap<String, String>) {
@@ -528,8 +581,8 @@ impl LocalWorkerManager {
         {
             runtime_only_env_names.push(alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string());
         }
-        for name in &runtime_only_binding_names {
-            persisted_env.remove(&alien_core::bindings::binding_env_var_name(name));
+        for binding in &runtime_only_bindings {
+            persisted_env.remove(&alien_core::bindings::binding_env_var_name(&binding.name));
         }
         // Resolved deployment secrets (including ALIEN_COMMANDS_TOKEN) never
         // persist either — same invariant as the binding secrets above.
@@ -546,7 +599,8 @@ impl LocalWorkerManager {
             runtime_command: existing.runtime_command.clone(),
             working_dir: existing.working_dir.clone(),
             transport_port,
-            runtime_only_binding_names,
+            runtime_only_bindings,
+            runtime_only_binding_names: Vec::new(),
             runtime_only_env_names,
             stop_grace_period_seconds: existing.stop_grace_period_seconds,
         };
@@ -557,7 +611,7 @@ impl LocalWorkerManager {
     async fn start_worker_internal(
         id: &str,
         env_vars: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
+        runtime_only_bindings: Vec<RuntimeOnlyBindingRef>,
         runtime_only_env_names: Vec<String>,
         state_dir: &PathBuf,
         workers: &Arc<Mutex<HashMap<String, WorkerRuntime>>>,
@@ -627,15 +681,15 @@ impl LocalWorkerManager {
 
         // Re-resolve each secret live (kept out of persisted metadata; see plan_worker_launch).
         let mut resolved_bindings = Vec::new();
-        for name in &runtime_only_binding_names {
+        for binding in &runtime_only_bindings {
             if let Some(entry) = bindings_provider
-                .resolve_runtime_only_binding_env(name)
+                .resolve_runtime_only_binding_env(&binding.name, &binding.resource_type)
                 .await
                 .context(ErrorData::Other {
-                    message: format!("Failed to resolve runtime-only binding '{}'", name),
+                    message: format!("Failed to resolve runtime-only binding '{}'", binding.name),
                 })?
             {
-                resolved_bindings.push((name.clone(), entry));
+                resolved_bindings.push((binding.name.clone(), entry));
             }
         }
         let (updated_metadata, runtime_env_vars) = Self::plan_worker_launch(
@@ -644,7 +698,7 @@ impl LocalWorkerManager {
             &existing_metadata,
             Some(port),
             env_vars,
-            runtime_only_binding_names,
+            runtime_only_bindings,
             &runtime_only_env_names,
             &resolved_bindings,
         );
@@ -1285,7 +1339,8 @@ impl LocalWorkerManager {
                 runtime_command: metadata.runtime_command(),
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
-                runtime_only_binding_names: Vec::new(), // Will be set during start_worker
+                runtime_only_bindings: Vec::new(), // Will be set during start_worker
+                runtime_only_binding_names: Vec::new(),
                 runtime_only_env_names: Vec::new(), // Will be set during start_daemon
                 stop_grace_period_seconds: None, // Will be set during start_daemon
             };
@@ -1362,7 +1417,8 @@ impl LocalWorkerManager {
                 runtime_command: metadata.runtime_command(),
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
-                runtime_only_binding_names: Vec::new(), // Will be set during start_worker
+                runtime_only_bindings: Vec::new(), // Will be set during start_worker
+                runtime_only_binding_names: Vec::new(),
                 runtime_only_env_names: Vec::new(), // Will be set during start_daemon
                 stop_grace_period_seconds: None, // Will be set during start_daemon
             };
@@ -1506,6 +1562,7 @@ mod tests {
             runtime_command: vec!["bun".to_string()],
             working_dir: None,
             transport_port: None,
+            runtime_only_bindings: Vec::new(),
             runtime_only_binding_names: Vec::new(),
             runtime_only_env_names: Vec::new(),
             stop_grace_period_seconds: None,
@@ -1530,21 +1587,22 @@ mod tests {
             &existing,
             Some(3000),
             base,
-            vec!["pgdb".to_string()],
+            vec![RuntimeOnlyBindingRef {
+                name: "pgdb".to_string(),
+                resource_type: "postgres".to_string(),
+            }],
             &[],
             &resolved,
         );
 
         // Persisted metadata: no password, no binding key; the (non-secret) link name stays.
         let json = serde_json::to_string(&metadata).expect("metadata serializes");
-        assert!(
-            !json.contains("s3cr3t"),
-            "persisted metadata leaks the password: {json}"
-        );
+        assert!(!json.contains("s3cr3t"), "persisted metadata leaks the password: {json}");
         assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
         assert!(metadata
-            .runtime_only_binding_names
-            .contains(&"pgdb".to_string()));
+            .runtime_only_bindings
+            .iter()
+            .any(|r| r.name == "pgdb" && r.resource_type == "postgres"));
 
         // Live process env: the password is delivered to the worker.
         assert!(live
@@ -1562,6 +1620,7 @@ mod tests {
             runtime_command: vec!["bun".to_string()],
             working_dir: None,
             transport_port: None,
+            runtime_only_bindings: Vec::new(),
             runtime_only_binding_names: Vec::new(),
             runtime_only_env_names: Vec::new(),
             stop_grace_period_seconds: None,
@@ -1616,6 +1675,7 @@ mod tests {
             runtime_command: Vec::new(),
             working_dir: None,
             transport_port: None,
+            runtime_only_bindings: Vec::new(),
             runtime_only_binding_names: vec!["database".to_string()],
             runtime_only_env_names: Vec::new(),
             stop_grace_period_seconds: None,
@@ -1644,6 +1704,7 @@ mod tests {
             runtime_command: Vec::new(),
             working_dir: None,
             transport_port: None,
+            runtime_only_bindings: Vec::new(),
             runtime_only_binding_names: Vec::new(),
             runtime_only_env_names: Vec::new(),
             stop_grace_period_seconds: None,
@@ -1676,6 +1737,7 @@ mod tests {
             runtime_command: Vec::new(),
             working_dir: None,
             transport_port: None,
+            runtime_only_bindings: Vec::new(),
             runtime_only_binding_names: Vec::new(),
             runtime_only_env_names: Vec::new(),
             stop_grace_period_seconds: None,
@@ -1693,17 +1755,42 @@ mod tests {
             &existing,
             Some(3000),
             base,
-            vec!["pgdb".to_string()],
+            vec![RuntimeOnlyBindingRef {
+                name: "pgdb".to_string(),
+                resource_type: "postgres".to_string(),
+            }],
             &[],
             &[],
         );
         let json = serde_json::to_string(&metadata).expect("metadata serializes");
-        assert!(
-            !json.contains("s3cr3t"),
-            "named binding must be stripped even unresolved: {json}"
-        );
+        assert!(!json.contains("s3cr3t"), "named binding must be stripped even unresolved: {json}");
         assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
         assert_eq!(metadata.env_vars.get("FOO"), Some(&"bar".to_string()));
+    }
+
+    /// Metadata written by a names-only CLI (the Postgres-only era) still recovers: the legacy
+    /// names fold into typed refs as Postgres, and typed entries win over a same-name legacy one.
+    #[test]
+    fn legacy_names_only_metadata_recovers_as_postgres_refs() {
+        let metadata: WorkerMetadata = serde_json::from_str(
+            r#"{
+                "worker_id": "w",
+                "extracted_path": "/w",
+                "env_vars": {},
+                "runtime_command": [],
+                "working_dir": null,
+                "runtime_only_binding_names": ["db"]
+            }"#,
+        )
+        .expect("legacy metadata deserializes");
+        let refs = metadata.runtime_only_binding_refs();
+        assert_eq!(
+            refs,
+            vec![RuntimeOnlyBindingRef {
+                name: "db".to_string(),
+                resource_type: "postgres".to_string(),
+            }]
+        );
     }
 
     fn paths(names: &[&str]) -> Vec<PathBuf> {
