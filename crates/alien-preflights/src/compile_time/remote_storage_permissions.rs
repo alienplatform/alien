@@ -67,6 +67,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access,
+                enabled_when: None,
             },
         );
         Stack {

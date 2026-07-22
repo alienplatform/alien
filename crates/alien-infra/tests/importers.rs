@@ -71,6 +71,7 @@ fn remote_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         lifecycle: ResourceLifecycle::Live,
         dependencies: vec![],
         remote_access: true,
+        enabled_when: None,
     }
 }
 

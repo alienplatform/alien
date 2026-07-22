@@ -346,6 +346,7 @@ mod tests {
             lifecycle,
             dependencies: Vec::new(),
             remote_access,
+            enabled_when: None,
         }
     }
 
