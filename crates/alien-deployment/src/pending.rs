@@ -156,6 +156,16 @@ pub fn strip_declined_resources(
             "The deployer declined this gated resource; it leaves the desired stack"
         );
         stack.resources.shift_remove(resource_id);
+        // A declined resource keeps no grant. Its resource-scoped entry must also
+        // leave every permission profile, or a runtime consumer that derives
+        // grants straight from the profile (the GCP service-account controller
+        // applies resource grants as project-level bindings, since Vertex can't
+        // scope IAM to a sub-resource) would re-grant it — the runtime twin of
+        // the setup emitter's enabled_when gate. The "*" wildcard is not
+        // resource-scoped, so it is left alone.
+        for profile in stack.permissions.profiles.values_mut() {
+            profile.0.shift_remove(resource_id.as_str());
+        }
     }
 
     Ok(stack)
@@ -249,8 +259,8 @@ fn environment_collection_context(
 mod tests {
     use super::*;
     use alien_core::{
-        Kv, KubernetesClientConfig, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
-        StackInputDefinition, StackResourceState,
+        Kv, KubernetesClientConfig, PermissionProfile, Resource, ResourceLifecycle,
+        ResourceStatus, ServiceAccount, StackInputDefinition, StackResourceState,
     };
 
     fn imported_state_with(resource_id: &str, resource: Resource) -> StackState {
@@ -311,6 +321,58 @@ mod tests {
 
         assert!(!stripped.resources.contains_key("analytics"));
         assert!(stripped.resources.contains_key("execution-sa"));
+    }
+
+    /// A declined gated resource must also lose its resource-scoped grant from
+    /// every permission profile (see `strip_declined_resources` for why), while
+    /// the `"*"` wildcard survives.
+    #[test]
+    fn a_declined_resource_loses_its_permission_profile_grant() {
+        let stack = Stack::new("gated-stack".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                Kv::new("analytics".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "analyticsEnabled",
+            )
+            .permission(
+                "execution",
+                PermissionProfile::new()
+                    .resource("analytics", ["kv/write"])
+                    .resource("*", ["worker/invoke"]),
+            )
+            .build();
+
+        // The import delivered the service account but not the gated store, so
+        // the store is the deployer's declined resource.
+        let state = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+
+        let stripped = strip_declined_resources(stack, &state, &Default::default())
+            .expect("frozen rules never error");
+
+        assert!(
+            !stripped.resources.contains_key("analytics"),
+            "the declined resource leaves the desired stack"
+        );
+        let profile = stripped
+            .permissions
+            .profiles
+            .get("execution")
+            .expect("the profile itself survives");
+        assert!(
+            !profile.0.contains_key("analytics"),
+            "the declined resource's grant leaves the profile so no runtime consumer re-applies it"
+        );
+        assert!(
+            profile.0.contains_key("*"),
+            "the wildcard grant is not resource-scoped and is untouched"
+        );
     }
 
     /// An empty state means this runner creates the frozen resources itself
