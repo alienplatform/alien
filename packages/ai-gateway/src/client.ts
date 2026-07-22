@@ -367,9 +367,9 @@ export function createAiClient(gateway: Gateway): AiClient {
 
     /**
      * Resolve an AI binding to `{ baseURL, apiKey? }` for a plain OpenAI-compatible client
-     * (e.g. the Vercel AI SDK's `createOpenAICompatible`). Mirrors `getPostgresConnection`:
-     * the binding decides the target, so app code is identical whether AI is a BYO-key
-     * provider (local) or an ambient-cloud model behind the gateway.
+     * (e.g. the Vercel AI SDK's `createOpenAICompatible`). The binding decides the target,
+     * so app code is identical whether AI is a BYO-key provider (local) or an ambient-cloud
+     * model behind the gateway.
      *
      * Awaits gateway startup for an ambient binding, so the returned `baseURL` is live
      * before the caller's client uses it.
