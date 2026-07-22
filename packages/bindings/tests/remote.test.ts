@@ -15,12 +15,15 @@ const projectId = "prj_cccccccccccccccccccccccccccc"
 const deploymentGroupId = "dg_dddddddddddddddddddddddddddd"
 const workspaceId = "ws_eeeeeeeeeeeeeeeeeeeeeeee"
 const token = "remote-secret-token"
+const bindingToken = "manager-binding-token"
 
 let managerServer: Server | undefined
 let platformServer: Server | undefined
 let managerOrigin: string
 let platformOrigin: string
-const authorizations: Array<string | undefined> = []
+const platformAuthorizations: Array<string | undefined> = []
+const managerAuthorizations: Array<string | undefined> = []
+const bindingTokenBodies: unknown[] = []
 const resolveBodies: unknown[] = []
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -58,7 +61,7 @@ function close(server: Server | undefined): Promise<void> {
 
 beforeAll(async () => {
   managerServer = createServer(async (request, response) => {
-    authorizations.push(request.headers.authorization)
+    managerAuthorizations.push(request.headers.authorization)
     if (request.method !== "POST" || request.url !== "/v1/bindings/resolve") {
       json(response, 404, { message: "not found" })
       return
@@ -74,8 +77,8 @@ beforeAll(async () => {
   })
   managerOrigin = await listen(managerServer)
 
-  platformServer = createServer((request, response) => {
-    authorizations.push(request.headers.authorization)
+  platformServer = createServer(async (request, response) => {
+    platformAuthorizations.push(request.headers.authorization)
     if (request.method === "GET" && request.url === `/v1/deployments/${deploymentId}`) {
       json(response, 200, {
         id: deploymentId,
@@ -94,19 +97,15 @@ beforeAll(async () => {
       })
       return
     }
-    if (request.method === "GET" && request.url === `/v1/managers/${managerId}`) {
+    if (request.method === "POST" && request.url === `/v1/managers/${managerId}/binding-token`) {
+      bindingTokenBodies.push(await bodyOf(request))
       json(response, 200, {
-        id: managerId,
-        name: "fixture-manager",
-        targets: ["local"],
-        managementConfigs: {},
-        isSystem: true,
-        workspaceId,
-        status: "healthy",
-        url: managerOrigin,
-        managedDeploymentCount: 1,
-        defaultProjectCount: 0,
-        createdAt: "2026-01-01T00:00:00Z",
+        accessToken: bindingToken,
+        expiresIn: 300,
+        tokenType: "Bearer",
+        managerUrl: managerOrigin,
+        databaseId: null,
+        controlPlaneUrl: null,
       })
       return
     }
@@ -131,7 +130,14 @@ describe("Bindings.forRemoteDeployment (real addon)", () => {
       message: "Remote access was revoked",
       retryable: false,
     })
-    expect(resolveBodies).toEqual([{ deploymentId, resourceId: "uploads" }])
-    expect(authorizations.every(value => value === `Bearer ${token}`)).toBe(true)
+    // A manager-side authorization rejection refreshes discovery once before
+    // preserving the second structured denial for the caller.
+    expect(bindingTokenBodies).toEqual([{ deploymentId }, { deploymentId }])
+    expect(resolveBodies).toEqual([
+      { deploymentId, resourceId: "uploads" },
+      { deploymentId, resourceId: "uploads" },
+    ])
+    expect(platformAuthorizations).toEqual(Array(4).fill(`Bearer ${token}`))
+    expect(managerAuthorizations).toEqual(Array(2).fill(`Bearer ${bindingToken}`))
   })
 })

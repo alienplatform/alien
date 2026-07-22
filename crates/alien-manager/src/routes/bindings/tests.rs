@@ -357,23 +357,35 @@ fn remote_binding_deployment_status_gate_is_post_handoff_only() {
         "updating",
         "update-failed",
     ] {
-        assert!(deployment_status_allows_remote_bindings(status), "{status}");
+        assert!(
+            deployment_status_allows_remote_bindings(deployment_status_from_record(status)),
+            "{status}"
+        );
     }
     for status in [
         "pending",
+        "preflights-failed",
         "initial-setup",
+        "initial-setup-failed",
         "provisioning",
+        "waiting-for-machines",
+        "provisioning-failed",
         "delete-pending",
         "deleting",
         "delete-failed",
+        "teardown-required",
+        "teardown-failed",
         "deleted",
         "error",
     ] {
         assert!(
-            !deployment_status_allows_remote_bindings(status),
+            !deployment_status_allows_remote_bindings(deployment_status_from_record(status)),
             "{status}"
         );
     }
+    assert!(!deployment_status_allows_remote_bindings(
+        deployment_status_from_record("future-or-corrupt-status")
+    ));
 }
 
 #[test]

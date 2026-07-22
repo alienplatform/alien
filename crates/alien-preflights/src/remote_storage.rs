@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
-use alien_core::{DeploymentConfig, Platform, ResourceLifecycle, Stack, StackState, Storage};
+use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 
 pub(crate) const REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID: &str = "storage/remote-data-write";
 
@@ -14,11 +14,7 @@ pub(crate) fn resource_ids(stack: &Stack, platform: Platform) -> Vec<String> {
 
     stack
         .resources()
-        .filter(|(_, entry)| {
-            entry.remote_access
-                && entry.lifecycle == ResourceLifecycle::Frozen
-                && entry.config.downcast_ref::<Storage>().is_some()
-        })
+        .filter(|(_, entry)| entry.is_remote_frozen_storage())
         .map(|(resource_id, _)| resource_id.clone())
         .collect()
 }
@@ -78,6 +74,7 @@ mod tests {
     use super::*;
     use alien_core::{
         bindings::StorageBinding, EnvironmentVariablesSnapshot, ExternalBinding, ExternalBindings,
+        ResourceLifecycle, Storage,
     };
 
     fn deployment_config() -> DeploymentConfig {

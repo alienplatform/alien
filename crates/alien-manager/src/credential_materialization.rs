@@ -327,8 +327,7 @@ fn aws_s3_session_policy(bucket_name: &str) -> Result<String, AlienError<ErrorDa
                 "Action": [
                     "s3:GetObject",
                     "s3:PutObject",
-                    "s3:DeleteObject",
-                    "s3:AbortMultipartUpload"
+                    "s3:DeleteObject"
                 ],
                 "Resource": [format!("arn:aws:s3:::{bucket_name}/*")]
             }
@@ -372,8 +371,7 @@ mod tests {
                         "Action": [
                             "s3:GetObject",
                             "s3:PutObject",
-                            "s3:DeleteObject",
-                            "s3:AbortMultipartUpload"
+                            "s3:DeleteObject"
                         ],
                         "Resource": ["arn:aws:s3:::requested-bucket/*"]
                     }

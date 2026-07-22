@@ -22,7 +22,8 @@ pub use azure_import::AzureRemoteStackManagementImporter;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
+use alien_core::{BindingValue, StorageBinding};
+use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
 
 /// Stable fingerprint of every input that changes the management identity's
@@ -69,6 +70,50 @@ fn ensure_setup_owned_remote_storage(
         ));
     }
     Ok(())
+}
+
+fn remote_storage_binding(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<Option<StorageBinding>> {
+    ensure_setup_owned_remote_storage(ctx, resource_id)?;
+
+    let Some(binding) = ctx
+        .state
+        .resource(resource_id)
+        .and_then(|state| state.remote_binding_params.as_ref())
+    else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(binding.clone())
+        .into_alien_error()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Remote Storage resource '{resource_id}' has invalid binding parameters"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
+        .map(Some)
+}
+
+fn concrete_storage_binding_value(
+    value: BindingValue<String>,
+    resource_id: &str,
+    field_name: &str,
+    provider: &str,
+) -> Result<String> {
+    match value {
+        BindingValue::Value(value) => Ok(value),
+        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => {
+            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' requires a concrete {provider} {field_name}"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }))
+        }
+    }
 }
 
 #[cfg(feature = "test")]

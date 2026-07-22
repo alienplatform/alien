@@ -6,8 +6,8 @@
 
 use alien_core::{
     AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, BindingValue,
-    ClientConfig, GcpClientConfig, GcpCredentials, Platform, ResourceLifecycle, ResourceStatus,
-    Storage, StorageBinding,
+    ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Platform, ResourceLifecycle,
+    ResourceStatus, Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -27,7 +27,7 @@ use crate::credential_materialization::{
     AZURE_REMOTE_STORAGE_PERMISSIONS,
 };
 use crate::error::ErrorData;
-use crate::traits::{DeploymentRecord, ReleaseStore};
+use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseStore};
 
 /// The remote client refreshes five minutes before this server-provided hint.
 /// One hour matches the maximum supported lifetime for manager-minted cloud credentials.
@@ -505,7 +505,8 @@ async fn resolve_binding(
             .into_response();
     }
 
-    if !deployment_status_allows_remote_bindings(&deployment.status) {
+    if !deployment_status_allows_remote_bindings(deployment_status_from_record(&deployment.status))
+    {
         return ErrorData::bad_request(format!(
             "Deployment is not operational for remote bindings (status '{}')",
             deployment.status
@@ -605,11 +606,33 @@ fn require_setup_owned_remote_storage(
     Ok(())
 }
 
-fn deployment_status_allows_remote_bindings(status: &str) -> bool {
-    matches!(
-        status,
-        "running" | "refresh-failed" | "update-pending" | "updating" | "update-failed"
-    )
+fn deployment_status_allows_remote_bindings(status: Option<DeploymentStatus>) -> bool {
+    match status {
+        Some(
+            DeploymentStatus::Running
+            | DeploymentStatus::RefreshFailed
+            | DeploymentStatus::UpdatePending
+            | DeploymentStatus::Updating
+            | DeploymentStatus::UpdateFailed,
+        ) => true,
+        Some(
+            DeploymentStatus::Pending
+            | DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::Provisioning
+            | DeploymentStatus::WaitingForMachines
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::DeletePending
+            | DeploymentStatus::Deleting
+            | DeploymentStatus::DeleteFailed
+            | DeploymentStatus::TeardownRequired
+            | DeploymentStatus::TeardownFailed
+            | DeploymentStatus::Deleted
+            | DeploymentStatus::Error,
+        )
+        | None => false,
+    }
 }
 
 fn remote_binding_expiry(

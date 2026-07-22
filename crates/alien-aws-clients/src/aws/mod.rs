@@ -29,10 +29,6 @@ pub trait AwsClientConfigExt {
     /// Get credentials for web identity token authentication
     async fn get_web_identity_credentials(&self) -> Result<AwsClientConfig>;
 
-    /// Resolve any refreshable source and exchange static keys for an expiring
-    /// STS session, returning only `SessionCredentials`.
-    async fn materialize_session_credentials(&self) -> Result<AwsClientConfig>;
-
     /// Assumes a target role with an inline session policy. The returned
     /// permissions are the intersection of the role and policy.
     async fn assume_role_with_session_policy(
@@ -167,12 +163,7 @@ impl AwsClientConfigExt for AwsClientConfig {
         Ok(AwsClientConfig {
             account_id: target_account_id,
             region: target_region,
-            credentials: AwsCredentials::SessionCredentials {
-                access_key_id: credentials.access_key_id,
-                secret_access_key: credentials.secret_access_key,
-                session_token: credentials.session_token,
-                expires_at: credentials.expiration,
-            },
+            credentials: credentials.into(),
             service_overrides: self.service_overrides.clone(),
         })
     }
@@ -271,12 +262,7 @@ impl AwsClientConfigExt for AwsClientConfig {
                 Ok(AwsClientConfig {
                     account_id: self.account_id.clone(),
                     region: self.region.clone(),
-                    credentials: AwsCredentials::SessionCredentials {
-                        access_key_id: credentials.access_key_id,
-                        secret_access_key: credentials.secret_access_key,
-                        session_token: credentials.session_token,
-                        expires_at: credentials.expiration,
-                    },
+                    credentials: credentials.into(),
                     service_overrides: self.service_overrides.clone(),
                 })
             }
@@ -302,10 +288,6 @@ impl AwsClientConfigExt for AwsClientConfig {
                 Ok(self.clone())
             }
         }
-    }
-
-    async fn materialize_session_credentials(&self) -> Result<AwsClientConfig> {
-        remote_storage_credentials::materialize_session_credentials(self).await
     }
 
     async fn assume_role_with_session_policy(

@@ -19,6 +19,7 @@ pub use credential_resolver::{
     CredentialResolver, GcpCredentialAccessBoundarySource, RemoteStorageCredentialSource,
     ResolvedCredentials,
 };
+pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,

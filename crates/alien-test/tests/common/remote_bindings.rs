@@ -16,7 +16,7 @@ use anyhow::{bail, Context};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::TryStreamExt;
 use object_store::path::Path;
@@ -38,6 +38,7 @@ struct DiscoveryState {
     manager_url: String,
     platform: Platform,
     authorization: HeaderValue,
+    manager_access_token: String,
 }
 
 struct DiscoveryServer {
@@ -61,10 +62,14 @@ impl DiscoveryServer {
             manager_url: deployment.manager().url.clone(),
             platform,
             authorization,
+            manager_access_token: deployment.token.clone(),
         };
         let app = Router::new()
             .route("/v1/deployments/{id}", get(deployment_handler))
-            .route("/v1/managers/{id}", get(manager_handler))
+            .route(
+                "/v1/managers/{id}/binding-token",
+                post(manager_binding_token_handler),
+            )
             .with_state(state);
         let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .await
@@ -119,10 +124,11 @@ async fn deployment_handler(
     .into_response()
 }
 
-async fn manager_handler(
+async fn manager_binding_token_handler(
     State(state): State<DiscoveryState>,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
 ) -> Response {
     if !is_authorized(&state, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -130,19 +136,19 @@ async fn manager_handler(
     if id != MANAGER_ID {
         return StatusCode::NOT_FOUND.into_response();
     }
+    if body.get("deploymentId").and_then(serde_json::Value::as_str)
+        != Some(state.deployment_id.as_str())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
 
     Json(json!({
-        "id": MANAGER_ID,
-        "name": "remote-storage-live-cloud-e2e",
-        "targets": [state.platform.as_str()],
-        "managementConfigs": {},
-        "isSystem": true,
-        "workspaceId": WORKSPACE_ID,
-        "status": "healthy",
-        "url": state.manager_url,
-        "managedDeploymentCount": 1,
-        "defaultProjectCount": 0,
-        "createdAt": "2026-01-01T00:00:00Z",
+        "accessToken": state.manager_access_token,
+        "expiresIn": 300,
+        "tokenType": "Bearer",
+        "managerUrl": state.manager_url,
+        "databaseId": null,
+        "controlPlaneUrl": null,
     }))
     .into_response()
 }

@@ -973,9 +973,10 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
     ) -> bool {
         resource_type == "storage"
-            && stack.resources.get(resource_id).is_some_and(|entry| {
-                entry.lifecycle == ResourceLifecycle::Frozen && entry.remote_access
-            })
+            && stack
+                .resources
+                .get(resource_id)
+                .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage)
     }
 
     /// Process AWS permissions for a specific profile by attaching inline policies

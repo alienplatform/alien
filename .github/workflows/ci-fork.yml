@@ -112,6 +112,6 @@ jobs:
       - name: Remote bindings tests (non-cloud)
         run: |
           cargo test -p alien-bindings --features platform-sdk --lib remote::
-          cargo test -p alien-aws-clients --lib remote_storage_credentials
-          cargo test -p alien-gcp-clients --lib remote_storage_credentials
+          cargo test -p alien-aws-clients --lib
+          cargo test -p alien-gcp-clients --lib
           cargo test -p alien-azure-clients --lib user_delegation_sas

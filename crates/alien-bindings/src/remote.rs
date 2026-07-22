@@ -350,13 +350,24 @@ fn validate_aws_remote_client_config(
             "service endpoint overrides are forbidden",
         ));
     }
-    let alien_core::AwsCredentials::SessionCredentials { expires_at, .. } = &config.credentials
+    let alien_core::AwsCredentials::SessionCredentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+        expires_at,
+    } = &config.credentials
     else {
         return Err(invalid_remote_lease(
             "AWS",
             "short-lived session credentials are required",
         ));
     };
+    if access_key_id.is_empty() || secret_access_key.is_empty() || session_token.is_empty() {
+        return Err(invalid_remote_lease(
+            "AWS",
+            "session credential fields must be nonempty",
+        ));
+    }
     let credential_expires_at = DateTime::parse_from_rfc3339(expires_at)
         .map_err(|_| invalid_remote_lease("AWS", "credential expiry is invalid"))?
         .with_timezone(&Utc);
@@ -370,15 +381,16 @@ fn validate_aws_remote_client_config(
 }
 
 fn validate_gcp_remote_client_config(config: &alien_core::GcpClientConfig) -> Result<()> {
-    if config.service_overrides.is_some()
-        || !matches!(
-            config.credentials,
-            alien_core::GcpCredentials::AccessToken { .. }
-        )
-    {
+    let alien_core::GcpCredentials::AccessToken { token } = &config.credentials else {
         return Err(invalid_remote_lease(
             "GCP",
             "one access token without service endpoint overrides is required",
+        ));
+    };
+    if config.service_overrides.is_some() || token.is_empty() {
+        return Err(invalid_remote_lease(
+            "GCP",
+            "one nonempty access token without service endpoint overrides is required",
         ));
     }
     Ok(())

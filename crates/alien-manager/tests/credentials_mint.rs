@@ -37,9 +37,9 @@ use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig, Container,
-    ContainerCode, GcpClientConfig, GcpCredentials, PermissionProfile, Platform, Resource,
-    ResourceLifecycle, ResourceSpec, ResourceStatus, RuntimeMetadata,
+    AwsClientConfig, AwsCredentials, AwsServiceOverrides, AzureClientConfig, AzureCredentials,
+    ClientConfig, Container, ContainerCode, GcpClientConfig, GcpCredentials, PermissionProfile,
+    Platform, Resource, ResourceLifecycle, ResourceSpec, ResourceStatus, RuntimeMetadata,
     ServiceAccount as ServiceAccountResource, Stack, StackResourceState, StackSettings, StackState,
     Storage, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
@@ -57,7 +57,8 @@ use alien_manager::stores::sqlite::{
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
     CreateReleaseParams, CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
-    ReleaseStore, TelemetryBackend, TokenStore, TokenType, UpdateImportedDeploymentParams,
+    ReleaseStore, RemoteStorageCredentialSource, TelemetryBackend, TokenStore, TokenType,
+    UpdateImportedDeploymentParams,
 };
 
 // ---------------------------------------------------------------------------

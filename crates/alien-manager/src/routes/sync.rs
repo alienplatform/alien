@@ -24,8 +24,9 @@ use alien_error::AlienError;
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
-    DeploymentRecord, ReconcileData, ReleaseRecord, TokenType,
+    deployment_status_from_record, CreateDeploymentParams, CreateTokenParams,
+    DeploymentAcquireMode, DeploymentFilter, DeploymentRecord, ReconcileData, ReleaseRecord,
+    TokenType,
 };
 
 use super::{auth, AppState};
@@ -1500,10 +1501,6 @@ fn deployment_state_from_record(
         retry_requested: deployment.retry_requested,
         protocol_version: deployment.deployment_protocol_version,
     })
-}
-
-fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
-    serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
 }
 
 fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use alien_core::{BindingValue, ResourceLifecycle, Storage, StorageBinding};
+use alien_core::{ResourceLifecycle, Storage, StorageBinding};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::iam::Binding;
 #[cfg(test)]
@@ -10,6 +10,7 @@ use alien_permissions::{
     get_permission_set, BindingTarget,
 };
 
+use super::{concrete_storage_binding_value, remote_storage_binding};
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 
@@ -30,7 +31,7 @@ pub(super) async fn build_grant_plans(
     let mut grant_plans = Vec::new();
 
     for (resource_id, resource_entry) in &ctx.desired_stack.resources {
-        if !is_remote_frozen_storage(resource_entry) {
+        if !resource_entry.is_remote_frozen_storage() {
             continue;
         }
 
@@ -128,7 +129,7 @@ pub(super) fn desired_bucket_names(ctx: &ResourceControllerContext<'_>) -> Resul
         .desired_stack
         .resources
         .iter()
-        .filter(|(_, entry)| is_remote_frozen_storage(entry))
+        .filter(|(_, entry)| entry.is_remote_frozen_storage())
         .map(|(resource_id, _)| remote_storage_bucket_name(ctx, resource_id))
         .collect::<Result<Vec<_>>>()?;
     bucket_names.sort_unstable();
@@ -301,12 +302,6 @@ fn retired_bucket_names(previous: &[String], desired: &[String]) -> Vec<String> 
         .collect()
 }
 
-fn is_remote_frozen_storage(resource_entry: &alien_core::ResourceEntry) -> bool {
-    resource_entry.lifecycle == ResourceLifecycle::Frozen
-        && resource_entry.remote_access
-        && resource_entry.config.downcast_ref::<Storage>().is_some()
-}
-
 fn remote_storage_bucket_name(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -328,81 +323,12 @@ fn remote_storage_bucket_name(
     }
 }
 
-fn remote_storage_binding(
-    ctx: &ResourceControllerContext<'_>,
-    resource_id: &str,
-) -> Result<Option<StorageBinding>> {
-    super::ensure_setup_owned_remote_storage(ctx, resource_id)?;
-
-    let Some(binding) = ctx
-        .state
-        .resource(resource_id)
-        .and_then(|state| state.remote_binding_params.as_ref())
-    else {
-        return Ok(None);
-    };
-
-    serde_json::from_value(binding.clone())
-        .into_alien_error()
-        .context(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "Remote Storage resource '{resource_id}' has invalid binding parameters"
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })
-        .map(Some)
-}
-
-fn concrete_storage_binding_value(
-    value: BindingValue<String>,
-    resource_id: &str,
-    field_name: &str,
-    provider: &str,
-) -> Result<String> {
-    match value {
-        BindingValue::Value(value) => Ok(value),
-        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => {
-            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Remote Storage resource '{resource_id}' requires a concrete {provider} {field_name}"
-                ),
-                resource_id: Some(resource_id.to_string()),
-            }))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Resource, ResourceEntry};
+    use alien_core::Resource;
     use alien_gcp_clients::gcs::MockGcsApi;
     use alien_gcp_clients::iam::IamPolicy;
-
-    fn storage_entry(lifecycle: ResourceLifecycle, remote_access: bool) -> ResourceEntry {
-        ResourceEntry {
-            config: Resource::new(Storage::new("archive".to_string()).build()),
-            lifecycle,
-            dependencies: Vec::new(),
-            remote_access,
-        }
-    }
-
-    #[test]
-    fn only_opted_in_frozen_storage_is_managed_remotely() {
-        assert!(is_remote_frozen_storage(&storage_entry(
-            ResourceLifecycle::Frozen,
-            true,
-        )));
-        assert!(!is_remote_frozen_storage(&storage_entry(
-            ResourceLifecycle::Frozen,
-            false,
-        )));
-        assert!(!is_remote_frozen_storage(&storage_entry(
-            ResourceLifecycle::Live,
-            true,
-        )));
-    }
 
     #[test]
     fn disable_and_rebind_retire_previous_bucket_scopes() {

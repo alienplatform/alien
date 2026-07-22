@@ -9,8 +9,7 @@
             "s3:ListBucket",
             "s3:GetObject",
             "s3:PutObject",
-            "s3:DeleteObject",
-            "s3:AbortMultipartUpload"
+            "s3:DeleteObject"
           ]
         },
         "binding": {
@@ -30,11 +29,7 @@
             "storage.objects.get",
             "storage.objects.list",
             "storage.objects.create",
-            "storage.objects.delete",
-            "storage.multipartUploads.create",
-            "storage.multipartUploads.abort",
-            "storage.multipartUploads.listParts",
-            "storage.multipartUploads.list"
+            "storage.objects.delete"
           ]
         },
         "binding": {

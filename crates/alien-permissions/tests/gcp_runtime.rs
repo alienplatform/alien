@@ -54,10 +54,6 @@ fn remote_storage_data_write_is_bucket_scoped_without_sign_blob() {
     assert_eq!(
         remote_role.included_permissions,
         vec![
-            "storage.multipartUploads.abort",
-            "storage.multipartUploads.create",
-            "storage.multipartUploads.list",
-            "storage.multipartUploads.listParts",
             "storage.objects.create",
             "storage.objects.delete",
             "storage.objects.get",

@@ -25,10 +25,6 @@ pub trait StsApi: Send + Sync + Debug {
         request: AssumeRoleWithWebIdentityRequest,
     ) -> Result<AssumeRoleWithWebIdentityResponse>;
     async fn get_caller_identity(&self) -> Result<GetCallerIdentityResponse>;
-    async fn get_session_token(
-        &self,
-        duration_seconds: Option<i32>,
-    ) -> Result<GetSessionTokenResponse>;
 }
 
 /// AWS STS client using the new request/error abstractions.
@@ -365,17 +361,6 @@ impl StsApi for StsClient {
         let body = Self::build_form_body("GetCallerIdentity", "2011-06-15", params);
         self.post_xml(body, "GetCallerIdentity", "caller").await
     }
-
-    async fn get_session_token(
-        &self,
-        duration_seconds: Option<i32>,
-    ) -> Result<GetSessionTokenResponse> {
-        let params = duration_seconds
-            .map(|duration| vec![("DurationSeconds".to_string(), duration.to_string())])
-            .unwrap_or_default();
-        let body = Self::build_form_body("GetSessionToken", "2011-06-15", params);
-        self.post_xml(body, "GetSessionToken", "caller").await
-    }
 }
 
 // -------------------------------------------------------------------------
@@ -501,6 +486,17 @@ pub struct Credentials {
     pub expiration: String,
 }
 
+impl From<Credentials> for AwsCredentials {
+    fn from(credentials: Credentials) -> Self {
+        Self::SessionCredentials {
+            access_key_id: credentials.access_key_id,
+            secret_access_key: credentials.secret_access_key,
+            session_token: credentials.session_token,
+            expires_at: credentials.expiration,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetCallerIdentityResponse {
@@ -515,18 +511,6 @@ pub struct GetCallerIdentityResult {
     pub account: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "PascalCase")]
-pub struct GetSessionTokenResponse {
-    pub get_session_token_result: GetSessionTokenResult,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "PascalCase")]
-pub struct GetSessionTokenResult {
-    pub credentials: Credentials,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,57 +519,6 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::{Arc, Mutex};
-
-    #[tokio::test]
-    async fn get_session_token_exchanges_static_keys_for_expiring_credentials() {
-        let observed = Arc::new(Mutex::new(Vec::new()));
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test STS server");
-        let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
-        let server_observed = observed.clone();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept STS request");
-            let (headers, body) = read_http_request(&mut stream);
-            let authorization = headers
-                .lines()
-                .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
-                .unwrap_or_default()
-                .to_string();
-            server_observed
-                .lock()
-                .expect("observed requests lock")
-                .push(ObservedRequest {
-                    body,
-                    authorization,
-                });
-            write_xml_response(&mut stream, get_session_token_response());
-        });
-        let config = AwsClientConfig {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            credentials: AwsCredentials::AccessKeys {
-                access_key_id: "AKIATESTACCESS".to_string(),
-                secret_access_key: "test-secret".to_string(),
-                session_token: None,
-            },
-            service_overrides: Some(AwsServiceOverrides {
-                endpoints: HashMap::from([("sts".to_string(), endpoint)]),
-            }),
-        };
-
-        let response = StsClient::new(Client::new(), config)
-            .get_session_token(Some(3600))
-            .await
-            .expect("get session token should succeed");
-        assert_eq!(
-            response.get_session_token_result.credentials.access_key_id,
-            "ASIASESSIONACCESS"
-        );
-        server.join().expect("server thread should finish");
-        let observed = observed.lock().expect("observed requests lock");
-        assert!(observed[0].body.contains("Action=GetSessionToken"));
-        assert!(observed[0].body.contains("DurationSeconds=3600"));
-        assert!(observed[0].authorization.contains("AKIATESTACCESS"));
-    }
 
     #[tokio::test]
     async fn get_caller_identity_exchanges_web_identity_before_signing() {
@@ -925,21 +858,6 @@ mod tests {
   </GetCallerIdentityResult>
   <ResponseMetadata><RequestId>request-2</RequestId></ResponseMetadata>
 </GetCallerIdentityResponse>"#
-            .to_string()
-    }
-
-    fn get_session_token_response() -> String {
-        r#"<GetSessionTokenResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
-  <GetSessionTokenResult>
-    <Credentials>
-      <AccessKeyId>ASIASESSIONACCESS</AccessKeyId>
-      <SecretAccessKey>session-secret</SecretAccessKey>
-      <SessionToken>session-token</SessionToken>
-      <Expiration>2030-01-01T01:00:00Z</Expiration>
-    </Credentials>
-  </GetSessionTokenResult>
-  <ResponseMetadata><RequestId>request-session</RequestId></ResponseMetadata>
-</GetSessionTokenResponse>"#
             .to_string()
     }
 }

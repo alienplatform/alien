@@ -23,6 +23,15 @@ pub struct ResourceEntry {
     pub remote_access: bool,
 }
 
+impl ResourceEntry {
+    /// Returns whether this entry is Frozen Storage published for remote access.
+    pub fn is_remote_frozen_storage(&self) -> bool {
+        self.lifecycle == ResourceLifecycle::Frozen
+            && self.remote_access
+            && self.config.downcast_ref::<crate::Storage>().is_some()
+    }
+}
+
 /// A bag of resources, unaware of any cloud.
 #[derive(Builder, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -295,6 +304,52 @@ mod tests {
         Storage, Worker, WorkerCode,
     };
     use insta::assert_json_snapshot;
+
+    fn resource_entry<T: crate::ResourceDefinition>(
+        resource: T,
+        lifecycle: ResourceLifecycle,
+        remote_access: bool,
+    ) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(resource),
+            lifecycle,
+            dependencies: Vec::new(),
+            remote_access,
+        }
+    }
+
+    #[test]
+    fn remote_frozen_storage_requires_storage_lifecycle_and_opt_in() {
+        assert!(resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            true,
+        )
+        .is_remote_frozen_storage());
+        assert!(!resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            false,
+        )
+        .is_remote_frozen_storage());
+        assert!(!resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Live,
+            true,
+        )
+        .is_remote_frozen_storage());
+        assert!(!resource_entry(
+            Worker::new("worker".to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/worker:latest".to_string(),
+                })
+                .permissions("worker-execution".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+            true,
+        )
+        .is_remote_frozen_storage());
+    }
 
     #[test]
     fn test_stack_serialization() {

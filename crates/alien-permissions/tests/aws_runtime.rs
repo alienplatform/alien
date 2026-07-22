@@ -42,7 +42,6 @@ fn remote_storage_data_write_generates_only_v0_object_operations() {
             "s3:GetObject",
             "s3:PutObject",
             "s3:DeleteObject",
-            "s3:AbortMultipartUpload",
         ]
     );
     assert_eq!(

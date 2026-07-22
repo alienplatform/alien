@@ -3,8 +3,7 @@
 use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack,
-    StackState, Storage,
+    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState, Storage,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -61,7 +60,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
                 continue;
             };
             let resource_type = entry.config.resource_type();
-            let remote_frozen_storage = is_remote_frozen_storage(entry);
+            let remote_frozen_storage = entry.is_remote_frozen_storage();
             let deps =
                 self.get_dependencies_for_resource(&stack, &resource_id, &resource_type, platform);
 
@@ -109,7 +108,7 @@ impl InfrastructureDependenciesMutation {
         let is_remote_frozen_storage = stack
             .resources
             .get(resource_id)
-            .is_some_and(is_remote_frozen_storage);
+            .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage);
 
         if platform == Platform::Azure
             && resource_id != "default-resource-group"
@@ -390,17 +389,11 @@ fn remote_stack_management_id(stack: &Stack) -> Option<&str> {
         .map(|(resource_id, _)| resource_id.as_str())
 }
 
-fn is_remote_frozen_storage(entry: &alien_core::ResourceEntry) -> bool {
-    entry.lifecycle == ResourceLifecycle::Frozen
-        && entry.remote_access
-        && entry.config.downcast_ref::<Storage>().is_some()
-}
-
 fn remote_frozen_storage_refs(stack: &Stack) -> Vec<ResourceRef> {
     stack
         .resources
         .iter()
-        .filter(|(_, entry)| is_remote_frozen_storage(entry))
+        .filter(|(_, entry)| entry.is_remote_frozen_storage())
         .map(|(resource_id, _)| ResourceRef::new(Storage::RESOURCE_TYPE, resource_id))
         .collect()
 }
@@ -438,7 +431,7 @@ fn validate_management_bootstrap_permissions(stack: &Stack) -> Result<()> {
             continue;
         };
 
-        if !is_remote_frozen_storage(entry)
+        if !entry.is_remote_frozen_storage()
             && management_profile
                 .0
                 .get(&resource_id)

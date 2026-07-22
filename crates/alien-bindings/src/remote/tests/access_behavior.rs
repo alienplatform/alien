@@ -78,6 +78,7 @@ async fn assignment_race_rediscovery_retries_once_against_the_new_manager() {
         fail: Arc::new(AtomicBool::new(false)),
         failure_response: Arc::new(StdRwLock::new(None)),
         invalid_binding: Arc::new(AtomicBool::new(false)),
+        expired_lease: Arc::new(AtomicBool::new(false)),
         advance_clock_to: Arc::new(StdRwLock::new(None)),
         clock: fixture.clock.clone(),
         expires_at: Arc::new(StdRwLock::new(at(3600))),

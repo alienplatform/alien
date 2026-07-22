@@ -33,6 +33,64 @@ pub use alien_core::{
     GcpServiceOverrides as ServiceOverrides,
 };
 
+enum MaterializedAccessTokenExpiry {
+    Unavailable,
+    ProviderTimestamp(String),
+    Exact(DateTime<Utc>),
+}
+
+struct MaterializedAccessToken {
+    token: String,
+    expiry: MaterializedAccessTokenExpiry,
+}
+
+impl MaterializedAccessToken {
+    fn opaque(token: String) -> Self {
+        Self {
+            token,
+            expiry: MaterializedAccessTokenExpiry::Unavailable,
+        }
+    }
+
+    fn into_token(self) -> String {
+        self.token
+    }
+
+    fn into_expiring(self) -> Result<ExpiringAccessToken> {
+        let expires_at = match self.expiry {
+            MaterializedAccessTokenExpiry::Unavailable => {
+                return Err(AlienError::new(ErrorData::InvalidClientConfig {
+                    message: "An opaque GCP access token has no authoritative expiry".to_string(),
+                    errors: None,
+                }));
+            }
+            MaterializedAccessTokenExpiry::ProviderTimestamp(expires_at) => {
+                DateTime::parse_from_rfc3339(&expires_at)
+                    .into_alien_error()
+                    .context(ErrorData::InvalidInput {
+                        message: "GCP returned an invalid access-token expiry".to_string(),
+                        field_name: None,
+                    })?
+                    .with_timezone(&Utc)
+            }
+            MaterializedAccessTokenExpiry::Exact(expires_at) => expires_at,
+        };
+        Ok(ExpiringAccessToken {
+            token: self.token,
+            expires_at,
+        })
+    }
+}
+
+impl From<ExpiringAccessToken> for MaterializedAccessToken {
+    fn from(token: ExpiringAccessToken) -> Self {
+        Self {
+            token: token.token,
+            expiry: MaterializedAccessTokenExpiry::Exact(token.expires_at),
+        }
+    }
+}
+
 /// A GCP access token paired with IAMCredentials' authoritative expiry.
 pub struct ExpiringAccessToken {
     pub token: String,
@@ -63,6 +121,59 @@ fn expires_at_from_expires_in(provider: &str, expires_in: i64) -> Result<DateTim
                 field_name: Some("expires_in".to_string()),
             })
         })
+}
+
+async fn materialize_access_token(config: &GcpClientConfig) -> Result<MaterializedAccessToken> {
+    match &config.credentials {
+        GcpCredentials::AccessToken { token } => {
+            Ok(MaterializedAccessToken::opaque(token.clone()))
+        }
+        GcpCredentials::ImpersonatedServiceAccount { source, config } => {
+            materialize_impersonated_access_token(source, config).await
+        }
+        GcpCredentials::ServiceAccountKey { json } => {
+            credential_exchange::generate_jwt_token_with_expiry(json)
+                .await
+                .map(Into::into)
+        }
+        GcpCredentials::ServiceMetadata => {
+            credential_exchange::fetch_metadata_token_with_expiry()
+                .await
+                .map(Into::into)
+        }
+        GcpCredentials::ProjectedServiceAccount { .. } => Err(AlienError::new(
+            ErrorData::InvalidClientConfig {
+                message: "Projected GCP workload-identity JWTs must be exchanged through an explicit external-account STS configuration before use as OAuth access tokens".to_string(),
+                errors: None,
+            },
+        )),
+        GcpCredentials::ExternalAccount {
+            audience,
+            subject_token_type,
+            token_url,
+            credential_source_file,
+            service_account_impersonation_url,
+        } => credential_exchange::exchange_external_account_token_with_expiry(
+            audience,
+            subject_token_type,
+            token_url,
+            credential_source_file,
+            service_account_impersonation_url.as_deref(),
+        )
+        .await
+        .map(Into::into),
+        GcpCredentials::AuthorizedUser {
+            client_id,
+            client_secret,
+            refresh_token,
+        } => credential_exchange::exchange_refresh_token_with_expiry(
+            client_id,
+            client_secret,
+            refresh_token,
+        )
+        .await
+        .map(Into::into),
+    }
 }
 
 /// Trait for GCP platform configuration operations
@@ -373,91 +484,13 @@ impl GcpClientConfigExt for GcpClientConfig {
 
     /// Generates a bearer token for GCP API authentication
     async fn get_bearer_token(&self, _audience: &str) -> Result<String> {
-        match &self.credentials {
-            GcpCredentials::AccessToken { token } => Ok(token.clone()),
-            GcpCredentials::ImpersonatedServiceAccount { source, config } => {
-                generate_impersonated_access_token(source, config)
-                    .await
-                    .map(|response| response.access_token)
-            }
-            GcpCredentials::ServiceAccountKey { json } => self.generate_jwt_token(json).await,
-            GcpCredentials::ServiceMetadata => self.fetch_metadata_token().await,
-            GcpCredentials::ProjectedServiceAccount { .. } => Err(AlienError::new(
-                ErrorData::InvalidClientConfig {
-                    message: "Projected GCP workload-identity JWTs must be exchanged through an explicit external-account STS configuration before use as OAuth access tokens".to_string(),
-                    errors: None,
-                },
-            )),
-            GcpCredentials::ExternalAccount {
-                audience,
-                subject_token_type,
-                token_url,
-                credential_source_file,
-                service_account_impersonation_url,
-            } => {
-                Self::exchange_external_account_token(
-                    audience,
-                    subject_token_type,
-                    token_url,
-                    credential_source_file,
-                    service_account_impersonation_url.as_deref(),
-                )
-                .await
-            }
-            GcpCredentials::AuthorizedUser {
-                client_id,
-                client_secret,
-                refresh_token,
-            } => Self::exchange_refresh_token(client_id, client_secret, refresh_token).await,
-        }
+        materialize_access_token(self)
+            .await
+            .map(MaterializedAccessToken::into_token)
     }
 
     async fn get_access_token_with_expiry(&self, _audience: &str) -> Result<ExpiringAccessToken> {
-        match &self.credentials {
-            GcpCredentials::AccessToken { .. } => {
-                Err(AlienError::new(ErrorData::InvalidClientConfig {
-                    message: "An opaque GCP access token has no authoritative expiry".to_string(),
-                    errors: None,
-                }))
-            }
-            GcpCredentials::ImpersonatedServiceAccount { .. } => {
-                self.get_impersonated_access_token_with_expiry().await
-            }
-            GcpCredentials::ServiceAccountKey { json } => {
-                self.generate_jwt_token_with_expiry(json).await
-            }
-            GcpCredentials::ServiceMetadata => self.fetch_metadata_token_with_expiry().await,
-            GcpCredentials::ProjectedServiceAccount { .. } => Err(AlienError::new(
-                ErrorData::InvalidClientConfig {
-                    message: "Projected GCP workload-identity JWTs must be exchanged through an explicit external-account STS configuration before use as OAuth access tokens".to_string(),
-                    errors: None,
-                },
-            )),
-            GcpCredentials::ExternalAccount {
-                audience,
-                subject_token_type,
-                token_url,
-                credential_source_file,
-                service_account_impersonation_url,
-            } => {
-                Self::exchange_external_account_token_with_expiry(
-                    audience,
-                    subject_token_type,
-                    token_url,
-                    credential_source_file,
-                    service_account_impersonation_url.as_deref(),
-                )
-                .await
-            }
-            GcpCredentials::AuthorizedUser {
-                client_id,
-                client_secret,
-                refresh_token,
-            } => {
-                Self::exchange_refresh_token_with_expiry(client_id, client_secret, refresh_token)
-                    .await
-            }
-        }
+        materialize_access_token(self).await?.into_expiring()
     }
 
     async fn get_impersonated_access_token_with_expiry(&self) -> Result<ExpiringAccessToken> {
@@ -469,18 +502,9 @@ impl GcpClientConfigExt for GcpClientConfig {
                 errors: None,
             }));
         };
-        let response = generate_impersonated_access_token(source, config).await?;
-        let expires_at = DateTime::parse_from_rfc3339(&response.expire_time)
-            .into_alien_error()
-            .context(ErrorData::InvalidInput {
-                message: "GCP returned an invalid access-token expiry".to_string(),
-                field_name: None,
-            })?
-            .with_timezone(&Utc);
-        Ok(ExpiringAccessToken {
-            token: response.access_token,
-            expires_at,
-        })
+        materialize_impersonated_access_token(source, config)
+            .await?
+            .into_expiring()
     }
 
     async fn downscope_access_token_for_bucket(
@@ -830,6 +854,17 @@ async fn generate_impersonated_access_token(
         .await
 }
 
+async fn materialize_impersonated_access_token(
+    source: &GcpClientConfig,
+    config: &GcpImpersonationConfig,
+) -> Result<MaterializedAccessToken> {
+    let response = generate_impersonated_access_token(source, config).await?;
+    Ok(MaterializedAccessToken {
+        token: response.access_token,
+        expiry: MaterializedAccessTokenExpiry::ProviderTimestamp(response.expire_time),
+    })
+}
+
 fn gcp_region_from_zone(zone: &str) -> Option<String> {
     let (region, zone_suffix) = zone.rsplit_once('-')?;
     if zone_suffix.len() != 1 || !zone_suffix.as_bytes()[0].is_ascii_lowercase() {
@@ -844,7 +879,31 @@ fn gcp_region_from_zone(zone: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::gcp_region_from_zone;
+    use super::{gcp_region_from_zone, GcpClientConfig, GcpClientConfigExt, GcpCredentials};
+
+    #[tokio::test]
+    async fn opaque_access_token_remains_valid_for_bearer_auth_but_not_leases() {
+        let config = GcpClientConfig {
+            project_id: "project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "opaque-token".to_string(),
+            },
+            service_overrides: None,
+            project_number: None,
+        };
+
+        assert_eq!(
+            config.get_bearer_token("audience").await.unwrap(),
+            "opaque-token"
+        );
+        let error = config
+            .get_access_token_with_expiry("audience")
+            .await
+            .expect_err("opaque tokens cannot back expiring leases");
+        assert_eq!(error.code, "INVALID_client_config");
+        assert!(error.message.contains("no authoritative expiry"));
+    }
 
     #[test]
     fn derives_region_from_zone() {

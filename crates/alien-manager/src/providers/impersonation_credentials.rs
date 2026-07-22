@@ -25,11 +25,7 @@ use crate::traits::{
     RemoteStorageCredentialSource, ResolvedCredentials,
 };
 
-const GCP_REMOTE_STORAGE_PERMISSIONS: [&str; 8] = [
-    "storage.multipartUploads.abort",
-    "storage.multipartUploads.create",
-    "storage.multipartUploads.list",
-    "storage.multipartUploads.listParts",
+const GCP_REMOTE_STORAGE_PERMISSIONS: [&str; 4] = [
     "storage.objects.create",
     "storage.objects.delete",
     "storage.objects.get",

@@ -77,6 +77,7 @@ struct ManagerFixtureState {
     fail: Arc<AtomicBool>,
     failure_response: Arc<StdRwLock<Option<(StatusCode, FailureBody)>>>,
     invalid_binding: Arc<AtomicBool>,
+    expired_lease: Arc<AtomicBool>,
     advance_clock_to: Arc<StdRwLock<Option<DateTime<Utc>>>>,
     clock: Arc<ManualClock>,
     expires_at: Arc<StdRwLock<DateTime<Utc>>>,
@@ -118,6 +119,7 @@ impl Fixture {
             fail: Arc::new(AtomicBool::new(false)),
             failure_response: Arc::new(StdRwLock::new(None)),
             invalid_binding: Arc::new(AtomicBool::new(false)),
+            expired_lease: Arc::new(AtomicBool::new(false)),
             advance_clock_to: Arc::new(StdRwLock::new(None)),
             clock: clock.clone(),
             expires_at: Arc::new(StdRwLock::new(expires_at)),
@@ -413,7 +415,11 @@ async fn resolve_handler(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    let expires_at = *state.expires_at.read().expect("manager expiry read lock");
+    let expires_at = if state.expired_lease.load(Ordering::SeqCst) {
+        state.clock.now() - chrono::Duration::seconds(1)
+    } else {
+        *state.expires_at.read().expect("manager expiry read lock")
+    };
     let binding = if state.invalid_binding.load(Ordering::SeqCst) {
         json!({ "service": "local-storage" })
     } else {
@@ -665,6 +671,7 @@ async fn existing_storage_handle_follows_manager_reassignment() {
         fail: Arc::new(AtomicBool::new(false)),
         failure_response: Arc::new(StdRwLock::new(None)),
         invalid_binding: Arc::new(AtomicBool::new(false)),
+        expired_lease: Arc::new(AtomicBool::new(false)),
         advance_clock_to: Arc::new(StdRwLock::new(None)),
         clock: fixture.clock.clone(),
         expires_at: Arc::new(StdRwLock::new(at(3901))),
@@ -765,6 +772,77 @@ async fn refresh_rechecks_expiry_after_the_network_request() {
     assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn decoded_expired_refresh_uses_valid_cache_without_replacing_it() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider.clone());
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(&Path::from("cached.txt"), PutPayload::from_static(b"value"))
+        .await
+        .expect("seed fixture object through the valid lease");
+
+    fixture.manager.expired_lease.store(true, Ordering::SeqCst);
+    fixture.clock.set(at(481));
+    let cached = provider
+        .load_storage("files")
+        .await
+        .expect("a malformed refresh should fall back to the still-valid cached lease");
+
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        cached
+            .head(&Path::from("cached.txt"))
+            .await
+            .expect("the fallback lease should still address the original storage")
+            .size,
+        5
+    );
+
+    fixture.clock.set(at(482));
+    provider
+        .load_storage("files")
+        .await
+        .expect("the invalid refresh cooldown should keep using the valid cache");
+    assert_eq!(
+        fixture.manager.calls.load(Ordering::SeqCst),
+        2,
+        "the retry cooldown must suppress another malformed refresh"
+    );
+
+    fixture.manager.expired_lease.store(false, Ordering::SeqCst);
+    fixture.clock.set(at(486));
+    fixture.set_manager_expiry(at(3900));
+    let refreshed = provider
+        .load_storage("files")
+        .await
+        .expect("a later valid refresh should replace the preserved cache");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        refreshed
+            .head(&Path::from("cached.txt"))
+            .await
+            .expect("the recovered lease should address the original storage")
+            .size,
+        5
+    );
+
+    fixture.clock.set(at(601));
+    provider
+        .load_storage("files")
+        .await
+        .expect("the replacement lease should outlive the original cache");
+    assert_eq!(
+        fixture.manager.calls.load(Ordering::SeqCst),
+        3,
+        "the valid replacement must remain cached after the original lease expires"
+    );
+}
+
 #[test]
 fn remote_urls_require_https_except_for_loopback_development() {
     assert!(!validate_platform_base_url("https://api.example.com").unwrap());
@@ -801,10 +879,52 @@ fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
     };
     assert!(validate_aws_remote_client_config(&aws, at(3600)).is_err());
 
+    let aws = alien_core::AwsClientConfig {
+        account_id: "123456789012".to_string(),
+        region: "us-east-1".to_string(),
+        credentials: alien_core::AwsCredentials::SessionCredentials {
+            access_key_id: "access".to_string(),
+            secret_access_key: "secret".to_string(),
+            session_token: "session".to_string(),
+            expires_at: at(3599).to_rfc3339(),
+        },
+        service_overrides: None,
+    };
+    let error = validate_aws_remote_client_config(&aws, at(3600))
+        .expect_err("AWS credentials expiring before the lease must fail closed");
+    assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
+    assert!(error
+        .message
+        .contains("credential expires before its lease"));
+
+    let aws = alien_core::AwsClientConfig {
+        account_id: "123456789012".to_string(),
+        region: "us-east-1".to_string(),
+        credentials: alien_core::AwsCredentials::SessionCredentials {
+            access_key_id: String::new(),
+            secret_access_key: "secret".to_string(),
+            session_token: "session".to_string(),
+            expires_at: at(3600).to_rfc3339(),
+        },
+        service_overrides: None,
+    };
+    assert!(validate_aws_remote_client_config(&aws, at(3600)).is_err());
+
     let gcp = alien_core::GcpClientConfig {
         project_id: "project".to_string(),
         region: "us-central1".to_string(),
         credentials: alien_core::GcpCredentials::ServiceMetadata,
+        service_overrides: None,
+        project_number: None,
+    };
+    assert!(validate_gcp_remote_client_config(&gcp).is_err());
+
+    let gcp = alien_core::GcpClientConfig {
+        project_id: "project".to_string(),
+        region: "us-central1".to_string(),
+        credentials: alien_core::GcpCredentials::AccessToken {
+            token: String::new(),
+        },
         service_overrides: None,
         project_number: None,
     };

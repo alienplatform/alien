@@ -4,8 +4,8 @@ use alien_azure_clients::authorization::Scope;
 use alien_azure_clients::models::authorization_role_definitions::{
     Permission, RoleDefinition, RoleDefinitionProperties,
 };
-use alien_core::{BindingValue, KubernetesCluster, ResourceLifecycle, Storage, StorageBinding};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_core::{KubernetesCluster, StorageBinding};
+use alien_error::{AlienError, Context, ContextError};
 use alien_permissions::{
     generators::{
         dedupe_azure_role_bindings, AzureCustomRole, AzureGrantPlan, AzureRoleDefinitionRef,
@@ -19,6 +19,7 @@ use super::azure::{
     generate_stack_management_grant_plan, resource_role_definition_key,
     AzureRemoteStackManagementController,
 };
+use super::{concrete_storage_binding_value, remote_storage_binding};
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
@@ -103,7 +104,7 @@ pub(super) fn generate_management_grant_plan(
         let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
             continue;
         };
-        let remote_storage = is_remote_frozen_storage(resource_entry);
+        let remote_storage = resource_entry.is_remote_frozen_storage();
         let permission_context = if let Some(cluster) =
             resource_entry.config.downcast_ref::<KubernetesCluster>()
         {
@@ -309,12 +310,6 @@ pub(super) async fn create_remote_storage_role_definitions(
     Ok(())
 }
 
-fn is_remote_frozen_storage(resource_entry: &alien_core::ResourceEntry) -> bool {
-    resource_entry.lifecycle == ResourceLifecycle::Frozen
-        && resource_entry.remote_access
-        && resource_entry.config.downcast_ref::<Storage>().is_some()
-}
-
 fn remote_storage_permission_context(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -357,54 +352,8 @@ fn remote_storage_permission_context(
     )
 }
 
-fn remote_storage_binding(
-    ctx: &ResourceControllerContext<'_>,
-    resource_id: &str,
-) -> Result<Option<StorageBinding>> {
-    super::ensure_setup_owned_remote_storage(ctx, resource_id)?;
-
-    let Some(binding) = ctx
-        .state
-        .resource(resource_id)
-        .and_then(|state| state.remote_binding_params.as_ref())
-    else {
-        return Ok(None);
-    };
-
-    serde_json::from_value(binding.clone())
-        .into_alien_error()
-        .context(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "Remote Storage resource '{resource_id}' has invalid binding parameters"
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })
-        .map(Some)
-}
-
-fn concrete_storage_binding_value(
-    value: BindingValue<String>,
-    resource_id: &str,
-    field_name: &str,
-    provider: &str,
-) -> Result<String> {
-    match value {
-        BindingValue::Value(value) => Ok(value),
-        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => {
-            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Remote Storage resource '{resource_id}' requires a concrete {provider} {field_name}"
-                ),
-                resource_id: Some(resource_id.to_string()),
-            }))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use alien_core::{Resource, ResourceEntry};
-
     use super::*;
 
     fn permission_context() -> PermissionContext {
@@ -414,29 +363,6 @@ mod tests {
             .with_stack_prefix("e2e-01-azcr".to_string())
             .with_managing_subscription_id("sub-123".to_string())
             .with_managing_resource_group("rg-123".to_string())
-    }
-
-    #[test]
-    fn remote_storage_management_is_limited_to_opted_in_frozen_storage() {
-        let entry = |lifecycle, remote_access| ResourceEntry {
-            config: Resource::new(Storage::new("archive".to_string()).build()),
-            lifecycle,
-            dependencies: Vec::new(),
-            remote_access,
-        };
-
-        assert!(is_remote_frozen_storage(&entry(
-            ResourceLifecycle::Frozen,
-            true
-        )));
-        assert!(!is_remote_frozen_storage(&entry(
-            ResourceLifecycle::Frozen,
-            false
-        )));
-        assert!(!is_remote_frozen_storage(&entry(
-            ResourceLifecycle::Live,
-            true
-        )));
     }
 
     #[test]
