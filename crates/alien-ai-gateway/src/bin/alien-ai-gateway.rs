@@ -4,7 +4,8 @@
 //! ALIEN_AI_GATEWAY_URL, and `exec`s the app so the app runs as the main process.
 //!
 //! Modes:
-//!   alien-ai-gateway --gateway-serve       run the gateway forever (fixed port)
+//!   alien-ai-gateway --gateway-serve       run the gateway forever (ephemeral port,
+//!                                          or ALIEN_AI_GATEWAY_PORT when pinned)
 //!   alien-ai-gateway -- <cmd> [args...]     bootstrap, then exec <cmd>
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -43,7 +44,7 @@ fn main() {
         _ => die("usage: alien-ai-gateway -- <command> [args...]"),
     };
 
-    let bindings = alien_gateway::bindings_from_env()
+    let bindings = alien_ai_gateway::bindings_from_env()
         .unwrap_or_else(|e| die(&format!("could not read the AI bindings: {e}")));
     if bindings.is_empty() {
         // No ambient AI binding (or BYO-key only): run the app directly, zero overhead.
@@ -57,12 +58,15 @@ fn main() {
         std::env::current_exe().unwrap_or_else(|e| die(&format!("cannot resolve own path: {e}")));
     let mut child = Command::new(self_exe)
         .arg(SERVE_FLAG)
+        // Pin the child to this launcher's port so the URL is known out of band;
+        // the container's network namespace is isolated, so a fixed port is safe.
+        .env(PORT_ENV, port().to_string())
         .stdin(Stdio::null())
         .spawn()
         .unwrap_or_else(|e| die(&format!("failed to start gateway child: {e}")));
 
     let base = format!("http://127.0.0.1:{}", port());
-    if !alien_gateway::wait_until_ready_blocking(&base) {
+    if !alien_ai_gateway::wait_until_ready_blocking(&base) {
         // Surface the child's own startup failure (e.g. an unavailable ambient
         // credential) rather than only a generic readiness timeout.
         if let Ok(Some(status)) = child.try_wait() {
@@ -80,13 +84,27 @@ fn serve_forever() -> ! {
         .build()
         .unwrap_or_else(|e| die(&format!("tokio runtime: {e}")));
     rt.block_on(async {
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port()));
-        let bindings = alien_gateway::bindings_from_env()
+        // A pinned port (container bootstrap) is bound as-is; without one, bind an
+        // ephemeral port so the spawning parent (the SDK-spawn path) can read the
+        // real URL back from the line announced below.
+        let pinned = std::env::var(PORT_ENV).is_ok();
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, if pinned { port() } else { 0 }));
+        let bindings = alien_ai_gateway::bindings_from_env()
             .unwrap_or_else(|e| die(&format!("could not read the AI bindings: {e}")));
-        let _handle = alien_gateway::start_gateway_on(bindings, addr)
+        let handle = alien_ai_gateway::start_gateway_on(bindings, addr)
             .await
             .unwrap_or_else(|e| die(&format!("gateway failed to start: {e}")));
-        // Hold the process (and the server task) open for the container lifetime.
+        // Only the ephemeral (SDK-spawn) path needs the URL announced: the parent
+        // reads this one machine-readable line to learn the OS-assigned port. The
+        // container bootstrap already knows its fixed port, so stay silent there. The
+        // handshake relies on stdout carrying nothing but this line, so any future
+        // logging must go to stderr. Flush because the parent may stop reading stdout
+        // once it has the URL.
+        if !pinned {
+            println!("{}", serde_json::json!({ "aiGatewayUrl": &handle.url }));
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        // Hold the process (and the server task) open for the lifetime of the parent.
         std::future::pending::<()>().await;
     });
     unreachable!()

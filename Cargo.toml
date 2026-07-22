@@ -22,8 +22,7 @@ members = [
   "crates/alien-k8s-clients",
   "crates/alien-observer",
   "crates/alien-error",
-  "crates/alien-gateway",
-  "crates/alien-ai-gateway-node",
+  "crates/alien-ai-gateway",
   "crates/alien-error-derive",
   "crates/alien-permissions",
   "crates/alien-preflights",
@@ -50,8 +49,7 @@ resolver = "2"
 default-members = [
   "crates/alien-core",
   "crates/alien-error",
-  "crates/alien-gateway",
-  "crates/alien-ai-gateway-node",
+  "crates/alien-ai-gateway",
   "crates/alien-macros"
 ]
 
@@ -68,7 +66,7 @@ license-file = "LICENSE.md"
 alien-commands = { path = "crates/alien-commands", version = "2.1.6", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
 alien-bindings = { path = "crates/alien-bindings", version = "2.1.6", default-features = false }
-alien-gateway = { path = "crates/alien-gateway", version = "2.1.6" }
+alien-ai-gateway = { path = "crates/alien-ai-gateway", version = "2.1.6" }
 alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "2.1.6" }
 alien-sdk = { path = "crates/alien-sdk", version = "2.1.6", default-features = false }
 alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "2.1.6" }

@@ -2,7 +2,7 @@
  * Typed errors for the AI client surface (`ai()` / `getAiConnection`).
  *
  * Defined here rather than in `@alienplatform/bindings` because the AI binding
- * resolves through this package's gateway, not the bindings native addon.
+ * resolves through this package's gateway process, not the bindings native addon.
  */
 
 import { defineError } from "@alienplatform/core"
@@ -50,7 +50,7 @@ export const AiTransportError = defineError({
 })
 
 /**
- * Error thrown when this platform/architecture has no native addon.
+ * Error thrown when this platform/architecture has no prebuilt gateway binary.
  */
 export const UnsupportedPlatformError = defineError({
   code: "AI_GATEWAY_UNSUPPORTED_PLATFORM",
@@ -60,27 +60,44 @@ export const UnsupportedPlatformError = defineError({
     reason: z.string().optional(),
   }),
   message: ({ platform, arch, reason }) =>
-    `@alienplatform/ai-gateway has no native addon for platform '${platform}' arch '${arch}'${reason ? `: ${reason}` : ""}.`,
+    `@alienplatform/ai-gateway has no prebuilt binary for platform '${platform}' arch '${arch}'${reason ? `: ${reason}` : ""}.`,
   retryable: false,
   internal: false,
   httpStatusCode: 400,
 })
 
 /**
- * Error thrown when the native addon exists but could not be loaded. Internal because the
- * context carries filesystem paths.
+ * Error thrown when the `alien-ai-gateway` executable cannot be located (or, for a
+ * compiled Worker, extracted) for this platform. Internal because the context
+ * carries filesystem paths.
  */
-export const NativeAddonLoadFailedError = defineError({
-  code: "AI_GATEWAY_ADDON_LOAD_FAILED",
+export const GatewayBinaryUnavailableError = defineError({
+  code: "AI_GATEWAY_BINARY_UNAVAILABLE",
   context: z.object({
     triple: z.string(),
     reason: z.string(),
     path: z.string().optional(),
   }),
   message: ({ triple, reason }) =>
-    `Cannot load the @alienplatform/ai-gateway native addon for '${triple}': ${reason}`,
+    `Cannot locate the alien-ai-gateway binary for '${triple}': ${reason}`,
   retryable: false,
   internal: true,
-  // Same class as UnsupportedPlatformError: the host environment can't run the addon.
+  // Same class as UnsupportedPlatformError: the host environment can't run the binary.
   httpStatusCode: 400,
+})
+
+/**
+ * Error thrown when the spawned `alien-ai-gateway` process failed to report a
+ * ready URL: it exited early or errored on startup. Retryable because the common
+ * cause (an ambient cloud credential not yet resolvable) is transient.
+ */
+export const GatewayStartFailedError = defineError({
+  code: "AI_GATEWAY_START_FAILED",
+  context: z.object({
+    reason: z.string(),
+  }),
+  message: ({ reason }) => `The alien-ai-gateway process failed to start: ${reason}`,
+  retryable: true,
+  internal: true,
+  httpStatusCode: 503,
 })

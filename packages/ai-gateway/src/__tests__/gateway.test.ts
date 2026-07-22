@@ -1,57 +1,110 @@
+import { EventEmitter } from "node:events"
 import { AlienError } from "@alienplatform/core"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createGateway } from "../gateway.js"
-import type { NativeAddon, RawAiGatewayHandle } from "../loader.js"
 
-const handle = { url: "http://127.0.0.1:41999" } as unknown as RawAiGatewayHandle
+// `vi.hoisted` so the (hoisted) `vi.mock` factory can reference the mock.
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }))
+vi.mock("node:child_process", () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
-function addonThat(startAiGateway: NativeAddon["startAiGateway"]): NativeAddon {
-  return { startAiGateway, version: () => "1.11.2" } as unknown as NativeAddon
+/** A minimal stand-in for a spawned ChildProcess the gateway wrapper drives. */
+function fakeChild() {
+  const mkStream = () => {
+    const s = new EventEmitter() as EventEmitter & { resume: () => void }
+    s.resume = () => {}
+    return s
+  }
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter
+    stderr: EventEmitter
+    kill: () => void
+    unref: () => void
+  }
+  child.stdout = mkStream()
+  child.stderr = mkStream()
+  child.kill = vi.fn()
+  child.unref = vi.fn()
+  return child
 }
 
-describe("createGateway", () => {
-  it("starts the addon once and reuses the resolved handle", async () => {
-    const start = vi.fn().mockResolvedValue(handle)
-    const gateway = createGateway(() => addonThat(start))
+const READY = '{"aiGatewayUrl":"http://127.0.0.1:41999"}\n'
 
-    expect(await gateway.startAiGateway()).toBe(handle)
-    expect(await gateway.startAiGateway()).toBe(handle)
-    expect(start).toHaveBeenCalledTimes(1)
+afterEach(() => {
+  spawnMock.mockReset()
+  vi.unstubAllEnvs()
+})
+
+describe("createGateway", () => {
+  it("spawns the binary once, reads the printed URL, and reuses the handle", async () => {
+    spawnMock.mockImplementation(() => {
+      const child = fakeChild()
+      // Emit after the wrapper has attached its listeners (next microtask).
+      queueMicrotask(() => child.stdout.emit("data", Buffer.from(READY)))
+      return child
+    })
+    const gateway = createGateway(async () => "/opt/alien-ai-gateway")
+
+    expect(await gateway.startAiGateway()).toEqual({ url: "http://127.0.0.1:41999" })
+    expect(await gateway.startAiGateway()).toEqual({ url: "http://127.0.0.1:41999" })
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(spawnMock).toHaveBeenCalledWith("/opt/alien-ai-gateway", ["--gateway-serve"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    })
   })
 
-  it("retries after a transient failure instead of caching the rejection", async () => {
-    const start = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("credential mint timed out"))
-      .mockResolvedValue(handle)
-    const gateway = createGateway(() => addonThat(start))
+  it("uses ALIEN_AI_GATEWAY_URL without spawning when a launcher already started the gateway", async () => {
+    vi.stubEnv("ALIEN_AI_GATEWAY_URL", "http://127.0.0.1:9008")
+    const gateway = createGateway(async () => "/opt/alien-ai-gateway")
+
+    expect(await gateway.startAiGateway()).toEqual({ url: "http://127.0.0.1:9008" })
+    expect(spawnMock).not.toHaveBeenCalled()
+  })
+
+  it("retries after a transient startup failure instead of caching the rejection", async () => {
+    spawnMock
+      .mockImplementationOnce(() => {
+        const child = fakeChild()
+        // Exit before printing a URL, with a reason on stderr.
+        queueMicrotask(() => {
+          child.stderr.emit("data", Buffer.from("ambient credential not ready"))
+          child.emit("exit", 1, null)
+        })
+        return child
+      })
+      .mockImplementationOnce(() => {
+        const child = fakeChild()
+        queueMicrotask(() => child.stdout.emit("data", Buffer.from(READY)))
+        return child
+      })
+    const gateway = createGateway(async () => "/opt/alien-ai-gateway")
 
     await expect(gateway.startAiGateway()).rejects.toThrow(AlienError)
     // A cached rejection would leave the gateway permanently dead for this process.
-    expect(await gateway.startAiGateway()).toBe(handle)
-    expect(start).toHaveBeenCalledTimes(2)
+    expect(await gateway.startAiGateway()).toEqual({ url: "http://127.0.0.1:41999" })
+    expect(spawnMock).toHaveBeenCalledTimes(2)
   })
 
-  it("rejects rather than throwing synchronously when the addon fails to load", async () => {
-    const gateway = createGateway(() => {
-      throw new Error("Cannot load the native addon for 'darwin-arm64'")
+  it("surfaces the child's stderr as the startup failure reason", async () => {
+    spawnMock.mockImplementation(() => {
+      const child = fakeChild()
+      queueMicrotask(() => {
+        child.stderr.emit("data", Buffer.from("bind: address already in use"))
+        child.emit("exit", 1, null)
+      })
+      return child
+    })
+    const gateway = createGateway(async () => "/opt/alien-ai-gateway")
+
+    await expect(gateway.startAiGateway()).rejects.toThrow(/address already in use/)
+  })
+
+  it("rejects rather than throwing synchronously when the binary cannot be resolved", async () => {
+    const gateway = createGateway(async () => {
+      throw new Error("no alien-ai-gateway binary for this platform")
     })
     // A synchronous throw would escape a caller's `.catch()`.
-    await expect(gateway.startAiGateway()).rejects.toThrow(AlienError)
-  })
-
-  it("decodes the addon's error envelope, preserving code and retryable", async () => {
-    const envelope = JSON.stringify({
-      code: "GATEWAY_AMBIENT_CREDENTIAL_UNAVAILABLE",
-      message: "Could not obtain the workload's ambient cloud credential: metadata timeout",
-      retryable: true,
-    })
-    const gateway = createGateway(() => addonThat(vi.fn().mockRejectedValue(new Error(envelope))))
-
-    await expect(gateway.startAiGateway()).rejects.toMatchObject({
-      code: "GATEWAY_AMBIENT_CREDENTIAL_UNAVAILABLE",
-      retryable: true,
-    })
+    await expect(gateway.startAiGateway()).rejects.toThrow()
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 })

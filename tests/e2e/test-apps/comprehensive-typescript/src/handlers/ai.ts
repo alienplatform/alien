@@ -9,7 +9,7 @@ const app = new Hono()
 // Proves that the runtime injected ALIEN_TEST_AI_BINDING and that the binding
 // parses to a well-formed config. With `?invoke=1` it additionally lists the
 // cloud's model catalog and makes a real one-line chat call through the
-// embedded gateway — the full app -> gateway -> cloud LLM path under the
+// gateway: the full app -> gateway -> cloud LLM path under the
 // workload's ambient credentials.
 app.get("/ai-test", async c => {
   try {
@@ -43,11 +43,11 @@ app.get("/ai-test", async c => {
         500,
       )
     }
-    const completion = (await binding.chat.completions.create({
+    const completion = await binding.chat.completions.create({
       model,
       messages: [{ role: "user", content: "Reply with exactly one word: pong" }],
-    })) as { choices?: Array<{ message?: { content?: string } }> }
-    const reply = completion.choices?.[0]?.message?.content ?? ""
+    })
+    const reply = completion.choices[0]?.message?.content ?? ""
     return c.json({
       injected: true,
       service: config.service,
