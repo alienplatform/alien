@@ -323,6 +323,7 @@ impl PreflightRegistry {
         // Add compile-time checks
         registry.add_compile_time_check(Box::new(compile_time::AllowedUserResourcesCheck));
         registry.add_compile_time_check(Box::new(compile_time::UniqueResourcesCheck));
+        registry.add_compile_time_check(Box::new(compile_time::ResourceEnabledValidCheck));
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicWorkerLifecycleCheck));

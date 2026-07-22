@@ -392,7 +392,18 @@ fn add_cloud_heartbeat_permission(
     }
 }
 
-fn permission_resource_type(resource_type: &str) -> &str {
+/// The `'*'`-scope grant suffixes this derivation emits per resource type
+/// (the `format!("{}/…")` inserts above). A check exempting gate-derived
+/// grants must recognize exactly this set — a suffix added there without
+/// updating this list turns legitimate gate toggles into refused updates.
+/// Data grants are never derived, so they are never in this list.
+pub(crate) const GATE_DERIVED_GLOBAL_SUFFIXES: [&str; 4] =
+    ["provision", "management", "heartbeat", "telemetry"];
+
+/// Maps a raw resource type to the namespace its permission-set ids use.
+/// Every check that matches grant ids by `<type>/` prefix must build the
+/// prefix through this map, or the check and the grants silently diverge.
+pub(crate) fn permission_resource_type(resource_type: &str) -> &str {
     match resource_type {
         "azure_resource_group" => "azure-resource-group",
         "azure_storage_account" => "azure-storage-account",
@@ -628,6 +639,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -637,6 +649,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen, // Should get nothing (heartbeat only)
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1048,6 +1061,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1111,6 +1125,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1179,6 +1194,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -1188,6 +1204,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1281,6 +1298,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -1290,6 +1308,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1346,6 +1365,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1405,6 +1425,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1472,6 +1493,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1546,6 +1568,7 @@ mod tests {
                         lifecycle: ResourceLifecycle::Live,
                         dependencies: Vec::new(),
                         remote_access: false,
+                        enabled_when: None,
                     },
                 );
                 resources
@@ -1604,6 +1627,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1669,6 +1693,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1735,6 +1760,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

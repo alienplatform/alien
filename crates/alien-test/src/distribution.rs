@@ -1030,6 +1030,7 @@ async fn apply_render_mutations_with_management_config(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
         management_config,
@@ -1915,6 +1916,7 @@ async fn terraform_kubernetes_stack_for_target(
 
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig {
+        input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
         management_config: render_management_config(target.cloud_platform(), &stack_settings),

@@ -1,0 +1,178 @@
+---
+source: crates/alien-cloudformation/tests/generator/enabled_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: gated kv stack
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Application inputs
+      Parameters:
+      - InputStoreEnabled
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      HeartbeatsMode:
+        default: Heartbeats
+      InputStoreEnabled:
+        default: Enable the store
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      TelemetryMode:
+        default: Telemetry
+      Token:
+        default: Install token
+      UpdatesMode:
+        default: Updates
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - auto
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+  InputStoreEnabled:
+    Type: String
+    Description: Whether to create the key-value store.
+    Default: 'true'
+    AllowedValues:
+    - 'true'
+    - 'false'
+Conditions:
+  InputStoreEnabledIsTrue:
+    Fn::Equals:
+    - Ref: InputStoreEnabled
+    - 'true'
+Resources:
+  Store:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      - AttributeName: sk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+      - AttributeName: sk
+        KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: store
+      - Key: resource-type
+        Value: kv
+    Condition: InputStoreEnabledIsTrue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  DeploymentRegistration:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:register
+      Token:
+        Ref: Token
+      DeploymentName:
+        Ref: AWS::StackName
+      ResourcePrefix:
+        Ref: AWS::StackName
+      SourceKind: cloudformation
+      Platform: aws
+      Region:
+        Ref: AWS::Region
+      SetupTarget: aws
+      SetupImportFormatVersion: 1
+      SetupFingerprint: test
+      SetupFingerprintVersion: 1
+      ManagementConfig:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+      StackSettings:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+      Resources:
+      - Fn::If:
+        - InputStoreEnabledIsTrue
+        - id: store
+          type: kv
+          importData:
+            tableName:
+              Ref: Store
+            tableArn:
+              Fn::GetAtt:
+              - Store
+              - Arn
+        - Ref: AWS::NoValue
+      InputValues:
+        storeEnabled:
+          Ref: InputStoreEnabled

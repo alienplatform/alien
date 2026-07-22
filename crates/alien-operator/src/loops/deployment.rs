@@ -477,6 +477,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            input_values: Default::default(),
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: None,

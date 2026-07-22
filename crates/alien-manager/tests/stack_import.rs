@@ -1116,3 +1116,61 @@ async fn invalid_resource_prefix_returns_400() {
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
 }
+
+/// Build a Stack whose second storage is gated on a declared deployer boolean.
+fn stack_with_gated_storage(ungated_id: &str, gated_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .inputs(vec![alien_core::StackInputDefinition::deployer_boolean(
+            "extrasEnabled",
+            "Enable extras",
+            "Whether to create the extras store.",
+            Some(true),
+        )])
+        .add(
+            Storage::new(ungated_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Storage::new(gated_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "extrasEnabled",
+        )
+        .build()
+}
+
+/// A setup import that omitted a gated resource: the stored prepared stack
+/// must exclude it, or provisioning would create the very resource the
+/// deployer declined.
+#[tokio::test]
+async fn a_declined_gated_resource_is_stripped_from_the_prepared_stack() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let prepared_stack = persisted
+        .runtime_metadata
+        .as_ref()
+        .expect("runtime_metadata must be persisted")
+        .prepared_stack
+        .as_ref()
+        .expect("prepared_stack must be persisted for imported provisioning");
+
+    assert!(
+        !prepared_stack.resources.contains_key("extras"),
+        "the import omitted the gated store, so the prepared stack must not \
+         carry it into provisioning"
+    );
+    assert!(prepared_stack.resources.contains_key("assets"));
+}

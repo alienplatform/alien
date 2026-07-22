@@ -531,6 +531,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -571,6 +572,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            input_values: Default::default(),
             deployment_name: Some("test deployment".to_string()),
             stack_settings: StackSettings::default(),
             management_config: None,
