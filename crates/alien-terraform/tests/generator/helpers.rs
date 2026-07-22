@@ -36,6 +36,41 @@ pub fn normalized(module: &ModuleFiles) -> String {
         .join(" ")
 }
 
+/// The `resource "<type>"` headers whose block body carries `gate` (the
+/// `count = var.<input> ? 1 : 0` line), read off a `normalized` module. Lets a
+/// test assert "every block that must be gated is, and no other" by parsed
+/// structure instead of a brittle `starts_with` on the rendered string.
+#[allow(dead_code)]
+pub fn gated_block_types(main: &str, gate: &str) -> Vec<String> {
+    let mut types = Vec::new();
+    for (index, _) in main.match_indices("resource \"") {
+        let rest = &main[index + "resource \"".len()..];
+        let Some((block_type, tail)) = rest.split_once('"') else {
+            continue;
+        };
+        // The block body runs to the next `resource "` header.
+        let body_end = tail.find("resource \"").unwrap_or(tail.len());
+        if tail[..body_end].contains(gate) {
+            types.push(block_type.to_string());
+        }
+    }
+    types
+}
+
+/// Every `resource "<type>"` header the module declares, gated or not. Paired
+/// with `gated_block_types` so a gate-exclusion test first proves the block it
+/// expects to stay ungated is actually rendered.
+#[allow(dead_code)]
+pub fn declared_block_types(main: &str) -> Vec<String> {
+    main.match_indices("resource \"")
+        .filter_map(|(index, _)| {
+            main[index + "resource \"".len()..]
+                .split_once('"')
+                .map(|(block_type, _)| block_type.to_string())
+        })
+        .collect()
+}
+
 /// The registration list only changes shape once something in the stack is
 /// gated. Everything else must render exactly as it did before this feature.
 pub fn assert_ungated_registration_list_is_a_plain_array(main: &str) {

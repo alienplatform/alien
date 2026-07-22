@@ -8,6 +8,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::enabled,
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
         permission_context, required_label, resource_prefix_template, role_expression_for_binding,
@@ -30,8 +31,9 @@ impl TfEmitter for GcpQueueEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let queue = downcast::<Queue>(ctx, Queue::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
 
-        let topic = resource_block(
+        let mut topic = resource_block(
             "google_pubsub_topic",
             label,
             [
@@ -40,9 +42,10 @@ impl TfEmitter for GcpQueueEmitter {
                 attr("labels", labels(ctx, "queue")),
             ],
         );
+        enabled::gate(&mut topic, enabled_when)?;
 
         let ack_deadline = ack_deadline_for(ctx);
-        let subscription = resource_block(
+        let mut subscription = resource_block(
             "google_pubsub_subscription",
             label,
             [
@@ -51,9 +54,10 @@ impl TfEmitter for GcpQueueEmitter {
                     expr::template(format!("${{local.resource_prefix}}-{}-default", queue.id())),
                 ),
                 attr("project", expr::raw("var.gcp_project")),
+                // The topic belongs to this same resource, so it is counted too.
                 attr(
                     "topic",
-                    expr::traversal(["google_pubsub_topic", label, "id"]),
+                    enabled::attribute(enabled_when, "google_pubsub_topic", label, "id"),
                 ),
                 attr(
                     "ack_deadline_seconds",
@@ -71,58 +75,83 @@ impl TfEmitter for GcpQueueEmitter {
                 attr("labels", labels(ctx, "queue")),
             ],
         );
+        enabled::gate(&mut subscription, enabled_when)?;
 
         let mut fragment = TfFragment::default();
         fragment.resource_blocks.push(topic);
         fragment.resource_blocks.push(subscription);
-        emit_queue_iam(ctx, &mut fragment, label)?;
+        emit_queue_iam(ctx, &mut fragment, label, enabled_when)?;
         Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "topicId",
-                expr::traversal(["google_pubsub_topic", label, "name"]),
+                enabled::attribute(enabled_when, "google_pubsub_topic", label, "name"),
             ),
             (
                 "topicName",
-                expr::traversal(["google_pubsub_topic", label, "id"]),
+                enabled::attribute(enabled_when, "google_pubsub_topic", label, "id"),
             ),
             (
                 "subscriptionId",
-                expr::traversal(["google_pubsub_subscription", label, "name"]),
+                enabled::attribute(enabled_when, "google_pubsub_subscription", label, "name"),
             ),
             (
                 "subscriptionName",
-                expr::traversal(["google_pubsub_subscription", label, "id"]),
+                enabled::attribute(enabled_when, "google_pubsub_subscription", label, "id"),
             ),
         ]))
     }
 
+    fn supports_enabled_when(&self) -> bool {
+        true
+    }
+
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(Some(expr::object([
             ("service", Expression::String("pubsub".to_string())),
             (
                 "topic",
-                expr::traversal(["google_pubsub_topic", label, "id"]),
+                enabled::attribute(enabled_when, "google_pubsub_topic", label, "id"),
             ),
             (
                 "subscription",
-                expr::traversal(["google_pubsub_subscription", label, "id"]),
+                enabled::attribute(enabled_when, "google_pubsub_subscription", label, "id"),
             ),
         ])))
     }
 }
 
-fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
+/// Address of one of this queue's own blocks, indexed when the queue is gated.
+///
+/// The IAM members below reference the topic and the subscription from raw
+/// strings as well as from expressions, so both forms have to agree on whether
+/// the `[0]` is there.
+fn own_block(enabled_when: Option<&str>, resource_type: &str, label: &str) -> String {
+    match enabled_when {
+        Some(_) => format!("{resource_type}.{label}[0]"),
+        None => format!("{resource_type}.{label}"),
+    }
+}
+
+fn emit_queue_iam(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    enabled_when: Option<&str>,
+) -> Result<()> {
     for (owner_label, permission_refs) in queue_permission_owners(ctx) {
         let member = service_account_member_for_label(&owner_label);
+        let topic_ref = own_block(enabled_when, "google_pubsub_topic", label);
         let context = permission_context(&owner_label, ctx.stack.id())
-            .with_resource_name(format!("${{google_pubsub_topic.{label}.name}}"));
+            .with_resource_name(format!("${{{topic_ref}.name}}"));
         let generator = GcpRuntimePermissionsGenerator::new();
 
         for permission_ref in permission_refs {
@@ -156,34 +185,50 @@ fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str)
                 let role = role_expression_for_binding(&binding.role, &custom_roles)?;
                 match resource_kind {
                     GcpBindingResourceKind::PubsubTopic => {
-                        fragment.resource_blocks.push(resource_block(
+                        let mut member_block = resource_block(
                             "google_pubsub_topic_iam_member",
                             &format!("{role_label}_{label}_{owner_label}_topic_{idx}"),
                             [
                                 attr("project", expr::raw("var.gcp_project")),
                                 attr(
                                     "topic",
-                                    expr::traversal(["google_pubsub_topic", label, "name"]),
+                                    enabled::attribute(
+                                        enabled_when,
+                                        "google_pubsub_topic",
+                                        label,
+                                        "name",
+                                    ),
                                 ),
                                 attr("role", role),
                                 attr("member", member.clone()),
                             ],
-                        ));
+                        );
+                        // The grant targets this queue's topic, so it only
+                        // exists while the topic does.
+                        enabled::gate(&mut member_block, enabled_when)?;
+                        fragment.resource_blocks.push(member_block);
                     }
                     GcpBindingResourceKind::PubsubSubscription => {
-                        fragment.resource_blocks.push(resource_block(
+                        let mut member_block = resource_block(
                             "google_pubsub_subscription_iam_member",
                             &format!("{role_label}_{label}_{owner_label}_subscription_{idx}"),
                             [
                                 attr("project", expr::raw("var.gcp_project")),
                                 attr(
                                     "subscription",
-                                    expr::traversal(["google_pubsub_subscription", label, "name"]),
+                                    enabled::attribute(
+                                        enabled_when,
+                                        "google_pubsub_subscription",
+                                        label,
+                                        "name",
+                                    ),
                                 ),
                                 attr("role", role),
                                 attr("member", member.clone()),
                             ],
-                        ));
+                        );
+                        enabled::gate(&mut member_block, enabled_when)?;
+                        fragment.resource_blocks.push(member_block);
                     }
                     GcpBindingResourceKind::ArtifactRegistryRepository => {}
                 }
