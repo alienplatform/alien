@@ -339,6 +339,11 @@ fn test_aws_cloudformation_resource_id_interpolates_in_conditions() {
         })
         .expect("worker provision should allow creating the physical Lambda function");
 
+    assert_eq!(
+        create_function_statement.action,
+        [json!("lambda:CreateFunction"), json!("lambda:TagResource")]
+    );
+
     let string_equals = create_function_statement
         .condition
         .as_ref()
@@ -346,8 +351,16 @@ fn test_aws_cloudformation_resource_id_interpolates_in_conditions() {
         .expect("Lambda creation should be request-tag conditioned");
 
     assert_eq!(
+        string_equals.get("aws:RequestTag/deployment"),
+        Some(&json!({"Fn::Sub": "${AWS::StackName}"}))
+    );
+    assert_eq!(
         string_equals.get("aws:RequestTag/resource"),
         Some(&json!("job"))
+    );
+    assert_eq!(
+        string_equals.get("aws:RequestTag/managed-by"),
+        Some(&json!("runtime"))
     );
 }
 

@@ -5,9 +5,9 @@
     "aws": [
       {
         "label": "create-lambda-functions",
-        "description": "Create Lambda functions owned by this application during initial setup.",
+        "description": "Create Lambda functions owned by this application during provisioning.",
         "grant": {
-          "actions": ["lambda:CreateFunction"]
+          "actions": ["lambda:CreateFunction", "lambda:TagResource"]
         },
         "binding": {
           "stack": {
@@ -42,7 +42,6 @@
             "lambda:CreateFunctionUrlConfig",
             "lambda:DeleteFunctionUrlConfig",
             "lambda:UpdateCodeSigningConfig",
-            "lambda:TagResource",
             "lambda:UpdateFunctionCode",
             "lambda:UpdateFunctionConfiguration",
             "lambda:PublishVersion",

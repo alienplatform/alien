@@ -639,10 +639,24 @@ fn test_worker_provision_uses_resource_name_for_arn_and_resource_id_for_tags() {
         })
         .expect("worker provision should allow creating the physical Lambda function");
 
+    assert_eq!(
+        create_function_statement.action,
+        ["lambda:CreateFunction", "lambda:TagResource"]
+    );
+    assert!(condition_equals(
+        create_function_statement,
+        "aws:RequestTag/deployment",
+        "my-stack"
+    ));
     assert!(condition_equals(
         create_function_statement,
         "aws:RequestTag/resource",
         "job"
+    ));
+    assert!(condition_equals(
+        create_function_statement,
+        "aws:RequestTag/managed-by",
+        "runtime"
     ));
 }
 
