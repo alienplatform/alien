@@ -140,6 +140,13 @@ impl CfEmitter for AwsStorageEmitter {
         ]))
     }
 
+    /// Every resource this emitter returns — bucket, policy, and the IAM
+    /// policies that name the bucket — is stamped with the gate's condition by
+    /// the generator, so they appear and disappear together.
+    fn supports_enabled_when(&self) -> bool {
+        true
+    }
+
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         resource_config::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
         let bucket_id = required_logical_id(ctx)?;
