@@ -194,7 +194,9 @@ pub fn generate_terraform_module(
     validate_stack_inputs_for_terraform(&stack_inputs)?;
 
     let mut per_resource: IndexMap<String, TfFragment> = IndexMap::new();
-    let mut registration_resources: Vec<Expression> = Vec::new();
+    // Each entry carries the gate it is conditional on, so `locals_body` can
+    // drop declined resources from the registration list.
+    let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
 
     for (resource_id, resource) in stack.resources() {
@@ -214,6 +216,37 @@ pub fn generate_terraform_module(
             names: &labels,
         };
 
+        if let Some(input_id) = resource.enabled_when.as_deref() {
+            if !emitter.supports_enabled_when() {
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("enabled() on resource type '{resource_type}'"),
+                    reason: format!(
+                        "the {platform:?} Terraform emitter for '{resource_type}' does not render \
+                         conditionally yet, so resource '{resource_id}' would be created regardless \
+                         of the deployer's answer"
+                    ),
+                }));
+            }
+            // Re-validated at render time like the CloudFormation generator:
+            // a caller that renders without running preflights must fail here,
+            // not ship a module whose `var.input_x` is undeclared or a string.
+            alien_core::find_boolean_gate_input(&stack_inputs, input_id).map_err(|issue| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("enabled('{input_id}')"),
+                    reason: match issue {
+                        alien_core::GateInputIssue::Undeclared => format!(
+                            "resource '{resource_id}' is gated on stack input '{input_id}', \
+                             which this module never asks the deployer for"
+                        ),
+                        alien_core::GateInputIssue::NotBoolean(kind) => format!(
+                            "resource '{resource_id}' is gated on stack input '{input_id}', \
+                             which is a {kind:?} input rather than a boolean"
+                        ),
+                    },
+                })
+            })?;
+        }
+
         let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
         // Split per-emitter `locals` out of the per-resource file \u2014 they
         // belong in `locals.tf` so reviewers see all locals together.
@@ -222,11 +255,14 @@ pub fn generate_terraform_module(
         per_resource.insert(resource_id.clone(), fragment);
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
-        registration_resources.push(expr::object([
-            ("id", Expression::String(resource_id.to_string())),
-            ("type", Expression::String(resource_type.to_string())),
-            ("importData", registration_data),
-        ]));
+        registration_resources.push((
+            resource.enabled_when.clone(),
+            expr::object([
+                ("id", Expression::String(resource_id.to_string())),
+                ("type", Expression::String(resource_type.to_string())),
+                ("importData", registration_data),
+            ]),
+        ));
     }
 
     if target.is_kubernetes() {
@@ -843,7 +879,13 @@ fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Resul
 }
 
 fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
-    format!("input_{}", snake_case_identifier(&input.id))
+    stack_input_variable_name(&input.id)
+}
+
+/// Variable name for a stack input id. Shared with the gating helpers, which
+/// only know the id.
+pub(crate) fn stack_input_variable_name(input_id: &str) -> String {
+    format!("input_{}", snake_case_identifier(input_id))
 }
 
 fn snake_case_identifier(value: &str) -> String {
@@ -1937,7 +1979,7 @@ fn resource_prefix_body() -> Body {
 fn locals_body(
     target: TerraformTarget,
     stack_settings: &StackSettings,
-    registration_resources: Vec<Expression>,
+    registration_resources: Vec<(Option<String>, Expression)>,
     extra: &IndexMap<String, Expression>,
     has_remote_management: bool,
 ) -> Result<Body> {
@@ -2030,7 +2072,7 @@ fn locals_body(
     ));
     body.push(attr(
         "deployment_resources",
-        Expression::Array(registration_resources),
+        crate::emitters::enabled::registration_list(registration_resources),
     ));
 
     if target.is_kubernetes() {

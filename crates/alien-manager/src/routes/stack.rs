@@ -184,6 +184,20 @@ pub async fn stack_import(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    // A gated resource renders behind its input in the setup template, so its
+    // absence from the import IS the deployer's answer. Imported deployments
+    // enter the runner at InitialSetup with this prepared stack; leaving the
+    // declined entry in would make the runner create the very resource the
+    // deployer said no to. A live gated resource follows the request's input
+    // values here for the same reason.
+    let prepared_stack = match alien_deployment::strip_declined_resources(
+        prepared_stack,
+        &stack_state,
+        &req.input_values,
+    ) {
+        Ok(stack) => stack,
+        Err(e) => return e.into_response(),
+    };
     let environment_info = infer_import_environment_info(&req);
     match state
         .deployment_store
@@ -300,6 +314,7 @@ pub async fn stack_import(
                         setup_fingerprint: req.setup_fingerprint.clone(),
                         setup_fingerprint_version: req.setup_fingerprint_version,
                         schedule_reconciliation: should_reconcile,
+                        input_values: req.input_values.clone(),
                     },
                 )
                 .await
@@ -760,6 +775,10 @@ fn import_changes_deployment(
         || existing.stack_settings.as_ref() != Some(&req.stack_settings)
         || existing.environment_info.as_ref() != environment_info.as_ref()
         || existing.runtime_metadata.as_ref() != Some(runtime_metadata)
+        // An edited gate answer changes nothing else in the payload, but the
+        // reconcile it schedules is what provisions or deprovisions the
+        // gated resource.
+        || existing.input_values != req.input_values
         || !imported_resources_are_unchanged(existing, imported_stack_state)
 }
 
@@ -839,6 +858,7 @@ async fn prepare_import_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
+        input_values: Default::default(),
         deployment_name: Some(req.deployment_name.clone()),
         stack_settings: req.stack_settings.clone(),
         management_config: req.management_config.clone(),
@@ -1139,6 +1159,7 @@ mod setup_update_authorization_tests {
             management_config: None,
             deployment_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             retry_requested: false,
             locked_by: None,
             locked_at: None,
@@ -1178,6 +1199,39 @@ mod setup_update_authorization_tests {
             setup_registration_replay(&metadata, &metadata),
             SetupRegistrationReplay::Exact
         );
+    }
+
+    /// A re-register that only flips a gate answer changes nothing else in
+    /// the payload; without the input-values clause the deployment never
+    /// reconciles and the toggle silently does nothing.
+    #[test]
+    fn an_input_only_edit_schedules_reconciliation() {
+        let prepared = stack("live-worker", "frozen-storage");
+        let existing = record(prepared);
+        let mut req = request();
+        req.stack_settings = existing.stack_settings.clone().unwrap();
+        let runtime_metadata = existing.runtime_metadata.clone().unwrap();
+        let imported_state = StackState::new(Platform::Aws);
+
+        assert!(!import_changes_deployment(
+            &existing,
+            &imported_state,
+            &None,
+            &runtime_metadata,
+            "release",
+            &req,
+        ));
+
+        req.input_values
+            .insert("enableAnalytics".to_string(), serde_json::json!(false));
+        assert!(import_changes_deployment(
+            &existing,
+            &imported_state,
+            &None,
+            &runtime_metadata,
+            "release",
+            &req,
+        ));
     }
 
     #[test]

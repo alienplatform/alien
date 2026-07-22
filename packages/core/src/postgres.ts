@@ -3,7 +3,7 @@ import {
   PostgresSchema,
   type ResourceType,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { Postgres as PostgresConfig, PostgresOutputs } from "./generated/index.js"
 export { PostgresSchema as PostgresConfigSchema } from "./generated/index.js"
@@ -12,7 +12,7 @@ export { PostgresSchema as PostgresConfigSchema } from "./generated/index.js"
  * Represents a managed PostgreSQL database. The target platform decides the backend;
  * the database is private and reachable only by same-stack workloads.
  */
-export class Postgres {
+export class Postgres extends ResourceBuilder {
   private _config: Partial<PostgresConfig> = {
     version: "17",
     storage: "20Gi",
@@ -24,6 +24,7 @@ export class Postgres {
    * @param id ID of the database. A database of this name is created on the server.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -99,7 +100,7 @@ export class Postgres {
   public build(): Resource {
     const config = PostgresSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "postgres",
       ...config,
     })
