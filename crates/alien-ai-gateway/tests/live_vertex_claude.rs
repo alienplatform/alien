@@ -4,7 +4,7 @@
 //! Run it with:
 //!   export GCP_PROJECT=<project-id>
 //!   export GCP_ACCESS_TOKEN="$(gcloud auth print-access-token)"
-//!   cargo test -p alien-gateway --test live_vertex_claude -- --ignored --nocapture
+//!   cargo test -p alien-ai-gateway --test live_vertex_claude -- --ignored --nocapture
 //!
 //! This is the end-to-end proof for the Vertex Claude arm: the gateway moves the
 //! model id into the `:rawPredict` URL, injects the Vertex version marker, and the
@@ -14,7 +14,7 @@
 use std::net::Ipv4Addr;
 
 use alien_core::Platform;
-use alien_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
+use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
 use serde_json::{json, Value};
 
 async fn serve(router: axum::Router) -> String {

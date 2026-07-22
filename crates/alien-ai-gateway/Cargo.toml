@@ -1,5 +1,5 @@
 [package]
-name = "alien-gateway"
+name = "alien-ai-gateway"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -35,3 +35,5 @@ http = { workspace = true }
 [dev-dependencies]
 httpmock = { workspace = true }
 temp-env = { workspace = true }
+dotenvy = { workspace = true }
+workspace_root = { workspace = true }

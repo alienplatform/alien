@@ -68,12 +68,13 @@ export type {
 } from "@alienplatform/bindings"
 
 // ============================================================================
-// AI — re-exported from @alienplatform/ai-gateway (the in-process Rust gateway)
+// AI: re-exported from @alienplatform/ai-gateway (a spawned Rust gateway process)
 // ============================================================================
 
 export {
   ai,
   getAiConnection,
+  startAiGateway,
   Ai,
   isExternalAiBinding,
   parseAiBinding,

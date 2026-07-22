@@ -1,40 +1,37 @@
 /**
- * Native addon loader for the AI gateway.
+ * Locate (and, for a compiled Worker, extract) the `alien-ai-gateway` executable
+ * that the gateway wrapper spawns.
  *
- * Resolves the napi-rs addon for the current platform, in order (mirrors
- * `@alienplatform/bindings`):
+ * Resolution order (deferred to first spawn, so importing the package does no I/O):
  *
- *   1. `ALIEN_AI_GATEWAY_ADDON_PATH` — an explicit path to a `.node` file
- *      (dev/test escape hatch; never set in published installs).
- *   2. The per-platform prebuild package `@alienplatform/ai-gateway-<triple>`
- *      from `optionalDependencies` (injected at publish time; absent in dev).
- *   3. Dev fallback: the locally-built addon under
- *      `crates/alien-ai-gateway-node/alien-ai-gateway-node.<triple>.node`, found
- *      by walking up from this module, version-gated against this package.
- *
- * Loading is deferred to first use, so importing the package performs no I/O.
+ *   1. An embedded binary registered by the `./native` entry. A `bun build
+ *      --compile` Worker embeds the executable and hands us its (virtual) path;
+ *      we copy it to a real, executable temp file once.
+ *   2. `ALIEN_AI_GATEWAY_BINARY_PATH`: an explicit path (dev/test escape hatch;
+ *      never set in published installs).
+ *   3. The per-platform prebuild package `@alienplatform/ai-gateway-<triple>`,
+ *      which ships the executable (installed via `optionalDependencies`).
+ *   4. Dev fallback: the locally-built binary under `target/{release,debug}`,
+ *      found by walking up from this module.
  */
 
-import { existsSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
+import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { AlienError } from "@alienplatform/core"
 
-import { NativeAddonLoadFailedError, UnsupportedPlatformError } from "./errors.js"
+import { GatewayBinaryUnavailableError, UnsupportedPlatformError } from "./errors.js"
 
 const require = createRequire(import.meta.url)
 
-/** A running gateway handle from the addon: its loopback base URL. Held for the
- * process lifetime — dropping the last reference stops the server. */
+/** The launcher binary's file name across all platforms. */
+const BINARY_NAME = "alien-ai-gateway"
+
+/** A running gateway handle: its loopback base URL. */
 export interface RawAiGatewayHandle {
   readonly url: string
-}
-
-/** The complete napi addon surface consumed by the wrapper. */
-export interface NativeAddon {
-  startAiGateway(): Promise<RawAiGatewayHandle>
-  version(): string
 }
 
 export type LinuxLibc = "gnu" | "musl"
@@ -51,7 +48,11 @@ export function detectLinuxLibc(): LinuxLibc {
   return existsSync("/etc/alpine-release") ? "musl" : "gnu"
 }
 
-/** Map `process.platform`/`arch` to the napi triple (prebuild name + `.node` file name). */
+/**
+ * Map `process.platform`/`arch` to the prebuild triple. The binary is built for
+ * musl as well as glibc, so Alpine/musl images resolve a prebuild rather than
+ * being rejected for their libc.
+ */
 export function platformTriple(
   platform: NodeJS.Platform = process.platform,
   arch: NodeJS.Architecture = process.arch,
@@ -59,168 +60,151 @@ export function platformTriple(
 ): string {
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
   if (platform === "darwin" && arch === "x64") return "darwin-x64"
-  if (platform === "linux" && libc === "musl") {
-    throw new AlienError(
-      UnsupportedPlatformError.create({
-        platform,
-        arch,
-        reason:
-          "prebuilds are published for glibc Linux only; run on a glibc-based image (debian/ubuntu-slim)",
-      }),
-    )
+  if (platform === "linux") {
+    if (arch === "x64") return `linux-x64-${libc}`
+    if (arch === "arm64") return `linux-arm64-${libc}`
   }
-  if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
-  if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
   throw new AlienError(UnsupportedPlatformError.create({ platform, arch }))
 }
 
-/** Walk up from `startDir` to find the locally-built addon, or `undefined`. */
-export function findLocalAddon(
-  triple: string,
+/** Walk up from `startDir` to find the locally-built binary, or `undefined`. */
+export function findLocalBinary(
   startDir: string = dirname(fileURLToPath(import.meta.url)),
 ): string | undefined {
-  const fileName = `alien-ai-gateway-node.${triple}.node`
   let dir = startDir
   for (;;) {
-    const candidate = join(dir, "crates", "alien-ai-gateway-node", fileName)
-    if (existsSync(candidate)) return candidate
+    for (const profile of ["release", "debug"]) {
+      const candidate = join(dir, "target", profile, BINARY_NAME)
+      if (existsSync(candidate)) return candidate
+    }
     const parent = dirname(dir)
     if (parent === dir) return undefined
     dir = parent
   }
 }
 
-function packageVersion(): string {
-  const dir = dirname(fileURLToPath(import.meta.url))
-  const packageJson = require(join(dir, "..", "package.json")) as { version: string }
-  return packageJson.version
-}
-
-let cached: NativeAddon | undefined
-let embedded: NativeAddon | undefined
+let cached: string | undefined
+let embeddedBinaryPath: string | undefined
 
 /**
- * Register a bun-embedded addon with the default loader, so plain
- * `@alienplatform/ai-gateway` imports (which go through {@link loadAddon})
- * resolve to it inside a `bun build --compile` binary — where the
- * filesystem/prebuild resolution below cannot find the addon. In a normal
- * install this is never called and {@link loadAddon} falls through to its
- * normal resolution. The `/native` entry calls this at bootstrap.
+ * Register the bun-embedded binary path, so plain `@alienplatform/ai-gateway`
+ * imports (which resolve through {@link resolveGatewayBinary}) find it inside a
+ * `bun build --compile` binary, where the filesystem/prebuild resolution below
+ * cannot. In a normal install this is never called. The `/native` entry calls it.
  */
-export function registerEmbeddedAddon(addon: NativeAddon): void {
-  embedded = addon
+export function registerEmbeddedBinary(path: string): void {
+  embeddedBinaryPath = path
 }
 
-/** Load (and memoize) the native addon, or throw if none resolves for this platform. */
-export function loadAddon(): NativeAddon {
+/** Resolve (and memoize) a runnable path to the launcher binary, or throw. */
+export async function resolveGatewayBinary(): Promise<string> {
   if (cached) return cached
 
-  // A compiled binary registers its embedded addon up front; prefer it over the
-  // filesystem/prebuild resolution below, which cannot work inside the binary.
-  if (embedded) {
-    cached = embedded
+  // A compiled binary registers its embedded copy up front; extract it to a real,
+  // executable file, since the embedded path is virtual and cannot be spawned.
+  if (embeddedBinaryPath) {
+    cached = await extractEmbedded(embeddedBinaryPath)
+    return cached
+  }
+
+  const override = process.env.ALIEN_AI_GATEWAY_BINARY_PATH
+  if (override) {
+    // Resolved against cwd, not this module's dist/ directory.
+    cached = ensureExecutable(resolve(override))
     return cached
   }
 
   const triple = platformTriple()
-  const pkg = `@alienplatform/ai-gateway-${triple}`
-
-  const override = process.env.ALIEN_AI_GATEWAY_ADDON_PATH
-  if (override) {
-    // Resolved against cwd, not this module's dist/ directory.
-    cached = requireAddon(resolve(override), triple, "ALIEN_AI_GATEWAY_ADDON_PATH")
-    return cached
-  }
-
-  const prebuild = requirePrebuild(pkg, triple)
+  const prebuild = await resolvePrebuild(triple)
   if (prebuild) {
-    cached = prebuild
+    cached = ensureExecutable(prebuild)
     return cached
   }
 
-  const local = findLocalAddon(triple)
+  const local = findLocalBinary()
   if (local) {
-    const addon = requireAddon(local, triple, "the locally-built addon")
-    const expected = packageVersion()
-    const actual = addon.version()
-    // Trust the local addon only when its reported version matches the installed package
-    // version. A mismatch is a stale build from an earlier checkout (ABI/version skew).
-    if (actual === expected) {
-      cached = addon
-      return cached
-    }
-    throw new AlienError(
-      NativeAddonLoadFailedError.create({
-        triple,
-        path: local,
-        reason: `the locally-built addon reports version '${actual}', but this package is '${expected}' — rebuild it with \`napi build --platform\` in crates/alien-ai-gateway-node`,
-      }),
-    )
+    cached = ensureExecutable(local)
+    return cached
   }
 
   throw new AlienError(
-    NativeAddonLoadFailedError.create({
+    GatewayBinaryUnavailableError.create({
       triple,
-      reason: `no addon found — install the '${pkg}' prebuild, build it locally with \`napi build --platform\` in crates/alien-ai-gateway-node, or set ALIEN_AI_GATEWAY_ADDON_PATH to a built .node file`,
+      reason: `no embedded binary, no ALIEN_AI_GATEWAY_BINARY_PATH, no '@alienplatform/ai-gateway-${triple}' prebuild, and no locally-built target/{release,debug}/${BINARY_NAME}; build it with \`cargo build --bin ${BINARY_NAME} -p alien-ai-gateway\``,
     }),
   )
 }
 
-/** `require` the prebuild, or `undefined` when it is not installed. */
-// Preserve the caught `require()` error as a structured source. This path is synchronous
-// (CJS require) and so cannot use the async `AlienError.from`; building the source inline keeps
-// the original dlopen/ABI failure (stack included) from being lost behind the generic message.
-function nativeAddonLoadFailure(
-  triple: string,
-  path: string,
-  reason: string,
-  cause: unknown,
-): AlienError {
-  return new AlienError({
-    ...NativeAddonLoadFailedError.create({ triple, path, reason }).toOptions(),
-    source: {
-      code: "GENERIC_ERROR",
-      message: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
-      retryable: false,
-      internal: true,
-    },
-  })
-}
-
-function requirePrebuild(pkg: string, triple: string): NativeAddon | undefined {
+/**
+ * Copy a bun-embedded binary to a real, executable temp file. Only reached inside
+ * a `bun build --compile` binary, where `Bun` is present and the embedded file
+ * must live on disk with the execute bit set before it can be spawned.
+ */
+async function extractEmbedded(virtualPath: string): Promise<string> {
+  const bun = (globalThis as { Bun?: { file(p: string): { arrayBuffer(): Promise<ArrayBuffer> } } })
+    .Bun
+  if (!bun) {
+    throw new AlienError(
+      GatewayBinaryUnavailableError.create({
+        triple: platformTriple(),
+        path: virtualPath,
+        reason: "an embedded gateway binary can only be extracted under the Bun runtime",
+      }),
+    )
+  }
   try {
-    return require(pkg) as NativeAddon
+    const bytes = await bun.file(virtualPath).arrayBuffer()
+    const dir = mkdtempSync(join(tmpdir(), "alien-ai-gateway-"))
+    const exe = join(dir, BINARY_NAME)
+    writeFileSync(exe, Buffer.from(bytes))
+    chmodSync(exe, 0o755)
+    return exe
   } catch (error) {
-    // Only "not installed" falls through to the dev-built addon. Anything else — a failed
-    // dlopen from ABI skew, a corrupt .node, a broken transitive require — is a real
-    // failure that the generic "install the prebuild" advice would misdiagnose.
-    if ((error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND") {
-      return undefined
-    }
-    throw nativeAddonLoadFailure(
-      triple,
-      pkg,
-      error instanceof Error ? error.message : String(error),
-      error,
+    // A filesystem fault here (no temp space, read-only tmp) would otherwise
+    // surface as a bare Error; wrap it so callers still see an AlienError.
+    throw (await AlienError.from(error)).withContext(
+      GatewayBinaryUnavailableError.create({
+        triple: platformTriple(),
+        path: virtualPath,
+        reason: "failed to extract the embedded gateway binary",
+      }),
     )
   }
 }
 
-function requireAddon(path: string, triple: string, source: string): NativeAddon {
+/** Best-effort execute bit; a prebuild may already be executable or read-only. */
+function ensureExecutable(path: string): string {
   try {
-    return require(path) as NativeAddon
-  } catch (error) {
-    throw nativeAddonLoadFailure(
-      triple,
-      path,
-      `${source} could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
-      error,
-    )
+    chmodSync(path, 0o755)
+  } catch {
+    // A read-only mount can't be chmod'd; if it isn't already executable the
+    // spawn below surfaces a real, specific error.
   }
+  return path
 }
 
-/** Test-only: reset the memoized addon. */
-export function resetAddonCacheForTests(): void {
+/** Resolve the binary shipped by the per-platform prebuild package, or `undefined`. */
+async function resolvePrebuild(triple: string): Promise<string | undefined> {
+  const pkg = `@alienplatform/ai-gateway-${triple}`
+  let pkgJson: string
+  try {
+    pkgJson = require.resolve(`${pkg}/package.json`)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND") return undefined
+    // Installed but unresolvable (e.g. a corrupt manifest); preserve the cause.
+    throw (await AlienError.from(error)).withContext(
+      GatewayBinaryUnavailableError.create({
+        triple,
+        reason: `the '${pkg}' prebuild is installed but could not be resolved`,
+      }),
+    )
+  }
+  const candidate = join(dirname(pkgJson), BINARY_NAME)
+  return existsSync(candidate) ? candidate : undefined
+}
+
+/** Test-only: reset the memoized resolution. */
+export function resetGatewayBinaryCacheForTests(): void {
   cached = undefined
-  embedded = undefined
+  embeddedBinaryPath = undefined
 }
