@@ -5,12 +5,7 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "s3:ListBucket",
-            "s3:GetObject",
-            "s3:PutObject",
-            "s3:DeleteObject"
-          ]
+          "actions": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         },
         "binding": {
           "stack": {
