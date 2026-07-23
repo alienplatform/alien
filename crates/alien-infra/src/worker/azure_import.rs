@@ -48,6 +48,7 @@ impl ResourceImporter for AzureWorkerImporter {
             commands_resource_group_name: None,
             commands_namespace_name: None,
             commands_queue_name: None,
+            commands_queue_applied: false,
             commands_dapr_component: None,
             commands_dapr_component_deletion_candidates: Vec::new(),
             commands_sender_role_assignment_id: None,

@@ -160,7 +160,7 @@ fn provider(
     let create_queue_actions = actions.clone();
     service_bus
         .expect_create_or_update_queue()
-        .times(1..)
+        .times(1)
         .returning(move |resource_group, namespace, queue, _| {
             record(
                 &create_queue_actions,
@@ -421,6 +421,36 @@ async fn commands_dependency_target_move_checkpoints_and_deletes_old_target_befo
             .any(|action| action.starts_with("create-queue:")),
         "desired target must be durable before queue creation"
     );
+
+    let actions_before_queue = actions.lock().expect("action log lock").len();
+    executor
+        .step()
+        .await
+        .expect("apply the checkpointed commands queue");
+    {
+        let actions = actions.lock().expect("action log lock");
+        assert_eq!(
+            &actions[actions_before_queue..],
+            [format!(
+                "create-queue:mock-rg/default-service-bus-namespace/{queue_name}"
+            )],
+            "the queue PUT must be the only mutation in its controller step"
+        );
+    }
+
+    let actions_before_dapr = actions.lock().expect("action log lock").len();
+    executor
+        .step()
+        .await
+        .expect("apply the commands Dapr component");
+    {
+        let actions = actions.lock().expect("action log lock");
+        assert_eq!(
+            &actions[actions_before_dapr..],
+            [format!("put-dapr:{component_name}")],
+            "the Dapr PUT must be checkpointed before sender RBAC reconciliation"
+        );
+    }
 
     for step in 0..40 {
         if actions

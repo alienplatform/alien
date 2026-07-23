@@ -95,6 +95,7 @@ impl AzureWorkerController {
             let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
             self.commands_resource_group_name =
                 Some(namespace_controller.resource_group_name(ctx)?);
+            self.commands_queue_applied = false;
             self.commands_sender_role_assignment_discovery_complete = false;
             return Ok(CommandsQueueTargetPreparation::Checkpoint);
         }
@@ -127,6 +128,7 @@ impl AzureWorkerController {
                 .get_or_insert_with(|| desired.namespace_name.clone());
             self.commands_queue_name
                 .get_or_insert_with(|| desired.queue_name.clone());
+            self.commands_queue_applied = false;
             self.commands_sender_role_assignment_discovery_complete = false;
             return Ok(CommandsQueueTargetPreparation::Checkpoint);
         }
@@ -258,6 +260,7 @@ impl AzureWorkerController {
             self.commands_resource_group_name = None;
             self.commands_namespace_name = None;
             self.commands_queue_name = None;
+            self.commands_queue_applied = false;
             self.commands_sender_role_assignment_discovery_complete = false;
             return Ok(CommandsTeardownResult::Mutated);
         }
@@ -655,6 +658,7 @@ impl AzureWorkerController {
             .get_or_insert_with(|| namespace_name.clone());
         self.commands_queue_name
             .get_or_insert_with(|| queue_name.clone());
+        self.commands_queue_applied = false;
         self.commands_dapr_component_deletion_candidates = commands_component_removal_names(
             container_app_name,
             self.commands_dapr_component.as_deref(),

@@ -27,6 +27,7 @@ fn storage_trigger_teardown_progress_is_persisted_and_legacy_safe() {
 #[test]
 fn commands_sender_intent_is_persisted_in_camel_case_and_legacy_safe() {
     let mut controller = AzureWorkerController::mock_ready("worker");
+    controller.commands_queue_applied = true;
     controller.commands_sender_role_assignment_intent =
         Some(AzureCommandsSenderRoleAssignmentIntent {
             assignment_id: "assignment-id".to_string(),
@@ -56,6 +57,7 @@ fn commands_sender_intent_is_persisted_in_camel_case_and_legacy_safe() {
         restored.commands_sender_role_assignment_intent,
         controller.commands_sender_role_assignment_intent
     );
+    assert!(restored.commands_queue_applied);
     assert!(restored.commands_sender_role_assignment_discovery_complete);
 
     let mut legacy = serialized;
@@ -67,9 +69,14 @@ fn commands_sender_intent_is_persisted_in_camel_case_and_legacy_safe() {
         .as_object_mut()
         .expect("controller state should be an object")
         .remove("commandsSenderRoleAssignmentDiscoveryComplete");
+    legacy
+        .as_object_mut()
+        .expect("controller state should be an object")
+        .remove("commandsQueueApplied");
     let restored: AzureWorkerController =
         serde_json::from_value(legacy).expect("legacy controller state should restore");
     assert!(restored.commands_sender_role_assignment_intent.is_none());
+    assert!(!restored.commands_queue_applied);
     assert!(!restored.commands_sender_role_assignment_discovery_complete);
 }
 
@@ -82,6 +89,7 @@ fn clear_all_resets_commands_lro_and_retry_state() {
     controller.commands_resource_group_name = Some("resource-group".to_string());
     controller.commands_namespace_name = Some("namespace".to_string());
     controller.commands_queue_name = Some("queue".to_string());
+    controller.commands_queue_applied = true;
     controller.commands_dapr_component = Some("component".to_string());
     controller.commands_dapr_component_deletion_candidates = vec!["component".to_string()];
     controller.commands_sender_role_assignment_id = Some("assignment".to_string());
@@ -113,6 +121,7 @@ fn clear_all_resets_commands_lro_and_retry_state() {
     assert!(controller.commands_resource_group_name.is_none());
     assert!(controller.commands_namespace_name.is_none());
     assert!(controller.commands_queue_name.is_none());
+    assert!(!controller.commands_queue_applied);
     assert!(controller.commands_dapr_component.is_none());
     assert!(controller
         .commands_dapr_component_deletion_candidates

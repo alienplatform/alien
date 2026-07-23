@@ -460,6 +460,9 @@ pub struct AzureWorkerController {
     pub(crate) commands_namespace_name: Option<String>,
     /// Service Bus queue name for commands delivery
     pub(crate) commands_queue_name: Option<String>,
+    /// Whether the tracked commands queue has been applied in the current setup cycle.
+    #[serde(default)]
+    pub(crate) commands_queue_applied: bool,
     /// Dapr component name for commands queue
     pub(crate) commands_dapr_component: Option<String>,
     /// Current and historical command Dapr names still requiring ownership-aware teardown.
@@ -2536,6 +2539,7 @@ impl AzureWorkerController {
         self.commands_update_teardown_candidates_initialized = false;
         self.trigger_update_teardown_candidates_initialized = false;
         self.commands_sender_role_assignment_discovery_complete = false;
+        self.commands_queue_applied = false;
 
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.clone().ok_or_else(|| {
@@ -4177,31 +4181,35 @@ impl AzureWorkerController {
                 return Ok(CommandsSetupOperation::Deleting(delay));
             }
         }
-        let mgmt = ctx
-            .service_provider
-            .get_azure_service_bus_management_client(azure_config)?;
+        if !self.commands_queue_applied {
+            let mgmt = ctx
+                .service_provider
+                .get_azure_service_bus_management_client(azure_config)?;
 
-        info!(
-            worker=%func_cfg.id,
-            namespace=%namespace_name,
-            queue=%queue_name,
-            "Pre-creating commands Service Bus queue (before Container App)"
-        );
+            info!(
+                worker=%func_cfg.id,
+                namespace=%namespace_name,
+                queue=%queue_name,
+                "Pre-creating commands Service Bus queue (before Container App)"
+            );
 
-        mgmt.create_or_update_queue(
-            service_bus_resource_group.clone(),
-            namespace_name.clone(),
-            queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties::default(),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to create commands Service Bus queue '{}'",
-                queue_name
-            ),
-            resource_id: Some(func_cfg.id.clone()),
-        })?;
+            mgmt.create_or_update_queue(
+                service_bus_resource_group.clone(),
+                namespace_name.clone(),
+                queue_name.clone(),
+                alien_azure_clients::models::queue::SbQueueProperties::default(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create commands Service Bus queue '{}'",
+                    queue_name
+                ),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+            self.commands_queue_applied = true;
+            return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+        }
 
         let component_name = get_azure_internal_commands_dapr_component_name(&container_app_name);
         let service_account_id = format!("{}-sa", func_cfg.get_permissions());
@@ -4274,7 +4282,11 @@ impl AzureWorkerController {
         )
         .await?
         {
-            DaprComponentEnsureOperation::Unchanged | DaprComponentEnsureOperation::Completed => {}
+            DaprComponentEnsureOperation::Unchanged => {}
+            DaprComponentEnsureOperation::Completed => {
+                self.commands_dapr_component = Some(component_name);
+                return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+            }
             DaprComponentEnsureOperation::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
                 self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
@@ -4419,6 +4431,7 @@ impl AzureWorkerController {
         self.commands_resource_group_name = None;
         self.commands_namespace_name = None;
         self.commands_queue_name = None;
+        self.commands_queue_applied = false;
         self.commands_dapr_component = None;
         self.commands_dapr_component_deletion_candidates.clear();
         self.commands_sender_role_assignment_id = None;
@@ -5241,6 +5254,7 @@ impl AzureWorkerController {
             commands_resource_group_name: None,
             commands_namespace_name: None,
             commands_queue_name: None,
+            commands_queue_applied: false,
             commands_dapr_component: None,
             commands_dapr_component_deletion_candidates: Vec::new(),
             commands_sender_role_assignment_id: None,
@@ -7370,6 +7384,7 @@ mod tests {
             commands_resource_group_name: None,
             commands_namespace_name: None,
             commands_queue_name: None,
+            commands_queue_applied: false,
             commands_dapr_component: None,
             commands_dapr_component_deletion_candidates: Vec::new(),
             commands_sender_role_assignment_id: None,
