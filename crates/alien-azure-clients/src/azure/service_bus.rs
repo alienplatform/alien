@@ -1,4 +1,5 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
+use crate::azure::error::safe_http_response_error;
 use crate::azure::models::queue::{SbQueue, SbQueueListResult, SbQueueProperties};
 use crate::azure::models::queue_namespace::{
     SbNamespace, SbNamespaceListResult, SbNamespaceProperties,
@@ -7,7 +8,7 @@ use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use reqwest::{Client, Method};
+use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -41,6 +42,41 @@ fn is_standard_header(header_name: &str) -> bool {
             | "x-content-type-options"
             | "x-frame-options"
     )
+}
+
+fn settlement_http_error(
+    operation: &str,
+    status: StatusCode,
+    request_url: &Url,
+) -> AlienError<ErrorData> {
+    let mut diagnostic_url = request_url.clone();
+    diagnostic_url.set_query(None);
+    diagnostic_url.set_fragment(None);
+    if let Ok(mut segments) = diagnostic_url.path_segments_mut() {
+        segments.pop_if_empty();
+        segments.pop();
+        segments.push("redacted-lock-token");
+    }
+
+    safe_http_response_error(
+        format!("Service Bus {operation} failed with status {status}"),
+        diagnostic_url.to_string(),
+        status,
+    )
+}
+
+async fn send_settlement_request(
+    request: reqwest::RequestBuilder,
+    operation: &str,
+) -> Result<reqwest::Response> {
+    request
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Service Bus {operation}: failed to execute request"),
+        })
 }
 
 #[cfg(feature = "test-utils")]
@@ -358,14 +394,11 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let namespace: SbNamespace = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus CreateOrUpdateNamespace: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Service Bus CreateOrUpdateNamespace: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
-                http_request_text: Some(body),
-                http_response_text: Some(response_body),
+                http_request_text: None,
+                http_response_text: None,
             })?;
 
         Ok(namespace)
@@ -411,14 +444,11 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let namespace: SbNamespace = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus GetNamespace: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Service Bus GetNamespace: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(namespace)
@@ -469,14 +499,11 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let namespaces: SbNamespaceListResult = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus ListNamespacesByResourceGroup: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Service Bus ListNamespacesByResourceGroup: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(namespaces)
@@ -571,14 +598,11 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let queue: SbQueue = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus CreateOrUpdateQueue: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Service Bus CreateOrUpdateQueue: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
-                http_request_text: Some(body),
-                http_response_text: Some(response_body),
+                http_request_text: None,
+                http_response_text: None,
             })?;
 
         Ok(queue)
@@ -624,14 +648,11 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let queue: SbQueue = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus GetQueue: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Service Bus GetQueue: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(queue)
@@ -676,14 +697,11 @@ impl ServiceBusManagementApi for AzureServiceBusManagementClient {
         let queues: SbQueueListResult = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus ListQueues: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Service Bus ListQueues: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(queues)
@@ -825,19 +843,12 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error_text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus SendMessage failed with status {}: {}",
-                    status, error_text
-                ),
+                message: format!("Service Bus SendMessage failed with status {status}"),
                 url: url.to_string(),
                 http_status: status.as_u16(),
-                http_request_text: Some(message.body),
-                http_response_text: Some(error_text),
+                http_request_text: None,
+                http_response_text: None,
             }));
         }
 
@@ -889,19 +900,12 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error_text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus ReceiveAndDelete failed with status {}: {}",
-                    status, error_text
-                ),
+                message: format!("Service Bus ReceiveAndDelete failed with status {status}"),
                 url: url.to_string(),
                 http_status: status.as_u16(),
                 http_request_text: None,
-                http_response_text: Some(error_text),
+                http_response_text: None,
             }));
         }
 
@@ -921,14 +925,11 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
                 .into_alien_error()
                 .context(ErrorData::HttpResponseError {
-                    message: format!(
-                        "Failed to parse BrokerProperties header: {}",
-                        broker_props_str
-                    ),
+                    message: "Failed to parse BrokerProperties header".to_string(),
                     url: url.to_string(),
                     http_status: 200,
                     http_request_text: None,
-                    http_response_text: Some(broker_props_str.to_string()),
+                    http_response_text: None,
                 })?;
             Some(broker_properties)
         } else {
@@ -1017,19 +1018,12 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error_text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus PeekLock failed with status {}: {}",
-                    status, error_text
-                ),
+                message: format!("Service Bus PeekLock failed with status {status}"),
                 url: url.to_string(),
                 http_status: status.as_u16(),
                 http_request_text: None,
-                http_response_text: Some(error_text),
+                http_response_text: None,
             }));
         }
 
@@ -1049,14 +1043,11 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             let broker_properties: BrokerProperties = serde_json::from_str(broker_props_str)
                 .into_alien_error()
                 .context(ErrorData::HttpResponseError {
-                    message: format!(
-                        "Failed to parse BrokerProperties header: {}",
-                        broker_props_str
-                    ),
+                    message: "Failed to parse BrokerProperties header".to_string(),
                     url: url.to_string(),
                     http_status: 200,
                     http_request_text: None,
-                    http_response_text: Some(broker_props_str.to_string()),
+                    http_response_text: None,
                 })?;
             Some(broker_properties)
         } else {
@@ -1118,33 +1109,17 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             None,
         )?;
 
-        let resp = self
-            .client
-            .delete(url.to_string())
-            .header("Authorization", format!("Bearer {}", bearer_token))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("Service Bus CompleteMessage: failed to execute request"),
-            })?;
+        let resp = send_settlement_request(
+            self.client
+                .delete(url.to_string())
+                .header("Authorization", format!("Bearer {}", bearer_token)),
+            "CompleteMessage",
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error_text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus CompleteMessage failed with status {}: {}",
-                    status, error_text
-                ),
-                url: url.to_string(),
-                http_status: status.as_u16(),
-                http_request_text: None,
-                http_response_text: Some(error_text),
-            }));
+            return Err(settlement_http_error("CompleteMessage", status, &url));
         }
 
         Ok(())
@@ -1169,33 +1144,17 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             None,
         )?;
 
-        let resp = self
-            .client
-            .put(url.to_string())
-            .header("Authorization", format!("Bearer {}", bearer_token))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("Service Bus AbandonMessage: failed to execute request"),
-            })?;
+        let resp = send_settlement_request(
+            self.client
+                .put(url.to_string())
+                .header("Authorization", format!("Bearer {}", bearer_token)),
+            "AbandonMessage",
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error_text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus AbandonMessage failed with status {}: {}",
-                    status, error_text
-                ),
-                url: url.to_string(),
-                http_status: status.as_u16(),
-                http_request_text: None,
-                http_response_text: Some(error_text),
-            }));
+            return Err(settlement_http_error("AbandonMessage", status, &url));
         }
 
         Ok(())
@@ -1220,35 +1179,75 @@ impl ServiceBusDataPlaneApi for AzureServiceBusDataPlaneClient {
             None,
         )?;
 
-        let resp = self
-            .client
-            .post(url.to_string())
-            .header("Authorization", format!("Bearer {}", bearer_token))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("Service Bus RenewMessageLock: failed to execute request"),
-            })?;
+        let resp = send_settlement_request(
+            self.client
+                .post(url.to_string())
+                .header("Authorization", format!("Bearer {}", bearer_token)),
+            "RenewMessageLock",
+        )
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error_text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Service Bus RenewMessageLock failed with status {}: {}",
-                    status, error_text
-                ),
-                url: url.to_string(),
-                http_status: status.as_u16(),
-                http_request_text: None,
-                http_response_text: Some(error_text),
-            }));
+            return Err(settlement_http_error("RenewMessageLock", status, &url));
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::{Method::DELETE, MockServer};
+
+    #[test]
+    fn settlement_errors_redact_lock_tokens_and_query_values() {
+        const LOCK_TOKEN: &str = "LOCK_TOKEN_SECRET_0123456789";
+        const QUERY_SECRET: &str = "QUERY_SECRET_0123456789";
+        let url = Url::parse(&format!(
+            "https://example.servicebus.windows.net/queue/messages/message-id/{LOCK_TOKEN}?sig={QUERY_SECRET}"
+        ))
+        .unwrap();
+
+        for operation in ["CompleteMessage", "AbandonMessage", "RenewMessageLock"] {
+            let error = settlement_http_error(operation, StatusCode::BAD_REQUEST, &url);
+            let serialized = serde_json::to_string(&error).unwrap();
+
+            assert!(serialized.contains(operation));
+            assert!(serialized.contains("redacted-lock-token"));
+            assert!(!serialized.contains(LOCK_TOKEN));
+            assert!(!serialized.contains(QUERY_SECRET));
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_transport_errors_drop_the_request_url() {
+        const LOCK_TOKEN: &str = "LOCK_TOKEN_TRANSPORT_SECRET_0123456789";
+        const QUERY_SECRET: &str = "QUERY_TRANSPORT_SECRET_0123456789";
+
+        let server = MockServer::start_async().await;
+        let path = format!("/queue/messages/message-id/{LOCK_TOKEN}");
+        let request_url = format!("{}{path}?sig={QUERY_SECRET}", server.base_url());
+        let redirect = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path(&path);
+                then.status(302).header("Location", &request_url);
+            })
+            .await;
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(1))
+            .build()
+            .unwrap();
+
+        let error = send_settlement_request(client.delete(&request_url), "CompleteMessage")
+            .await
+            .expect_err("redirect loop should be a transport failure");
+        let serialized = serde_json::to_string(&error).unwrap();
+
+        redirect.assert_hits_async(2).await;
+        assert!(serialized.contains("CompleteMessage"));
+        assert!(!serialized.contains(LOCK_TOKEN));
+        assert!(!serialized.contains(QUERY_SECRET));
     }
 }

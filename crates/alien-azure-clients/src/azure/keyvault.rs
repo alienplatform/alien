@@ -312,14 +312,11 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let vault: Vault = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure CreateOrUpdateVault: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure CreateOrUpdateVault: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
-                http_request_text: Some(body),
-                http_response_text: Some(response_body),
+                http_request_text: None,
+                http_response_text: None,
             })?;
 
         Ok(vault)
@@ -391,11 +388,11 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let vault: Vault = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!("Azure GetVault: JSON parse error. Body: {}", response_body),
+                message: "Azure GetVault: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(vault)
@@ -455,14 +452,11 @@ impl KeyVaultManagementApi for AzureKeyVaultManagementClient {
         let vault: Vault = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure UpdateVault: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure UpdateVault: JSON parse error".to_string(),
                 url: url.to_string(),
                 http_status: 200,
-                http_request_text: Some(body),
-                http_response_text: Some(response_body),
+                http_request_text: None,
+                http_response_text: None,
             })?;
 
         Ok(vault)

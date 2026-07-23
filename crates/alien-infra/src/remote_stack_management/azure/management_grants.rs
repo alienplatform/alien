@@ -132,12 +132,24 @@ mod tests {
     }
 
     #[test]
-    fn role_assignment_conflict_parser_extracts_existing_assignment_id() {
-        let err = AlienError::new(CloudClientErrorData::RemoteResourceConflict {
-            resource_type: "Resource".to_string(),
-            resource_name: "roleAssignments/requested".to_string(),
-            message: "The role assignment already exists. The ID of the conflicting role assignment is 593d47719b195096804b7b96d6e5a5ac.".to_string(),
-        });
+    fn role_assignment_conflict_conversion_extracts_existing_assignment_id_without_leaking_body() {
+        const RESPONSE_SECRET: &str = "ROLE_ASSIGNMENT_RESPONSE_SECRET_0123456789";
+        let response_body = format!(
+            r#"{{
+                "error": {{
+                    "code": "RoleAssignmentExists",
+                    "message": "The role assignment already exists. The ID of the conflicting role assignment is 593d47719b195096804b7b96d6e5a5ac. {RESPONSE_SECRET}"
+                }}
+            }}"#
+        );
+        let err = alien_azure_clients::azure::common::create_azure_http_error_with_context(
+            reqwest::StatusCode::CONFLICT,
+            "CreateRoleAssignment",
+            "Role Assignment",
+            "requested",
+            &response_body,
+            "https://management.azure.com/roleAssignments/requested",
+        );
 
         let existing_assignment_id = existing_role_assignment_id_from_conflict(
             "/subscriptions/sub-123/resourceGroups/rg-123",
@@ -149,6 +161,9 @@ mod tests {
             existing_assignment_id,
             "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/593d4771-9b19-5096-804b-7b96d6e5a5ac"
         );
+        assert!(!serde_json::to_string(&err)
+            .unwrap()
+            .contains(RESPONSE_SECRET));
     }
 
     #[test]

@@ -1,7 +1,72 @@
 use alien_azure_clients::authorization::Scope;
 
+const CONTAINER_APP_NAME_MAX_LEN: usize = 32;
+const CONTAINER_APP_NAME_HASH_LEN: usize = 16;
+const CONTAINER_APP_IDENTITY_DOMAIN: &str = "alien.azure.container-app.v1";
 const DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
 const DAPR_COMPONENT_IDENTITY_DOMAIN: &str = "alien.azure.dapr.component.v1";
+
+/// Returns a valid Azure Container App name for a worker.
+///
+/// Existing canonical names are preserved. Names that require normalization or
+/// shortening retain a readable alphanumeric prefix and append a deterministic
+/// hash of the full deployment/worker identity. Transformed names contain no
+/// hyphens, while canonical names always contain the separator between the
+/// resource prefix and worker ID, so the two namespaces cannot alias.
+pub(super) fn get_azure_container_app_name(resource_prefix: &str, worker_id: &str) -> String {
+    let raw = format!("{resource_prefix}-{worker_id}");
+    let normalized = normalize_azure_container_app_name(&raw);
+
+    if normalized == raw && normalized.len() <= CONTAINER_APP_NAME_MAX_LEN {
+        return normalized;
+    }
+
+    let hash = stable_identity_hash(CONTAINER_APP_IDENTITY_DOMAIN, &[resource_prefix, worker_id]);
+    let max_stem_len = CONTAINER_APP_NAME_MAX_LEN - CONTAINER_APP_NAME_HASH_LEN;
+    let stem: String = normalized
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .take(max_stem_len)
+        .collect();
+
+    format!("{stem}{}", &hash[..CONTAINER_APP_NAME_HASH_LEN])
+}
+
+fn normalize_azure_container_app_name(raw: &str) -> String {
+    let mut normalized = String::with_capacity(raw.len());
+    let mut previous_was_hyphen = false;
+
+    for character in raw.chars() {
+        let character = if character.is_ascii_alphanumeric() {
+            character.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+
+        if character == '-' {
+            if normalized.is_empty() || previous_was_hyphen {
+                continue;
+            }
+        }
+        normalized.push(character);
+        previous_was_hyphen = character == '-';
+    }
+
+    while normalized.ends_with('-') {
+        normalized.pop();
+    }
+    if normalized.is_empty() {
+        normalized.push_str("app");
+    } else if !normalized
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_lowercase())
+    {
+        normalized.insert_str(0, "app-");
+    }
+
+    normalized
+}
 
 /// Returns a valid Azure Container Apps Dapr component name.
 ///
@@ -231,10 +296,12 @@ fn structured_dapr_component_name(readable_stem: &str, identity_parts: &[&str]) 
 /// Fixed-width length prefixes make tuple boundaries unambiguous, and the
 /// domain version prevents future identity formats from aliasing this one.
 fn structured_identity_hash(identity_parts: &[&str]) -> String {
+    stable_identity_hash(DAPR_COMPONENT_IDENTITY_DOMAIN, identity_parts)
+}
+
+fn stable_identity_hash(domain: &str, identity_parts: &[&str]) -> String {
     let mut identity = Vec::new();
-    for part in
-        std::iter::once(DAPR_COMPONENT_IDENTITY_DOMAIN).chain(identity_parts.iter().copied())
-    {
+    for part in std::iter::once(domain).chain(identity_parts.iter().copied()) {
         identity.extend_from_slice(&(part.len() as u64).to_be_bytes());
         identity.extend_from_slice(part.as_bytes());
     }
@@ -260,16 +327,72 @@ fn append_hash(normalized: &str, hash: &str) -> String {
 mod tests {
     use super::{
         commands_queue_name, commands_sender_role_assignment_name,
-        get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
-        get_azure_internal_commands_dapr_component_name,
+        get_azure_blob_trigger_dapr_component_name, get_azure_container_app_name,
+        get_azure_dapr_component_name, get_azure_internal_commands_dapr_component_name,
         get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
         get_legacy_azure_blob_trigger_dapr_component_names,
         get_legacy_azure_internal_commands_dapr_component_names,
         get_legacy_azure_queue_trigger_dapr_component_names, service_bus_queue_scope,
         storage_trigger_queue_name, storage_trigger_receiver_role_assignment_name,
-        DAPR_COMPONENT_NAME_MAX_LEN,
+        CONTAINER_APP_NAME_MAX_LEN, DAPR_COMPONENT_NAME_MAX_LEN,
     };
     use alien_azure_clients::authorization::Scope;
+
+    #[test]
+    fn container_app_name_preserves_existing_canonical_names() {
+        assert_eq!(
+            get_azure_container_app_name("acme-prod", "worker"),
+            "acme-prod-worker"
+        );
+        let max_length_worker = "w".repeat(CONTAINER_APP_NAME_MAX_LEN - "acme-prod-".len());
+        assert_eq!(
+            get_azure_container_app_name("acme-prod", &max_length_worker),
+            format!("acme-prod-{max_length_worker}")
+        );
+    }
+
+    #[test]
+    fn container_app_name_bounds_current_e2e_identity_stably() {
+        let resource_prefix = "e2e-10-azure-terraform-pr-0123456789";
+        let worker_id = "test-alien-ts-function";
+        let name = get_azure_container_app_name(resource_prefix, worker_id);
+
+        assert_valid_container_app_name(&name);
+        assert_eq!(name, "e2e10azureterraf731185acf8be53ed");
+    }
+
+    #[test]
+    fn container_app_name_normalizes_invalid_characters() {
+        let name = get_azure_container_app_name("123_Test.Stack", "Worker_Name_");
+
+        assert_valid_container_app_name(&name);
+        assert_ne!(name, "123_Test.Stack-Worker_Name_");
+    }
+
+    #[test]
+    fn container_app_name_hash_distinguishes_shared_truncated_stems() {
+        let prefix = "e2e-10-azure-terraform-pr-0123456789";
+        let first = get_azure_container_app_name(prefix, "worker-with-shared-prefix-first");
+        let second = get_azure_container_app_name(prefix, "worker-with-shared-prefix-second");
+
+        assert_valid_container_app_name(&first);
+        assert_valid_container_app_name(&second);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn transformed_container_app_name_cannot_alias_a_canonical_name() {
+        let transformed =
+            get_azure_container_app_name("acme", "worker-name-that-is-long-enough-to-hash");
+        let canonical = get_azure_container_app_name("acme", "worker-nam-726449ac71e95aa5");
+        let old_single_separator_output = "acme-worker-nam-726449ac71e95aa5";
+
+        assert_eq!(canonical, old_single_separator_output);
+        assert_eq!(transformed, "acmeworkernameth726449ac71e95aa5");
+        assert_ne!(transformed, canonical);
+        assert_valid_container_app_name(&transformed);
+        assert_valid_container_app_name(&canonical);
+    }
 
     #[test]
     fn auxiliary_resource_identities_match_the_creation_contract() {
@@ -328,6 +451,22 @@ mod tests {
         );
         assert_eq!(resource_type, "queues");
         assert_eq!(resource_name, "app-rq");
+    }
+
+    fn assert_valid_container_app_name(name: &str) {
+        assert!((2..=CONTAINER_APP_NAME_MAX_LEN).contains(&name.len()));
+        assert!(name
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase()));
+        assert!(name
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric()));
+        assert!(name.chars().all(|character| character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || character == '-'));
+        assert!(!name.contains("--"));
     }
 
     #[test]

@@ -85,7 +85,7 @@ impl ResourceGraphApi for AzureResourceGraphClient {
                     message: "Failed to read Azure Resource Graph response body".to_string(),
                     url: url.clone(),
                     http_status: status,
-                    http_request_text: Some(body),
+                    http_request_text: None,
                     http_response_text: None,
                 })?;
 
@@ -96,7 +96,7 @@ impl ResourceGraphApi for AzureResourceGraphClient {
                 url,
                 http_status: status,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })
     }
 }

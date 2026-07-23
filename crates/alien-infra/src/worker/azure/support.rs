@@ -1,10 +1,5 @@
 use super::*;
 
-/// Generates a deterministic Azure Container Apps name for a worker.
-pub(super) fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
-}
-
 #[cfg(not(test))]
 pub(super) const AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS: u64 = 60;
 #[cfg(test)]
@@ -133,9 +128,7 @@ pub(super) fn is_azure_container_apps_environment_waking_error(
 }
 
 pub(super) fn get_container_apps_certificate_name(prefix: &str, worker_id: &str) -> String {
-    format!("{}-{}", prefix, worker_id)
-        .replace('_', "-")
-        .to_lowercase()
+    get_azure_container_app_name(prefix, worker_id)
 }
 
 /// Domain information for a worker.

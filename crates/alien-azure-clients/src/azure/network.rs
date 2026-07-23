@@ -324,7 +324,7 @@ impl NetworkApi for AzureNetworkClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 
@@ -448,7 +448,7 @@ impl NetworkApi for AzureNetworkClient {
                 message: format!("Azure GetSubnet: JSON parse error for {}", subnet_name),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;
@@ -581,7 +581,7 @@ impl NetworkApi for AzureNetworkClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;
@@ -714,7 +714,7 @@ impl NetworkApi for AzureNetworkClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 
@@ -851,7 +851,7 @@ impl NetworkApi for AzureNetworkClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 

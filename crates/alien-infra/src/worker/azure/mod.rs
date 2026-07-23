@@ -42,9 +42,10 @@ use crate::worker::azure_dapr_names_migration::{
     DaprComponentMigrationStep, CURRENT_DAPR_COMPONENT_NAMING_VERSION,
 };
 use crate::worker::azure_names::{
-    commands_queue_name, get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
-    get_azure_internal_commands_dapr_component_name, get_azure_queue_trigger_dapr_component_name,
-    get_azure_storage_event_subscription_name, get_legacy_azure_blob_trigger_dapr_component_names,
+    commands_queue_name, get_azure_blob_trigger_dapr_component_name, get_azure_container_app_name,
+    get_azure_dapr_component_name, get_azure_internal_commands_dapr_component_name,
+    get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
+    get_legacy_azure_blob_trigger_dapr_component_names,
     get_legacy_azure_internal_commands_dapr_component_names,
     get_legacy_azure_queue_trigger_dapr_component_names,
 };

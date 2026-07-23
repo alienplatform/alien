@@ -325,14 +325,11 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let registry: Registry = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure GetRegistry: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure GetRegistry: JSON parse error".to_string(),
                 url: url_string,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(registry)
@@ -381,14 +378,11 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let list_result: RegistryListResult = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure ListRegistries: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure ListRegistries: JSON parse error".to_string(),
                 url: url_string,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(list_result.value)
@@ -563,14 +557,11 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let scope_map: ScopeMap = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure GetScopeMap: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure GetScopeMap: JSON parse error".to_string(),
                 url: url_string,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(scope_map)
@@ -615,14 +606,11 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let list_result: ScopeMapListResult = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure ListScopeMaps: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure ListScopeMaps: JSON parse error".to_string(),
                 url: url_string,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(list_result.value)
@@ -797,11 +785,11 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let token: Token = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!("Azure GetToken: JSON parse error. Body: {}", response_body),
+                message: "Azure GetToken: JSON parse error".to_string(),
                 url: url_string,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(token)
@@ -843,14 +831,11 @@ impl ContainerRegistryApi for AzureContainerRegistryClient {
         let list_result: TokenListResult = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure ListTokens: JSON parse error. Body: {}",
-                    response_body
-                ),
+                message: "Azure ListTokens: JSON parse error".to_string(),
                 url: url_string,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(response_body),
+                http_response_text: None,
             })?;
 
         Ok(list_result.value)
