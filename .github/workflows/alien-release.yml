@@ -1,0 +1,204 @@
+name: Release Alien project
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  ALIEN_BASE_URL: https://api.alan.aliendev.ngrok.dev
+  ALIEN_API_KEY: ${{ secrets.ALIEN_API_KEY }}
+  ALIEN_WORKSPACE: ${{ secrets.ALIEN_WORKSPACE }}
+  ALIEN_ROOT_DIRECTORY: ${{ vars.ALIEN_ROOT_DIRECTORY || '.' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      groups: ${{ steps.plan.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.3
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install dependencies
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+            bun install --frozen-lockfile
+          elif [ -f yarn.lock ]; then
+            corepack enable && yarn install --immutable
+          elif [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Install Alien CLI
+        run: |
+          case "$(uname -m)" in
+            x86_64) ALIEN_ARCH=linux-x86_64 ;;
+            aarch64 | arm64) ALIEN_ARCH=linux-aarch64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL https://releases.alan.aliendev.ngrok.dev/$ALIEN_ARCH/alien -o alien
+          chmod +x alien
+          sudo mv alien /usr/local/bin/
+
+      - name: Compute build plan
+        id: plan
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: |
+          alien build plan --json > plan.json
+          {
+            echo "groups<<__ALIEN_EOF__"
+            jq -c . plan.json
+            echo "__ALIEN_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.groups) }}
+    runs-on: ${{ matrix.group.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.3
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install dependencies
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+            bun install --frozen-lockfile
+          elif [ -f yarn.lock ]; then
+            corepack enable && yarn install --immutable
+          elif [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Install Alien CLI
+        run: |
+          case "$(uname -m)" in
+            x86_64) ALIEN_ARCH=linux-x86_64 ;;
+            aarch64 | arm64) ALIEN_ARCH=linux-aarch64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL https://releases.alan.aliendev.ngrok.dev/$ALIEN_ARCH/alien -o alien
+          chmod +x alien
+          sudo mv alien /usr/local/bin/
+
+      - name: Build ${{ matrix.group.name }}
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: |
+          alien build \
+            --platforms "${{ join(matrix.group.platforms, ',') }}" \
+            --targets "${{ matrix.group.name }}" \
+            --output-dir ".alien-${{ matrix.group.name }}"
+
+      - name: Upload partial build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: alien-build-${{ matrix.group.name }}
+          path: ${{ env.ALIEN_ROOT_DIRECTORY }}/.alien-${{ matrix.group.name }}
+          if-no-files-found: error
+          # The build output dir is dotted (.alien-*); v4 drops hidden paths without this.
+          include-hidden-files: true
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: alien-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.3
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Install dependencies
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+            bun install --frozen-lockfile
+          elif [ -f yarn.lock ]; then
+            corepack enable && yarn install --immutable
+          elif [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Install Alien CLI
+        run: |
+          case "$(uname -m)" in
+            x86_64) ALIEN_ARCH=linux-x86_64 ;;
+            aarch64 | arm64) ALIEN_ARCH=linux-aarch64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL https://releases.alan.aliendev.ngrok.dev/$ALIEN_ARCH/alien -o alien
+          chmod +x alien
+          sudo mv alien /usr/local/bin/
+
+      - name: Download partial build outputs
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ env.ALIEN_ROOT_DIRECTORY }}/.alien-partials
+          pattern: alien-build-*
+
+      - name: Merge build outputs
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: alien build merge --input .alien-partials --output .alien
+
+      - name: Release
+        working-directory: ${{ env.ALIEN_ROOT_DIRECTORY }}
+        run: alien release --prebuilt --project "ai-finetune-inference" --json --no-browser
