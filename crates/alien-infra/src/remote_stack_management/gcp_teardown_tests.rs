@@ -9,7 +9,8 @@ use alien_gcp_clients::iam::MockIamApi;
 
 use super::*;
 use crate::core::{
-    HeartbeatCollector, MockPlatformServiceProvider, PlatformServiceProvider, ResourceRegistry,
+    HeartbeatCollector, MockPlatformServiceProvider, PlatformServiceProvider, ResourceController,
+    ResourceRegistry,
 };
 
 fn impersonated_target_config(service_account_email: &str) -> ClientConfig {
@@ -83,6 +84,7 @@ async fn teardown_revokes_bucket_access_by_deleting_identity_not_editing_bucket_
         heartbeat_collector: HeartbeatCollector::default(),
     };
     let mut controller = GcpRemoteStackManagementController {
+        setup_managed: Some(false),
         state: GcpRemoteStackManagementState::DeleteStart,
         service_account_email: Some(service_account_email.to_string()),
         service_account_unique_id: Some("1234567890".to_string()),
@@ -110,4 +112,64 @@ async fn teardown_revokes_bucket_access_by_deleting_identity_not_editing_bucket_
         .expect("management identity deletion must revoke effective bucket access");
     assert!(controller.service_account_email.is_none());
     assert!(controller.remote_storage_bucket_names.is_empty());
+}
+
+#[tokio::test]
+async fn setup_managed_lifecycle_never_calls_cloud_apis() {
+    let service_account_email =
+        "a-test-stack-managemen-12ab34cd@target-project.iam.gserviceaccount.com";
+    let provider: Arc<dyn PlatformServiceProvider> = Arc::new(MockPlatformServiceProvider::new());
+
+    let management = RemoteStackManagement::new("management".to_string()).build();
+    let desired_config = Resource::new(management);
+    let state = StackState::new(Platform::Gcp);
+    let stack = Stack::new("test-stack".to_string()).build();
+    let registry = Arc::new(ResourceRegistry::new());
+    let deployment_config = DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(Default::default())
+        .allow_frozen_changes(false)
+        .build();
+    let ctx = ResourceControllerContext {
+        desired_config: &desired_config,
+        platform: Platform::Gcp,
+        client_config: impersonated_target_config(service_account_email),
+        state: &state,
+        resource_prefix: "test-stack",
+        registry: &registry,
+        desired_stack: &stack,
+        service_provider: &provider,
+        deployment_config: &deployment_config,
+        heartbeat_collector: HeartbeatCollector::default(),
+    };
+    let mut controller = GcpRemoteStackManagementController {
+        setup_managed: Some(true),
+        state: GcpRemoteStackManagementState::UpdateStart,
+        service_account_email: Some(service_account_email.to_string()),
+        service_account_unique_id: Some("1234567890".to_string()),
+        role_bound: true,
+        impersonation_granted: true,
+        applied_management_grant_fingerprint: None,
+        remote_storage_bucket_names: vec!["setup-owned-bucket".to_string()],
+        _internal_stay_count: None,
+    };
+
+    assert!(!controller.needs_update(&ctx).expect("ownership check"));
+    controller.update_start(&ctx).await.expect("update skip");
+    controller.state = GcpRemoteStackManagementState::DeleteStart;
+    controller.delete_start(&ctx).await.expect("delete skip");
+    assert_eq!(
+        controller.service_account_email.as_deref(),
+        Some(service_account_email),
+        "runtime teardown must leave the setup-owned identity intact"
+    );
+    assert_eq!(
+        controller.remote_storage_bucket_names,
+        ["setup-owned-bucket".to_string()]
+    );
 }
