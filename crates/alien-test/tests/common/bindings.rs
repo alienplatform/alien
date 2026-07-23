@@ -934,7 +934,7 @@ pub async fn check_service_account(deployment: &TestDeployment) -> anyhow::Resul
 // AI Gateway
 // ---------------------------------------------------------------------------
 
-/// Response from the /ai-test endpoint. `model_count`, `model`, and `reply` are
+/// Response from the /ai-test endpoint. `model_count`, `models`, and `results` are
 /// present only on `?invoke=1` responses.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -943,19 +943,40 @@ struct AiTestResponse {
     service: String,
     locator: Option<String>,
     model_count: Option<usize>,
-    model: Option<String>,
-    reply: Option<String>,
+    models: Option<Vec<AiModelInfo>>,
+    results: Option<Vec<AiInvokeResult>>,
+}
+
+/// One entry in the availability-filtered model list, with its picker metadata.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiModelInfo {
+    id: String,
+    provider: String,
+    display_name: String,
+}
+
+/// The outcome of invoking one listed model. `ok` is true on a completion or a 429
+/// (enabled but rate-limited); false means the model was listed but not invocable.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiInvokeResult {
+    #[allow(dead_code)]
+    model: String,
+    ok: bool,
+    #[serde(default)]
+    detail: Option<String>,
 }
 
 /// Check the AI binding end to end: GET /ai-test, then GET /ai-test?invoke=1.
 ///
 /// The first call proves the runtime injected ALIEN_TEST_AI_BINDING and that it
-/// parsed to a well-formed bedrock config. The second lists the model catalog and
-/// makes a real one-line chat call through the embedded gateway under the
-/// workload's ambient credentials — proving the full app -> gateway -> cloud LLM
-/// path, not just provisioning. The invoke half needs nonzero Bedrock on-demand
-/// quota in the deployment's account; set ALIEN_E2E_AI_SKIP_INVOKE=1 to run
-/// provisioning-only in a quota-zeroed account.
+/// parsed to a well-formed config. The second exercises the availability contract:
+/// getAvailableModels is filtered to the models this cloud actually has enabled, and
+/// every listed model is invoked through the embedded gateway under the workload's
+/// ambient credentials. A 429 counts as available (enabled but rate-limited), so this
+/// passes on a quota-zeroed account; a 403/404 on a listed model would mean the
+/// filter is broken. Set ALIEN_E2E_AI_SKIP_INVOKE=1 to run provisioning-only.
 pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!(binding = AI_BINDING, "Checking AI binding injection");
@@ -1011,7 +1032,7 @@ pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
 
     let resp = reqwest::Client::new()
         .get(format!("{}/ai-test?invoke=1", url))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(180))
         .send()
         .await
         .context("AI invoke request failed")?;
@@ -1026,17 +1047,37 @@ pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
         .context("Failed to parse AI invoke response")?;
     let model_count = data.model_count.unwrap_or(0);
     if model_count == 0 {
-        bail!("AI model catalog is empty; expected at least one curated model");
+        bail!("getAvailableModels returned no models; expected at least one enabled model");
     }
-    let reply = data.reply.as_deref().unwrap_or("");
-    if !reply.to_ascii_lowercase().contains("pong") {
+
+    // Every listed model must carry picker metadata (provider + displayName).
+    let models = data.models.unwrap_or_default();
+    if models.len() != model_count {
+        bail!("modelCount {model_count} disagrees with the models list ({})", models.len());
+    }
+    for m in &models {
+        if m.provider.is_empty() || m.display_name.is_empty() {
+            bail!("listed model '{}' is missing provider/displayName enrichment", m.id);
+        }
+    }
+
+    // Every listed model must be invocable (2xx or 429). The list is
+    // availability-filtered, so a 403/404 on a listed model means the filter let a
+    // disabled model through.
+    let results = data.results.unwrap_or_default();
+    if results.len() != model_count {
+        bail!("modelCount {model_count} disagrees with the results list ({})", results.len());
+    }
+    let failed: Vec<&AiInvokeResult> = results.iter().filter(|r| !r.ok).collect();
+    if !failed.is_empty() {
         bail!(
-            "AI chat reply did not contain 'pong': model={:?} reply={:?}",
-            data.model,
-            reply
+            "some listed models were not invocable (a listed-but-unavailable model means the availability filter is broken): {failed:?}"
         );
     }
 
-    info!(model = %data.model.as_deref().unwrap_or(""), %reply, "AI model invoke check passed");
+    info!(
+        model_count,
+        "AI availability check passed: every enabled model listed (with provider/displayName) invoked cleanly (2xx or 429)"
+    );
     Ok(())
 }

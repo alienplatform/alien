@@ -3,13 +3,16 @@ import { Hono } from "hono"
 
 const app = new Hono()
 
-// The models this stack can call on the current cloud (curated per-cloud catalog).
+// The models this deployment's cloud actually has enabled, each with an id,
+// provider, and displayName for a picker. Models not enabled on this cloud are
+// simply absent, so call this to discover what you can use.
 app.get("/models", async c => {
   const models = await ai("assistant").getAvailableModels()
-  return c.json({ models: models.map(m => m.id) })
+  return c.json({ models })
 })
 
-// One-shot question -> answer. `?model=` overrides the default (first catalog entry).
+// One-shot question -> answer. Discover then pick: `?model=` overrides, else use the
+// first model getAvailableModels returned for this cloud.
 app.get("/ask", async c => {
   const question = c.req.query("q")
   if (!question) {

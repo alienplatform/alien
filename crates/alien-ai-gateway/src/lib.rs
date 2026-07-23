@@ -6,6 +6,7 @@
 //! passes its URL to the app; routing lives in `router`, credential injection in
 //! `creds`.
 
+mod availability;
 mod config;
 mod creds;
 mod error;

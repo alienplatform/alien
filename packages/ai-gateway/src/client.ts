@@ -42,7 +42,12 @@ export interface ResponseCreateParams {
 
 /** One model the gateway exposes for this binding's cloud. */
 export interface AiModel {
+  /** The id passed to `chat.completions.create` / `responses.create`. */
   id: string
+  /** The model's publisher, e.g. "openai", "anthropic", "google". */
+  provider: string
+  /** A human label for a model picker, e.g. "Claude Opus 4.8". */
+  displayName: string
 }
 
 /**
@@ -87,7 +92,7 @@ function defaultModels(provider: string): string[] {
 export interface ResolvedAiBinding {
   baseUrl: string
   apiKey?: string
-  staticModels?: string[]
+  staticModels?: AiModel[]
 }
 
 /**
@@ -108,7 +113,13 @@ export async function resolveAiBinding(gateway: Gateway, name: string): Promise<
     return {
       baseUrl: providerBaseUrl(binding.provider),
       apiKey: binding.apiKey,
-      staticModels: defaultModels(binding.provider),
+      // BYO and ambient bindings return the identical AiModel shape; a BYO id is
+      // its own display label since we do not curate the provider's own catalog.
+      staticModels: defaultModels(binding.provider).map(id => ({
+        id,
+        provider: binding.provider,
+        displayName: id,
+      })),
     }
   }
   const handle = await gateway.startAiGateway()
@@ -272,7 +283,7 @@ export class Ai {
     // Curated default for a BYO-key provider (see `defaultModels`); the gateway
     // path fetches the cloud's catalog below.
     if (staticModels) {
-      return staticModels.map(id => ({ id }))
+      return staticModels
     }
     const url = `${baseUrl}/v1/models`
     const response = await this._fetch(url, { method: "GET" })
@@ -293,6 +304,22 @@ export class Ai {
     // The gateway always returns a `data` array; its absence means a broken response.
     if (!Array.isArray(body.data)) {
       throw createUpstreamError(url, response.status, "models response had no data array")
+    }
+    // The gateway subprocess is a separate trust boundary (it can be a stale or
+    // mismatched binary), so verify each element actually carries the AiModel
+    // shape instead of letting a type assertion hide missing fields.
+    for (const model of body.data) {
+      if (
+        typeof model?.id !== "string" ||
+        typeof model?.provider !== "string" ||
+        typeof model?.displayName !== "string"
+      ) {
+        throw createUpstreamError(
+          url,
+          response.status,
+          `models response entry is missing id/provider/displayName: ${JSON.stringify(model)}`,
+        )
+      }
     }
     return body.data
   }
