@@ -9,7 +9,7 @@ import * as z from "zod";
  * @description Minimum and maximum OCU bounds for one OpenSearch compute component.
  */
 export const AwsOpenSearchCapacityRangeSchema = z.object({
-    "maxOcu": z.int().min(1).max(1696).describe("Maximum OCUs the component may scale to.").nullish(),
+    "maxOcu": z.int().min(2).max(1696).describe("Maximum OCUs the component may scale to.").nullish(),
 "minOcu": z.int().min(0).max(1696).describe("Minimum OCUs kept available. Zero enables scale-to-zero.").nullish()
     }).describe("Minimum and maximum OCU bounds for one OpenSearch compute component.")
 

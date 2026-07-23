@@ -92,7 +92,7 @@ pub struct AwsOpenSearchCapacityRange {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_ocu: Option<u16>,
     /// Maximum OCUs the component may scale to.
-    #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 1696))]
+    #[cfg_attr(feature = "openapi", schema(minimum = 2, maximum = 1696))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_ocu: Option<u16>,
 }
@@ -178,7 +178,7 @@ fn validate_capacity_range(component: &str, range: AwsOpenSearchCapacityRange) -
 }
 
 fn valid_nonzero_ocu(value: u16) -> bool {
-    matches!(value, 1 | 2 | 4 | 8 | 16) || (value >= 32 && value <= 1696 && value % 16 == 0)
+    matches!(value, 2 | 4 | 8 | 16) || (value >= 32 && value <= 1696 && value % 16 == 0)
 }
 
 fn invalid_capacity(message: impl Into<String>) -> AlienError<ErrorData> {
@@ -361,7 +361,7 @@ mod tests {
                     max_ocu: Some(1696),
                 }),
                 search: Some(AwsOpenSearchCapacityRange {
-                    min_ocu: Some(1),
+                    min_ocu: Some(2),
                     max_ocu: Some(32),
                 }),
             })
@@ -384,7 +384,7 @@ mod tests {
             },
             AwsOpenSearchCapacity {
                 indexing: Some(AwsOpenSearchCapacityRange {
-                    min_ocu: Some(3),
+                    min_ocu: Some(1),
                     max_ocu: None,
                 }),
                 search: None,

@@ -12,21 +12,21 @@ describe("AwsOpenSearch", () => {
   it("builds independent indexing and search capacity ranges", () => {
     const resource = new AwsOpenSearch("messages")
       .capacity({
-        indexing: { minOcu: 1, maxOcu: 8 },
-        search: { minOcu: 1, maxOcu: 16 },
+        indexing: { minOcu: 2, maxOcu: 8 },
+        search: { minOcu: 2, maxOcu: 16 },
       })
       .build()
 
     expect(resource.config.capacity).toEqual({
-      indexing: { minOcu: 1, maxOcu: 8 },
-      search: { minOcu: 1, maxOcu: 16 },
+      indexing: { minOcu: 2, maxOcu: 8 },
+      search: { minOcu: 2, maxOcu: 16 },
     })
   })
 
   it.each([
     [{}, /must configure indexing, search, or both/],
     [{ indexing: {} }, /indexing capacity must configure/],
-    [{ indexing: { minOcu: 3 } }, /indexing.minOcu must be/],
+    [{ indexing: { minOcu: 1 } }, /indexing.minOcu must be/],
     [{ search: { maxOcu: 0 } }, /search.maxOcu must be/],
     [{ search: { minOcu: 8, maxOcu: 4 } }, /minOcu must not exceed maxOcu/],
   ])("rejects unsupported capacity %j", (capacity, message) => {
