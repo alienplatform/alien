@@ -22,10 +22,12 @@ use std::fmt::Debug;
 /// # What gets provisioned
 ///
 /// The AWS emitter provisions next-generation OpenSearch Serverless:
-/// a collection group (`Generation: NEXTGEN`, compute/storage decoupled,
-/// scale-to-zero) plus a collection inside it, an AWS-owned-key encryption
-/// configuration, a public network policy, and a data-access policy for
-/// service-account roles granted `experimental/aws-opensearch/data-access`.
+/// a collection group (`Generation: NEXTGEN`, compute/storage decoupled)
+/// plus a collection inside it, an AWS-owned-key encryption configuration,
+/// a public network policy, and a data-access policy for service-account
+/// roles granted `experimental/aws-opensearch/data-access`. Collection groups
+/// scale to zero by default; configure a non-zero minimum capacity when the
+/// workload requires predictable interactive latency.
 /// The collection endpoint is public but every request must be SigV4-signed
 /// and pass both IAM (`aoss:APIAccessAll`) and the data-access policy.
 ///
@@ -59,6 +61,40 @@ pub struct AwsOpenSearch {
     #[builder(default)]
     #[serde(default)]
     pub collection_type: AwsOpenSearchCollectionType,
+    /// Optional indexing and search OCU limits for the collection group.
+    ///
+    /// When omitted, AWS uses zero minimum capacity for both components, so
+    /// an idle next-generation collection can scale to zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<AwsOpenSearchCapacity>,
+}
+
+/// Indexing and search capacity limits for an OpenSearch collection group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AwsOpenSearchCapacity {
+    /// Indexing OCU bounds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexing: Option<AwsOpenSearchCapacityRange>,
+    /// Search OCU bounds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<AwsOpenSearchCapacityRange>,
+}
+
+/// Minimum and maximum OCU bounds for one OpenSearch compute component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AwsOpenSearchCapacityRange {
+    /// Minimum OCUs kept available. Zero enables scale-to-zero.
+    #[cfg_attr(feature = "openapi", schema(minimum = 0, maximum = 1696))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_ocu: Option<u16>,
+    /// Maximum OCUs the component may scale to.
+    #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 1696))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_ocu: Option<u16>,
 }
 
 /// Workload type for an OpenSearch Serverless collection.
@@ -88,6 +124,67 @@ impl AwsOpenSearch {
     pub fn id(&self) -> &str {
         &self.id
     }
+
+    /// Validates collection-group capacity values against AWS's supported OCU
+    /// increments and min/max ordering.
+    pub fn validate_capacity(&self) -> Result<()> {
+        let Some(capacity) = &self.capacity else {
+            return Ok(());
+        };
+        if capacity.indexing.is_none() && capacity.search.is_none() {
+            return Err(invalid_capacity(
+                "at least one of 'indexing' or 'search' must be configured",
+            ));
+        }
+        if let Some(range) = capacity.indexing {
+            validate_capacity_range("indexing", range)?;
+        }
+        if let Some(range) = capacity.search {
+            validate_capacity_range("search", range)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_capacity_range(component: &str, range: AwsOpenSearchCapacityRange) -> Result<()> {
+    if range.min_ocu.is_none() && range.max_ocu.is_none() {
+        return Err(invalid_capacity(format!(
+            "'{component}' must configure 'minOcu' or 'maxOcu'"
+        )));
+    }
+    if let Some(min) = range.min_ocu {
+        if min != 0 && !valid_nonzero_ocu(min) {
+            return Err(invalid_capacity(format!(
+                "'{component}.minOcu' value {min} is unsupported"
+            )));
+        }
+    }
+    if let Some(max) = range.max_ocu {
+        if !valid_nonzero_ocu(max) {
+            return Err(invalid_capacity(format!(
+                "'{component}.maxOcu' value {max} is unsupported"
+            )));
+        }
+    }
+    if let (Some(min), Some(max)) = (range.min_ocu, range.max_ocu) {
+        if min > max {
+            return Err(invalid_capacity(format!(
+                "'{component}.minOcu' ({min}) must be less than or equal to \
+                 '{component}.maxOcu' ({max})"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn valid_nonzero_ocu(value: u16) -> bool {
+    matches!(value, 1 | 2 | 4 | 8 | 16) || (value >= 32 && value <= 1696 && value % 16 == 0)
+}
+
+fn invalid_capacity(message: impl Into<String>) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::GenericError {
+        message: format!("AwsOpenSearch capacity is invalid: {}", message.into()),
+    })
 }
 
 /// Outputs generated by a successfully provisioned AwsOpenSearch collection.
@@ -170,6 +267,8 @@ impl ResourceDefinition for AwsOpenSearch {
             }));
         }
 
+        new_search.validate_capacity()?;
+
         Ok(())
     }
 
@@ -203,6 +302,7 @@ mod tests {
         let search = AwsOpenSearch::new("search".to_string()).build();
         assert_eq!(search.id, "search");
         assert_eq!(search.collection_type, AwsOpenSearchCollectionType::Search);
+        assert!(search.capacity.is_none());
     }
 
     #[test]
@@ -250,6 +350,64 @@ mod tests {
 
         let roundtrip: AwsOpenSearch = serde_json::from_value(json).unwrap();
         assert_eq!(search, roundtrip);
+    }
+
+    #[test]
+    fn capacity_accepts_scale_to_zero_and_supported_nonzero_values() {
+        let search = AwsOpenSearch::new("search".to_string())
+            .capacity(AwsOpenSearchCapacity {
+                indexing: Some(AwsOpenSearchCapacityRange {
+                    min_ocu: Some(0),
+                    max_ocu: Some(1696),
+                }),
+                search: Some(AwsOpenSearchCapacityRange {
+                    min_ocu: Some(1),
+                    max_ocu: Some(32),
+                }),
+            })
+            .build();
+
+        search
+            .validate_capacity()
+            .expect("capacity should be valid");
+        let json = serde_json::to_value(&search).expect("capacity should serialize");
+        assert_eq!(json["capacity"]["indexing"]["minOcu"], 0);
+        assert_eq!(json["capacity"]["search"]["maxOcu"], 32);
+    }
+
+    #[test]
+    fn capacity_rejects_empty_unsupported_and_inverted_ranges() {
+        let cases = [
+            AwsOpenSearchCapacity {
+                indexing: None,
+                search: None,
+            },
+            AwsOpenSearchCapacity {
+                indexing: Some(AwsOpenSearchCapacityRange {
+                    min_ocu: Some(3),
+                    max_ocu: None,
+                }),
+                search: None,
+            },
+            AwsOpenSearchCapacity {
+                indexing: None,
+                search: Some(AwsOpenSearchCapacityRange {
+                    min_ocu: Some(8),
+                    max_ocu: Some(4),
+                }),
+            },
+        ];
+
+        for capacity in cases {
+            let search = AwsOpenSearch::new("search".to_string())
+                .capacity(capacity)
+                .build();
+            let error = search
+                .validate_capacity()
+                .expect_err("invalid capacity must fail");
+            assert_eq!(error.code, "GENERIC_ERROR");
+            assert!(error.to_string().contains("capacity is invalid"));
+        }
     }
 
     #[test]

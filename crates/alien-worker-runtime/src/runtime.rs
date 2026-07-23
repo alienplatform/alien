@@ -88,6 +88,43 @@ pub enum RuntimeDependencies {
     },
 }
 
+struct PrestartedTransport {
+    shutdown_tx: broadcast::Sender<()>,
+    handle: JoinHandle<Result<()>>,
+}
+
+fn prestart_lambda_transport(
+    config: &RuntimeConfig,
+    control_server: Arc<ControlGrpcServer>,
+) -> Result<PrestartedTransport> {
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let handle = spawn_transport(
+        TransportType::Lambda,
+        config.transport_port,
+        config.lambda_mode,
+        config.command_timeout,
+        control_server,
+        None,
+        None,
+        shutdown_rx,
+    )?;
+    Ok(PrestartedTransport {
+        shutdown_tx,
+        handle,
+    })
+}
+
+async fn stop_prestarted_transport(mut transport: PrestartedTransport) {
+    let _ = transport.shutdown_tx.send(());
+    if tokio::time::timeout(std::time::Duration::from_secs(1), &mut transport.handle)
+        .await
+        .is_err()
+    {
+        transport.handle.abort();
+        let _ = transport.handle.await;
+    }
+}
+
 /// Run the Alien Worker Runtime.
 ///
 /// # Arguments
@@ -147,46 +184,68 @@ pub async fn run(
     let _ = WAIT_UNTIL_SERVER.set(wait_until_server.clone());
     let _ = CONTROL_SERVER.set(control_server.clone());
 
-    // 2. Load user secrets from vault if ALIEN_SECRETS is present
-    // Returns HashMap of secrets to pass to subprocess (avoids std::env::set_var races)
-    // For embedded runtimes, ALIEN_SECRETS is in config.env_vars (not process env)
-    // For standalone runtimes, ALIEN_SECRETS is in process env (std::env)
-    let secrets = if let Some(ref provider) = bindings_provider {
-        if let Some(alien_secrets_json) = config.env_vars.get(ENV_ALIEN_SECRETS) {
-            info!("Loading secrets from vault before starting application");
-            crate::secrets::load_secrets_from_vault(&**provider, alien_secrets_json).await?
-        } else if let Ok(alien_secrets_json) = std::env::var(ENV_ALIEN_SECRETS) {
-            info!("Loading secrets from vault before starting application (from process env)");
-            crate::secrets::load_secrets_from_vault(&**provider, &alien_secrets_json).await?
+    // Lambda must register its extension and begin the bounded readiness phase
+    // before secret loading and application startup. AWS gives on-demand
+    // functions only 10 seconds for Init; starting the transport after those
+    // operations can defer Runtime API polling until the first invocation.
+    let prestarted_transport = if config.transport == TransportType::Lambda {
+        Some(prestart_lambda_transport(&config, control_server.clone())?)
+    } else {
+        None
+    };
+
+    let application_startup: Result<(Child, Option<CommandPushConfig>)> = async {
+        // 2. Load user secrets from vault if ALIEN_SECRETS is present.
+        let secrets = if let Some(ref provider) = bindings_provider {
+            if let Some(alien_secrets_json) = config.env_vars.get(ENV_ALIEN_SECRETS) {
+                info!("Loading secrets from vault before starting application");
+                crate::secrets::load_secrets_from_vault(&**provider, alien_secrets_json).await?
+            } else if let Ok(alien_secrets_json) = std::env::var(ENV_ALIEN_SECRETS) {
+                info!("Loading secrets from vault before starting application (from process env)");
+                crate::secrets::load_secrets_from_vault(&**provider, &alien_secrets_json).await?
+            } else {
+                debug!("No ALIEN_SECRETS found in config or process env");
+                std::collections::HashMap::new()
+            }
         } else {
-            debug!("No ALIEN_SECRETS found in config or process env");
             std::collections::HashMap::new()
+        };
+
+        let runtime_secrets = if let Some(ref provider) = bindings_provider {
+            load_runtime_secrets(&config, &**provider).await?
+        } else {
+            HashMap::new()
+        };
+
+        let log_exporter = config
+            .log_exporter
+            .clone()
+            .with_runtime_secrets(&runtime_secrets);
+        if let Some(otlp_config) = log_exporter.to_otlp_config() {
+            init_otlp_logging_from_config(otlp_config)?;
         }
-    } else {
-        std::collections::HashMap::new()
-    };
 
-    let runtime_secrets = if let Some(ref provider) = bindings_provider {
-        load_runtime_secrets(&config, &**provider).await?
-    } else {
-        HashMap::new()
-    };
-
-    let log_exporter = config
-        .log_exporter
-        .clone()
-        .with_runtime_secrets(&runtime_secrets);
-    if let Some(otlp_config) = log_exporter.to_otlp_config() {
-        init_otlp_logging_from_config(otlp_config)?;
+        let command_push = command_push_config(&config, &secrets)?;
+        let child = start_application(&config, &secrets, log_exporter).await?;
+        Ok((child, command_push))
     }
+    .await;
 
-    let command_push = command_push_config(&config, &secrets)?;
+    let (mut child, command_push) = match application_startup {
+        Ok(started) => started,
+        Err(error) => {
+            if let Some(transport) = prestarted_transport {
+                stop_prestarted_transport(transport).await;
+            }
+            return Err(error);
+        }
+    };
 
-    // 3. Start application subprocess with secrets
-    let mut child = start_application(&config, &secrets, log_exporter).await?;
-
-    // 4. Wait for app to register HTTP port.
-    let app_http_port = {
+    // Non-Lambda transports still take a startup snapshot. Lambda resolves
+    // readiness dynamically for every invocation.
+    let app_http_port = if config.transport == TransportType::Lambda {
+        None
+    } else {
         info!("Waiting for application to register HTTP server...");
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -209,21 +268,20 @@ pub async fn run(
         }
     };
 
-    // 4b. Wait for app to subscribe to the task stream before accepting invocations.
-    // Without this, cold starts can race: the invoke arrives before the app has called
-    // WaitForTasks, causing "channel closed" errors on the broadcast channel.
-    info!("Waiting for application to subscribe to task stream...");
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        control_server.wait_for_task_subscriber(),
-    )
-    .await
-    {
-        Ok(_) => {
-            info!("Application subscribed to task stream");
-        }
-        Err(_) => {
-            warn!("Timeout waiting for task stream subscriber — commands may fail");
+    if config.transport != TransportType::Lambda {
+        info!("Waiting for application to subscribe to task stream...");
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            control_server.wait_for_task_subscriber(),
+        )
+        .await
+        {
+            Ok(_) => {
+                info!("Application subscribed to task stream");
+            }
+            Err(_) => {
+                warn!("Timeout waiting for task stream subscriber — commands may fail");
+            }
         }
     }
 
@@ -238,6 +296,7 @@ pub async fn run(
         wait_until_server,
         &mut child,
         shutdown_rx,
+        prestarted_transport,
     )
     .await;
 
@@ -257,23 +316,28 @@ async fn run_transport(
     wait_until_server: Arc<WaitUntilGrpcServer>,
     child: &mut Child,
     mut shutdown_rx: broadcast::Receiver<()>,
+    prestarted_transport: Option<PrestartedTransport>,
 ) -> Result<()> {
     // Own the transport shutdown channel here. This lets every branch that
     // wins the lifecycle race stop intake and await the transport task instead
     // of dropping its JoinHandle (which would detach it in Tokio).
-    let (transport_shutdown_tx, transport_shutdown_rx) = broadcast::channel(1);
-
-    // Spawn the transport as a task
-    let mut transport_handle: JoinHandle<Result<()>> = spawn_transport(
-        config.transport,
-        config.transport_port,
-        config.lambda_mode,
-        config.command_timeout,
-        control_server,
-        app_http_port,
-        command_push,
-        transport_shutdown_rx,
-    )?;
+    let (transport_shutdown_tx, mut transport_handle) =
+        if let Some(prestarted) = prestarted_transport {
+            (prestarted.shutdown_tx, prestarted.handle)
+        } else {
+            let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+            let handle = spawn_transport(
+                config.transport,
+                config.transport_port,
+                config.lambda_mode,
+                config.command_timeout,
+                control_server,
+                app_http_port,
+                command_push,
+                shutdown_rx,
+            )?;
+            (shutdown_tx, handle)
+        };
 
     // Wait for shutdown, child exit, or transport completion
     tokio::select! {
@@ -394,10 +458,7 @@ fn spawn_transport(
         TransportType::Lambda => {
             use crate::transports::lambda::LambdaTransport;
 
-            let mut transport = LambdaTransport::new(lambda_mode, control_server);
-            if let Some(port) = app_http_port {
-                transport = transport.with_app_port(port);
-            }
+            let transport = LambdaTransport::new(lambda_mode, control_server);
             // Lambda polls the Runtime API and has no native shutdown receiver.
             // Race that owned future against the same internal shutdown signal
             // so run_transport can still join it without detaching/aborting.

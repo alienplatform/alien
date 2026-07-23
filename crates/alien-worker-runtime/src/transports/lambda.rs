@@ -13,6 +13,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use alien_commands::{runtime::submit_response, types::CommandResponse};
@@ -30,7 +31,10 @@ use http_body::Body as HttpBody;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use lambda_http::{
     aws_lambda_events::apigw::ApiGatewayV2httpResponse,
-    http::{header::SET_COOKIE, Response},
+    http::{
+        header::{RETRY_AFTER, SET_COOKIE},
+        Response,
+    },
     Body as LambdaBody, Request as LambdaRequest, RequestExt,
 };
 use lambda_runtime::{
@@ -242,14 +246,12 @@ where
 /// Lambda transport state
 struct LambdaState {
     control_server: Arc<ControlGrpcServer>,
-    app_http_port: Option<u16>,
 }
 
 /// Lambda transport
 pub struct LambdaTransport {
     mode: LambdaMode,
     control_server: Arc<ControlGrpcServer>,
-    app_http_port: Option<u16>,
 }
 
 impl LambdaTransport {
@@ -257,13 +259,7 @@ impl LambdaTransport {
         Self {
             mode,
             control_server,
-            app_http_port: None,
         }
-    }
-
-    pub fn with_app_port(mut self, port: u16) -> Self {
-        self.app_http_port = Some(port);
-        self
     }
 
     /// Run the Lambda transport
@@ -272,25 +268,24 @@ impl LambdaTransport {
 
         let state = Arc::new(LambdaState {
             control_server: self.control_server,
-            app_http_port: self.app_http_port,
         });
 
         match self.mode {
             LambdaMode::Streaming => {
                 let (request_done_sender, request_done_receiver) = unbounded_channel::<()>();
                 let adapter = StreamingAdapter {
-                    state,
+                    state: state.clone(),
                     request_done_sender,
                 };
-                run_streaming(adapter, request_done_receiver).await
+                run_streaming(adapter, request_done_receiver, state.control_server.clone()).await
             }
             LambdaMode::Buffered => {
                 let (request_done_sender, request_done_receiver) = unbounded_channel::<()>();
                 let adapter = BufferedAdapter {
-                    state,
+                    state: state.clone(),
                     request_done_sender,
                 };
-                run_buffered(adapter, request_done_receiver).await
+                run_buffered(adapter, request_done_receiver, state.control_server.clone()).await
             }
         }
     }
@@ -416,6 +411,7 @@ async fn drive_lambda_runtime<E: std::fmt::Display>(
     lambda_runtime_future: impl std::future::Future<Output = std::result::Result<(), E>>,
     request_done_receiver: UnboundedReceiver<()>,
     runtime_label: &str,
+    control_server: Arc<ControlGrpcServer>,
 ) -> Result<()> {
     // Register the wait_until extension only if not running in cargo lambda
     let wait_until_extension_future = if should_register_wait_until_extension() {
@@ -434,6 +430,8 @@ async fn drive_lambda_runtime<E: std::fmt::Display>(
         info!("Skipping wait_until extension registration");
         None
     };
+
+    wait_for_initial_readiness(control_server).await;
 
     // Run Lambda runtime, optionally with extension
     match wait_until_extension_future {
@@ -477,6 +475,7 @@ async fn drive_lambda_runtime<E: std::fmt::Display>(
 async fn run_streaming(
     handler: StreamingAdapter,
     request_done_receiver: UnboundedReceiver<()>,
+    control_server: Arc<ControlGrpcServer>,
 ) -> Result<()> {
     info!("run_streaming: Setting up Lambda streaming runtime");
 
@@ -508,19 +507,90 @@ async fn run_streaming(
             }
         });
 
-    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
+    drive_lambda_runtime(
+        lambda::run(svc),
+        request_done_receiver,
+        "Streaming",
+        control_server,
+    )
+    .await
 }
 
 /// Launch Lambda **buffered** runtime.
 async fn run_buffered(
     adapter: BufferedAdapter,
     request_done_receiver: UnboundedReceiver<()>,
+    control_server: Arc<ControlGrpcServer>,
 ) -> Result<()> {
     let svc = lambda_runtime::tower::ServiceBuilder::new()
         .map_request(event_to_request)
         .service(adapter);
 
-    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Buffered").await
+    drive_lambda_runtime(
+        lambda::run(svc),
+        request_done_receiver,
+        "Buffered",
+        control_server,
+    )
+    .await
+}
+
+const INITIAL_READINESS_BUDGET: Duration = Duration::from_secs(8);
+const INVOCATION_DEADLINE_MARGIN: Duration = Duration::from_secs(1);
+
+async fn wait_for_initial_readiness(control_server: Arc<ControlGrpcServer>) {
+    wait_for_initial_readiness_with_budget(control_server, INITIAL_READINESS_BUDGET).await;
+}
+
+async fn wait_for_initial_readiness_with_budget(
+    control_server: Arc<ControlGrpcServer>,
+    budget: Duration,
+) {
+    let ready = async {
+        tokio::join!(
+            control_server.wait_for_http_server(),
+            control_server.wait_for_task_subscriber()
+        );
+    };
+
+    if tokio::time::timeout(budget, ready).await.is_err() {
+        warn!(
+            budget_seconds = budget.as_secs(),
+            "Application is not fully ready; starting Lambda Runtime API polling"
+        );
+    } else {
+        info!("Application is ready; starting Lambda Runtime API polling");
+    }
+}
+
+fn invocation_readiness_budget(event: &LambdaRequest) -> Duration {
+    let deadline_ms = event.lambda_context().deadline;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    Duration::from_millis(deadline_ms.saturating_sub(now_ms))
+        .saturating_sub(INVOCATION_DEADLINE_MARGIN)
+}
+
+fn invocation_failure(message: impl Into<String>) -> LambdaError {
+    std::io::Error::other(message.into()).into()
+}
+
+async fn wait_for_task_readiness(
+    state: &LambdaState,
+    budget: Duration,
+) -> std::result::Result<(), LambdaError> {
+    tokio::time::timeout(budget, state.control_server.wait_for_task_subscriber())
+        .await
+        .map_err(|_| invocation_failure("Application task handler was not ready before deadline"))
+}
+
+async fn wait_for_http_readiness(state: &LambdaState, budget: Duration) -> Option<u16> {
+    tokio::time::timeout(budget, state.control_server.wait_for_http_server())
+        .await
+        .ok()
+        .flatten()
 }
 
 // ============================================================================
@@ -590,9 +660,14 @@ fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
     ClassifiedEvent::Http(Box::new(event))
 }
 
-/// Dispatch a classified non-HTTP event to the app. Shared by both modes;
-/// the (always empty 200) response is constructed per mode by the caller.
-async fn dispatch_task_event(state: &LambdaState, request_id: &str, event: TaskEvent) {
+/// Dispatch a classified non-HTTP event to the app. Shared by both modes.
+/// The caller returns an empty 200 only after every task succeeds; failures
+/// become invocation errors so the AWS event source retries them.
+async fn dispatch_task_event(
+    state: &LambdaState,
+    request_id: &str,
+    event: TaskEvent,
+) -> Result<()> {
     match event {
         TaskEvent::S3(s3_event) => handle_s3_event(state, request_id, *s3_event).await,
         TaskEvent::Sqs(sqs_event) => handle_sqs_event(state, request_id, *sqs_event).await,
@@ -679,71 +754,74 @@ fn sqs_record_to_task(
 /// either a non-success result or a transport failure. Shared by the S3,
 /// SQS, and CloudWatch handlers, which differ only in the task built and the
 /// `desc` used in log messages.
-async fn send_event_task(state: &LambdaState, task: Task, desc: &str) {
-    match state
+async fn send_event_task(state: &LambdaState, task: Task, desc: &str) -> Result<()> {
+    let task_id = task.task_id.clone();
+    let result = state
         .control_server
         .send_task(task, super::shared::EVENT_TASK_TIMEOUT)
         .await
-    {
-        Ok(result) => {
-            if !result.success {
-                error!(
-                    error_code = ?result.error_code,
-                    error_message = ?result.error_message,
-                    "Application failed to process {}", desc
-                );
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to send {}", desc);
-        }
+        .map_err(|message| {
+            AlienError::new(ErrorData::TaskDeliveryFailed {
+                task_id: task_id.clone(),
+                task_type: desc.to_string(),
+                message,
+            })
+        })?;
+
+    if !result.success {
+        return Err(AlienError::new(ErrorData::TaskDeliveryFailed {
+            task_id,
+            task_type: desc.to_string(),
+            message: result
+                .error_message
+                .unwrap_or_else(|| "unknown application error".to_string()),
+        }));
     }
+
+    Ok(())
 }
 
-async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Event) {
+async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Event) -> Result<()> {
     for record in s3_event.records {
-        let task = match s3_record_to_task(request_id, record) {
-            Ok(task) => task,
-            Err(e) => {
-                error!(error = %e, "Failed to parse S3 event record");
-                continue;
-            }
-        };
+        let task = s3_record_to_task(request_id, record)?;
 
-        send_event_task(state, task, "storage event").await;
+        send_event_task(state, task, "storage event").await?;
     }
+    Ok(())
 }
 
-async fn handle_sqs_event(state: &LambdaState, request_id: &str, sqs_event: SqsEvent) {
+async fn handle_sqs_event(
+    state: &LambdaState,
+    request_id: &str,
+    sqs_event: SqsEvent,
+) -> Result<()> {
     for record in sqs_event.records {
         // Check if body is a command envelope before converting. Gate on the
         // protocol field like `shared::try_parse_envelope`: any JSON that
         // merely satisfies Envelope's shape must not be swallowed as a
-        // command. `continue`, never `return` — the Lambda reports the whole
-        // batch as processed, so bailing early would silently discard every
-        // remaining record in the batch (SQS deletes them all).
+        // command. `continue`, never `return`, so every record in the event is
+        // processed before the invocation is acknowledged.
         if let Some(ref body) = record.body {
             if let Ok(envelope) = serde_json::from_str::<alien_commands::types::Envelope>(body) {
                 if envelope.protocol == alien_commands::PROTOCOL_VERSION {
-                    handle_command(state, &envelope).await;
+                    handle_command(state, &envelope).await?;
                     continue;
                 }
             }
         }
 
-        let task = match sqs_record_to_task(request_id, record) {
-            Ok(task) => task,
-            Err(e) => {
-                error!(error = %e, "Failed to parse SQS message");
-                continue;
-            }
-        };
+        let task = sqs_record_to_task(request_id, record)?;
 
-        send_event_task(state, task, "queue message").await;
+        send_event_task(state, task, "queue message").await?;
     }
+    Ok(())
 }
 
-async fn handle_cloudwatch_event(state: &LambdaState, request_id: &str, cw_event: CloudWatchEvent) {
+async fn handle_cloudwatch_event(
+    state: &LambdaState,
+    request_id: &str,
+    cw_event: CloudWatchEvent,
+) -> Result<()> {
     let schedule_name = cw_event.resources.first().cloned().unwrap_or_default();
     let scheduled_time = Some(prost_types::Timestamp {
         seconds: cw_event.time.timestamp(),
@@ -760,10 +838,13 @@ async fn handle_cloudwatch_event(state: &LambdaState, request_id: &str, cw_event
         })),
     };
 
-    send_event_task(state, task, "cron event").await;
+    send_event_task(state, task, "cron event").await
 }
 
-async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::Envelope) {
+async fn handle_command(
+    state: &LambdaState,
+    envelope: &alien_commands::types::Envelope,
+) -> Result<()> {
     let command_id = envelope.command_id.clone();
     let command_name = envelope.command.clone();
 
@@ -778,13 +859,13 @@ async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::E
             error!(command_id = %command_id, error = %e, "Failed to decode command params");
             let command_response = CommandResponse::error(&e.code, e.to_string());
             if let Err(submit_err) = submit_response(envelope, command_response).await {
-                error!(
-                    command_id = %command_id,
-                    error = %submit_err,
-                    "Failed to submit decode-error response"
-                );
+                return Err(AlienError::new(ErrorData::ResponseDeliveryFailed {
+                    request_id: command_id,
+                    message: submit_err.to_string(),
+                    destination: Some("command response endpoint".to_string()),
+                }));
             }
-            return;
+            return Ok(());
         }
     };
 
@@ -838,7 +919,11 @@ async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::E
 
             debug!(command_id = %command_id, "Submitting command response to manager");
             if let Err(e) = submit_response(envelope, command_response).await {
-                error!(command_id = %command_id, error = %e, "Failed to submit command response");
+                return Err(AlienError::new(ErrorData::ResponseDeliveryFailed {
+                    request_id: command_id,
+                    message: e.to_string(),
+                    destination: Some("command response endpoint".to_string()),
+                }));
             } else {
                 debug!(command_id = %command_id, "Command response submitted successfully");
             }
@@ -846,9 +931,20 @@ async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::E
         Err(e) => {
             error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
             let command_response = CommandResponse::error("HANDLER_ERROR", &e);
-            let _ = submit_response(envelope, command_response).await;
+            submit_response(envelope, command_response)
+                .await
+                .map_err(|submit_error| {
+                    AlienError::new(ErrorData::ResponseDeliveryFailed {
+                        request_id: command_id,
+                        message: format!(
+                            "Command task failed ({e}); error response submission failed: {submit_error}"
+                        ),
+                        destination: Some("command response endpoint".to_string()),
+                    })
+                })?;
         }
     }
+    Ok(())
 }
 
 /// Forward a Lambda request to the app's local HTTP server. Shared by both
@@ -902,14 +998,18 @@ async fn handle_streaming_event(
     event: LambdaRequest,
 ) -> std::result::Result<Response<StreamingBody>, LambdaError> {
     debug!(request_id = %request_id, "Handling Lambda event (streaming)");
+    let readiness_budget = invocation_readiness_budget(&event);
 
     match classify_event(event) {
         ClassifiedEvent::Task(task_event) => {
-            dispatch_task_event(state, request_id, task_event).await;
+            wait_for_task_readiness(state, readiness_budget).await?;
+            dispatch_task_event(state, request_id, task_event)
+                .await
+                .map_err(|error| invocation_failure(error.to_string()))?;
             Ok(empty_streaming_response())
         }
         ClassifiedEvent::Http(event) => {
-            forward_http_request_streaming(state, request_id, *event).await
+            forward_http_request_streaming(state, request_id, *event, readiness_budget).await
         }
     }
 }
@@ -918,13 +1018,15 @@ async fn forward_http_request_streaming(
     state: &LambdaState,
     request_id: &str,
     event: LambdaRequest,
+    readiness_budget: Duration,
 ) -> std::result::Result<Response<StreamingBody>, LambdaError> {
-    let Some(app_port) = state.app_http_port else {
-        warn!("No app HTTP port registered, returning 503");
+    let Some(app_port) = wait_for_http_readiness(state, readiness_budget).await else {
+        warn!("App HTTP server was not ready before the invocation deadline");
         return Ok(Response::builder()
             .status(503)
+            .header(RETRY_AFTER, "1")
             .body(lambda_streaming_body(
-                b"App HTTP server not registered".to_vec(),
+                b"Service temporarily unavailable".to_vec(),
             ))
             .unwrap());
     };
@@ -985,17 +1087,21 @@ async fn handle_buffered_event(
     event: LambdaRequest,
 ) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
     debug!(request_id = %request_id, "Handling Lambda event (buffered)");
+    let readiness_budget = invocation_readiness_budget(&event);
 
     match classify_event(event) {
         ClassifiedEvent::Task(task_event) => {
-            dispatch_task_event(state, request_id, task_event).await;
+            wait_for_task_readiness(state, readiness_budget).await?;
+            dispatch_task_event(state, request_id, task_event)
+                .await
+                .map_err(|error| invocation_failure(error.to_string()))?;
             Ok(ApiGatewayV2httpResponse {
                 status_code: 200,
                 ..Default::default()
             })
         }
         ClassifiedEvent::Http(event) => {
-            forward_http_request_buffered(state, request_id, *event).await
+            forward_http_request_buffered(state, request_id, *event, readiness_budget).await
         }
     }
 }
@@ -1004,13 +1110,20 @@ async fn forward_http_request_buffered(
     state: &LambdaState,
     request_id: &str,
     event: LambdaRequest,
+    readiness_budget: Duration,
 ) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
-    let Some(app_port) = state.app_http_port else {
-        warn!("No app HTTP port registered, returning 503");
+    let Some(app_port) = wait_for_http_readiness(state, readiness_budget).await else {
+        warn!("App HTTP server was not ready before the invocation deadline");
+        let mut headers = lambda_http::http::HeaderMap::new();
+        headers.insert(
+            RETRY_AFTER,
+            lambda_http::http::HeaderValue::from_static("1"),
+        );
         return Ok(ApiGatewayV2httpResponse {
             status_code: 503,
+            headers,
             body: Some(LambdaBody::Text(
-                "App HTTP server not registered".to_string(),
+                "Service temporarily unavailable".to_string(),
             )),
             ..Default::default()
         });
@@ -1192,5 +1305,64 @@ mod tests {
             ClassifiedEvent::Http(_) => {}
             _ => panic!("unrecognized payload must fall through to HTTP forwarding"),
         }
+    }
+
+    #[tokio::test]
+    async fn initial_readiness_budget_expires_without_blocking_runtime_polling() {
+        let control_server = Arc::new(ControlGrpcServer::new());
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_for_initial_readiness_with_budget(control_server, Duration::from_millis(5)),
+        )
+        .await
+        .expect("bounded readiness must return");
+    }
+
+    #[tokio::test]
+    async fn unready_http_returns_retryable_sanitized_503_in_both_modes() {
+        let state = LambdaState {
+            control_server: Arc::new(ControlGrpcServer::new()),
+        };
+
+        let streaming = forward_http_request_streaming(
+            &state,
+            "request",
+            LambdaRequest::new(LambdaBody::Empty),
+            Duration::ZERO,
+        )
+        .await
+        .expect("streaming response");
+        assert_eq!(streaming.status(), 503);
+        assert_eq!(streaming.headers().get(RETRY_AFTER).unwrap(), "1");
+
+        let buffered = forward_http_request_buffered(
+            &state,
+            "request",
+            LambdaRequest::new(LambdaBody::Empty),
+            Duration::ZERO,
+        )
+        .await
+        .expect("buffered response");
+        assert_eq!(buffered.status_code, 503);
+        assert_eq!(buffered.headers.get(RETRY_AFTER).unwrap(), "1");
+        assert_eq!(
+            buffered.body,
+            Some(LambdaBody::Text(
+                "Service temporarily unavailable".to_string()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn event_delivery_failure_is_returned_to_lambda() {
+        let state = LambdaState {
+            control_server: Arc::new(ControlGrpcServer::new()),
+        };
+
+        let error = send_event_task(&state, Task::default(), "queue message")
+            .await
+            .expect_err("missing task subscriber must fail the invocation");
+        assert!(error.to_string().contains("(queue message) failed"));
     }
 }

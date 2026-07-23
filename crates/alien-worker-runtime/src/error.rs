@@ -223,6 +223,22 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A task could not be delivered to the application or completed successfully.
+    #[error(
+        code = "TASK_DELIVERY_FAILED",
+        message = "Task '{task_id}' ({task_type}) failed: {message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    TaskDeliveryFailed {
+        /// Runtime task identifier.
+        task_id: String,
+        /// Human-readable task type.
+        task_type: String,
+        /// Delivery or application failure.
+        message: String,
+    },
+
     /// Failed to load a secret from the vault at startup.
     #[error(
         code = "SECRET_LOAD_FAILED",

@@ -7,7 +7,7 @@
 //! - Task result submission
 
 use std::{collections::HashMap, pin::Pin, sync::Arc};
-use tokio::sync::{broadcast, mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
@@ -33,8 +33,6 @@ pub struct ControlState {
     http_port: Option<u16>,
     /// Registered event handlers: (handler_type, resource_name) -> registration
     handlers: HashMap<(String, String), HandlerRegistration>,
-    /// Sender for notifying when HTTP server is registered
-    http_ready_tx: Option<tokio::sync::oneshot::Sender<u16>>,
 }
 
 impl Default for ControlState {
@@ -42,7 +40,6 @@ impl Default for ControlState {
         Self {
             http_port: None,
             handlers: HashMap::new(),
-            http_ready_tx: None,
         }
     }
 }
@@ -56,8 +53,10 @@ pub struct ControlGrpcServer {
     task_tx: broadcast::Sender<Task>,
     /// Result channels - keyed by task_id
     result_channels: Arc<Mutex<HashMap<String, mpsc::Sender<Result<TaskResult, String>>>>>,
-    /// Notified when the first task stream subscriber connects
-    task_subscriber_notify: Arc<Notify>,
+    /// Readiness signal for the application HTTP server.
+    http_ready_tx: watch::Sender<Option<u16>>,
+    /// Readiness signal for the application task stream.
+    task_ready_tx: watch::Sender<bool>,
 }
 
 /// Result for a task
@@ -98,10 +97,13 @@ impl TaskResult {
 impl ControlGrpcServer {
     pub fn new() -> Self {
         let (task_tx, _) = broadcast::channel(1024);
+        let (http_ready_tx, _) = watch::channel(None);
+        let (task_ready_tx, _) = watch::channel(false);
         Self {
             state: Arc::new(RwLock::new(ControlState::default())),
             task_tx,
-            task_subscriber_notify: Arc::new(Notify::new()),
+            http_ready_tx,
+            task_ready_tx,
             result_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -132,39 +134,29 @@ impl ControlGrpcServer {
 
     /// Wait for HTTP server to be registered
     pub async fn wait_for_http_server(&self) -> Option<u16> {
-        // Check if already registered
-        {
-            let state = self.state.read().await;
-            if let Some(port) = state.http_port {
+        let mut ready = self.http_ready_tx.subscribe();
+        loop {
+            if let Some(port) = *ready.borrow_and_update() {
                 return Some(port);
             }
-        }
-
-        // Create a oneshot channel and store sender
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        {
-            let mut state = self.state.write().await;
-            // Double-check in case it was registered while we were waiting for write lock
-            if let Some(port) = state.http_port {
-                return Some(port);
+            if ready.changed().await.is_err() {
+                return None;
             }
-            state.http_ready_tx = Some(tx);
         }
-
-        // Wait for registration
-        rx.await.ok()
     }
 
     /// Wait for at least one application to subscribe to the task stream.
     /// Returns immediately if there's already a subscriber.
     pub async fn wait_for_task_subscriber(&self) {
-        if self.task_tx.receiver_count() > 0 {
-            return;
+        let mut ready = self.task_ready_tx.subscribe();
+        loop {
+            if *ready.borrow_and_update() {
+                return;
+            }
+            if ready.changed().await.is_err() {
+                return;
+            }
         }
-        // notify_one() stores a permit when no one is waiting, so even if
-        // the app subscribes between our check above and this await, the
-        // stored permit makes notified() return immediately.
-        self.task_subscriber_notify.notified().await;
     }
 
     /// Send a task to the application and wait for the result.
@@ -238,13 +230,8 @@ impl ControlService for ControlGrpcServer {
 
         info!(port = port, "Application registered HTTP server");
 
-        let mut state = self.state.write().await;
-        state.http_port = Some(port);
-
-        // Notify any waiters
-        if let Some(tx) = state.http_ready_tx.take() {
-            let _ = tx.send(port);
-        }
+        self.state.write().await.http_port = Some(port);
+        self.http_ready_tx.send_replace(Some(port));
 
         Ok(Response::new(RegisterHttpServerResponse { success: true }))
     }
@@ -286,7 +273,7 @@ impl ControlService for ControlGrpcServer {
         debug!(application_id = %req.application_id, "Application waiting for tasks");
 
         let mut task_rx = self.task_tx.subscribe();
-        self.task_subscriber_notify.notify_one();
+        self.task_ready_tx.send_replace(true);
 
         let stream = async_stream::stream! {
             loop {
@@ -400,5 +387,51 @@ mod tests {
         // Wait task should complete with the port
         let port = wait_task.await.unwrap();
         assert_eq!(port, Some(3000));
+    }
+
+    #[tokio::test]
+    async fn multiple_http_waiters_observe_registration() {
+        let server = ControlGrpcServer::new();
+        let first = tokio::spawn({
+            let server = server.clone();
+            async move { server.wait_for_http_server().await }
+        });
+        let second = tokio::spawn({
+            let server = server.clone();
+            async move { server.wait_for_http_server().await }
+        });
+
+        server
+            .register_http_server(Request::new(RegisterHttpServerRequest { port: 4000 }))
+            .await
+            .unwrap();
+
+        assert_eq!(first.await.unwrap(), Some(4000));
+        assert_eq!(second.await.unwrap(), Some(4000));
+        assert_eq!(server.wait_for_http_server().await, Some(4000));
+    }
+
+    #[tokio::test]
+    async fn multiple_task_waiters_observe_subscription() {
+        let server = ControlGrpcServer::new();
+        let first = tokio::spawn({
+            let server = server.clone();
+            async move { server.wait_for_task_subscriber().await }
+        });
+        let second = tokio::spawn({
+            let server = server.clone();
+            async move { server.wait_for_task_subscriber().await }
+        });
+
+        server
+            .wait_for_tasks(Request::new(WaitForTasksRequest {
+                application_id: "app".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        first.await.unwrap();
+        second.await.unwrap();
+        server.wait_for_task_subscriber().await;
     }
 }

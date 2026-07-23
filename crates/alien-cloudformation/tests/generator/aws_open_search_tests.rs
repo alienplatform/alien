@@ -3,8 +3,9 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{CfRegistry, RegistrationMode};
 use alien_core::{
-    import::EmitContext, AwsOpenSearch, AwsOpenSearchCollectionType, AwsOpenSearchImportData,
-    PermissionProfile, Platform, ResourceLifecycle, ServiceAccount, Stack, StackSettings,
+    import::EmitContext, AwsOpenSearch, AwsOpenSearchCapacity, AwsOpenSearchCapacityRange,
+    AwsOpenSearchCollectionType, AwsOpenSearchImportData, PermissionProfile, Platform,
+    ResourceLifecycle, ServiceAccount, Stack, StackSettings,
 };
 use indexmap::IndexMap;
 
@@ -39,6 +40,10 @@ fn aws_open_search_renders_collection_with_data_access() {
     assert_eq!(group["Type"], "AWS::OpenSearchServerless::CollectionGroup");
     assert_eq!(group["Properties"]["Generation"], "NEXTGEN");
     assert_eq!(group["Properties"]["StandbyReplicas"], "ENABLED");
+    assert!(
+        group["Properties"].get("CapacityLimits").is_none(),
+        "capacity must remain omitted by default"
+    );
 
     let network = &template["Resources"]["ArticlesNetworkPolicy"];
     let network_policy = network["Properties"]["Policy"]["Fn::Sub"][0]
@@ -77,6 +82,77 @@ fn aws_open_search_renders_collection_with_data_access() {
     assert!(access_policy.contains("${Principal0}"));
 
     insta::assert_snapshot!("aws_open_search", yaml);
+}
+
+#[test]
+fn aws_open_search_renders_collection_group_capacity_limits() {
+    let stack = Stack::new("search-stack".to_string())
+        .add(
+            AwsOpenSearch::new("articles".to_string())
+                .capacity(AwsOpenSearchCapacity {
+                    indexing: Some(AwsOpenSearchCapacityRange {
+                        min_ocu: Some(1),
+                        max_ocu: Some(16),
+                    }),
+                    search: Some(AwsOpenSearchCapacityRange {
+                        min_ocu: Some(2),
+                        max_ocu: Some(32),
+                    }),
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws opensearch serverless capacity",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let limits = &template["Resources"]["ArticlesGroup"]["Properties"]["CapacityLimits"];
+    assert_eq!(limits["MinIndexingCapacityInOcu"], 1);
+    assert_eq!(limits["MaxIndexingCapacityInOcu"], 16);
+    assert_eq!(limits["MinSearchCapacityInOcu"], 2);
+    assert_eq!(limits["MaxSearchCapacityInOcu"], 32);
+}
+
+#[test]
+fn aws_open_search_rejects_invalid_capacity_before_rendering() {
+    let stack = Stack::new("search-stack".to_string())
+        .add(
+            AwsOpenSearch::new("articles".to_string())
+                .capacity(AwsOpenSearchCapacity {
+                    indexing: None,
+                    search: Some(AwsOpenSearchCapacityRange {
+                        min_ocu: Some(3),
+                        max_ocu: None,
+                    }),
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let error = alien_cloudformation::generate_cloudformation_template(
+        &stack,
+        alien_cloudformation::CloudFormationOptions {
+            registry: &CfRegistry::built_in(),
+            target: alien_cloudformation::CloudFormationTarget::Aws,
+            stack_settings: StackSettings::default(),
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
+            registration: RegistrationMode::OutputsFallback,
+            description: None,
+        },
+    )
+    .expect_err("unsupported OCU values must fail generation");
+
+    assert!(error.to_string().contains("minOcu"));
+    assert!(error.to_string().contains("unsupported"));
 }
 
 #[test]
