@@ -1,4 +1,5 @@
 const DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
+const DAPR_COMPONENT_IDENTITY_DOMAIN: &str = "alien.azure.dapr.component.v1";
 
 /// Returns a valid Azure Container Apps Dapr component name.
 ///
@@ -6,6 +7,16 @@ const DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
 /// deterministic hash of the original input so distinct resource IDs cannot
 /// collapse to the same component name through normalization.
 pub(super) fn get_azure_dapr_component_name(raw: &str) -> String {
+    let normalized = normalize_azure_dapr_component_name(raw);
+
+    if normalized == raw && normalized.len() <= DAPR_COMPONENT_NAME_MAX_LEN {
+        return normalized;
+    }
+
+    append_raw_input_hash(&normalized, raw)
+}
+
+fn normalize_azure_dapr_component_name(raw: &str) -> String {
     let mut normalized = String::with_capacity(raw.len());
     let mut previous_was_hyphen = false;
 
@@ -42,26 +53,66 @@ pub(super) fn get_azure_dapr_component_name(raw: &str) -> String {
         normalized.insert_str(0, "dapr-");
     }
 
-    if normalized == raw && normalized.len() <= DAPR_COMPONENT_NAME_MAX_LEN {
-        return normalized;
-    }
-
-    append_raw_input_hash(&normalized, raw)
+    normalized
 }
 
 pub(super) fn get_azure_internal_commands_dapr_component_name(container_app_name: &str) -> String {
-    get_azure_dapr_component_name(&format!(
-        "servicebus-{container_app_name}-internal-commands"
-    ))
+    structured_dapr_component_name(
+        &format!("servicebus-{container_app_name}-internal-commands"),
+        &["internal-commands", container_app_name],
+    )
+}
+
+pub(super) fn get_legacy_azure_internal_commands_dapr_component_names(
+    container_app_name: &str,
+) -> [String; 2] {
+    [
+        get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-commands")),
+        get_azure_dapr_component_name(&format!(
+            "servicebus-{container_app_name}-internal-commands"
+        )),
+    ]
 }
 
 pub(super) fn get_azure_queue_trigger_dapr_component_name(
     container_app_name: &str,
     queue_id: &str,
 ) -> String {
-    get_azure_dapr_component_name(&format!(
-        "servicebus-{container_app_name}-queue-trigger-{queue_id}"
-    ))
+    structured_dapr_component_name(
+        &format!("servicebus-{container_app_name}-queue-trigger-{queue_id}"),
+        &["queue-trigger", container_app_name, queue_id],
+    )
+}
+
+pub(super) fn get_legacy_azure_queue_trigger_dapr_component_names(
+    container_app_name: &str,
+    queue_id: &str,
+) -> [String; 2] {
+    [
+        get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-{queue_id}")),
+        get_azure_dapr_component_name(&format!(
+            "servicebus-{container_app_name}-queue-trigger-{queue_id}"
+        )),
+    ]
+}
+
+pub(super) fn get_azure_blob_trigger_dapr_component_name(
+    container_app_name: &str,
+    storage_id: &str,
+) -> String {
+    structured_dapr_component_name(
+        &format!("blobstorage-{container_app_name}-{storage_id}"),
+        &["blob-trigger", container_app_name, storage_id],
+    )
+}
+
+pub(super) fn get_legacy_azure_blob_trigger_dapr_component_names(
+    container_app_name: &str,
+    storage_id: &str,
+) -> [String; 1] {
+    [get_azure_dapr_component_name(&format!(
+        "blobstorage-{container_app_name}-{storage_id}"
+    ))]
 }
 
 pub(super) fn get_azure_storage_event_subscription_name(
@@ -86,6 +137,32 @@ fn append_raw_input_hash(normalized: &str, raw: &str) -> String {
     let hash = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, raw.as_bytes())
         .simple()
         .to_string();
+    append_hash(normalized, &hash)
+}
+
+fn structured_dapr_component_name(readable_stem: &str, identity_parts: &[&str]) -> String {
+    let normalized = normalize_azure_dapr_component_name(readable_stem);
+    let hash = structured_identity_hash(identity_parts);
+    append_hash(&normalized, &hash)
+}
+
+/// Hash semantic fields independently of their human-readable concatenation.
+/// Fixed-width length prefixes make tuple boundaries unambiguous, and the
+/// domain version prevents future identity formats from aliasing this one.
+fn structured_identity_hash(identity_parts: &[&str]) -> String {
+    let mut identity = Vec::new();
+    for part in
+        std::iter::once(DAPR_COMPONENT_IDENTITY_DOMAIN).chain(identity_parts.iter().copied())
+    {
+        identity.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        identity.extend_from_slice(part.as_bytes());
+    }
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, &identity)
+        .simple()
+        .to_string()
+}
+
+fn append_hash(normalized: &str, hash: &str) -> String {
     let max_stem_len = DAPR_COMPONENT_NAME_MAX_LEN - 1 - hash.len();
     let mut stem: String = normalized.chars().take(max_stem_len).collect();
     while stem
@@ -101,9 +178,12 @@ fn append_raw_input_hash(normalized: &str, raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_azure_dapr_component_name, get_azure_internal_commands_dapr_component_name,
+        get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
+        get_azure_internal_commands_dapr_component_name,
         get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
-        DAPR_COMPONENT_NAME_MAX_LEN,
+        get_legacy_azure_blob_trigger_dapr_component_names,
+        get_legacy_azure_internal_commands_dapr_component_names,
+        get_legacy_azure_queue_trigger_dapr_component_names, DAPR_COMPONENT_NAME_MAX_LEN,
     };
 
     #[test]
@@ -157,11 +237,6 @@ mod tests {
 
     #[test]
     fn commands_and_commands_queue_trigger_have_distinct_component_names() {
-        let internal_commands = get_azure_internal_commands_dapr_component_name("worker");
-        let commands_queue = get_azure_queue_trigger_dapr_component_name("worker", "commands");
-        assert_eq!(internal_commands, "servicebus-worker-internal-commands");
-        assert_eq!(commands_queue, "servicebus-worker-queue-trigger-commands");
-
         for container_app_name in [
             "worker",
             "e2e-03-azure-terraform-provider-very-long-worker-name",
@@ -172,9 +247,73 @@ mod tests {
                 get_azure_queue_trigger_dapr_component_name(container_app_name, "commands");
 
             assert_ne!(internal_commands, commands_queue);
-            assert_valid_dapr_component_name(&internal_commands);
-            assert_valid_dapr_component_name(&commands_queue);
+            assert_structured_dapr_component_name(&internal_commands);
+            assert_structured_dapr_component_name(&commands_queue);
         }
+    }
+
+    #[test]
+    fn structured_names_do_not_alias_any_legacy_name() {
+        let app = "worker";
+        let queue = "events";
+        let storage = "archive";
+
+        let commands = get_azure_internal_commands_dapr_component_name(app);
+        assert!(get_legacy_azure_internal_commands_dapr_component_names(app)
+            .iter()
+            .all(|legacy| legacy != &commands));
+
+        let queue_trigger = get_azure_queue_trigger_dapr_component_name(app, queue);
+        assert!(
+            get_legacy_azure_queue_trigger_dapr_component_names(app, queue)
+                .iter()
+                .all(|legacy| legacy != &queue_trigger)
+        );
+
+        let blob_trigger = get_azure_blob_trigger_dapr_component_name(app, storage);
+        assert!(
+            get_legacy_azure_blob_trigger_dapr_component_names(app, storage)
+                .iter()
+                .all(|legacy| legacy != &blob_trigger)
+        );
+    }
+
+    #[test]
+    fn queue_trigger_names_disambiguate_cross_worker_tuple_boundaries() {
+        let first =
+            get_azure_queue_trigger_dapr_component_name("prefix-worker", "queue-trigger-events");
+        let second =
+            get_azure_queue_trigger_dapr_component_name("prefix-worker-queue-trigger", "events");
+
+        assert_distinct_structured_names(&first, &second);
+        assert_eq!(
+            first,
+            get_azure_queue_trigger_dapr_component_name("prefix-worker", "queue-trigger-events")
+        );
+    }
+
+    #[test]
+    fn commands_names_disambiguate_cross_kind_tuple_boundaries() {
+        let internal =
+            get_azure_internal_commands_dapr_component_name("prefix-worker-queue-trigger-events");
+        let queue = get_azure_queue_trigger_dapr_component_name(
+            "prefix-worker",
+            "events-internal-commands",
+        );
+
+        assert_distinct_structured_names(&internal, &queue);
+    }
+
+    #[test]
+    fn blob_trigger_names_disambiguate_cross_worker_tuple_boundaries() {
+        let first = get_azure_blob_trigger_dapr_component_name("prefix-worker", "archive-files");
+        let second = get_azure_blob_trigger_dapr_component_name("prefix-worker-archive", "files");
+
+        assert_distinct_structured_names(&first, &second);
+        assert_eq!(
+            first,
+            get_azure_blob_trigger_dapr_component_name("prefix-worker", "archive-files")
+        );
     }
 
     #[test]
@@ -211,5 +350,20 @@ mod tests {
                 || matches!(character, '-' | '.')
         }));
         assert!(!name.contains("--"));
+    }
+
+    fn assert_structured_dapr_component_name(name: &str) {
+        assert_valid_dapr_component_name(name);
+        let (_, hash) = name
+            .rsplit_once('-')
+            .expect("structured Dapr component names should have a hash suffix");
+        assert_eq!(hash.len(), 32);
+        assert!(hash.chars().all(|character| character.is_ascii_hexdigit()));
+    }
+
+    fn assert_distinct_structured_names(first: &str, second: &str) {
+        assert_ne!(first, second);
+        assert_structured_dapr_component_name(first);
+        assert_structured_dapr_component_name(second);
     }
 }
