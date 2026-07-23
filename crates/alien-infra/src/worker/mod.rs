@@ -13,6 +13,8 @@ pub use gcp_import::GcpWorkerImporter;
 mod azure;
 pub use azure::*;
 
+mod azure_dapr_components;
+mod azure_dapr_names_migration;
 mod azure_names;
 
 mod azure_import;

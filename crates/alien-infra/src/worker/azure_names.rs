@@ -65,13 +65,11 @@ pub(super) fn get_azure_internal_commands_dapr_component_name(container_app_name
 
 pub(super) fn get_legacy_azure_internal_commands_dapr_component_names(
     container_app_name: &str,
-) -> [String; 2] {
-    [
-        get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-commands")),
-        get_azure_dapr_component_name(&format!(
-            "servicebus-{container_app_name}-internal-commands"
-        )),
-    ]
+) -> Vec<String> {
+    historical_dapr_component_names(&[
+        format!("servicebus-{container_app_name}-commands"),
+        format!("servicebus-{container_app_name}-internal-commands"),
+    ])
 }
 
 pub(super) fn get_azure_queue_trigger_dapr_component_name(
@@ -87,13 +85,11 @@ pub(super) fn get_azure_queue_trigger_dapr_component_name(
 pub(super) fn get_legacy_azure_queue_trigger_dapr_component_names(
     container_app_name: &str,
     queue_id: &str,
-) -> [String; 2] {
-    [
-        get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-{queue_id}")),
-        get_azure_dapr_component_name(&format!(
-            "servicebus-{container_app_name}-queue-trigger-{queue_id}"
-        )),
-    ]
+) -> Vec<String> {
+    historical_dapr_component_names(&[
+        format!("servicebus-{container_app_name}-{queue_id}"),
+        format!("servicebus-{container_app_name}-queue-trigger-{queue_id}"),
+    ])
 }
 
 pub(super) fn get_azure_blob_trigger_dapr_component_name(
@@ -109,10 +105,8 @@ pub(super) fn get_azure_blob_trigger_dapr_component_name(
 pub(super) fn get_legacy_azure_blob_trigger_dapr_component_names(
     container_app_name: &str,
     storage_id: &str,
-) -> [String; 1] {
-    [get_azure_dapr_component_name(&format!(
-        "blobstorage-{container_app_name}-{storage_id}"
-    ))]
+) -> Vec<String> {
+    historical_dapr_component_names(&[format!("blobstorage-{container_app_name}-{storage_id}")])
 }
 
 pub(super) fn get_azure_storage_event_subscription_name(
@@ -138,6 +132,36 @@ fn append_raw_input_hash(normalized: &str, raw: &str) -> String {
         .simple()
         .to_string();
     append_hash(normalized, &hash)
+}
+
+fn historical_dapr_component_names(raw_names: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    for raw_name in raw_names {
+        for name in [
+            get_azure_dapr_component_name(raw_name),
+            get_legacy_eight_character_hash_dapr_component_name(raw_name),
+        ] {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Reproduces the first bounded-name rollout so partially upgraded stacks can
+/// be migrated. That version normalized short names without a hash and used an
+/// eight-character UUID suffix only when the 60-character limit was exceeded.
+fn get_legacy_eight_character_hash_dapr_component_name(raw: &str) -> String {
+    let normalized = normalize_azure_dapr_component_name(raw);
+    if normalized.len() <= DAPR_COMPONENT_NAME_MAX_LEN {
+        return normalized;
+    }
+
+    let hash = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, raw.as_bytes())
+        .simple()
+        .to_string();
+    append_hash(&normalized, &hash[..8])
 }
 
 fn structured_dapr_component_name(readable_stem: &str, identity_parts: &[&str]) -> String {
@@ -276,6 +300,16 @@ mod tests {
                 .iter()
                 .all(|legacy| legacy != &blob_trigger)
         );
+    }
+
+    #[test]
+    fn legacy_names_include_first_bounded_rollout_hash() {
+        let names = get_legacy_azure_internal_commands_dapr_component_names(
+            "e2e-03-azure-terraform-provider-very-long-worker-name",
+        );
+
+        assert!(names
+            .contains(&"servicebus-e2e-03-azure-terraform-provider-very-lon-3c4abf84".to_string()));
     }
 
     #[test]

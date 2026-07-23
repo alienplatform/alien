@@ -38,6 +38,7 @@ impl ResourceImporter for AzureWorkerImporter {
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
             storage_trigger_infrastructure: Vec::new(),
+            storage_trigger_teardown_progress: Default::default(),
             fqdn: data.fqdn,
             certificate_id: None,
             keyvault_cert_id: None,
@@ -56,6 +57,9 @@ impl ResourceImporter for AzureWorkerImporter {
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
             update_dapr_components_deleted: false,
+            dapr_component_naming_version: 0,
+            pending_dapr_component_deletion_name: None,
+            dapr_component_deletion_candidates_initialized: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
