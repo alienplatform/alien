@@ -184,10 +184,11 @@ pub async fn run(
     let _ = WAIT_UNTIL_SERVER.set(wait_until_server.clone());
     let _ = CONTROL_SERVER.set(control_server.clone());
 
-    // Lambda must register its extension and begin the bounded readiness phase
-    // before secret loading and application startup. AWS gives on-demand
-    // functions only 10 seconds for Init; starting the transport after those
-    // operations can defer Runtime API polling until the first invocation.
+    // Lambda must register its extension and begin Runtime API polling before
+    // secret loading and application startup. AWS gives on-demand functions
+    // only 10 seconds for Init, including container/bootstrap overhead outside
+    // this process. Invocation handlers wait for application readiness within
+    // the invocation deadline, so transport startup must never wait for it.
     let prestarted_transport = if config.transport == TransportType::Lambda {
         Some(prestart_lambda_transport(&config, control_server.clone())?)
     } else {

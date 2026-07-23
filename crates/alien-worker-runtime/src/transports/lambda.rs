@@ -277,7 +277,7 @@ impl LambdaTransport {
                     state: state.clone(),
                     request_done_sender,
                 };
-                run_streaming(adapter, request_done_receiver, state.control_server.clone()).await
+                run_streaming(adapter, request_done_receiver).await
             }
             LambdaMode::Buffered => {
                 let (request_done_sender, request_done_receiver) = unbounded_channel::<()>();
@@ -285,7 +285,7 @@ impl LambdaTransport {
                     state: state.clone(),
                     request_done_sender,
                 };
-                run_buffered(adapter, request_done_receiver, state.control_server.clone()).await
+                run_buffered(adapter, request_done_receiver).await
             }
         }
     }
@@ -411,7 +411,6 @@ async fn drive_lambda_runtime<E: std::fmt::Display>(
     lambda_runtime_future: impl std::future::Future<Output = std::result::Result<(), E>>,
     request_done_receiver: UnboundedReceiver<()>,
     runtime_label: &str,
-    control_server: Arc<ControlGrpcServer>,
 ) -> Result<()> {
     // Register the wait_until extension only if not running in cargo lambda
     let wait_until_extension_future = if should_register_wait_until_extension() {
@@ -430,8 +429,6 @@ async fn drive_lambda_runtime<E: std::fmt::Display>(
         info!("Skipping wait_until extension registration");
         None
     };
-
-    wait_for_initial_readiness(control_server).await;
 
     // Run Lambda runtime, optionally with extension
     match wait_until_extension_future {
@@ -475,7 +472,6 @@ async fn drive_lambda_runtime<E: std::fmt::Display>(
 async fn run_streaming(
     handler: StreamingAdapter,
     request_done_receiver: UnboundedReceiver<()>,
-    control_server: Arc<ControlGrpcServer>,
 ) -> Result<()> {
     info!("run_streaming: Setting up Lambda streaming runtime");
 
@@ -507,61 +503,22 @@ async fn run_streaming(
             }
         });
 
-    drive_lambda_runtime(
-        lambda::run(svc),
-        request_done_receiver,
-        "Streaming",
-        control_server,
-    )
-    .await
+    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
 }
 
 /// Launch Lambda **buffered** runtime.
 async fn run_buffered(
     adapter: BufferedAdapter,
     request_done_receiver: UnboundedReceiver<()>,
-    control_server: Arc<ControlGrpcServer>,
 ) -> Result<()> {
     let svc = lambda_runtime::tower::ServiceBuilder::new()
         .map_request(event_to_request)
         .service(adapter);
 
-    drive_lambda_runtime(
-        lambda::run(svc),
-        request_done_receiver,
-        "Buffered",
-        control_server,
-    )
-    .await
+    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Buffered").await
 }
 
-const INITIAL_READINESS_BUDGET: Duration = Duration::from_secs(8);
 const INVOCATION_DEADLINE_MARGIN: Duration = Duration::from_secs(1);
-
-async fn wait_for_initial_readiness(control_server: Arc<ControlGrpcServer>) {
-    wait_for_initial_readiness_with_budget(control_server, INITIAL_READINESS_BUDGET).await;
-}
-
-async fn wait_for_initial_readiness_with_budget(
-    control_server: Arc<ControlGrpcServer>,
-    budget: Duration,
-) {
-    let ready = async {
-        tokio::join!(
-            control_server.wait_for_http_server(),
-            control_server.wait_for_task_subscriber()
-        );
-    };
-
-    if tokio::time::timeout(budget, ready).await.is_err() {
-        warn!(
-            budget_seconds = budget.as_secs(),
-            "Application is not fully ready; starting Lambda Runtime API polling"
-        );
-    } else {
-        info!("Application is ready; starting Lambda Runtime API polling");
-    }
-}
 
 fn invocation_readiness_budget(event: &LambdaRequest) -> Duration {
     let deadline_ms = event.lambda_context().deadline;
@@ -1305,18 +1262,6 @@ mod tests {
             ClassifiedEvent::Http(_) => {}
             _ => panic!("unrecognized payload must fall through to HTTP forwarding"),
         }
-    }
-
-    #[tokio::test]
-    async fn initial_readiness_budget_expires_without_blocking_runtime_polling() {
-        let control_server = Arc::new(ControlGrpcServer::new());
-
-        tokio::time::timeout(
-            Duration::from_millis(100),
-            wait_for_initial_readiness_with_budget(control_server, Duration::from_millis(5)),
-        )
-        .await
-        .expect("bounded readiness must return");
     }
 
     #[tokio::test]
