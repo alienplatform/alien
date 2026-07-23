@@ -64,6 +64,7 @@ on:
           - comprehensive-rust
           - comprehensive-ts
           - full-stack-microservices
+          - enabled-demo
           - command-routing-ts
           - container-rust
           - runtime-less-mixed
@@ -357,6 +358,11 @@ jobs:
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-comprehensive-rust","test_filter":"terraform_aks_helm_pull_comprehensive_rust","needs_oidc":true,"resource_suffix":"tfakscr"}]')
+            fi
+          fi
+          if [ "$APP" = "All" ] || [ "$APP" = "enabled-demo" ]; then
+            if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-enabled-demo","test_filter":"terraform_aws_push_enabled_demo","needs_oidc":false,"resource_suffix":"tfawsed","bindings_arch":"aarch64"}]')
             fi
           fi
           if [ "$APP" = "All" ] || [ "$APP" = "full-stack-microservices" ]; then
