@@ -22,7 +22,6 @@
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "build:addon": "napi build --platform --release --cwd ../../crates/alien-bindings-node",
-    "prepare": "npm run build",
     "test": "vitest run",
     "test:bun": "bun scripts/run-bun-tests.mjs",
     "test:ts": "tsc --noEmit",
