@@ -603,6 +603,7 @@ dependencies = [
  "alien-bindings",
  "alien-core",
  "alien-error",
+ "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-sigv4",
@@ -619,6 +620,7 @@ dependencies = [
  "temp-env",
  "tokio",
  "tracing",
+ "urlencoding",
 ]
 
 [[package]]

@@ -3,19 +3,19 @@ use tracing::info;
 use crate::azure_utils::get_resource_group_name;
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use crate::infra_requirements::azure_utils::get_storage_account_name;
+use crate::storage::AzureStorageController;
 use alien_azure_clients::azure::cognitive_services::{
     CognitiveServicesAccountCreateParameters, CognitiveServicesAccountCreateProperties,
     CognitiveServicesDeploymentCreateParameters, CognitiveServicesDeploymentCreateProperties,
     CognitiveServicesDeploymentModel, CognitiveServicesDeploymentSku, CognitiveServicesSku,
 };
 use alien_azure_clients::long_running_operation::OperationResult;
-use alien_core::FinetuneSpec;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    bindings::AiBinding, Ai, AiHeartbeatData, AiHeartbeatStatus, AiOutputs,
-    AzureFoundryAiHeartbeatData, HeartbeatBackend, Platform, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    bindings::{AiBinding, FinetuneCapability},
+    Ai, AiHeartbeatData, AiHeartbeatStatus, AiOutputs, AzureFoundryAiHeartbeatData,
+    HeartbeatBackend, Platform, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceRef, ResourceStatus, Storage,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -54,15 +54,14 @@ pub struct AzureAiController {
     pub(crate) resource_group: Option<String>,
     /// The Azure region where the account is created.
     pub(crate) location: Option<String>,
-    /// The Foundry fine-tuning job id, set once the job is submitted. Only
-    /// populated when the resource declares a `finetune` spec.
+    /// The fine-tuning capability this gateway advertises, resolved during the
+    /// create flow when the resource declares a `finetune` spec. The gateway
+    /// submits and rediscovers the Foundry fine-tuning job at runtime from this
+    /// capability; the controller never starts a job itself. Captured into state
+    /// (rather than rebuilt in `get_binding_params`, which has no `ctx`) so the
+    /// binding can carry it. `None` for a pure-inference gateway.
     #[serde(default)]
-    pub(crate) tuning_job_id: Option<String>,
-    /// The deployment name serving the tuned model, set once the tuned model is
-    /// deployed. This is the `upstream_id` the gateway forwards to over the
-    /// OpenAI chat path. Absent for a pure inference gateway.
-    #[serde(default)]
-    pub(crate) tuned_deployment_name: Option<String>,
+    pub(crate) finetune: Option<FinetuneCapability>,
 }
 
 #[controller]
@@ -469,262 +468,17 @@ impl AzureAiController {
 
         info!(account_name = %account_name, "All Azure model deployments provisioned");
 
-        // A pure inference gateway is Ready here. When the resource declares a
-        // finetune spec, tune the base model and serve the result before Ready.
-        if config.finetune.is_some() {
-            return Ok(HandlerAction::Continue {
-                state: SubmittingTuningJob,
-                suggested_delay: None,
-            });
-        }
+        // Fine-tuning is triggered at runtime through the gateway, not at deploy
+        // time, so the resource is Ready as soon as the base deployments succeed.
+        // When the resource declares a `finetune` spec, resolve the capability the
+        // gateway needs to submit/rediscover a runtime tuning job and carry it on
+        // the binding.
+        self.finetune = self.resolve_finetune_capability(ctx, &config)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
         })
-    }
-
-    // ─────────────── FINE-TUNING FLOW ───────────────────────────
-
-    #[handler(
-        state = SubmittingTuningJob,
-        on_failure = CreateFailed,
-        status = ResourceStatus::Provisioning,
-    )]
-    async fn submitting_tuning_job(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
-        let azure_config = ctx.get_azure_config()?;
-        let config = ctx.desired_resource_config::<Ai>()?;
-        let spec = require_finetune_spec(&config)?;
-
-        let endpoint = self.require_endpoint(&config.id)?.to_string();
-
-        // Foundry imports the training dataset directly from the customer's Blob
-        // container. We derive the blob URL deterministically the same way the
-        // Azure Storage controller names the container
-        // (`{prefix}-{training_data}`, lowercased, `_`->`-`) under the shared
-        // default storage account, rather than requiring a public storage state
-        // type. See `crates/alien-infra/src/storage/azure.rs`.
-        //
-        // GOTCHA: Foundry's Blob import path requires the AIServices account to
-        // allow *public network access*. A private-endpoint-only account rejects
-        // the blob URL at job-submit time; the job then surfaces as a terminal
-        // failure in WaitingForTuningJob (fail-fast), not a silent hang.
-        let storage_account = get_storage_account_name(ctx.state)?;
-        let training_file = training_blob_url(
-            &storage_account,
-            ctx.resource_prefix,
-            &spec.training_data,
-            &spec.training_key,
-        );
-
-        info!(
-            id = %config.id,
-            endpoint = %endpoint,
-            base_model = %spec.base_model,
-            training_file = %training_file,
-            "Submitting Azure Foundry fine-tuning job"
-        );
-
-        let finetuning_client = ctx
-            .service_provider
-            .get_azure_foundry_finetuning_client(azure_config)?;
-
-        let job = finetuning_client
-            .create_fine_tuning_job(&endpoint, &spec.base_model, &training_file)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to submit Azure Foundry fine-tuning job for base model '{}'",
-                    spec.base_model
-                ),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        info!(id = %config.id, job_id = %job.id, status = %job.status, "Fine-tuning job submitted");
-        self.tuning_job_id = Some(job.id);
-
-        Ok(HandlerAction::Continue {
-            state: WaitingForTuningJob,
-            suggested_delay: Some(std::time::Duration::from_secs(30)),
-        })
-    }
-
-    #[handler(
-        state = WaitingForTuningJob,
-        on_failure = CreateFailed,
-        status = ResourceStatus::Provisioning,
-    )]
-    async fn waiting_for_tuning_job(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
-        let azure_config = ctx.get_azure_config()?;
-        let config = ctx.desired_resource_config::<Ai>()?;
-
-        let endpoint = self.require_endpoint(&config.id)?.to_string();
-        let job_id = self.tuning_job_id.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Fine-tuning job id not set in state".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
-        info!(id = %config.id, job_id = %job_id, "Polling Azure Foundry fine-tuning job");
-
-        let finetuning_client = ctx
-            .service_provider
-            .get_azure_foundry_finetuning_client(azure_config)?;
-
-        let job = finetuning_client
-            .get_fine_tuning_job(&endpoint, job_id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to poll Azure Foundry fine-tuning job '{}'", job_id),
-                resource_id: Some(config.id.clone()),
-            })?;
-
-        // Fail fast on a terminal failure rather than polling a dead job forever,
-        // mirroring the WaitingForDeployments style.
-        if job.is_terminal_failure() {
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Azure Foundry fine-tuning job '{}' entered terminal state '{}'",
-                    job.id, job.status
-                ),
-                resource_id: Some(config.id.clone()),
-            }));
-        }
-
-        if !job.is_succeeded() {
-            info!(id = %config.id, job_id = %job.id, status = %job.status, "Fine-tuning job not yet complete, retrying");
-            return Ok(HandlerAction::Continue {
-                state: WaitingForTuningJob,
-                suggested_delay: Some(std::time::Duration::from_secs(30)),
-            });
-        }
-
-        // Succeeded: capture the tuned model name to deploy. Fail fast if the
-        // provider reports success without one — we cannot serve a missing model.
-        let fine_tuned_model = job.fine_tuned_model.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Azure Foundry fine-tuning job '{}' succeeded but returned no fine_tuned_model",
-                    job.id
-                ),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
-        info!(id = %config.id, fine_tuned_model = %fine_tuned_model, "Fine-tuning job succeeded");
-
-        // Deploy the tuned model under the served id, so the OpenAI chat path
-        // accepts it as a deployment target.
-        let spec = require_finetune_spec(&config)?;
-        let served_id = spec.served_model_id_or_default(&config.id);
-        self.deploy_tuned_model(ctx, &config.id, &served_id, &fine_tuned_model)
-            .await?;
-        self.tuned_deployment_name = Some(served_id);
-
-        Ok(HandlerAction::Continue {
-            state: WaitingForTunedDeployment,
-            suggested_delay: Some(std::time::Duration::from_secs(10)),
-        })
-    }
-
-    #[handler(
-        state = WaitingForTunedDeployment,
-        on_failure = CreateFailed,
-        status = ResourceStatus::Provisioning,
-    )]
-    async fn waiting_for_tuned_deployment(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
-        let azure_config = ctx.get_azure_config()?;
-        let config = ctx.desired_resource_config::<Ai>()?;
-
-        let account_name = self.require_account_name(&config.id)?.to_string();
-        let resource_group_name = self.require_resource_group(&config.id)?.to_string();
-        let deployment_name = self.tuned_deployment_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Tuned deployment name not set in state".to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
-        let cognitive_client = ctx
-            .service_provider
-            .get_azure_cognitive_services_client(azure_config)?;
-
-        match cognitive_client
-            .get_deployment(&resource_group_name, &account_name, deployment_name)
-            .await
-        {
-            Ok(deployment) => {
-                let provisioning_state = deployment
-                    .properties
-                    .as_ref()
-                    .and_then(|p| p.provisioning_state.as_deref())
-                    .unwrap_or("");
-
-                if provisioning_state.eq_ignore_ascii_case("Failed")
-                    || provisioning_state.eq_ignore_ascii_case("Canceled")
-                {
-                    return Err(AlienError::new(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Azure tuned-model deployment '{}' entered terminal state '{}'",
-                            deployment_name, provisioning_state
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-
-                if !provisioning_state.eq_ignore_ascii_case("Succeeded") {
-                    info!(
-                        account_name = %account_name,
-                        deployment = %deployment_name,
-                        provisioning_state = %provisioning_state,
-                        "Tuned-model deployment not yet ready, retrying"
-                    );
-                    return Ok(HandlerAction::Continue {
-                        state: WaitingForTunedDeployment,
-                        suggested_delay: Some(std::time::Duration::from_secs(10)),
-                    });
-                }
-
-                info!(account_name = %account_name, deployment = %deployment_name, "Tuned-model deployment provisioned");
-                Ok(HandlerAction::Continue {
-                    state: Ready,
-                    suggested_delay: None,
-                })
-            }
-            Err(e)
-                if matches!(
-                    &e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                info!(
-                    account_name = %account_name,
-                    deployment = %deployment_name,
-                    "Tuned-model deployment not yet visible, retrying"
-                );
-                Ok(HandlerAction::Continue {
-                    state: WaitingForTunedDeployment,
-                    suggested_delay: Some(std::time::Duration::from_secs(10)),
-                })
-            }
-            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to poll Azure tuned-model deployment '{}'",
-                    deployment_name
-                ),
-                resource_id: Some(config.id.clone()),
-            })),
-        }
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -972,13 +726,12 @@ impl AzureAiController {
 
         let mut binding = AiBinding::foundry(endpoint, account_name);
 
-        // Attach the tuned model only once its deployment exists, so a pure
-        // inference gateway keeps the unchanged untuned wire shape. We deploy the
-        // tuned model under a deployment named `served_id`, and Foundry's OpenAI
-        // chat path takes that same deployment name as the request-body `model`.
-        // So served_id and upstream_id are the one stored deployment name.
-        if let Some(deployment_name) = &self.tuned_deployment_name {
-            binding = binding.with_tuned_model(deployment_name.clone(), deployment_name.clone());
+        // Carry the fine-tuning capability when the resource declared one, so the
+        // gateway can submit/rediscover a runtime tuning job. A pure-inference
+        // gateway returns the untuned binding unchanged. The controller never
+        // attaches a `tuned_model` — the gateway rediscovers it by convention.
+        if let Some(capability) = self.finetune.as_ref() {
+            binding = binding.with_finetune(capability.clone());
         }
 
         Ok(Some(serde_json::to_value(binding).into_alien_error().context(
@@ -996,95 +749,44 @@ impl AzureAiController {
         self.endpoint = None;
         self.resource_group = None;
         self.location = None;
-        self.tuning_job_id = None;
-        self.tuned_deployment_name = None;
+        self.finetune = None;
     }
 
-    /// Returns the provisioned account endpoint, or a config error if unset.
-    fn require_endpoint(&self, resource_id: &str) -> Result<&str> {
-        self.endpoint.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Endpoint not set in state".to_string(),
-                resource_id: Some(resource_id.to_string()),
-            })
-        })
-    }
-
-    /// Returns the AIServices account name, or a config error if unset.
-    fn require_account_name(&self, resource_id: &str) -> Result<&str> {
-        self.account_name.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Account name not set in state".to_string(),
-                resource_id: Some(resource_id.to_string()),
-            })
-        })
-    }
-
-    /// Returns the resource group name, or a config error if unset.
-    fn require_resource_group(&self, resource_id: &str) -> Result<&str> {
-        self.resource_group.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Resource group not set in state".to_string(),
-                resource_id: Some(resource_id.to_string()),
-            })
-        })
-    }
-
-    /// Deploys the tuned model under `deployment_name`, reusing the same
-    /// control-plane `create_deployment` path as the base catalog so the OpenAI
-    /// chat endpoint accepts the deployment name as a `model`.
-    async fn deploy_tuned_model(
+    /// Builds the fine-tuning capability the binding carries when the resource
+    /// declares a `finetune` spec, or `None` for a pure-inference gateway.
+    ///
+    /// Resolves the training data's real Blob container from the storage
+    /// dependency's controller state (rather than re-deriving the prefixed name),
+    /// keeping it in lockstep with the storage controller's naming. Foundry
+    /// submits the runtime tuning job under the gateway's ambient identity, so no
+    /// role is passed (`role_arn` is empty).
+    fn resolve_finetune_capability(
         &self,
         ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
-        deployment_name: &str,
-        fine_tuned_model: &str,
-    ) -> Result<()> {
-        let azure_config = ctx.get_azure_config()?;
-        let account_name = self.require_account_name(resource_id)?.to_string();
-        let resource_group_name = self.require_resource_group(resource_id)?.to_string();
-
-        info!(
-            account_name = %account_name,
-            deployment = %deployment_name,
-            fine_tuned_model = %fine_tuned_model,
-            "Deploying tuned model"
-        );
-
-        let cognitive_client = ctx
-            .service_provider
-            .get_azure_cognitive_services_client(azure_config)?;
-
-        // The tuned model's format is OpenAI and its "version" the fine-tuned
-        // model id Foundry returned. Capacity mirrors the base deployments.
-        let parameters = CognitiveServicesDeploymentCreateParameters {
-            sku: CognitiveServicesDeploymentSku {
-                name: "GlobalStandard".to_string(),
-                capacity: DEFAULT_DEPLOYMENT_CAPACITY,
-            },
-            properties: CognitiveServicesDeploymentCreateProperties {
-                model: CognitiveServicesDeploymentModel {
-                    format: "OpenAI".to_string(),
-                    name: fine_tuned_model.to_string(),
-                    version: "1".to_string(),
-                },
-            },
+        config: &Ai,
+    ) -> Result<Option<FinetuneCapability>> {
+        let Some(spec) = config.finetune.as_ref() else {
+            return Ok(None);
         };
 
-        cognitive_client
-            .create_deployment(
-                &resource_group_name,
-                &account_name,
-                deployment_name,
-                &parameters,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to deploy tuned model as '{}'", deployment_name),
-                resource_id: Some(resource_id.to_string()),
-            })?;
+        let training_ref = ResourceRef::new(Storage::RESOURCE_TYPE, spec.training_data.clone());
+        let storage_state = ctx.require_dependency::<AzureStorageController>(&training_ref)?;
+        let training_bucket = storage_state.container_name.ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: config.id.clone(),
+                dependency_id: spec.training_data.clone(),
+            })
+        })?;
 
-        Ok(())
+        Ok(Some(FinetuneCapability {
+            base_model: spec.base_model.clone(),
+            training_bucket,
+            training_key: spec.training_key.clone(),
+            served_model_id: spec.served_model_id_or_default(&config.id),
+            job_name: format!("{}-{}", ctx.resource_prefix, config.id),
+            // Foundry submits under the ambient identity; no passed role.
+            role_arn: String::new(),
+        }))
     }
 
     /// Creates a controller in the ready state for testing purposes.
@@ -1096,8 +798,7 @@ impl AzureAiController {
             endpoint: Some(endpoint.to_string()),
             resource_group: Some("mock-rg".to_string()),
             location: Some("eastus".to_string()),
-            tuning_job_id: None,
-            tuned_deployment_name: None,
+            finetune: None,
             _internal_stay_count: None,
         }
     }
@@ -1112,59 +813,10 @@ impl AzureAiController {
             endpoint: Some(endpoint.to_string()),
             resource_group: Some("mock-rg".to_string()),
             location: Some("eastus".to_string()),
-            tuning_job_id: None,
-            tuned_deployment_name: None,
+            finetune: None,
             _internal_stay_count: None,
         }
     }
-
-    /// Creates a controller poised to submit a fine-tuning job (account and base
-    /// deployments already provisioned), for testing the tuning states.
-    #[cfg(feature = "test-utils")]
-    pub fn mock_submitting_tuning(account_name: &str, endpoint: &str) -> Self {
-        Self {
-            state: AzureAiState::SubmittingTuningJob,
-            account_name: Some(account_name.to_string()),
-            endpoint: Some(endpoint.to_string()),
-            resource_group: Some("mock-rg".to_string()),
-            location: Some("eastus".to_string()),
-            tuning_job_id: None,
-            tuned_deployment_name: None,
-            _internal_stay_count: None,
-        }
-    }
-}
-
-/// Extracts the finetune spec from an `Ai` config, erroring if absent. Called
-/// only from tuning states, which are unreachable without a spec.
-fn require_finetune_spec(config: &Ai) -> Result<&FinetuneSpec> {
-    config.finetune.as_ref().ok_or_else(|| {
-        AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: "Reached a fine-tuning state without a finetune spec".to_string(),
-            resource_id: Some(config.id.clone()),
-        })
-    })
-}
-
-/// Builds the Blob URL Foundry imports the training dataset from.
-///
-/// Derived deterministically to match the Azure Storage controller's container
-/// naming (`{prefix}-{name}` lowercased with `_`->`-`) under the shared default
-/// storage account, so we don't need a public storage state type. Kept as a
-/// pure function so it is unit-testable.
-fn training_blob_url(
-    storage_account: &str,
-    resource_prefix: &str,
-    training_data: &str,
-    training_key: &str,
-) -> String {
-    let container = format!("{}-{}", resource_prefix, training_data)
-        .to_lowercase()
-        .replace('_', "-");
-    format!(
-        "https://{}.blob.core.windows.net/{}/{}",
-        storage_account, container, training_key
-    )
 }
 
 #[cfg(all(test, feature = "test-utils"))]
@@ -1177,7 +829,6 @@ mod tests {
         CognitiveServicesDeployment, CognitiveServicesDeploymentProperties,
         MockCognitiveServicesAccountsApi,
     };
-    use alien_azure_clients::azure::openai_finetuning::{FineTuningJob, MockFoundryFineTuningApi};
     use alien_azure_clients::long_running_operation::OperationResult;
     use alien_client_core::ErrorData as CloudClientErrorData;
     use crate::storage::AzureStorageController;
@@ -1215,17 +866,7 @@ mod tests {
         Storage::new(TRAINING_STORAGE_ID.to_string()).build()
     }
 
-    /// A fine-tuning job in the given status, carrying `fine_tuned_model` only
-    /// when succeeded.
-    fn job(status: &str, fine_tuned_model: Option<&str>) -> FineTuningJob {
-        FineTuningJob {
-            id: "ftjob-abc".to_string(),
-            status: status.to_string(),
-            fine_tuned_model: fine_tuned_model.map(|s| s.to_string()),
-        }
-    }
-
-    /// A cognitive-services mock that succeeds base + tuned deployments (create +
+    /// A cognitive-services mock that succeeds all base deployments (create +
     /// get both report Succeeded).
     fn mock_cognitive_all_succeed() -> MockCognitiveServicesAccountsApi {
         let mut mock = MockCognitiveServicesAccountsApi::new();
@@ -1475,55 +1116,18 @@ mod tests {
 
     // ─────────────── FINE-TUNING TESTS ──────────────────────────
 
-    #[test]
-    fn training_blob_url_matches_storage_container_naming() {
-        // Must match the Azure Storage controller's container naming so Foundry
-        // imports from the container the storage controller actually created.
-        let url = training_blob_url("myacct", "test", "training_set", "training.jsonl");
-        assert_eq!(
-            url,
-            "https://myacct.blob.core.windows.net/test-training-set/training.jsonl",
-            "underscores must become hyphens and the prefix must be applied, lowercased"
-        );
-    }
-
     #[tokio::test]
-    async fn test_finetune_submit_poll_succeeds_and_binds_tuned_model() {
-        // Full flow from the base deployments (mock_deploying) through submit ->
-        // pending -> succeeded -> deploy tuned -> Ready, then assert the tuned
-        // binding. Drives the real WaitingForDeployments -> SubmittingTuningJob
-        // branch (config.finetune is Some).
-        // One shared finetuning mock (cloned per getter call) so its poll
-        // sequence persists across steps: first `running`, then `succeeded`.
-        let mut finetuning_mock = MockFoundryFineTuningApi::new();
-        finetuning_mock
-            .expect_create_fine_tuning_job()
-            .returning(|_, _, _| Ok(job("pending", None)));
-        let polls = std::sync::Mutex::new(
-            vec![
-                job("running", None),
-                job("succeeded", Some("gpt-4o-mini.ft-abc")),
-            ]
-            .into_iter(),
-        );
-        finetuning_mock
-            .expect_get_fine_tuning_job()
-            .returning(move |_, _| {
-                Ok(polls
-                    .lock()
-                    .unwrap()
-                    .next()
-                    .unwrap_or_else(|| job("succeeded", Some("gpt-4o-mini.ft-abc"))))
-            });
-        let finetuning_mock = Arc::new(finetuning_mock);
-
+    async fn test_finetune_reaches_ready_immediately_with_capability() {
+        // Fine-tuning is triggered at runtime through the gateway, so a finetune
+        // resource reaches Ready as soon as the base deployments succeed — no
+        // tuning job or tuned deployment is created at deploy time. The Foundry
+        // finetuning client is never wired, so a call to it would panic on the
+        // unset expectation, catching any regression that re-introduces
+        // deploy-time tuning. The binding carries the FinetuneCapability instead.
         let mut mock_provider = MockPlatformServiceProvider::new();
         mock_provider
             .expect_get_azure_cognitive_services_client()
             .returning(|_| Ok(Arc::new(mock_cognitive_all_succeed())));
-        mock_provider
-            .expect_get_azure_foundry_finetuning_client()
-            .returning(move |_| Ok(finetuning_mock.clone()));
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(tuned_ai())
@@ -1543,7 +1147,7 @@ mod tests {
             .expect("executor builds");
 
         // Ready is a heartbeat loop (not terminal), so step until Running.
-        for _ in 0..12 {
+        for _ in 0..8 {
             if executor.status() == ResourceStatus::Running {
                 break;
             }
@@ -1552,85 +1156,42 @@ mod tests {
         assert_eq!(
             executor.status(),
             ResourceStatus::Running,
-            "finetune resource must reach Ready after the job completes and the tuned model deploys"
+            "a finetune resource is Ready immediately; the gateway triggers tuning at runtime"
         );
 
         let binding = current_binding(&executor);
-        let tuned = binding
-            .tuned_model()
-            .expect("completed finetune must attach a tuned model");
-        assert_eq!(
-            tuned.served_id, "my-ai-tuned",
-            "served id must default to <ai-id>-tuned"
-        );
-        assert_eq!(
-            tuned.upstream_id, "my-ai-tuned",
-            "upstream id is the tuned deployment name, which equals served_id"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_finetune_job_failed_fails_fast_to_create_failed() {
-        // A terminal Failed job status must route to CreateFailed, not poll forever.
-        let mut mock_provider = MockPlatformServiceProvider::new();
-        mock_provider
-            .expect_get_azure_cognitive_services_client()
-            .returning(|_| Ok(Arc::new(mock_cognitive_all_succeed())));
-        mock_provider
-            .expect_get_azure_foundry_finetuning_client()
-            .returning(|_| {
-                let mut mock = MockFoundryFineTuningApi::new();
-                mock.expect_create_fine_tuning_job()
-                    .returning(|_, _, _| Ok(job("pending", None)));
-                mock.expect_get_fine_tuning_job()
-                    .returning(|_, _| Ok(job("failed", None)));
-                Ok(Arc::new(mock))
-            });
-
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(tuned_ai())
-            .controller(AzureAiController::mock_submitting_tuning(
-                "default-storage-account",
-                "https://my-ai.cognitiveservices.azure.com/",
-            ))
-            .platform(Platform::Azure)
-            .service_provider(Arc::new(mock_provider))
-            .with_test_dependencies()
-            .with_dependency(
-                training_storage(),
-                AzureStorageController::mock_ready(TRAINING_STORAGE_ID),
-            )
-            .build()
-            .await
-            .expect("executor builds");
-
-        // A terminal Failed job must surface as a handler error (which the
-        // executor's on_failure routing turns into CreateFailed), not an endless
-        // poll. Bounded so a poll-forever regression fails instead of hanging.
-        let mut surfaced_error = false;
-        for _ in 0..8 {
-            if executor.step().await.is_err() {
-                surfaced_error = true;
-                break;
-            }
-        }
         assert!(
-            surfaced_error,
-            "a terminal Failed job must surface as an error, not a silent retry"
+            binding.tuned_model().is_none(),
+            "the controller must not attach a tuned model; the gateway rediscovers it"
+        );
+        let cap = binding
+            .finetune()
+            .expect("finetune binding must carry the fine-tuning capability");
+        assert_eq!(cap.base_model, "gpt-4o-mini");
+        // Bucket resolved from the storage dependency's container name
+        // (test-stack-<id>, from AzureStorageController::mock_ready), not
+        // re-derived here.
+        assert_eq!(cap.training_bucket, "test-stack-training-set");
+        assert_eq!(cap.training_key, "training.jsonl");
+        assert_eq!(cap.served_model_id, "my-ai-tuned");
+        // Deterministic {prefix}-{id}; the executor test harness uses the
+        // resource prefix "test" (distinct from the storage mock's "test-stack"
+        // container-name prefix).
+        assert_eq!(cap.job_name, "test-my-ai");
+        assert!(
+            cap.role_arn.is_empty(),
+            "Foundry submits under the ambient identity; no role is passed"
         );
     }
 
     #[tokio::test]
-    async fn test_no_finetune_reaches_ready_with_untuned_binding() {
-        // Regression: an inference-only resource must never call the fine-tuning
-        // client and must emit an untuned binding.
+    async fn test_no_finetune_reaches_ready_with_plain_binding() {
+        // Regression: an inference-only resource reaches Ready with a plain
+        // binding carrying neither a tuned model nor a finetune capability.
         let mut mock_provider = MockPlatformServiceProvider::new();
         mock_provider
             .expect_get_azure_cognitive_services_client()
             .returning(|_| Ok(Arc::new(mock_cognitive_all_succeed())));
-        mock_provider
-            .expect_get_azure_foundry_finetuning_client()
-            .never();
 
         let mut executor = SingleControllerExecutor::builder()
             .resource(basic_ai())
@@ -1661,6 +1222,10 @@ mod tests {
         assert!(
             binding.tuned_model().is_none(),
             "inference-only binding must omit tuned_model"
+        );
+        assert!(
+            binding.finetune().is_none(),
+            "inference-only binding must omit the finetune capability"
         );
     }
 }

@@ -14,11 +14,13 @@ import * as alien from "@alienplatform/core"
 // (and change it if you hit "bucket name is not available").
 const dataset = new alien.Storage("finetune-training-data").build()
 
-// A model-less AI gateway that also fine-tunes. On deploy, the resource's cloud
-// controller submits the provider's tuning job (Bedrock CreateModelCustomizationJob,
-// Vertex tuningJobs, or Foundry fine_tuning.jobs) reading `dataset` in the
-// customer's account, polls it to completion, and serves the tuned model through
-// the same gateway under `servedModelId`. Base models remain callable too.
+// A model-less AI gateway with a fine-tuning CAPABILITY. `.finetune(...)` here is a
+// declaration, not a deploy-time trigger: the resource provisions and is Ready
+// immediately (no job runs at deploy). The app starts a tuning job at RUNTIME by
+// calling `ai("llm").finetune(...)` (see src/index.ts) — the gateway then submits the
+// provider's job (Bedrock CreateModelCustomizationJob, Vertex tuningJobs, or Foundry
+// fine_tuning.jobs) reading `dataset` in the customer's account, and serves the tuned
+// model under `servedModelId` once it completes. Base models remain callable too.
 //
 // `baseModel` is a provider-native id; pick the one that matches the cloud you
 // deploy to (see the README's per-provider table). The default here targets

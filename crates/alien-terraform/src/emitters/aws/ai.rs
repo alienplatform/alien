@@ -12,18 +12,26 @@
 //! `stack_permission_sets`; resource-scoped grants are emitted here.
 
 use crate::{
+    block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, required_label,
+        iam_policy_name_sanitize, iam_role_name_template, jsonencode, required_label,
+        service_assume_role_policy, tags,
     },
     expr,
 };
 use alien_core::{
     import::EmitContext, Ai, PermissionProfile, PermissionSetReference, Result, ServiceAccount,
+    Storage,
 };
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
+
+/// The `ai/finetune` permission set id. When a permission profile references it on
+/// this AI resource, the emitter provisions a dedicated Bedrock-trusted IAM role so
+/// Bedrock can assume it to read training data and write output.
+const AI_FINETUNE_PERMISSION_ID: &str = "ai/finetune";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsAiEmitter;
@@ -57,6 +65,16 @@ impl TfEmitter for AwsAiEmitter {
                     )?;
                 }
             }
+        }
+
+        // When a permission profile references `ai/finetune` on this resource, emit a
+        // dedicated IAM role Bedrock can assume for model-customization jobs. The
+        // stack's service-account roles only trust compute principals
+        // (`lambda`/`codebuild`/`ec2`), so Bedrock cannot assume them — that is the
+        // real AccessDenied this role fixes. Its name matches the controller's
+        // `role_arn` (`{prefix}-{id}-finetune`) so the runtime gateway can pass it.
+        if resource_references_finetune(ctx) {
+            emit_finetune_role(&mut fragment, ctx, ai.id());
         }
 
         Ok(fragment)
@@ -117,4 +135,107 @@ fn sanitize_label_segment(input: &str) -> String {
             }
         })
         .collect()
+}
+
+/// True when any permission profile references the `ai/finetune` set on this AI
+/// resource. Only then is the Bedrock-trusted finetune role needed.
+fn resource_references_finetune(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.permission_profiles().values().any(|profile| {
+        ai_permission_refs(profile, ctx.resource_id)
+            .iter()
+            .any(|reference| reference.id() == AI_FINETUNE_PERMISSION_ID)
+    })
+}
+
+/// Emit the dedicated Bedrock-trusted finetune IAM role plus its inline S3 policy.
+///
+/// The role is named `{prefix}-{id}-finetune` (matching the controller's
+/// `role_arn`), trusts `bedrock.amazonaws.com`, and can read training data
+/// (`s3:GetObject`/`s3:ListBucket`) and write output (`s3:PutObject`) on every
+/// storage bucket in the stack.
+fn emit_finetune_role(fragment: &mut TfFragment, ctx: &EmitContext<'_>, ai_id: &str) {
+    let role_label = format!("{}_finetune", sanitize_label_segment(ai_id));
+
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_role",
+        &role_label,
+        [
+            attr(
+                "name",
+                iam_role_name_template(&format!("{ai_id}-finetune")),
+            ),
+            attr(
+                "assume_role_policy",
+                service_assume_role_policy(&["bedrock.amazonaws.com"]),
+            ),
+            attr("tags", tags(ctx, "ai")),
+        ],
+    ));
+
+    let statements = finetune_s3_statements(ctx);
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_role_policy",
+        &format!("{role_label}_s3"),
+        [
+            attr(
+                "name",
+                Expression::String(format!("{ai_id}-finetune-s3")),
+            ),
+            attr(
+                "role",
+                expr::traversal(["aws_iam_role", role_label.as_str(), "id"]),
+            ),
+            attr(
+                "policy",
+                jsonencode(expr::object([
+                    ("Version", Expression::String("2012-10-17".to_string())),
+                    ("Statement", Expression::Array(statements)),
+                ])),
+            ),
+        ],
+    ));
+}
+
+/// S3 statements scoping the finetune role to the stack's storage buckets:
+/// list/read on the bucket + objects, put on objects (training in, output out).
+fn finetune_s3_statements(ctx: &EmitContext<'_>) -> Vec<Expression> {
+    let mut bucket_arns = Vec::new();
+    let mut object_arns = Vec::new();
+    for (id, entry) in ctx.stack.resources() {
+        if entry.config.downcast_ref::<Storage>().is_none() {
+            continue;
+        }
+        let Some(label) = ctx.name_for(id) else {
+            continue;
+        };
+        bucket_arns.push(expr::traversal(["aws_s3_bucket", label, "arn"]));
+        object_arns.push(expr::template(format!("${{aws_s3_bucket.{label}.arn}}/*")));
+    }
+
+    vec![
+        // Read the training dataset: list the bucket and get objects.
+        expr::object([
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::Array(vec![
+                    Expression::String("s3:GetObject".to_string()),
+                    Expression::String("s3:ListBucket".to_string()),
+                ]),
+            ),
+            (
+                "Resource",
+                Expression::Array(bucket_arns.iter().cloned().chain(object_arns.iter().cloned()).collect()),
+            ),
+        ]),
+        // Write the tuning-job output back to storage.
+        expr::object([
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::String("s3:PutObject".to_string()),
+            ),
+            ("Resource", Expression::Array(object_arns)),
+        ]),
+    ]
 }

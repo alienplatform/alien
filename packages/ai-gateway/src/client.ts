@@ -11,7 +11,12 @@
 import { AlienError } from "@alienplatform/core"
 
 import { isExternalAiBinding, parseAiBinding } from "./binding.js"
-import { AiTransportError, AiUpstreamError, BindingNotFoundError } from "./errors.js"
+import {
+  AiTransportError,
+  AiUpstreamError,
+  BindingNotFoundError,
+  InvalidBindingConfigError,
+} from "./errors.js"
 import type { Gateway } from "./gateway.js"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,6 +40,24 @@ export interface ResponseCreateParams {
 /** One model the gateway exposes for this binding's cloud. */
 export interface AiModel {
   id: string
+}
+
+/** The handle returned when a runtime fine-tuning job is submitted through the gateway. */
+export interface FinetuneResult {
+  /** Gateway-assigned id used to poll the job's status. */
+  jobId: string
+  /** The served model id inference should target once the job succeeds. */
+  servedModel: string
+}
+
+/** The status of a runtime fine-tuning job, as reported by the gateway. */
+export interface FinetuneJobStatus {
+  /** Lifecycle state of the job. */
+  status: "running" | "succeeded" | "failed"
+  /** The tuned model id, present once the job has succeeded. */
+  model?: string
+  /** A human-readable detail (e.g. the failure reason), when the gateway provides one. */
+  message?: string
 }
 
 // Upstream base URL (no `/v1`) for a BYO-key provider. `ALIEN_AI_LOCAL_BASE_URL` overrides it so
@@ -270,6 +293,57 @@ export class Ai {
     return body.data
   }
 
+  /**
+   * Submit a runtime fine-tuning job for this binding's model. Only the ambient (gateway)
+   * path supports fine-tuning — a BYO-key External binding has no gateway finetune endpoint,
+   * so this rejects rather than POSTing to the raw provider.
+   */
+  async finetune(opts?: { trainingKey?: string }): Promise<FinetuneResult> {
+    const { baseUrl, apiKey } = await this.connection()
+    if (apiKey) throw finetuneUnsupportedError()
+
+    const url = `${baseUrl}/v1/finetune`
+    // Omit trainingKey entirely when not supplied; the capability already carries a default key.
+    const body = opts?.trainingKey === undefined ? {} : { trainingKey: opts.trainingKey }
+    const response = await this._fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) {
+      throw createUpstreamError(url, response.status, await extractErrorMessage(response))
+    }
+    return this._parseJson<FinetuneResult>(url, response)
+  }
+
+  /** Poll a runtime fine-tuning job by its id. Ambient (gateway) path only. */
+  async finetuneStatus(jobId: string): Promise<FinetuneJobStatus> {
+    const { baseUrl, apiKey } = await this.connection()
+    if (apiKey) throw finetuneUnsupportedError()
+
+    const url = `${baseUrl}/v1/finetune/${encodeURIComponent(jobId)}`
+    const response = await this._fetch(url, { method: "GET" })
+    if (!response.ok) {
+      throw createUpstreamError(url, response.status, await extractErrorMessage(response))
+    }
+    return this._parseJson<FinetuneJobStatus>(url, response)
+  }
+
+  // Parse a JSON response body, wrapping a parse failure in an AiTransportError like the
+  // other JSON-returning methods (getAvailableModels, _postSurface) do.
+  private async _parseJson<T>(url: string, response: Response): Promise<T> {
+    try {
+      return (await response.json()) as T
+    } catch (jsonError) {
+      throw (await AlienError.from(jsonError)).withContext(
+        AiTransportError.create({
+          url,
+          reason: `Response body is not valid JSON: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`,
+        }),
+      )
+    }
+  }
+
   private _chatCompletionsCreate(params: ChatCompletionCreateParams): Promise<unknown> {
     return this._postSurface("/v1/chat/completions", params)
   }
@@ -384,6 +458,17 @@ export function createAiClient(gateway: Gateway): AiClient {
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Fine-tuning is a capability of the ambient gateway; a BYO-key (External) provider is reached
+// directly and has no gateway finetune endpoint, so the operation is unsupported there.
+function finetuneUnsupportedError() {
+  return new AlienError(
+    InvalidBindingConfigError.create({
+      message: "Fine-tuning is not supported for BYO-key (External) AI providers",
+      suggestion: "Use an ambient-cloud AI binding with a fine-tune capability configured",
+    }),
+  )
+}
 
 async function extractErrorMessage(response: Response): Promise<string> {
   try {

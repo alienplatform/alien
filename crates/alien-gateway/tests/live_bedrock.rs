@@ -44,6 +44,7 @@ async fn live_bedrock_openai_chat() {
         cred,
         upstream_base_override: None,
         tuned: None,
+        finetune: None,
     };
 
     let base = serve(build_router(vec![route])).await;
@@ -100,6 +101,7 @@ async fn live_bedrock_claude_streaming() {
         cred,
         upstream_base_override: None,
         tuned: None,
+        finetune: None,
     };
 
     let base = serve(build_router(vec![route])).await;

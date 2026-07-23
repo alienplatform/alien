@@ -49,6 +49,9 @@ pub struct GatewayRoute {
     /// before the catalog so a completed fine-tuning job's artifact is reachable
     /// under its public `served_id`. `None` for a pure inference gateway.
     pub tuned: Option<crate::TunedRoute>,
+    /// The fine-tuning capability the runtime control-plane routes use to submit
+    /// and rediscover jobs. `None` if the binding declared no `.finetune(...)`.
+    pub finetune: Option<alien_core::bindings::FinetuneCapability>,
 }
 
 struct AppState {
@@ -70,7 +73,94 @@ pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
         .route("/{binding}/v1/messages", post(proxy))
         .route("/{binding}/v1/responses", post(proxy_responses))
         .route("/{binding}/v1/models", get(list_models))
+        // Runtime fine-tuning control plane (see `crate::finetune`).
+        .route("/{binding}/v1/finetune", post(submit_finetune))
+        .route("/{binding}/v1/finetune/{job}", get(finetune_status))
         .with_state(state)
+}
+
+/// `POST /<binding>/v1/finetune` — submit a tuning job for the binding's declared
+/// capability. Body: optional `{ "trainingKey": "..." }` to override the training
+/// file. Returns `{ "jobId", "servedModel" }`.
+async fn submit_finetune(
+    State(state): State<Arc<AppState>>,
+    Path(binding): Path<String>,
+    body: Bytes,
+) -> Result<Response> {
+    let route = state.routes.get(&binding).ok_or_else(|| {
+        AlienError::new(ErrorData::UnknownBinding { binding: binding.clone() })
+    })?;
+    let capability = route
+        .finetune
+        .as_ref()
+        .ok_or_else(|| crate::finetune::no_capability(&binding))?;
+    let provider = crate::finetune::provider_for(&crate::finetune::ProviderCtx {
+        cloud: route.cloud,
+        region: route.region.as_deref(),
+        project: route.project.as_deref(),
+        azure_endpoint: route.azure_endpoint.as_deref(),
+        cred: &route.cred,
+        client: &state.client,
+        base_override: route.upstream_base_override.as_deref(),
+    })
+    .ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidRequest {
+            message: format!("the gateway does not fine-tune {:?} bindings yet", route.cloud),
+        })
+    })?;
+
+    // An empty body is fine (use the declared training key); otherwise parse the override.
+    let training_key = if body.is_empty() {
+        None
+    } else {
+        let parsed: SubmitFinetuneBody = serde_json::from_slice(&body).map_err(|e| {
+            AlienError::new(ErrorData::InvalidRequest {
+                message: format!("invalid finetune body: {e}"),
+            })
+        })?;
+        parsed.training_key
+    };
+
+    let handle = provider
+        .submit(&crate::finetune::SubmitRequest { capability, training_key })
+        .await?;
+    Ok(Json(handle).into_response())
+}
+
+/// `GET /<binding>/v1/finetune/<job>` — poll a submitted job. Returns
+/// `{ "status", "model"?, "message"? }`.
+async fn finetune_status(
+    State(state): State<Arc<AppState>>,
+    Path((binding, job)): Path<(String, String)>,
+) -> Result<Response> {
+    let route = state.routes.get(&binding).ok_or_else(|| {
+        AlienError::new(ErrorData::UnknownBinding { binding: binding.clone() })
+    })?;
+    let provider = crate::finetune::provider_for(&crate::finetune::ProviderCtx {
+        cloud: route.cloud,
+        region: route.region.as_deref(),
+        project: route.project.as_deref(),
+        azure_endpoint: route.azure_endpoint.as_deref(),
+        cred: &route.cred,
+        client: &state.client,
+        base_override: route.upstream_base_override.as_deref(),
+    })
+    .ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidRequest {
+            message: format!("the gateway does not fine-tune {:?} bindings yet", route.cloud),
+        })
+    })?;
+
+    let state_out = provider.status(&job).await?;
+    Ok(Json(state_out).into_response())
+}
+
+/// Optional body for `POST /finetune`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitFinetuneBody {
+    #[serde(default)]
+    training_key: Option<String>,
 }
 
 /// Parse a proxied request body as JSON and pull out its required `model` field.
@@ -174,9 +264,34 @@ async fn proxy(
     // `upstream_id` is a custom-model id, on Vertex a tuned-endpoint model id, on
     // Foundry a deployment name — in every case it becomes the request body's
     // `model` against the cloud's OpenAI endpoint.
+    //
+    // Two sources, in order:
+    //   1. A binding that already carries a resolved `tuned` model (deploy-time
+    //      path / test injection) routes straight to it.
+    //   2. Otherwise, if the request's model matches the fine-tuning capability's
+    //      `served_model_id`, rediscover the completed tuned model by convention
+    //      (stateless — no stored ARN). If it isn't ready yet, fall through to the
+    //      catalog, which yields `ModelNotAvailable` for the tuned id.
     if let Some(tuned) = &route.tuned {
         if model == tuned.served_id {
             return proxy_openai(&state, route, tuned.upstream_id.clone(), payload).await;
+        }
+    }
+    if let Some(cap) = &route.finetune {
+        if model == cap.served_model_id {
+            if let Some(provider) = crate::finetune::provider_for(&crate::finetune::ProviderCtx {
+                cloud: route.cloud,
+                region: route.region.as_deref(),
+                project: route.project.as_deref(),
+                azure_endpoint: route.azure_endpoint.as_deref(),
+                cred: &route.cred,
+                client: &state.client,
+                base_override: route.upstream_base_override.as_deref(),
+            }) {
+                if let Some(upstream) = provider.resolve_served_model(cap).await? {
+                    return proxy_openai(&state, route, upstream, payload).await;
+                }
+            }
         }
     }
 
@@ -1001,6 +1116,7 @@ mod tests {
             cred: test_aws_cred(),
             upstream_base_override: Some(upstream.to_string()),
             tuned: None,
+            finetune: None,
         }
     }
 
@@ -1014,6 +1130,7 @@ mod tests {
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
             tuned: None,
+            finetune: None,
         }
     }
 
@@ -1189,6 +1306,7 @@ mod tests {
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
             tuned: None,
+            finetune: None,
         }
     }
 
@@ -1298,6 +1416,99 @@ mod tests {
         assert!(text.contains("\"pong\""), "upstream body must pass through: {text}");
         // The mock only matches when the body carries the rewritten upstream id and an
         // Authorization header, so a hit proves the model rewrite and cred injection.
+        mock.assert_async().await;
+    }
+
+    fn bedrock_finetune_capability() -> alien_core::bindings::FinetuneCapability {
+        alien_core::bindings::FinetuneCapability {
+            base_model: "amazon.nova-lite-v1:0".to_string(),
+            training_bucket: "my-bucket".to_string(),
+            training_key: "training.jsonl".to_string(),
+            served_model_id: "support-tuned".to_string(),
+            job_name: "ai-finetune-llm".to_string(),
+            role_arn: "arn:aws:iam::123456789012:role/ft".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_finetune_posts_customization_job() {
+        // POST /finetune submits CreateModelCustomizationJob with the capability's
+        // names, role, base model, and the S3 training/output URIs, signed for bedrock.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/model-customization-jobs")
+                    .body_contains("\"jobName\":\"ai-finetune-llm\"")
+                    .body_contains("\"baseModelIdentifier\":\"amazon.nova-lite-v1:0\"")
+                    .body_contains("s3://my-bucket/training.jsonl")
+                    .body_contains("arn:aws:iam::123456789012:role/ft")
+                    .header_exists("authorization");
+                then.status(201)
+                    .header("content-type", "application/json")
+                    .body(r#"{"jobArn":"arn:aws:bedrock:us-east-2:123456789012:model-customization-job/nova.x/abc"}"#);
+            })
+            .await;
+
+        let mut route = aws_route(&server.base_url());
+        route.finetune = Some(bedrock_finetune_capability());
+
+        let url = serve(build_router(vec![route])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/finetune"))
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("submit request");
+
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["servedModel"], "support-tuned");
+        assert!(body["jobId"].as_str().unwrap().contains("model-customization-job"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn submit_finetune_without_capability_is_rejected() {
+        // A binding with no finetune capability rejects the submit rather than 500ing.
+        let server = MockServer::start_async().await;
+        let route = aws_route(&server.base_url()); // finetune: None
+        let url = serve(build_router(vec![route])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/finetune"))
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("submit request");
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn finetune_status_maps_completed_to_succeeded() {
+        // GET /finetune/{job} maps Bedrock "Completed" + outputModelArn to succeeded+model.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET).path_contains("/model-customization-jobs/");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"status":"Completed","outputModelArn":"arn:aws:bedrock:us-east-2:123456789012:custom-model/nova.x/abc"}"#);
+            })
+            .await;
+
+        let mut route = aws_route(&server.base_url());
+        route.finetune = Some(bedrock_finetune_capability());
+        let url = serve(build_router(vec![route])).await;
+        let resp = reqwest::Client::new()
+            .get(format!("{url}/llm/v1/finetune/job-123"))
+            .send()
+            .await
+            .expect("status request");
+
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["status"], "succeeded");
+        assert!(body["model"].as_str().unwrap().contains("custom-model"));
         mock.assert_async().await;
     }
 

@@ -7,10 +7,9 @@ const TRAINING_KEY = "training.jsonl"
 
 const app = new Hono()
 
-// 1. Upload the JSONL training set into the customer's bucket. The tuning job
-//    (submitted by the AI resource's controller at deploy time) reads it from
-//    there — the data never leaves the customer's cloud. In a real app you'd
-//    seed this before deploy; exposed here so the flow is runnable end-to-end.
+// 1. Upload the JSONL training set into the customer's bucket. Nothing is tuned yet —
+//    the AI resource is already provisioned and Ready; fine-tuning is triggered at
+//    runtime (step 2). The data never leaves the customer's cloud.
 app.post("/dataset", async c => {
   const body = await c.req.text()
   if (!body.trim()) {
@@ -21,25 +20,34 @@ app.post("/dataset", async c => {
   return c.json({ uploaded: TRAINING_KEY, examples: lines })
 })
 
-// 2. Fine-tune status. The tuned model shows up in the gateway's model list only
-//    once its job has completed, so its presence is a simple readiness signal.
-app.get("/finetune/status", async c => {
-  const models = await ai("llm").getAvailableModels()
-  const ready = models.some(m => m.id === TUNED_MODEL)
-  return c.json({
-    tunedModel: TUNED_MODEL,
-    status: ready ? "ready" : "pending",
-    availableModels: models.map(m => m.id),
-  })
+// 2. Trigger fine-tuning at runtime. This is the whole point: the provisioned `llm`
+//    resource is always Ready, and the app itself kicks off a job by calling the
+//    gateway — `ai("llm").finetune(...)`. The gateway submits the cloud tuning job
+//    (Bedrock / Vertex / Foundry) under the workload's ambient identity and returns a
+//    job id to poll. Long-running (minutes to hours); this returns immediately.
+app.post("/finetune", async c => {
+  const { jobId, servedModel } = await ai("llm").finetune({ trainingKey: TRAINING_KEY })
+  return c.json({ jobId, servedModel, message: "tuning started; poll /finetune/status?jobId=" })
 })
 
-// 3. Inference against a base foundation model (the per-cloud catalog).
+// 3. Poll a job. The gateway queries the cloud live (stateless — no job state stored).
+app.get("/finetune/status", async c => {
+  const jobId = c.req.query("jobId")
+  if (!jobId) {
+    return c.json({ error: "pass ?jobId= from the POST /finetune response" }, 400)
+  }
+  const state = await ai("llm").finetuneStatus(jobId)
+  return c.json(state)
+})
+
+// 4. Inference against a base foundation model (the per-cloud catalog).
 app.post("/chat", async c => {
   return chat(c, await defaultBaseModel())
 })
 
-// 4. Inference against the fine-tuned model — same OpenAI-compatible call, just a
-//    different `model` id. The gateway routes it to the tuned artifact in-account.
+// 5. Inference against the fine-tuned model — same OpenAI-compatible call, just a
+//    different `model` id. Works once the job has succeeded: the gateway rediscovers
+//    the completed tuned model by convention and routes to it.
 app.post("/chat-tuned", async c => {
   return chat(c, TUNED_MODEL)
 })

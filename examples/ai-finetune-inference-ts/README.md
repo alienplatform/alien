@@ -10,25 +10,37 @@ Fine-tune a base model **inside the customer's cloud**, then serve it for infere
 
 ## How it works
 
+Fine-tuning is triggered **at runtime by the app**, not at deploy time. The
+`alien.AI("llm")` resource provisions and is **Ready immediately** — it's just the
+inference gateway plus a fine-tuning capability. The app starts a job by calling the
+gateway; the resource never blocks on a hours-long training job.
+
 ```
-alien.Storage("dataset")          # S3 / GCS / Blob in the customer's account
-        │  training.jsonl uploaded by the worker
-        ▼
-alien.AI("llm").finetune({...})   # on deploy, the controller submits the
-        │                         # provider's tuning job reading `dataset`,
-        │                         # polls to completion, records the artifact
-        ▼
-gateway serves "support-tuned"    # tuned model routed alongside the base catalog
+deploy:   alien.Storage("finetune-training-data")   # S3 / GCS / Blob, customer's account
+          alien.AI("llm").finetune({...})            # Ready immediately — capability only
+                                                      # (no job runs at deploy)
+
+runtime:  POST /dataset            → upload training.jsonl into the bucket
+          POST /finetune           → ai("llm").finetune()  submits the cloud job → { jobId }
+          GET  /finetune/status    → ai("llm").finetuneStatus(jobId) → running|succeeded|failed
+          POST /chat-tuned         → inference on "support-tuned" once the job succeeded
 ```
 
-At deploy time the AI resource's cloud controller submits the tuning job (Bedrock `CreateModelCustomizationJob`, Vertex `tuningJobs`, or Foundry `fine_tuning.jobs`), polls it to completion via its heartbeat loop, and records the tuned artifact. The gateway then routes the public id `support-tuned` to that artifact — so app code calls it exactly like a base model, only the `model` string differs.
+When the app calls `ai("llm").finetune(...)`, the gateway submits the provider's tuning
+job (Bedrock `CreateModelCustomizationJob`, Vertex `tuningJobs`, or Foundry
+`fine_tuning.jobs`) under the workload's ambient identity, reading the dataset from the
+customer's bucket, and returns a job id. Inference for `support-tuned` works once the job
+succeeds: the gateway **rediscovers** the completed tuned model by convention (no stored
+state) and routes to it — so app code calls it exactly like a base model, only the `model`
+string differs.
 
 ## API
 
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/dataset` | POST | Upload JSONL training data into the customer's bucket (body = JSONL) |
-| `/finetune/status` | GET | `ready` once the tuning job has completed, else `pending` |
+| `/finetune` | POST | Start a tuning job at runtime; returns `{ jobId, servedModel }` |
+| `/finetune/status` | GET | Poll a job: `?jobId=` → `{ status, model?, message? }` |
 | `/chat` | POST | Inference against a base foundation model (`{ "message": "..." }`) |
 | `/chat-tuned` | POST | Inference against the fine-tuned model — same call, different model id |
 
@@ -39,15 +51,19 @@ npm install
 alien dev
 ```
 
-Upload the sample dataset and query the tuned model:
+Upload data, start a job, poll it, then query the tuned model:
 
 ```bash
 curl -X POST --data-binary @sample-training.jsonl http://localhost:8080/dataset
-curl http://localhost:8080/finetune/status
+JOB=$(curl -s -X POST http://localhost:8080/finetune | jq -r .jobId)
+curl "http://localhost:8080/finetune/status?jobId=$JOB"
+# once succeeded:
 curl -X POST http://localhost:8080/chat-tuned -d '{"message":"How do I reset my password?"}'
 ```
 
-On the **local** platform the AI resource is a BYO-key provider (set `OPENAI_API_KEY`); fine-tuning is a managed-cloud capability, so `/finetune/status` reports `pending` locally and the tuned route falls back to the base model. Deploy to a cloud to exercise the real tuning flow.
+On the **local** platform the AI resource is a BYO-key provider (set `OPENAI_API_KEY`);
+fine-tuning is a managed-cloud capability, so `POST /finetune` is rejected locally and the
+tuned route falls back to the base model. Deploy to a cloud to exercise the real tuning flow.
 
 ## Picking `baseModel` per cloud
 

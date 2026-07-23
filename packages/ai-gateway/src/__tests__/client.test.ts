@@ -278,3 +278,92 @@ describe("Ai.responses.create", () => {
     )
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ai.finetune / Ai.finetuneStatus — runtime fine-tuning (ambient gateway only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AMBIENT = JSON.stringify({ service: "bedrock", region: "us-east-2" })
+
+describe("Ai.finetune", () => {
+  it("POSTs the training key to the gateway and returns { jobId, servedModel }", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    const fetchMock = stubFetch({ jobId: "job-123", servedModel: "llm-tuned" })
+
+    const result = await ai("llm").finetune({ trainingKey: "datasets/train.jsonl" })
+
+    expect(callUrl(fetchMock)).toBe(`${GATEWAY_URL}/llm/v1/finetune`)
+    expect(callInit(fetchMock).method).toBe("POST")
+    expect(callBody(fetchMock)).toEqual({ trainingKey: "datasets/train.jsonl" })
+    // Ambient path injects the credential in the gateway; no client-side auth header.
+    const headers = (callInit(fetchMock).headers ?? {}) as Record<string, string>
+    expect(headers.Authorization).toBeUndefined()
+    expect(result).toEqual({ jobId: "job-123", servedModel: "llm-tuned" })
+  })
+
+  it("omits trainingKey from the body when not provided", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    const fetchMock = stubFetch({ jobId: "job-1", servedModel: "llm-tuned" })
+
+    await ai("llm").finetune()
+
+    expect(callBody(fetchMock)).toEqual({})
+  })
+
+  it("rejects for a BYO-key External binding without POSTing", async () => {
+    // EXTERNAL binding is stubbed in the top-level beforeEach.
+    const fetchMock = stubFetch({ jobId: "x", servedModel: "y" })
+    await expect(ai("llm").finetune({ trainingKey: "k" })).rejects.toMatchObject({
+      code: "INVALID_BINDING_CONFIG",
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("throws an AiUpstreamError on a non-2xx gateway response", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    stubFetch({ error: { message: "boom" } }, 500)
+    await expect(ai("llm").finetune({ trainingKey: "k" })).rejects.toThrow(AlienError)
+  })
+})
+
+describe("Ai.finetuneStatus", () => {
+  it("GETs the job by id and maps a succeeded status with the tuned model", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    const fetchMock = stubFetch({ status: "succeeded", model: "llm-tuned-v1" })
+
+    const status = await ai("llm").finetuneStatus("job-123")
+
+    expect(callUrl(fetchMock)).toBe(`${GATEWAY_URL}/llm/v1/finetune/job-123`)
+    expect(callInit(fetchMock).method).toBe("GET")
+    expect(status).toEqual({ status: "succeeded", model: "llm-tuned-v1" })
+  })
+
+  it("maps a running status", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    stubFetch({ status: "running" })
+    expect(await ai("llm").finetuneStatus("job-1")).toEqual({ status: "running" })
+  })
+
+  it("URL-encodes the job id", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    const fetchMock = stubFetch({ status: "running" })
+    await ai("llm").finetuneStatus("arn:aws:bedrock/job 1")
+    expect(callUrl(fetchMock)).toBe(
+      `${GATEWAY_URL}/llm/v1/finetune/${encodeURIComponent("arn:aws:bedrock/job 1")}`,
+    )
+  })
+
+  it("rejects for a BYO-key External binding without a GET", async () => {
+    const fetchMock = stubFetch({ status: "running" })
+    await expect(ai("llm").finetuneStatus("job-1")).rejects.toMatchObject({
+      code: "INVALID_BINDING_CONFIG",
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("throws an AiUpstreamError on a non-2xx gateway response", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", AMBIENT)
+    stubFetch({ error: { message: "not found" } }, 404)
+    await expect(ai("llm").finetuneStatus("missing")).rejects.toThrow(AlienError)
+  })
+})

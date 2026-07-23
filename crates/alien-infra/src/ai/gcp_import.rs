@@ -29,10 +29,9 @@ impl ResourceImporter for GcpAiImporter {
             state: GcpAiState::Ready,
             project: Some(data.project_id),
             location: Some(data.location),
-            // Import targets an existing base gateway; no tuning job is involved.
-            tuning_job_name: None,
-            tuned_model_upstream_id: None,
-            tuned_model_served_id: None,
+            // Import targets an existing base gateway; it advertises no
+            // fine-tuning capability.
+            finetune: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

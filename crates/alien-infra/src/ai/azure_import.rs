@@ -28,9 +28,9 @@ impl ResourceImporter for AzureAiImporter {
             endpoint: Some(data.endpoint),
             resource_group: Some(data.resource_group),
             location: Some(data.location),
-            // An imported resource has no in-flight tuning job or tuned deployment.
-            tuning_job_id: None,
-            tuned_deployment_name: None,
+            // Import targets an existing base gateway; it advertises no
+            // fine-tuning capability.
+            finetune: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

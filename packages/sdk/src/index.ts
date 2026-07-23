@@ -76,6 +76,8 @@ export type {
   AiConnection,
   AiModel,
   ChatCompletionCreateParams,
+  FinetuneJobStatus,
+  FinetuneResult,
   ResponseCreateParams,
 } from "@alienplatform/ai-gateway"
 

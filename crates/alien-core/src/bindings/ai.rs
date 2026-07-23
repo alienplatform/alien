@@ -39,6 +39,38 @@ pub struct TunedModel {
     pub upstream_id: String,
 }
 
+/// The fine-tuning capability a managed binding carries when its `Ai` resource
+/// declared `.finetune(...)`. This is *not* a completed tuned model — it is the
+/// declaration the gateway needs to submit a tuning job at runtime (when the app
+/// calls `POST /<binding>/v1/finetune`) and to rediscover the tuned model by
+/// convention once the job completes. Absent for a pure inference gateway.
+///
+/// The tuning job runs at runtime, not at deploy time, so this capability travels
+/// on the binding while `tuned_model` is populated only after a job succeeds (via
+/// rediscovery, so it may be absent even when a capability is present).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FinetuneCapability {
+    /// Provider-native base-model id the job tunes.
+    pub base_model: String,
+    /// The object-storage bucket (S3 / GCS / Blob) holding the training dataset.
+    /// Resolved by the controller from the training-data storage dependency.
+    pub training_bucket: String,
+    /// Object key of the training file within `training_bucket`.
+    pub training_key: String,
+    /// The public model id the tuned model is served under.
+    pub served_model_id: String,
+    /// The deterministic provider-side name of the tuned model / job, used both to
+    /// submit and to rediscover it (e.g. the Bedrock custom-model + job name).
+    pub job_name: String,
+    /// IAM role ARN (AWS) the tuning job assumes to read/write S3. Empty on clouds
+    /// that submit under the ambient identity without a passed role.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role_arn: String,
+}
+
 /// AWS Bedrock AI binding configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -51,6 +83,10 @@ pub struct BedrockAiBinding {
     /// declared a completed fine-tuning job. Absent for a pure inference gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuned_model: Option<TunedModel>,
+    /// The fine-tuning capability the gateway uses to submit and rediscover a
+    /// runtime tuning job. Present when the resource declared `.finetune(...)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finetune: Option<FinetuneCapability>,
 }
 
 /// GCP Vertex AI binding configuration
@@ -67,6 +103,10 @@ pub struct VertexAiBinding {
     /// declared a completed fine-tuning job. Absent for a pure inference gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuned_model: Option<TunedModel>,
+    /// The fine-tuning capability the gateway uses to submit and rediscover a
+    /// runtime tuning job. Present when the resource declared `.finetune(...)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finetune: Option<FinetuneCapability>,
 }
 
 /// Azure AI Foundry binding configuration
@@ -83,6 +123,10 @@ pub struct FoundryAiBinding {
     /// declared a completed fine-tuning job. Absent for a pure inference gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tuned_model: Option<TunedModel>,
+    /// The fine-tuning capability the gateway uses to submit and rediscover a
+    /// runtime tuning job. Present when the resource declared `.finetune(...)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finetune: Option<FinetuneCapability>,
 }
 
 /// External AI provider binding configuration (BYO-key).
@@ -127,6 +171,7 @@ impl AiBinding {
         Self::Bedrock(BedrockAiBinding {
             region: region.into(),
             tuned_model: None,
+            finetune: None,
         })
     }
 
@@ -135,6 +180,7 @@ impl AiBinding {
             project: project.into(),
             location: location.into(),
             tuned_model: None,
+            finetune: None,
         })
     }
 
@@ -143,6 +189,7 @@ impl AiBinding {
             endpoint: endpoint.into(),
             account: account.into(),
             tuned_model: None,
+            finetune: None,
         })
     }
 
@@ -171,12 +218,42 @@ impl AiBinding {
         }
     }
 
+    /// Attach a fine-tuning capability to a managed binding, so the gateway can
+    /// submit and rediscover a runtime tuning job. A no-op on `External`.
+    pub fn with_finetune(self, capability: FinetuneCapability) -> Self {
+        match self {
+            Self::Bedrock(b) => Self::Bedrock(BedrockAiBinding {
+                finetune: Some(capability),
+                ..b
+            }),
+            Self::Vertex(b) => Self::Vertex(VertexAiBinding {
+                finetune: Some(capability),
+                ..b
+            }),
+            Self::Foundry(b) => Self::Foundry(FoundryAiBinding {
+                finetune: Some(capability),
+                ..b
+            }),
+            Self::External(b) => Self::External(b),
+        }
+    }
+
     /// The tuned model attached to this binding, if any.
     pub fn tuned_model(&self) -> Option<&TunedModel> {
         match self {
             Self::Bedrock(b) => b.tuned_model.as_ref(),
             Self::Vertex(b) => b.tuned_model.as_ref(),
             Self::Foundry(b) => b.tuned_model.as_ref(),
+            Self::External(_) => None,
+        }
+    }
+
+    /// The fine-tuning capability attached to this binding, if any.
+    pub fn finetune(&self) -> Option<&FinetuneCapability> {
+        match self {
+            Self::Bedrock(b) => b.finetune.as_ref(),
+            Self::Vertex(b) => b.finetune.as_ref(),
+            Self::Foundry(b) => b.finetune.as_ref(),
             Self::External(_) => None,
         }
     }

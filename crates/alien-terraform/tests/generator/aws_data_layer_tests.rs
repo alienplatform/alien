@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Vault,
+    Ai, FinetuneMethod, FinetuneSpec, Kv, LifecycleRule, PermissionProfile, Queue,
+    ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -202,4 +202,74 @@ fn aws_ai_invoke_permissions_attach_to_service_account_role() {
         "bedrock foundation-model ARN must appear"
     );
     assert_terraform_valid(&module, "aws_ai_invoke_permissions");
+}
+
+#[test]
+fn aws_ai_finetune_emits_bedrock_trusted_role_with_s3_policy() {
+    // When a permission profile references ai/finetune on the AI resource, the
+    // emitter provisions a dedicated IAM role Bedrock can assume (the real fix for
+    // AccessDenied: service-account roles only trust compute principals) with an
+    // inline S3 policy over the stack's storage buckets.
+    let stack = Stack::new("acme-ai".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("llm", ["ai/finetune"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("training".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Ai::new("llm".to_string())
+                .finetune(FinetuneSpec {
+                    base_model: "amazon.nova-lite-v1:0".to_string(),
+                    training_data: "training".to_string(),
+                    training_key: "training.jsonl".to_string(),
+                    served_model_id: None,
+                    method: FinetuneMethod::Sft,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    // The dedicated finetune role exists, named deterministically to match the
+    // controller's role_arn (`${resource_prefix}-llm-finetune`).
+    assert!(
+        rendered.contains("llm_finetune"),
+        "expected a dedicated finetune aws_iam_role:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("llm-finetune"),
+        "expected role name suffix llm-finetune matching the controller role_arn:\n{rendered}"
+    );
+    // Its trust policy allows Bedrock to assume it — the crux of the fix.
+    assert!(
+        rendered.contains("bedrock.amazonaws.com"),
+        "finetune role must trust bedrock.amazonaws.com:\n{rendered}"
+    );
+    // The inline policy grants S3 read (training data) and write (output),
+    // scoped to the stack's storage bucket ARN (not "*").
+    assert!(
+        rendered.contains("s3:GetObject") && rendered.contains("s3:ListBucket"),
+        "finetune role must read the training dataset from S3:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("s3:PutObject"),
+        "finetune role must write tuning output to S3:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("aws_s3_bucket.training.arn"),
+        "S3 grants must reference the storage bucket ARN, not \"*\":\n{rendered}"
+    );
+    assert_terraform_valid(&module, "aws_ai_finetune_role");
 }

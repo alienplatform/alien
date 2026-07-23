@@ -40,18 +40,18 @@ describe("ai-finetune-inference-ts", () => {
     expect(response.status).toBe(400)
   })
 
-  it("reports a well-formed fine-tune status", async () => {
+  it("requires a jobId to poll status", async () => {
+    // /finetune/status needs the jobId from a POST /finetune response.
     const response = await fetch(`${deployment.url}/finetune/status`)
-    expect(response.status).toBe(200)
-    const body = (await response.json()) as {
-      tunedModel: string
-      status: string
-      availableModels: string[]
-    }
-    expect(body.tunedModel).toBe("support-tuned")
-    // Locally the managed tuning job never runs, so the tuned model is not ready.
-    expect(body.status).toBe("pending")
-    expect(Array.isArray(body.availableModels)).toBe(true)
+    expect(response.status).toBe(400)
+  })
+
+  it("rejects starting a job on the local (BYO-key) platform", async () => {
+    // Fine-tuning is a managed-cloud capability; the local platform serves the AI
+    // resource as a BYO-key provider, so triggering a job is not supported here.
+    // (On a real cloud deploy this returns { jobId, servedModel }.)
+    const response = await fetch(`${deployment.url}/finetune`, { method: "POST" })
+    expect(response.status).toBeGreaterThanOrEqual(400)
   })
 
   it.skipIf(!OPENAI_KEY)("answers a base-model chat when a provider key is set", async () => {

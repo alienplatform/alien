@@ -158,11 +158,13 @@ fn bindings_from_pairs(
 /// env-var key encodes it).
 fn gateway_binding(name: &str, binding: AiBinding) -> Option<GatewayBinding> {
     // A managed binding may carry a tuned model the gateway serves alongside the
-    // static catalog. Read it before consuming the binding into its variant.
+    // static catalog, and/or a fine-tuning capability the control-plane routes use.
+    // Read both before consuming the binding into its variant.
     let tuned = binding.tuned_model().map(|t| TunedRoute {
         served_id: t.served_id.clone(),
         upstream_id: t.upstream_id.clone(),
     });
+    let finetune = binding.finetune().cloned();
     match binding {
         AiBinding::Bedrock(b) => Some(GatewayBinding {
             name: name.to_string(),
@@ -171,6 +173,7 @@ fn gateway_binding(name: &str, binding: AiBinding) -> Option<GatewayBinding> {
             project: None,
             azure_endpoint: None,
             tuned,
+            finetune,
         }),
         AiBinding::Vertex(b) => Some(GatewayBinding {
             name: name.to_string(),
@@ -179,6 +182,7 @@ fn gateway_binding(name: &str, binding: AiBinding) -> Option<GatewayBinding> {
             project: Some(b.project),
             azure_endpoint: None,
             tuned,
+            finetune,
         }),
         AiBinding::Foundry(b) => Some(GatewayBinding {
             name: name.to_string(),
@@ -187,6 +191,7 @@ fn gateway_binding(name: &str, binding: AiBinding) -> Option<GatewayBinding> {
             project: None,
             azure_endpoint: Some(b.endpoint),
             tuned,
+            finetune,
         }),
         // External is a BYO-key provider, not an ambient-managed cloud — not served here.
         AiBinding::External(_) => None,
@@ -249,6 +254,7 @@ pub async fn resolve_route(binding: GatewayBinding, managed: Option<&Managed>) -
         cred,
         upstream_base_override: None,
         tuned: binding.tuned,
+        finetune: binding.finetune,
     })
 }
 

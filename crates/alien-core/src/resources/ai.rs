@@ -36,14 +36,18 @@ impl Default for FinetuneMethod {
 /// Declares that an [`Ai`] resource should fine-tune a base model in the
 /// customer's cloud before serving it.
 ///
-/// The training data lives in a customer-owned [`Storage`](crate::Storage)
-/// bucket (S3 / GCS / Blob), referenced by `training_data`. At deploy time the
-/// cloud controller submits the provider's tuning job (Bedrock
+/// This is a *capability declaration*, not a deploy-time trigger: a resource
+/// with a `finetune` spec provisions and is Ready immediately (no job runs at
+/// deploy). The declaration flows to the gateway as a fine-tuning capability;
+/// the app then starts a job at runtime by calling `ai("<id>").finetune(...)`,
+/// which the gateway submits to the provider (Bedrock
 /// `CreateModelCustomizationJob`, Vertex tuning job, or Foundry
-/// `fine_tuning.jobs`), polls it to completion via the heartbeat loop, and
-/// records the resulting artifact so the gateway can route `served_model_id`
-/// to it. Base-model inference is unaffected — an `Ai` without a `finetune`
-/// spec behaves exactly as before.
+/// `fine_tuning.jobs`) under the workload's ambient identity, reading the
+/// training data from the customer-owned [`Storage`](crate::Storage) bucket
+/// (S3 / GCS / Blob) referenced by `training_data`. Once a job completes, the
+/// gateway serves the tuned model under `served_model_id`, rediscovering it by
+/// convention. Base-model inference is unaffected — an `Ai` without a
+/// `finetune` spec behaves exactly as before.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
@@ -51,10 +55,10 @@ impl Default for FinetuneMethod {
 pub struct FinetuneSpec {
     /// Provider-native base-model identifier to tune (e.g. an Amazon Nova model
     /// id on Bedrock, a Gemini model on Vertex, or a gpt-4o family model on
-    /// Foundry). Validated against the target cloud when the job is submitted.
+    /// Foundry). Validated against the target cloud when a runtime job is submitted.
     pub base_model: String,
 
-    /// The storage resource holding the JSONL training dataset. The controller
+    /// The storage resource holding the JSONL training dataset. The gateway
     /// reads it from the customer bucket the storage resolves to; the data
     /// never leaves the customer's cloud.
     pub training_data: String,

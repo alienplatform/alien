@@ -9,6 +9,7 @@
 mod config;
 mod creds;
 mod error;
+mod finetune;
 mod router;
 pub use config::{bindings_from_env, bindings_from_env_map};
 pub use creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
@@ -47,6 +48,9 @@ pub struct GatewayBinding {
     /// A tuned model this binding serves alongside the static catalog, produced
     /// by a completed fine-tuning job. `None` for a pure inference gateway.
     pub tuned: Option<TunedRoute>,
+    /// The fine-tuning capability the runtime control-plane routes use. `None`
+    /// unless the binding declared `.finetune(...)`.
+    pub finetune: Option<alien_core::bindings::FinetuneCapability>,
 }
 
 /// A tuned model the gateway routes to: the public id an app requests mapped to

@@ -49,6 +49,7 @@ fn foundry_route() -> GatewayRoute {
         cred: AmbientCred::Bearer(BearerTokenCred::static_token(token)),
         upstream_base_override: None,
         tuned: None,
+        finetune: None,
     }
 }
 

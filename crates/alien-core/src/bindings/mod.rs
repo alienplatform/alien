@@ -28,7 +28,8 @@ mod vault;
 mod worker;
 
 pub use ai::{
-    AiBinding, BedrockAiBinding, ExternalAiBinding, FoundryAiBinding, VertexAiBinding,
+    AiBinding, BedrockAiBinding, ExternalAiBinding, FinetuneCapability, FoundryAiBinding,
+    TunedModel, VertexAiBinding,
 };
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,

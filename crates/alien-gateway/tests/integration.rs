@@ -81,6 +81,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
             cred: aws_cred(),
             upstream_base_override: Some(aws_upstream.base_url()),
             tuned: None,
+            finetune: None,
         },
         GatewayRoute {
             name: "azllm".to_string(),
@@ -91,6 +92,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("test-azure-token")),
             upstream_base_override: Some(azure_upstream.base_url()),
             tuned: None,
+            finetune: None,
         },
     ];
 

@@ -36,6 +36,8 @@ export type {
   AiConnection,
   AiModel,
   ChatCompletionCreateParams,
+  FinetuneJobStatus,
+  FinetuneResult,
   ResponseCreateParams,
 } from "./client.js"
 export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js"
