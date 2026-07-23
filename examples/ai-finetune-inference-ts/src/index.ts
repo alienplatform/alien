@@ -16,7 +16,7 @@ app.post("/dataset", async c => {
   if (!body.trim()) {
     return c.json({ error: "POST JSONL training data as the request body" }, 400)
   }
-  await storage("dataset").put(TRAINING_KEY, new TextEncoder().encode(body))
+  await storage("finetune-training-data").put(TRAINING_KEY, new TextEncoder().encode(body))
   const lines = body.split("\n").filter(l => l.trim()).length
   return c.json({ uploaded: TRAINING_KEY, examples: lines })
 })

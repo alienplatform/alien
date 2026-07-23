@@ -7,7 +7,12 @@ import * as alien from "@alienplatform/core"
 // The training dataset lives in the customer's object storage:
 // S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure. The worker uploads
 // JSONL examples here; the tuning job reads them in-account.
-const dataset = new alien.Storage("dataset").build()
+//
+// NOTE: S3 bucket names are GLOBALLY unique across all AWS accounts. The bucket
+// is named `<deployment-prefix>-<storage-id>`, so a generic id like "dataset"
+// can collide with a bucket someone else already owns. Keep this id distinctive
+// (and change it if you hit "bucket name is not available").
+const dataset = new alien.Storage("finetune-training-data").build()
 
 // A model-less AI gateway that also fine-tunes. On deploy, the resource's cloud
 // controller submits the provider's tuning job (Bedrock CreateModelCustomizationJob,
@@ -49,7 +54,7 @@ export default new alien.Stack("ai-finetune-inference")
       execution: {
         // Read/write the dataset bucket, and both submit the tuning job and
         // invoke models (base + tuned) through the gateway.
-        dataset: ["storage/data-read", "storage/data-write"],
+        "finetune-training-data": ["storage/data-read", "storage/data-write"],
         "*": ["ai/invoke", "ai/finetune"],
       },
     },
