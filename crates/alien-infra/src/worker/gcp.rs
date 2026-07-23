@@ -3638,6 +3638,16 @@ impl GcpWorkerController {
                 {
                     info!(name=%neg_name, "Serverless NEG was already deleted");
                 }
+                Err(e) if is_gcp_resource_in_use(&e) => {
+                    info!(
+                        name=%neg_name,
+                        "Serverless NEG is still referenced by another GCP resource; retrying deletion"
+                    );
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(30),
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    });
+                }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete serverless NEG '{}'", neg_name),
@@ -6602,6 +6612,68 @@ mod tests {
 
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert_eq!(proxy_delete_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_retries_serverless_neg_while_backend_reference_drains() {
+        let worker = function_public_ingress();
+        let function_name = format!("test-{}", worker.id);
+        let neg_delete_attempts = Arc::new(AtomicUsize::new(0));
+        let neg_delete_attempts_for_mock = Arc::clone(&neg_delete_attempts);
+        let mock_cloudrun = setup_mock_client_for_creation_and_deletion(&function_name, true);
+
+        let mut mock_compute = MockComputeApi::new();
+        mock_compute
+            .expect_delete_global_forwarding_rule()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_target_https_proxy()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_url_map()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_backend_service()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_region_network_endpoint_group()
+            .returning(move |_, _| {
+                if neg_delete_attempts_for_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(resource_in_use_error())
+                } else {
+                    Ok(Operation::default())
+                }
+            });
+        mock_compute
+            .expect_delete_global_address()
+            .returning(|_| Ok(Operation::default()));
+
+        let mock_provider =
+            setup_mock_service_provider(mock_cloudrun, Some(Arc::new(mock_compute)));
+        let mut controller = GcpWorkerController::mock_ready(&function_name);
+        controller.forwarding_rule_name = Some("test-fwd".to_string());
+        controller.target_https_proxy_name = Some("test-proxy".to_string());
+        controller.url_map_name = Some("test-url-map".to_string());
+        controller.backend_service_name = Some("test-backend".to_string());
+        controller.serverless_neg_name = Some("test-neg".to_string());
+        controller.global_address_name = Some("test-address".to_string());
+        controller.global_address_ip = Some("203.0.113.9".to_string());
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(neg_delete_attempts.load(Ordering::SeqCst), 2);
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
