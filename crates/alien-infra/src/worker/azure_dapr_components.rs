@@ -9,6 +9,8 @@ use tracing::{info, warn};
 
 use crate::error::{ErrorData, Result};
 
+use super::azure_names::get_azure_dapr_component_name;
+
 pub(super) enum DaprComponentDeleteOperation {
     NotFound,
     Foreign,
@@ -51,6 +53,10 @@ pub(super) fn service_bus_dapr_component(
     queue_name: String,
     azure_client_id: &str,
 ) -> DaprComponent {
+    // Keep the provider constraint at the construction boundary as well as in
+    // the higher-level naming helpers. This prevents a future raw-name call
+    // site from sending Azure a component name longer than 60 characters.
+    let component_name = get_azure_dapr_component_name(&component_name);
     let metadata = vec![
         DaprMetadata {
             name: Some("namespaceName".into()),
@@ -358,4 +364,59 @@ fn normalized_secrets(
         .collect::<Vec<_>>();
     normalized.sort_unstable();
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::service_bus_dapr_component;
+    use crate::worker::azure_names::get_azure_internal_commands_dapr_component_name;
+
+    const LIVE_E2E_COMMANDS_COMPONENT_NAME: &str =
+        "servicebus-e2e-03-azure-terraform-pr-1608f028be-test-alien-ts-function-commands";
+
+    #[test]
+    fn service_bus_component_normalizes_the_live_e2e_name_at_the_request_boundary() {
+        let first = service_bus_dapr_component(
+            LIVE_E2E_COMMANDS_COMPONENT_NAME.to_string(),
+            "worker-app",
+            "namespace",
+            "commands".to_string(),
+            "client-id",
+        );
+        let second = service_bus_dapr_component(
+            LIVE_E2E_COMMANDS_COMPONENT_NAME.to_string(),
+            "worker-app",
+            "namespace",
+            "commands".to_string(),
+            "client-id",
+        );
+
+        let first_name = first.name.expect("Dapr component should have a name");
+        assert_eq!(
+            first_name,
+            "servicebus-e2e-03-azure-ter-b11ae730a7375f62a2bcaddaa1abe84c"
+        );
+        assert_eq!(second.name.as_deref(), Some(first_name.as_str()));
+        assert_eq!(first_name.len(), 60);
+        assert!(first_name
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn service_bus_component_does_not_rehash_a_structured_safe_name() {
+        let structured_name = get_azure_internal_commands_dapr_component_name(
+            "e2e-03-azure-terraform-pr-1608f028be-test-alien-ts-function",
+        );
+        let component = service_bus_dapr_component(
+            structured_name.clone(),
+            "worker-app",
+            "namespace",
+            "commands".to_string(),
+            "client-id",
+        );
+
+        assert_eq!(component.name.as_deref(), Some(structured_name.as_str()));
+    }
 }
