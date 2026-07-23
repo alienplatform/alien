@@ -57,13 +57,14 @@ pub async fn test_queue(
         })?;
 
     // Receive up to 1 message
-    let messages = queue
-        .receive(1)
-        .await
-        .into_alien_error()
-        .context(ErrorData::QueueOperationFailed {
-            operation: "Failed to receive message".to_string(),
-        })?;
+    let messages =
+        queue
+            .receive(1)
+            .await
+            .into_alien_error()
+            .context(ErrorData::QueueOperationFailed {
+                operation: "Failed to receive message".to_string(),
+            })?;
     if let Some(msg) = messages.into_iter().next() {
         queue
             .ack(&msg.receipt_handle)
