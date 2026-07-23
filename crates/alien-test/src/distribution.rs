@@ -86,7 +86,10 @@ impl DistributionArtifactCleanup {
         }
     }
 
-    fn command_env(&self) -> &[(String, String)] {
+    /// Target-scoped credentials/region the artifact was applied with. Exposed
+    /// so distribution tests can make read-only cloud assertions against the
+    /// same account the setup artifact provisioned into.
+    pub fn command_env(&self) -> &[(String, String)] {
         match self {
             DistributionArtifactCleanup::CloudFormation { env, .. }
             | DistributionArtifactCleanup::Terraform { env, .. }
@@ -3207,6 +3210,26 @@ fn terraform_output_u32(outputs: &Value, key: &str) -> anyhow::Result<u32> {
     anyhow::bail!("terraform output {key} is not a number or string")
 }
 
+/// The gate answers the enabled-demo e2e applies: the four `*On` inputs true,
+/// the four `*Off` inputs false. Tuple keys are the Terraform variable names the
+/// generator emits for each input id (`input_` + snake_case), so a change to
+/// `stack_input_variable_name` must be mirrored here. Empty for every other app.
+fn enabled_demo_gate_answers(app: TestApp) -> &'static [(&'static str, bool)] {
+    match app {
+        TestApp::EnabledDemo => &[
+            ("input_kv_on", true),
+            ("input_kv_off", false),
+            ("input_storage_on", true),
+            ("input_storage_off", false),
+            ("input_queue_on", true),
+            ("input_queue_off", false),
+            ("input_vault_on", true),
+            ("input_vault_off", false),
+        ],
+        _ => &[],
+    }
+}
+
 fn terraform_tfvars(
     prepared: &DistributionPrepared,
     target: alien_terraform::TerraformTarget,
@@ -3229,6 +3252,13 @@ fn terraform_tfvars(
         "manager_url".to_string(),
         Value::String(prepared.manager.url.clone()),
     );
+
+    // Answer deployer gate inputs at apply time. Terraform auto-loads
+    // terraform.tfvars.json, so a `input_<snake(id)>` key here is how the
+    // harness threads a `.enabled(input)` answer into the applied artifact.
+    for (tfvar, answer) in enabled_demo_gate_answers(prepared.app) {
+        vars.insert(tfvar.to_string(), Value::Bool(*answer));
+    }
 
     match target.cloud_platform() {
         Platform::Aws => {
