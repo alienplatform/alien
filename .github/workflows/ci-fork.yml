@@ -84,6 +84,9 @@ jobs:
       - name: Lint
         run: pnpm format-and-lint
 
+      - name: Enforce max source file length
+        run: scripts/check-max-lines.sh
+
       - name: TypeScript typecheck
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
