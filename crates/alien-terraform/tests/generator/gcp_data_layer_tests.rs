@@ -58,6 +58,42 @@ fn gcp_storage_public_read_allows_object_viewer() {
 }
 
 #[test]
+fn gcp_storage_remote_access_grants_exact_role_to_management_identity() {
+    let stack = Stack::new("acme-remote-storage".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("uploads", ["storage/remote-data-write"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("uploads".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_storage_remote_access", &module);
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered
+        .contains("google_project_iam_custom_role\" \"gcp_role_storage_remote_data_write\""));
+    assert!(rendered.contains(
+        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_management_storage_0\""
+    ));
+    assert!(rendered.contains("google_service_account.management.email"));
+    assert!(rendered.contains("\"storage.objects.get\""));
+    assert!(rendered.contains("\"storage.objects.list\""));
+    assert!(rendered.contains("\"storage.objects.create\""));
+    assert!(rendered.contains("\"storage.objects.delete\""));
+    assert!(!rendered.contains("\"iam.serviceAccounts.signBlob\""));
+    assert_terraform_valid(&module, "gcp_storage_remote_access");
+}
+
+#[test]
 fn gcp_kv_renders_firestore_database() {
     let stack = Stack::new("acme-kv".to_string())
         .add(
