@@ -28,10 +28,16 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
+            ]
           }
         }
       },

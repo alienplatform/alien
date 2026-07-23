@@ -433,6 +433,13 @@ fn aws_email_resource_permissions_attach_to_service_account_role() {
         .filter_map(|action| action.as_str().map(str::to_string))
         .collect();
     assert!(identity_actions.contains(&"ses:CreateEmailIdentity".to_string()));
+    let identity_resources = identity_statements[0]["Resource"]
+        .as_array()
+        .expect("manage-identities statement should list resources");
+    assert!(identity_resources.contains(&serde_json::json!({
+        "Fn::Sub":
+            "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-mailer"
+    })));
 
     for policy in [send_policy, identities_policy] {
         assert_eq!(
