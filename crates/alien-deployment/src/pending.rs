@@ -1,7 +1,9 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ClientConfig, EnvironmentInfo, Platform, Stack, StackState};
+use alien_core::{
+    ClientConfig, EnvironmentInfo, ManagementPermissions, Platform, Stack, StackState,
+};
 use alien_error::AlienError;
 use alien_error::Context;
 use tracing::info;
@@ -169,6 +171,17 @@ pub fn strip_declined_resources(
         for profile in stack.permissions.profiles.values_mut() {
             profile.0.shift_remove(resource_id.as_str());
         }
+        // The management profile is a parallel resource-scoped grant store: an
+        // Extend/Override entry for a declined resource must go too, or the
+        // management role keeps a namespace grant the resource no longer backs.
+        // Auto needs no strip — the management mutation re-derives it from the
+        // stripped resource set.
+        match &mut stack.permissions.management {
+            ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+                profile.0.shift_remove(resource_id.as_str());
+            }
+            ManagementPermissions::Auto => {}
+        }
     }
 
     Ok(stack)
@@ -262,8 +275,8 @@ fn environment_collection_context(
 mod tests {
     use super::*;
     use alien_core::{
-        Kv, KubernetesClientConfig, PermissionProfile, Resource, ResourceLifecycle,
-        ResourceStatus, ServiceAccount, StackInputDefinition, StackResourceState,
+        Kv, KubernetesClientConfig, ManagementPermissions, PermissionProfile, Resource,
+        ResourceLifecycle, ResourceStatus, ServiceAccount, StackInputDefinition, StackResourceState,
     };
 
     fn imported_state_with(resource_id: &str, resource: Resource) -> StackState {
@@ -394,6 +407,58 @@ mod tests {
         assert!(
             profile.0.contains_key("*"),
             "the wildcard grant is not resource-scoped and is untouched"
+        );
+    }
+
+    /// A declined resource must also lose its resource-scoped grant from an
+    /// Extend/Override management profile, not only the named profiles — that
+    /// profile is a second store the management role reads from.
+    #[test]
+    fn a_declined_resource_loses_its_management_grant() {
+        let mut stack = Stack::new("gated-stack".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Kv::new("events".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                Kv::new("analytics".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "analyticsEnabled",
+            )
+            .build();
+        stack.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new()
+                .resource("analytics", ["kv/management"])
+                .resource("events", ["kv/management"]),
+        );
+
+        // The import delivered the service account but not the gated `analytics`
+        // store, so `analytics` is the deployer's declined resource.
+        let state = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+
+        let stripped = strip_declined_resources(stack, &state, &Default::default())
+            .expect("frozen rules never error");
+
+        let management = match &stripped.permissions.management {
+            ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+                profile
+            }
+            ManagementPermissions::Auto => panic!("expected an Extend management profile"),
+        };
+        assert!(
+            !management.0.contains_key("analytics"),
+            "the declined resource's management grant is withdrawn"
+        );
+        assert!(
+            management.0.contains_key("events"),
+            "a kept resource's management grant survives"
         );
     }
 
