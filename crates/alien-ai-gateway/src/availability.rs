@@ -8,9 +8,13 @@
 //! ambient credential, classified by status. This needs no permission beyond the
 //! inference grant the workload already holds (`ai/invoke`).
 //!
-//! A 429 (rate-limit) or 400 (our minimal body rejected) both mean the endpoint
-//! authed and routed the request, so the model is enabled; only 401/403/404 mean it
-//! is off. Probing is lazy (first `/v1/models` per binding) and cached, so it never
+//! A 429 (rate-limit) means the endpoint authed and routed the request, so the model
+//! is enabled and merely throttled. A 400 does NOT: Bedrock answers "The provided
+//! model identifier is invalid" with 400 for a model the account cannot address, so
+//! counting 400 as enabled lists models that then fail on the first real call. The
+//! probe body is minimal and well formed, so a 400 is about the model, not the body.
+//! 400/401/403/404 therefore all mean the model is off. Probing is lazy (first
+//! `/v1/models` per binding) and cached, so it never
 //! gates the gateway bind. Fail-open by design: `available_models` never returns
 //! an error and never fails a deploy. A model that cannot be probed conclusively
 //! stays listed (never worse than the old static catalog) and the result is left
@@ -32,9 +36,9 @@ use crate::router::{
 
 /// The outcome of probing one model.
 enum Availability {
-    /// Reached and authed (2xx, or a 429 rate-limit, or a 400 body rejection).
+    /// Reached, authed, and served (2xx, or a 429 rate-limit).
     Available,
-    /// Definitively off: an auth/entitlement/not-found status (401/403/404).
+    /// Definitively off: rejected the model or the caller (400/401/403/404).
     Unavailable,
     /// Could not tell (transport error, 5xx, or the route lacked a field to build
     /// the probe). Kept in the list for this response, but the result is not cached.
@@ -49,12 +53,12 @@ pub(crate) struct ProbeResult {
     pub fully_resolved: bool,
 }
 
-/// Classify an upstream HTTP status. See the module doc for why 429/400 are
-/// "available": both prove the request authed and routed to a real model.
+/// Classify an upstream HTTP status. See the module doc for why 429 is "available"
+/// and why 400 is not.
 fn classify_status(code: u16) -> Availability {
     match code {
-        200..=299 | 400 | 429 => Availability::Available,
-        401 | 403 | 404 => Availability::Unavailable,
+        200..=299 | 429 => Availability::Available,
+        400 | 401 | 403 | 404 => Availability::Unavailable,
         _ => Availability::Indeterminate,
     }
 }
@@ -207,11 +211,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classify_treats_429_and_400_as_available() {
-        // 2xx, plus the two "reached and authed" statuses.
+    fn classify_treats_429_as_available_and_400_as_off() {
+        // 2xx, plus the throttled-but-enabled case.
         assert!(matches!(classify_status(200), Availability::Available));
         assert!(matches!(classify_status(429), Availability::Available));
-        assert!(matches!(classify_status(400), Availability::Available));
+        // 400 is the model, not the body: Bedrock returns it as "The provided model
+        // identifier is invalid", and listing those breaks the invocable contract.
+        assert!(matches!(classify_status(400), Availability::Unavailable));
         // Auth / entitlement / not-found: definitively off.
         assert!(matches!(classify_status(401), Availability::Unavailable));
         assert!(matches!(classify_status(403), Availability::Unavailable));
