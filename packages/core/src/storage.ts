@@ -17,6 +17,7 @@ export class Storage extends ResourceBuilder {
     publicRead: false,
     versioning: false,
     lifecycleRules: [],
+    corsAllowedOrigins: [],
   }
 
   /**
@@ -66,6 +67,18 @@ export class Storage extends ResourceBuilder {
    */
   public lifecycleRules(rules: LifecycleRule[]): this {
     this._config.lifecycleRules = rules
+    return this
+  }
+
+  /**
+   * Allows browser reads from the listed origins through signed URLs.
+   * Providers enable `GET` and `HEAD`; use `*` only when the signed URL itself
+   * is the credential and browser cookies are not involved.
+   * @param origins Allowed browser origins.
+   * @returns The Storage builder instance.
+   */
+  public corsAllowedOrigins(origins: string[]): this {
+    this._config.corsAllowedOrigins = origins
     return this
   }
 

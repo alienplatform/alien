@@ -55,6 +55,16 @@ fn presigned_to_js(request: &PresignedRequest) -> PresignedRequestJs {
     }
 }
 
+fn parse_path(path: String, field_name: &str, operation_context: &str) -> napi::Result<Path> {
+    Path::parse(path).map_err(|error| {
+        map_alien_error(AlienError::new(ErrorData::InvalidInput {
+            operation_context: operation_context.to_string(),
+            details: error.to_string(),
+            field_name: Some(field_name.to_string()),
+        }))
+    })
+}
+
 /// Handle to a resolved storage binding.
 #[napi]
 pub struct StorageHandle {
@@ -77,7 +87,7 @@ impl StorageHandle {
     pub async fn get(&self, path: String) -> napi::Result<Buffer> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
-        let location = Path::from(path);
+        let location = parse_path(path, "path", "get")?;
         let result = store
             .get(&location)
             .await
@@ -94,7 +104,7 @@ impl StorageHandle {
     pub async fn put(&self, path: String, data: Buffer) -> napi::Result<()> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
-        let location = Path::from(path);
+        let location = parse_path(path, "path", "put")?;
         store
             .put(&location, PutPayload::from(data.to_vec()))
             .await
@@ -107,7 +117,7 @@ impl StorageHandle {
     pub async fn delete(&self, path: String) -> napi::Result<()> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
-        let location = Path::from(path);
+        let location = parse_path(path, "path", "delete")?;
         store
             .delete(&location)
             .await
@@ -120,7 +130,9 @@ impl StorageHandle {
     pub async fn list(&self, prefix: Option<String>) -> napi::Result<Vec<ObjectMetaJs>> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
-        let prefix = prefix.map(Path::from);
+        let prefix = prefix
+            .map(|prefix| parse_path(prefix, "prefix", "list"))
+            .transpose()?;
         let mut stream = store.list(prefix.as_ref());
         let mut metas = Vec::new();
         while let Some(item) = stream.next().await {
@@ -135,7 +147,7 @@ impl StorageHandle {
     pub async fn head(&self, path: String) -> napi::Result<ObjectMetaJs> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
-        let location = Path::from(path);
+        let location = parse_path(path, "path", "head")?;
         let meta = store
             .head(&location)
             .await
@@ -148,8 +160,10 @@ impl StorageHandle {
     pub async fn copy(&self, from: String, to: String) -> napi::Result<()> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
+        let from = parse_path(from, "from", "copy")?;
+        let to = parse_path(to, "to", "copy")?;
         store
-            .copy(&Path::from(from), &Path::from(to))
+            .copy(&from, &to)
             .await
             .map_err(|e| map_object_store_error(e, &binding, "copy"))?;
         Ok(())
@@ -167,7 +181,7 @@ impl StorageHandle {
         expires_in_secs: u32,
     ) -> napi::Result<PresignedRequestJs> {
         let store = self.inner.clone();
-        let location = Path::from(path);
+        let location = parse_path(path, "path", "signed_url")?;
         let expires_in = Duration::from_secs(u64::from(expires_in_secs));
         let request = match method.as_str() {
             "GET" => store.presigned_get(&location, expires_in).await,
@@ -191,6 +205,30 @@ mod tests {
     use super::*;
     use alien_bindings::presigned::PresignedOperation;
     use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn parse_path_preserves_rfc_message_id_characters() {
+        let raw = "<0100019f@example.com>/message.eml";
+
+        let path = parse_path(raw.to_string(), "path", "signed_url")
+            .expect("RFC Message-ID characters should form a valid object path");
+
+        assert_eq!(path.as_ref(), raw);
+    }
+
+    #[test]
+    fn parse_path_rejects_invalid_segments_with_structured_input_error() {
+        let error = parse_path("messages//raw.eml".to_string(), "path", "signed_url")
+            .expect_err("empty path segments should be rejected");
+
+        assert!(
+            error.reason.contains("\"code\":\"INVALID_INPUT\"")
+                && error.reason.contains("\"field_name\":\"path\"")
+                && error.reason.contains("signed_url"),
+            "unexpected error envelope: {}",
+            error.reason
+        );
+    }
 
     #[test]
     fn object_meta_to_js_maps_location_size_and_timestamp() {

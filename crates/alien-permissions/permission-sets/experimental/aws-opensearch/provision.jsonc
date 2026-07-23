@@ -1,11 +1,11 @@
 {
-  // AWS-only experimental resource: OpenSearch Serverless (next generation).
+  // AWS-only experimental resource: OpenSearch Serverless.
   "id": "experimental/aws-opensearch/provision",
-  "description": "Allows creating, updating, and deleting OpenSearch Serverless collection groups, collections, and their security/access policies",
+  "description": "Allows creating, updating, and deleting OpenSearch Serverless collections and their security/access policies",
   "platforms": {
     "aws": [
       {
-        // Derived from the AWS::OpenSearchServerless::{CollectionGroup,Collection,
+        // Derived from the AWS::OpenSearchServerless::{Collection,
         // SecurityPolicy,AccessPolicy} CloudFormation handler permissions.
         // OpenSearch Serverless control-plane actions cannot be resource-scoped:
         // security and access policies have no ARNs, and collection/group ARNs
@@ -14,17 +14,11 @@
         // aws_abac_validation.rs).
         "grant": {
           "actions": [
-            "aoss:CreateCollectionGroup",
-            "aoss:UpdateCollectionGroup",
-            "aoss:DeleteCollectionGroup",
-            "aoss:BatchGetCollectionGroup",
-            "aoss:ListCollectionGroups",
             "aoss:CreateCollection",
             "aoss:UpdateCollection",
             "aoss:DeleteCollection",
             "aoss:BatchGetCollection",
             "aoss:ListCollections",
-            "aoss:AddCollectionToCollectionGroup",
             "aoss:CreateSecurityPolicy",
             "aoss:GetSecurityPolicy",
             "aoss:UpdateSecurityPolicy",

@@ -2062,6 +2062,22 @@ async fn hash_typescript_dependency_inputs(
         if dist.is_dir() {
             hash_source_directory(&dist, hasher).await?;
         }
+
+        if package_dir.file_name().is_some_and(|n| n == "sdk") {
+            let transitive_bindings = realpath
+                .join("node_modules")
+                .join("@alienplatform")
+                .join("bindings");
+            if let Ok(transitive_realpath) = transitive_bindings.canonicalize() {
+                hasher.update(b"alienplatform-transitive-bindings");
+                hasher.update(transitive_bindings.to_string_lossy().as_bytes());
+                let transitive_dist = transitive_realpath.join("dist");
+                if transitive_dist.is_dir() {
+                    hash_source_directory(&transitive_dist, hasher).await?;
+                }
+                bindings_realpath = Some(transitive_realpath);
+            }
+        }
     }
 
     // Workspace dev addons for the requested targets, anchored on the real
@@ -4038,6 +4054,65 @@ mod tests {
             local_a_key, local_b_key,
             "Local Workers run from scratch and must ignore the cloud runtime base"
         );
+    }
+
+    #[tokio::test]
+    async fn typescript_cache_key_includes_addon_reached_transitively_through_sdk() {
+        let workspace = tempdir().unwrap();
+        let app = workspace.path().join("app");
+        let sdk = app.join("node_modules").join("@alienplatform").join("sdk");
+        let bindings = sdk
+            .join("node_modules")
+            .join("@alienplatform")
+            .join("bindings");
+        let addon_dir = workspace.path().join("crates").join("alien-bindings-node");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(sdk.join("dist")).unwrap();
+        std::fs::create_dir_all(bindings.join("dist")).unwrap();
+        std::fs::create_dir_all(&addon_dir).unwrap();
+        std::fs::write(app.join("src/index.ts"), "console.log('app')\n").unwrap();
+        std::fs::write(sdk.join("dist/index.js"), "export {}\n").unwrap();
+        std::fs::write(bindings.join("dist/native.js"), "export {}\n").unwrap();
+
+        let addon = addon_dir.join("alien-bindings-node.linux-arm64-gnu.node");
+        std::fs::write(&addon, b"first-addon").unwrap();
+
+        let toolchain = ToolchainConfig::TypeScript {
+            binary_name: Some("app".to_string()),
+        };
+        let targets = vec![BinaryTarget::LinuxArm64];
+        let settings = BuildSettings {
+            output_directory: workspace.path().join("out").to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let first = compute_source_artifact_cache_key(
+            app.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        std::fs::write(&addon, b"second-addon").unwrap();
+        let second = compute_source_artifact_cache_key(
+            app.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(first, second);
     }
 
     #[tokio::test]

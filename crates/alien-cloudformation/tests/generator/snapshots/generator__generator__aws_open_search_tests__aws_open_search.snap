@@ -101,8 +101,8 @@ Resources:
         Value: execution-sa
       - Key: resource-type
         Value: service-account
-  ArticlesGroup:
-    Type: AWS::OpenSearchServerless::CollectionGroup
+  ArticlesEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
       Name:
         Fn::Join:
@@ -117,20 +117,23 @@ Resources:
                 - Fn::Split:
                   - /
                   - Ref: AWS::StackId
-      StandbyReplicas: ENABLED
-      Generation: NEXTGEN
-      Tags:
-      - Key: managed-by
-        Value: setup
-      - Key: deployment
-        Value:
-          Ref: AWS::StackName
-      - Key: resource
-        Value: articles
-      - Key: resource-type
-        Value: experimental/aws-opensearch
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+      Type: encryption
+      Policy:
+        Fn::Sub:
+        - '{"Rules":[{"ResourceType":"collection","Resource":["collection/${Name}"]}],"AWSOwnedKey":true}'
+        - Name:
+            Fn::Join:
+            - '-'
+            - - articles
+              - Fn::Select:
+                - 0
+                - Fn::Split:
+                  - '-'
+                  - Fn::Select:
+                    - 2
+                    - Fn::Split:
+                      - /
+                      - Ref: AWS::StackId
   ArticlesNetworkPolicy:
     Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
@@ -181,21 +184,6 @@ Resources:
                   - /
                   - Ref: AWS::StackId
       Type: SEARCH
-      CollectionGroupName:
-        Fn::Join:
-        - '-'
-        - - articles
-          - Fn::Select:
-            - 0
-            - Fn::Split:
-              - '-'
-              - Fn::Select:
-                - 2
-                - Fn::Split:
-                  - /
-                  - Ref: AWS::StackId
-      EncryptionConfig:
-        AWSOwnedKey: true
       Tags:
       - Key: managed-by
         Value: setup
@@ -207,7 +195,8 @@ Resources:
       - Key: resource-type
         Value: experimental/aws-opensearch
     DependsOn:
-    - ArticlesGroup
+    - ArticlesEncryptionPolicy
+    - ArticlesNetworkPolicy
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
   ArticlesDataAccessPolicy:

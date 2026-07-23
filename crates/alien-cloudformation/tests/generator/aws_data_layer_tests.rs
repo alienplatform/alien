@@ -69,6 +69,44 @@ fn aws_storage_minimal_uses_safe_defaults() {
 }
 
 #[test]
+fn aws_storage_emits_browser_read_cors() {
+    let stack = Stack::new("storage-cors".to_string())
+        .add(
+            Storage::new("data".to_string())
+                .cors_allowed_origins(vec![
+                    "https://console.example.com".to_string(),
+                    "http://localhost:3000".to_string(),
+                ])
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws storage CORS",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let cors_rule =
+        &template["Resources"]["Data"]["Properties"]["CorsConfiguration"]["CorsRules"][0];
+
+    assert_eq!(cors_rule["AllowedHeaders"], serde_json::json!(["*"]));
+    assert_eq!(
+        cors_rule["AllowedMethods"],
+        serde_json::json!(["GET", "HEAD"])
+    );
+    assert_eq!(
+        cors_rule["AllowedOrigins"],
+        serde_json::json!(["https://console.example.com", "http://localhost:3000"])
+    );
+    assert_eq!(cors_rule["ExposedHeaders"], serde_json::json!(["ETag"]));
+    assert_eq!(cors_rule["MaxAge"], 3600);
+}
+
+#[test]
 fn storage_only_template_omits_custom_domain_inputs() {
     let stack = Stack::new("storage-minimal".to_string())
         .add(

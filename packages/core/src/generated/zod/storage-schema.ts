@@ -10,7 +10,8 @@ import { LifecycleRuleSchema } from "./lifecycle-rule-schema.js";
  * @description Represents an object storage bucket.
  */
 export const StorageSchema = z.object({
-    "id": z.string().describe("Name of the the storage bucket.\nFor names with dots, each dot-separated label must be ≤ 63 characters."),
+    "corsAllowedOrigins": z.optional(z.array(z.string()).describe("Browser origins allowed to read objects through signed URLs.\n\nWhen non-empty, providers configure CORS for `GET` and `HEAD` requests.\nAn origin of `*` is appropriate for private buckets whose signed URLs\nare bearer credentials and do not use browser cookies.\nDefault: `[]` (CORS disabled).")),
+"id": z.string().describe("Name of the the storage bucket.\nFor names with dots, each dot-separated label must be ≤ 63 characters."),
 get "lifecycleRules"(){
                 return z.array(LifecycleRuleSchema.describe("Defines a rule for managing the lifecycle of objects within a storage bucket.")).describe("List of rules for automatic object management (e.g., expiration).\nDefault: `[]` (empty list)").optional()
               },

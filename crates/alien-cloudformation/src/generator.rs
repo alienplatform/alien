@@ -1781,7 +1781,11 @@ impl RegistrationEntry {
     /// Gates a rendered value on this entry's input: a declined entry
     /// resolves to `AWS::NoValue`, which removes the element from its list.
     fn gated(&self, value: CfExpression) -> CfExpression {
-        enabled::when_enabled(self.enabled_when.as_deref(), value, CfExpression::no_value())
+        enabled::when_enabled(
+            self.enabled_when.as_deref(),
+            value,
+            CfExpression::no_value(),
+        )
     }
 
     /// Element for the custom resource's `Resources` property.

@@ -108,6 +108,7 @@ exports[`Email resource configuration > creates email infrastructure with inboun
     },
     "mailbox": {
       "config": {
+        "corsAllowedOrigins": [],
         "id": "mailbox",
         "lifecycleRules": [],
         "publicRead": false,
@@ -238,6 +239,7 @@ exports[`Stack builder validation > builds and validates a complex stack with pe
   "resources": {
     "my-test-bucket": {
       "config": {
+        "corsAllowedOrigins": [],
         "id": "my-test-bucket",
         "lifecycleRules": [],
         "publicRead": true,
@@ -313,6 +315,7 @@ exports[`Stack builder validation > builds and validates a stack with Build and 
   "resources": {
     "build-storage": {
       "config": {
+        "corsAllowedOrigins": [],
         "id": "build-storage",
         "lifecycleRules": [],
         "publicRead": false,

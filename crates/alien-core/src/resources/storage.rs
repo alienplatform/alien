@@ -47,6 +47,16 @@ pub struct Storage {
     #[serde(default)]
     #[builder(default)]
     pub lifecycle_rules: Vec<LifecycleRule>,
+
+    /// Browser origins allowed to read objects through signed URLs.
+    ///
+    /// When non-empty, providers configure CORS for `GET` and `HEAD` requests.
+    /// An origin of `*` is appropriate for private buckets whose signed URLs
+    /// are bearer credentials and do not use browser cookies.
+    /// Default: `[]` (CORS disabled).
+    #[serde(default)]
+    #[builder(default)]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Storage {

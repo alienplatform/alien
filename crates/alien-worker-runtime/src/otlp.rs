@@ -1,4 +1,5 @@
 use crate::error::{ErrorData, Result};
+use alien_core::ENV_ALIEN_RUNTIME_SECRETS;
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     collections::HashMap,
@@ -89,6 +90,18 @@ fn runtime_otlp_disabled() -> bool {
 pub fn init_otlp_logging(
 ) -> Result<Option<OpenTelemetryTracingBridge<SdkLoggerProvider, opentelemetry_sdk::logs::SdkLogger>>>
 {
+    // Runtime telemetry credentials are deliberately kept in the deployment's
+    // secret provider rather than the process environment. `run` resolves them
+    // asynchronously and installs the authenticated app-log provider later. Do
+    // not attach an unauthenticated tracing bridge during process bootstrap: it
+    // would keep exporting through its original provider even after the global
+    // app-log provider is replaced.
+    if runtime_otlp_credentials_are_vault_backed() {
+        info!("Deferring OTLP initialization until runtime credentials are loaded");
+        *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = None;
+        return Ok(None);
+    }
+
     let config = match OtlpConfig::from_env() {
         Some(config) => {
             info!(
@@ -112,6 +125,10 @@ pub fn init_otlp_logging(
 
     info!("OTLP logging initialized successfully");
     Ok(Some(bridge))
+}
+
+fn runtime_otlp_credentials_are_vault_backed() -> bool {
+    std::env::var_os(ENV_ALIEN_RUNTIME_SECRETS).is_some()
 }
 
 /// Initialize the app-log OTLP provider from already-resolved runtime config.
@@ -451,6 +468,7 @@ mod tests {
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION");
         std::env::remove_var("ALIEN_DEPLOYMENT_ID");
         std::env::remove_var(ENV_ALIEN_RUNTIME_SEND_OTLP);
+        std::env::remove_var(ENV_ALIEN_RUNTIME_SECRETS);
     }
 
     #[test]
@@ -485,6 +503,19 @@ mod tests {
 
         let config = OtlpConfig::from_env();
         assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_runtime_otlp_credentials_are_vault_backed() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clear_otlp_env_vars();
+
+        assert!(!runtime_otlp_credentials_are_vault_backed());
+        std::env::set_var(
+            ENV_ALIEN_RUNTIME_SECRETS,
+            r#"{"otlpLogsAuthHeader":"secret"}"#,
+        );
+        assert!(runtime_otlp_credentials_are_vault_backed());
     }
 
     #[test]
