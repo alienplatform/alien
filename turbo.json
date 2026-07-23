@@ -11,6 +11,7 @@
       "cache": false
     },
     "test": {
+      "dependsOn": ["^build", "build"],
       "cache": false
     },
     "test:ts": {
