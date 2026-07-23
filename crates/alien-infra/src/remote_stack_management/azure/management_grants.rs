@@ -616,7 +616,7 @@ impl AzureRemoteStackManagementController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(prefix: &str) -> Self {
         Self {
-            setup_managed: false,
+            setup_managed: Some(false),
             state: AzureRemoteStackManagementState::Ready,
             uami_resource_id: Some(format!(
                 "/subscriptions/sub-1234/resourceGroups/test-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}-management-identity",

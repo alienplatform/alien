@@ -40,6 +40,7 @@ use super::azure_remote_storage::{
 
 mod management_grants;
 pub(super) use management_grants::*;
+mod ownership;
 
 #[cfg(not(test))]
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
@@ -56,10 +57,10 @@ const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
 pub struct AzureRemoteStackManagementController {
     /// Whether setup owns the identity, FIC, and management grants.
     ///
-    /// Existing serialized controllers predate this field and came from the
-    /// setup/import path, so deserialization defaults to setup ownership.
-    #[serde(default = "setup_managed_by_default")]
-    pub(crate) setup_managed: bool,
+    /// `None` is a legacy checkpoint; ownership is then inferred from the
+    /// controller state that predates this field.
+    #[serde(default)]
+    pub(crate) setup_managed: Option<bool>,
     /// The resource ID of the target UAMI
     pub(crate) uami_resource_id: Option<String>,
     /// The client ID of the target UAMI (used in access_configuration output)
@@ -98,6 +99,11 @@ impl AzureRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // This flow creates and therefore owns every structural resource.
+        // Persist the decision before the first cloud mutation so a failed
+        // direct setup cannot later be mistaken for an IaC import.
+        self.setup_managed = Some(false);
+
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
         let identity_name = get_management_identity_name(ctx.resource_prefix);
@@ -563,7 +569,7 @@ impl AzureRemoteStackManagementController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        if self.setup_managed {
+        if self.setup_managed_resources() {
             info!(
                 config_id = %config.id,
                 "Skipping runtime mutation of setup-managed Azure identity and grants"
@@ -710,7 +716,7 @@ impl AzureRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        if self.setup_managed {
+        if self.setup_managed_resources() {
             info!(
                 config_id = %config.id,
                 "Leaving setup-managed Azure identity and grants for setup teardown"
@@ -955,7 +961,7 @@ impl AzureRemoteStackManagementController {
     }
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        if self.setup_managed {
+        if self.setup_managed_resources() {
             return Ok(false);
         }
 
@@ -967,6 +973,5 @@ impl AzureRemoteStackManagementController {
     }
 }
 
-fn setup_managed_by_default() -> bool {
-    true
-}
+#[cfg(test)]
+mod ownership_tests;

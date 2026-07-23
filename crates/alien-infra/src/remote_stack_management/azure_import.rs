@@ -41,7 +41,7 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             // management grants. The runtime observes the imported identity;
             // it must not require a broadly privileged bootstrap principal to
             // mutate setup-owned RBAC after handoff.
-            setup_managed: true,
+            setup_managed: Some(true),
             state,
             uami_resource_id: Some(data.identity_id),
             uami_client_id: Some(data.client_id),
