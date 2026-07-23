@@ -23,6 +23,22 @@ pub enum AiBinding {
     External(ExternalAiBinding),
 }
 
+/// A tuned model the gateway can route to, produced by a completed
+/// fine-tuning job. Maps the public `served_id` an app requests to the
+/// provider-native artifact the gateway forwards to (a Bedrock custom-model
+/// ARN, a Vertex tuned endpoint id, or a Foundry deployment name).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TunedModel {
+    /// The public model id apps send in the `model` field.
+    pub served_id: String,
+    /// The provider-native upstream artifact (custom-model ARN / tuned endpoint
+    /// id / deployment name) the gateway forwards to.
+    pub upstream_id: String,
+}
+
 /// AWS Bedrock AI binding configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -31,6 +47,10 @@ pub enum AiBinding {
 pub struct BedrockAiBinding {
     /// The AWS region where Bedrock is accessed
     pub region: String,
+    /// A tuned model served alongside the base catalog, if the resource
+    /// declared a completed fine-tuning job. Absent for a pure inference gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuned_model: Option<TunedModel>,
 }
 
 /// GCP Vertex AI binding configuration
@@ -43,6 +63,10 @@ pub struct VertexAiBinding {
     pub project: String,
     /// The Vertex AI region (e.g., "us-central1")
     pub location: String,
+    /// A tuned model served alongside the base catalog, if the resource
+    /// declared a completed fine-tuning job. Absent for a pure inference gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuned_model: Option<TunedModel>,
 }
 
 /// Azure AI Foundry binding configuration
@@ -55,6 +79,10 @@ pub struct FoundryAiBinding {
     pub endpoint: String,
     /// The Azure account or subscription identifier
     pub account: String,
+    /// A tuned model served alongside the base catalog, if the resource
+    /// declared a completed fine-tuning job. Absent for a pure inference gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuned_model: Option<TunedModel>,
 }
 
 /// External AI provider binding configuration (BYO-key).
@@ -98,6 +126,7 @@ impl AiBinding {
     pub fn bedrock(region: impl Into<String>) -> Self {
         Self::Bedrock(BedrockAiBinding {
             region: region.into(),
+            tuned_model: None,
         })
     }
 
@@ -105,6 +134,7 @@ impl AiBinding {
         Self::Vertex(VertexAiBinding {
             project: project.into(),
             location: location.into(),
+            tuned_model: None,
         })
     }
 
@@ -112,7 +142,43 @@ impl AiBinding {
         Self::Foundry(FoundryAiBinding {
             endpoint: endpoint.into(),
             account: account.into(),
+            tuned_model: None,
         })
+    }
+
+    /// Attach a tuned model to a managed binding, so the gateway routes
+    /// `served_id` to `upstream_id` alongside the base catalog. A no-op on the
+    /// `External` (BYO-key) variant, which the gateway does not serve.
+    pub fn with_tuned_model(self, served_id: impl Into<String>, upstream_id: impl Into<String>) -> Self {
+        let tuned = TunedModel {
+            served_id: served_id.into(),
+            upstream_id: upstream_id.into(),
+        };
+        match self {
+            Self::Bedrock(b) => Self::Bedrock(BedrockAiBinding {
+                tuned_model: Some(tuned),
+                ..b
+            }),
+            Self::Vertex(b) => Self::Vertex(VertexAiBinding {
+                tuned_model: Some(tuned),
+                ..b
+            }),
+            Self::Foundry(b) => Self::Foundry(FoundryAiBinding {
+                tuned_model: Some(tuned),
+                ..b
+            }),
+            Self::External(b) => Self::External(b),
+        }
+    }
+
+    /// The tuned model attached to this binding, if any.
+    pub fn tuned_model(&self) -> Option<&TunedModel> {
+        match self {
+            Self::Bedrock(b) => b.tuned_model.as_ref(),
+            Self::Vertex(b) => b.tuned_model.as_ref(),
+            Self::Foundry(b) => b.tuned_model.as_ref(),
+            Self::External(_) => None,
+        }
     }
 
     pub fn external(
@@ -139,6 +205,41 @@ mod tests {
 
         let deserialized: AiBinding = serde_json::from_str(&json).unwrap();
         assert_eq!(binding, deserialized);
+    }
+
+    #[test]
+    fn test_bedrock_binding_without_tuned_model_omits_field() {
+        let binding = AiBinding::bedrock("us-east-1");
+        let json = serde_json::to_value(&binding).unwrap();
+        assert!(
+            json.get("tunedModel").is_none(),
+            "an untuned binding must omit tunedModel so the inference-only wire shape is unchanged"
+        );
+    }
+
+    #[test]
+    fn test_bedrock_binding_with_tuned_model_roundtrip() {
+        let binding = AiBinding::bedrock("us-east-1")
+            .with_tuned_model("finance-model", "arn:aws:bedrock:us-east-1:123:custom-model/abc");
+
+        let json = serde_json::to_value(&binding).unwrap();
+        assert_eq!(json["service"], "bedrock");
+        assert_eq!(json["tunedModel"]["servedId"], "finance-model");
+        assert_eq!(
+            json["tunedModel"]["upstreamId"],
+            "arn:aws:bedrock:us-east-1:123:custom-model/abc"
+        );
+
+        let back: AiBinding = serde_json::from_value(json).unwrap();
+        assert_eq!(binding, back);
+        assert_eq!(back.tuned_model().unwrap().served_id, "finance-model");
+    }
+
+    #[test]
+    fn test_external_binding_ignores_tuned_model() {
+        // The gateway does not serve BYO-key providers, so a tuned model is a no-op there.
+        let binding = AiBinding::external("openai", "sk-x").with_tuned_model("x", "y");
+        assert!(binding.tuned_model().is_none());
     }
 
     #[test]

@@ -1,0 +1,90 @@
+{
+  "id": "ai/finetune",
+  "description": "Allows submitting and monitoring model fine-tuning jobs and reading the training dataset from the customer's object storage",
+  "platforms": {
+    "aws": [
+      {
+        // Bedrock model customization is a control-plane job the workload submits,
+        // polls, and (for on-demand serving) invokes the resulting custom model.
+        // The job reads its dataset from and writes metrics to a customer S3
+        // bucket; those S3 grants are scoped by the storage resource's own
+        // permission set, so this set only needs the Bedrock job + custom-model
+        // actions. The custom-model ARN is not known until the job completes, so
+        // the resource ARN is the account-wide custom-model / job namespace.
+        "grant": {
+          "actions": [
+            "bedrock:CreateModelCustomizationJob",
+            "bedrock:GetModelCustomizationJob",
+            "bedrock:StopModelCustomizationJob",
+            "bedrock:GetCustomModel",
+            "bedrock:ListCustomModels",
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:bedrock:*::foundation-model/*",
+              "arn:aws:bedrock:*:${awsAccountId}:custom-model/*",
+              "arn:aws:bedrock:*:${awsAccountId}:model-customization-job/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:bedrock:*::foundation-model/*",
+              "arn:aws:bedrock:*:${awsAccountId}:custom-model/*",
+              "arn:aws:bedrock:*:${awsAccountId}:model-customization-job/*"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        // Vertex tuning jobs run under a custom role. roles/aiplatform.user carries
+        // far more than tuning needs; a custom role with the tuning-job lifecycle
+        // and the predict permissions for serving the tuned endpoint is the
+        // least-privilege set. Reading the dataset from GCS is granted by the
+        // storage resource's own set, not here.
+        "grant": {
+          "permissions": [
+            "aiplatform.tuningJobs.create",
+            "aiplatform.tuningJobs.get",
+            "aiplatform.tuningJobs.list",
+            "aiplatform.tuningJobs.cancel",
+            "aiplatform.models.get",
+            "aiplatform.endpoints.predict"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        // Foundry fine-tuning + deploying the tuned model are account-scoped
+        // control-plane operations. "Cognitive Services Contributor" is the
+        // least-privilege built-in role that can create fine-tuning jobs and
+        // model deployments on the account; "Cognitive Services OpenAI User"
+        // is added so the same workload can invoke the tuned deployment.
+        "grant": {
+          "predefinedRoles": [
+            "Cognitive Services Contributor",
+            "Cognitive Services OpenAI User"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,3 +1,4 @@
+pub mod aiplatform;
 pub mod api_client;
 pub mod artifactregistry;
 pub mod cloud_sql;

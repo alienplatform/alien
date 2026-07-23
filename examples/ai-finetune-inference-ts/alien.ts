@@ -1,0 +1,57 @@
+// EXAMPLE: Fine-tune a base model in the customer's cloud, then serve it for
+// inference — without the training data or the tuned weights ever leaving the
+// customer's account.
+
+import * as alien from "@alienplatform/core"
+
+// The training dataset lives in the customer's object storage:
+// S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure. The worker uploads
+// JSONL examples here; the tuning job reads them in-account.
+const dataset = new alien.Storage("dataset").build()
+
+// A model-less AI gateway that also fine-tunes. On deploy, the resource's cloud
+// controller submits the provider's tuning job (Bedrock CreateModelCustomizationJob,
+// Vertex tuningJobs, or Foundry fine_tuning.jobs) reading `dataset` in the
+// customer's account, polls it to completion, and serves the tuned model through
+// the same gateway under `servedModelId`. Base models remain callable too.
+//
+// `baseModel` is a provider-native id; pick the one that matches the cloud you
+// deploy to (see the README's per-provider table). The default here targets
+// AWS Bedrock (Amazon Nova).
+const llm = new alien.AI("llm")
+  .finetune({
+    baseModel: "amazon.nova-lite-v1:0",
+    trainingData: dataset,
+    trainingKey: "training.jsonl",
+    servedModelId: "support-tuned",
+    method: "sft",
+  })
+  .build()
+
+const api = new alien.Worker("api")
+  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+  // GCP Cloud Run gen2 requires >= 512 MiB; the default 256 MiB fails its preflight.
+  .memoryMb(512)
+  .publicEndpoint("api")
+  // Linking injects the dataset binding and the AI gateway (ALIEN_LLM_BINDING).
+  .link(dataset)
+  .link(llm)
+  .permissions("execution")
+  .build()
+
+export default new alien.Stack("ai-finetune-inference")
+  .platforms(["aws", "gcp", "azure"])
+  .add(dataset, "live")
+  .add(llm, "live")
+  .add(api, "live")
+  .permissions({
+    profiles: {
+      execution: {
+        // Read/write the dataset bucket, and both submit the tuning job and
+        // invoke models (base + tuned) through the gateway.
+        dataset: ["storage/data-read", "storage/data-write"],
+        "*": ["ai/invoke", "ai/finetune"],
+      },
+    },
+  })
+  .build()

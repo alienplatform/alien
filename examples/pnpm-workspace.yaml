@@ -1,5 +1,6 @@
 packages:
   - ai-quickstart-ts
+  - ai-finetune-inference-ts
   - basic-worker-ts
   - basic-worker-rs
   - remote-worker-ts

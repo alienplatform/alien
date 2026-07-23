@@ -45,6 +45,10 @@ pub struct GatewayRoute {
     /// host (the per-protocol path is still appended). Lets tests aim a binding at a
     /// mock upstream.
     pub upstream_base_override: Option<String>,
+    /// A tuned model this route serves alongside the static catalog. Checked
+    /// before the catalog so a completed fine-tuning job's artifact is reachable
+    /// under its public `served_id`. `None` for a pure inference gateway.
+    pub tuned: Option<crate::TunedRoute>,
 }
 
 struct AppState {
@@ -161,7 +165,20 @@ async fn proxy(
         })
     })?;
 
-    let (mut payload, model) = parse_model_request(&body)?;
+    let (payload, model) = parse_model_request(&body)?;
+
+    // A tuned model produced by a fine-tuning job is served under its public
+    // `served_id` and is not in the static catalog (its upstream artifact is
+    // created at runtime). Check it before the catalog. All three clouds serve a
+    // tuned model over the OpenAI-compatible chat path: on Bedrock the
+    // `upstream_id` is a custom-model id, on Vertex a tuned-endpoint model id, on
+    // Foundry a deployment name — in every case it becomes the request body's
+    // `model` against the cloud's OpenAI endpoint.
+    if let Some(tuned) = &route.tuned {
+        if model == tuned.served_id {
+            return proxy_openai(&state, route, tuned.upstream_id.clone(), payload).await;
+        }
+    }
 
     // Cloud-scoped resolution: Claude ids appear once per cloud, so a first-match
     // resolve would always land on another cloud's entry and fail the cloud filter.
@@ -193,14 +210,26 @@ async fn proxy(
             .await;
     }
 
-    payload["model"] = Value::String(cm.upstream_id.to_string());
+    proxy_openai(&state, route, cm.upstream_id.to_string(), payload).await
+}
+
+/// Forward an OpenAI-protocol chat request: rewrite the body `model` to
+/// `upstream_id`, build the cloud's OpenAI chat endpoint, sign, and stream the
+/// reply back untranslated. Shared by base-catalog models and tuned models.
+async fn proxy_openai(
+    state: &AppState,
+    route: &GatewayRoute,
+    upstream_id: String,
+    mut payload: Value,
+) -> Result<Response> {
+    payload["model"] = Value::String(upstream_id);
     let upstream_body = serde_json::to_vec(&payload)
         .into_alien_error()
         .context(ErrorData::Other {
             message: "could not re-serialize the rewritten request body".to_string(),
         })?;
 
-    let (url, aws_service) = upstream_target(route, cm.protocol)?;
+    let (url, aws_service) = upstream_target(route, Protocol::OpenAi)?;
 
     let upstream =
         sign_and_execute(&state.client, &route.cred, &url, aws_service, upstream_body, &[]).await?;
@@ -971,6 +1000,7 @@ mod tests {
             azure_endpoint: None,
             cred: test_aws_cred(),
             upstream_base_override: Some(upstream.to_string()),
+            tuned: None,
         }
     }
 
@@ -983,6 +1013,7 @@ mod tests {
             azure_endpoint: None,
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
+            tuned: None,
         }
     }
 
@@ -1157,6 +1188,7 @@ mod tests {
             azure_endpoint: Some(endpoint.to_string()),
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
+            tuned: None,
         }
     }
 
@@ -1266,6 +1298,78 @@ mod tests {
         assert!(text.contains("\"pong\""), "upstream body must pass through: {text}");
         // The mock only matches when the body carries the rewritten upstream id and an
         // Authorization header, so a hit proves the model rewrite and cred injection.
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn tuned_model_routes_to_upstream_artifact() {
+        // A request for the tuned model's public served id must be rewritten to the
+        // tuned upstream artifact (here a Bedrock custom-model id) and hit the same
+        // OpenAI chat path — proving the tuned override fires before catalog lookup.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/chat/completions")
+                    .body_contains("custom-model/finance-abc123")
+                    .header_exists("authorization");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"cmpl-1","choices":[{"message":{"content":"pong"}}]}"#);
+            })
+            .await;
+
+        let mut route = aws_route(&server.base_url());
+        route.tuned = Some(crate::TunedRoute {
+            served_id: "finance-model".to_string(),
+            upstream_id: "custom-model/finance-abc123".to_string(),
+        });
+
+        let url = serve(build_router(vec![route])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"finance-model","messages":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 200);
+        let text = resp.text().await.unwrap();
+        assert!(text.contains("\"pong\""), "upstream body must pass through: {text}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn tuned_model_does_not_shadow_base_catalog() {
+        // With a tuned model configured, a base catalog id still resolves normally —
+        // the override only triggers on an exact served-id match.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/chat/completions")
+                    .body_contains("openai.gpt-oss-20b-1:0");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"cmpl-1","choices":[{"message":{"content":"pong"}}]}"#);
+            })
+            .await;
+
+        let mut route = aws_route(&server.base_url());
+        route.tuned = Some(crate::TunedRoute {
+            served_id: "finance-model".to_string(),
+            upstream_id: "custom-model/finance-abc123".to_string(),
+        });
+
+        let url = serve(build_router(vec![route])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"gpt-oss-20b","messages":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 200);
         mock.assert_async().await;
     }
 

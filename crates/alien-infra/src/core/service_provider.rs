@@ -3,6 +3,7 @@ use alien_aws_clients::{
     acm::{AcmApi, AcmClient},
     apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
     autoscaling::{AutoScalingApi, AutoScalingClient},
+    bedrock::{BedrockApi, BedrockClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
@@ -39,6 +40,7 @@ use alien_azure_clients::{
     managed_clusters::{AzureManagedClustersClient, ManagedClustersApi},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
+    openai_finetuning::{AzureFoundryFineTuningClient, FoundryFineTuningApi},
     private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
     resource_skus::{AzureResourceSkusClient, ResourceSkusApi},
     resources::{AzureResourcesClient, ResourcesApi},
@@ -53,6 +55,7 @@ use alien_azure_clients::{
 };
 use alien_error::Context;
 use alien_gcp_clients::{
+    aiplatform::{AiPlatformApi, AiPlatformClient},
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
     cloudbuild::{CloudBuildApi, CloudBuildClient},
@@ -129,6 +132,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
+    async fn get_aws_bedrock_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn BedrockApi>>;
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
@@ -164,6 +171,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>>;
+    fn get_gcp_aiplatform_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn AiPlatformApi>>;
 
     // Azure clients
     fn get_azure_application_gateway_client(
@@ -230,6 +241,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn CognitiveServicesAccountsApi>>;
+    fn get_azure_foundry_finetuning_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn FoundryFineTuningApi>>;
     fn get_azure_key_vault_management_client(
         &self,
         config: &AzureClientConfig,
@@ -682,6 +697,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_bedrock_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn BedrockApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(BedrockClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     // GCP implementations
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>> {
         Ok(Arc::new(GcpIamClient::new(
@@ -797,6 +828,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>> {
         Ok(Arc::new(GkeContainerClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_aiplatform_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn AiPlatformApi>> {
+        Ok(Arc::new(AiPlatformClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))
@@ -958,6 +999,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn CognitiveServicesAccountsApi>> {
         Ok(Arc::new(AzureCognitiveServicesClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_foundry_finetuning_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn FoundryFineTuningApi>> {
+        Ok(Arc::new(AzureFoundryFineTuningClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

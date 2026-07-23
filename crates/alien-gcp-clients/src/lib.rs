@@ -12,6 +12,7 @@ pub mod platform {
 }
 
 // Re-export all client APIs
+pub use gcp::aiplatform::{AiPlatformApi, AiPlatformClient};
 pub use gcp::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
 pub use gcp::cloud_sql::{CloudSqlApi, CloudSqlClient};
 pub use gcp::cloudasset::{CloudAssetApi, CloudAssetClient};

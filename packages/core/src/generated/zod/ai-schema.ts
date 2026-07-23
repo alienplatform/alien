@@ -4,12 +4,16 @@
 */
 
 import * as z from "zod";
+import { FinetuneSpecSchema } from "./finetune-spec-schema.js";
 
 /**
- * @description Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack\'s external-bindings map; the executor then skips the cloud controller.
+ * @description Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack\'s external-bindings map; the executor then skips the cloud controller.\n\nWhen `finetune` is set, the resource also tunes a base model in the\ncustomer\'s cloud and serves the result through the same gateway (see\n[`FinetuneSpec`]).
  */
 export const AiSchema = z.object({
-    "id": z.string().describe("Identifier for the AI resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
-    }).describe("Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack's external-bindings map; the executor then skips the cloud controller.")
+    get "finetune"(){
+                return z.union([FinetuneSpecSchema, z.null()]).optional()
+              },
+"id": z.string().describe("Identifier for the AI resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
+    }).describe("Represents an AI Gateway resource that provides a unified interface to\nmanaged AI inference services across cloud providers.\n\nBYO-key external providers (OpenAI/Anthropic) are NOT declared here. Like any\nother BYO infrastructure (e.g. external Redis for `kv`), an external AI\nprovider is supplied at deploy time as an `ExternalBinding::Ai` in the\nstack's external-bindings map; the executor then skips the cloud controller.\n\nWhen `finetune` is set, the resource also tunes a base model in the\ncustomer's cloud and serves the result through the same gateway (see\n[`FinetuneSpec`]).")
 
 export type Ai = z.infer<typeof AiSchema>

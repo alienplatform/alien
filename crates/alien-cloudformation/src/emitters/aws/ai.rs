@@ -3,8 +3,9 @@
 //! AWS Bedrock is a regional, account-scoped service with no per-stack
 //! cloud resource to provision. The emitter returns zero CFN resources for
 //! the AI resource itself and emits `AWS::IAM::Policy` resources for every
-//! permission profile that references `ai/invoke` on this resource, attaching
-//! them to the corresponding service-account role.
+//! permission profile that references an `ai/*` set (e.g. `ai/invoke`, or
+//! `ai/finetune` when the resource declares a fine-tuning job) on this
+//! resource, attaching them to the corresponding service-account role.
 //!
 //! The import ref carries the region so the controller can reconstruct the
 //! Bedrock endpoint without a cloud round-trip.

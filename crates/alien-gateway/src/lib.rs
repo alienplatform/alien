@@ -44,6 +44,21 @@ pub struct GatewayBinding {
     pub project: Option<String>,
     /// Azure account endpoint, e.g. `https://acct.openai.azure.com/`.
     pub azure_endpoint: Option<String>,
+    /// A tuned model this binding serves alongside the static catalog, produced
+    /// by a completed fine-tuning job. `None` for a pure inference gateway.
+    pub tuned: Option<TunedRoute>,
+}
+
+/// A tuned model the gateway routes to: the public id an app requests mapped to
+/// the provider-native upstream artifact (a Bedrock custom-model ARN, a Vertex
+/// tuned endpoint id, or a Foundry deployment name). Populated from the
+/// binding's `tunedModel`; consumed by the router before the static catalog.
+#[derive(Debug, Clone)]
+pub struct TunedRoute {
+    /// The public model id apps send in the `model` field.
+    pub served_id: String,
+    /// The provider-native upstream artifact the gateway forwards to.
+    pub upstream_id: String,
 }
 
 /// A running gateway: its loopback base URL and the server task that keeps it alive

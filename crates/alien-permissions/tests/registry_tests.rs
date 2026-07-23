@@ -103,6 +103,59 @@ fn test_ai_invoke_is_inference_only() {
 }
 
 #[test]
+fn test_ai_finetune_grants_job_lifecycle() {
+    let finetune = get_permission_set("ai/finetune").expect("ai/finetune must resolve");
+
+    // AWS: the Bedrock customization-job lifecycle plus custom-model invoke.
+    let aws = finetune.platforms.aws.as_ref().expect("aws platform");
+    let aws_actions: Vec<&String> = aws
+        .iter()
+        .filter_map(|e| e.grant.actions.as_ref())
+        .flatten()
+        .collect();
+    for required in [
+        "bedrock:CreateModelCustomizationJob",
+        "bedrock:GetModelCustomizationJob",
+        "bedrock:GetCustomModel",
+    ] {
+        assert!(
+            aws_actions.iter().any(|a| a.as_str() == required),
+            "ai/finetune AWS must grant {required}"
+        );
+    }
+
+    // GCP: the Vertex tuning-job lifecycle as a least-privilege permissions list,
+    // never a predefined role (same invariant ai/invoke holds).
+    let gcp = finetune.platforms.gcp.as_ref().expect("gcp platform");
+    for (i, entry) in gcp.iter().enumerate() {
+        assert!(
+            entry.grant.predefined_roles.is_none(),
+            "ai/finetune GCP entry {i} must use a permissions list, not predefinedRoles"
+        );
+        let perms = entry.grant.permissions.as_ref().expect("permissions list");
+        assert!(
+            perms.iter().any(|p| p == "aiplatform.tuningJobs.create"),
+            "ai/finetune GCP must grant aiplatform.tuningJobs.create"
+        );
+    }
+
+    // Azure: fine-tuning + deployment need a management-class role, which is
+    // exactly what ai/invoke forbids — assert finetune is allowed to carry it.
+    let azure = finetune.platforms.azure.as_ref().expect("azure platform");
+    let has_contributor = azure.iter().any(|e| {
+        e.grant
+            .predefined_roles
+            .as_ref()
+            .map(|roles| roles.iter().any(|r| r == "Cognitive Services Contributor"))
+            .unwrap_or(false)
+    });
+    assert!(
+        has_contributor,
+        "ai/finetune Azure must grant Cognitive Services Contributor to create tuning jobs and deployments"
+    );
+}
+
+#[test]
 fn test_ai_provision_has_deployment_writes() {
     // The predefined model set is deployed at provision time, so deployments/{write,read}
     // live in ai/provision (control plane), not in ai/management or ai/invoke.
@@ -188,7 +241,7 @@ fn test_openai_user_role_id_resolves() {
 
 #[test]
 fn test_ai_permission_sets_have_all_platforms() {
-    for id in ["ai/provision", "ai/management", "ai/heartbeat", "ai/invoke"] {
+    for id in ["ai/provision", "ai/management", "ai/heartbeat", "ai/invoke", "ai/finetune"] {
         let perm_set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));
         assert_eq!(perm_set.id, id);
         assert!(!perm_set.description.is_empty(), "{id} must have a description");

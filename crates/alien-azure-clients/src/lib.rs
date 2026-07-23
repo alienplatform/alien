@@ -33,6 +33,9 @@ pub use azure::managed_identity::{
 };
 pub use azure::monitor::{AzureMonitorClient, MonitorApi};
 pub use azure::network::{AzureNetworkClient, NetworkApi};
+pub use azure::openai_finetuning::{
+    AzureFoundryFineTuningClient, FineTuningJob, FineTuningJobCreateRequest, FoundryFineTuningApi,
+};
 pub use azure::resource_graph::{AzureResourceGraphClient, ResourceGraphApi};
 pub use azure::resource_skus::{
     AzureResourceSkusClient, ResourceSku, ResourceSkuLocationInfo, ResourceSkuRestriction,

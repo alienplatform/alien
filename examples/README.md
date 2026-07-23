@@ -4,6 +4,8 @@ Each example is a self-contained template you can initialize with `alien init`.
 
 | Template | Description | Language |
 |----------|-------------|----------|
+| [ai-quickstart-ts](./ai-quickstart-ts) | The smallest AI setup: one worker asking cloud LLMs questions through the embedded AI gateway (no API keys). | TypeScript |
+| [ai-finetune-inference-ts](./ai-finetune-inference-ts) | Fine-tune a base model in the customer's cloud and serve it for inference — data and weights never leave the account. | TypeScript |
 | [remote-worker-ts](./remote-worker-ts) | Execute tool calls in your customer's cloud. The AI worker pattern. | TypeScript |
 | [basic-worker-ts](./basic-worker-ts) | The simplest Alien worker, in TypeScript. | TypeScript |
 | [basic-worker-rs](./basic-worker-rs) | The simplest Alien worker, in Rust. | Rust |

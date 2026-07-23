@@ -3,9 +3,10 @@
 //! AWS Bedrock is a regional, account-scoped service with no per-stack
 //! cloud resource to provision. The emitter returns an empty fragment for
 //! the resource itself and emits any resource-scoped `aws_iam_role_policy`
-//! blocks for permission profiles that reference `ai/invoke` on this
-//! resource. The region is carried in the import ref so the controller can
-//! reconstruct the Bedrock endpoint without a cloud round-trip.
+//! blocks for permission profiles that reference an `ai/*` set (e.g.
+//! `ai/invoke`, or `ai/finetune` when the resource declares a fine-tuning
+//! job) on this resource. The region is carried in the import ref so the
+//! controller can reconstruct the Bedrock endpoint without a cloud round-trip.
 //!
 //! Stack-level permissions flow through `AwsServiceAccountEmitter` via
 //! `stack_permission_sets`; resource-scoped grants are emitted here.

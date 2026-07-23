@@ -28,6 +28,7 @@ pub mod managed_identity;
 pub mod models;
 pub mod monitor;
 pub mod network;
+pub mod openai_finetuning;
 pub mod private_networking;
 pub mod resource_graph;
 pub mod resource_skus;

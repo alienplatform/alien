@@ -1,0 +1,3 @@
+name = "ai-finetune-inference-ts"
+description = "Fine-tune a base model in the customer's cloud and serve it for inference through the embedded Alien AI gateway — training data and tuned weights never leave the account."
+language = "TypeScript"

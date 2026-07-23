@@ -93,6 +93,8 @@ use utoipa::OpenApi;
     PostgresOutputs,
     Ai,
     AiOutputs,
+    FinetuneSpec,
+    FinetuneMethod,
     Queue,
     QueueOutputs,
     Email,
