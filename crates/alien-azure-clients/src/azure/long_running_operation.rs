@@ -1,4 +1,7 @@
-use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
+use crate::azure::common::{
+    create_azure_http_error_with_context, AzureClientBase, AzureRequestBuilder,
+};
+use crate::azure::error::{safe_http_response_context, sanitized_diagnostic_url};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
@@ -25,6 +28,47 @@ struct AsyncOperationStatus {
     /// Optional error information if the operation failed
     #[serde(default)]
     error: Option<serde_json::Value>,
+}
+
+fn safe_async_operation_error_code(error: Option<&serde_json::Value>) -> Option<&str> {
+    error
+        .and_then(|error| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 128
+                && code.bytes().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, b'.' | b'_' | b'-')
+                })
+        })
+}
+
+fn parse_location_result_response<T: serde::de::DeserializeOwned>(
+    status: StatusCode,
+    body: &str,
+    location_url: &str,
+    operation_name: &str,
+    resource_name: &str,
+) -> Result<T> {
+    let diagnostic_url = sanitized_diagnostic_url(location_url);
+    if !status.is_success() {
+        return Err(create_azure_http_error_with_context(
+            status,
+            operation_name,
+            "LongRunningOperation",
+            resource_name,
+            body,
+            &diagnostic_url,
+        ));
+    }
+
+    serde_json::from_str(body)
+        .into_alien_error()
+        .context(safe_http_response_context(
+            format!("Azure {operation_name}: failed to parse result from Location URL"),
+            diagnostic_url,
+            status,
+        ))
 }
 
 // -----------------------------------------------------------------------------
@@ -222,6 +266,7 @@ impl LongRunningOperationClient {
             .client
             .execute(signed)
             .await
+            .map_err(reqwest::Error::without_url)
             .into_alien_error()
             .context(ErrorData::HttpRequestFailed {
                 message: format!(
@@ -233,6 +278,7 @@ impl LongRunningOperationClient {
         let body = resp
             .text()
             .await
+            .map_err(reqwest::Error::without_url)
             .into_alien_error()
             .context(ErrorData::HttpRequestFailed {
                 message: format!(
@@ -240,22 +286,7 @@ impl LongRunningOperationClient {
                 ),
             })?;
 
-        if !status.is_success() {
-            return Err(AlienError::new(ErrorData::GenericError {
-                message: format!(
-                    "Azure {operation_name} for '{resource_name}': \
-                     Location URL returned {status}. Body: {body}"
-                ),
-            }));
-        }
-
-        serde_json::from_str(&body)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
-                message: format!(
-                    "Azure {operation_name}: failed to parse result from Location URL. Body: {body}"
-                ),
-            })
+        parse_location_result_response(status, &body, location_url, operation_name, resource_name)
     }
 }
 
@@ -268,7 +299,8 @@ impl LongRunningOperationApi for LongRunningOperationClient {
         operation_name: &str,
         resource_name: &str,
     ) -> Result<Option<String>> {
-        debug!(operation = %operation_name, resource = %resource_name, url = %operation.url, "Checking Azure async operation status");
+        let diagnostic_url = sanitized_diagnostic_url(&operation.url);
+        debug!(operation = %operation_name, resource = %resource_name, url = %diagnostic_url, "Checking Azure async operation status");
         let bearer_token = self
             .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
@@ -290,15 +322,14 @@ impl LongRunningOperationApi for LongRunningOperationClient {
         match status {
             StatusCode::OK => {
                 // Got 200 OK - need to check the JSON status field
-                let body =
-                    resp.text()
-                        .await
-                        .into_alien_error()
-                        .context(ErrorData::HttpRequestFailed {
-                            message: format!(
-                                "Azure {operation_name}: failed to read response body"
-                            ),
-                        })?;
+                let body = resp
+                    .text()
+                    .await
+                    .map_err(reqwest::Error::without_url)
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        message: format!("Azure {operation_name}: failed to read response body"),
+                    })?;
 
                 // Try to parse as async operation status first
                 if let Ok(operation_status) = serde_json::from_str::<AsyncOperationStatus>(&body) {
@@ -310,17 +341,17 @@ impl LongRunningOperationApi for LongRunningOperationClient {
                             Ok(Some(body))
                         }
                         "failed" | "canceled" => {
-                            // Operation failed or was canceled
-                            let error_msg = if let Some(error) = &operation_status.error {
-                                format!("Operation {}: {}", operation_status.status, error)
-                            } else {
-                                format!("Operation {}", operation_status.status)
-                            };
-                            warn!(operation = %operation_name, resource = %resource_name, status = %operation_status.status, error = ?operation_status.error, "❌ Azure async operation failed");
+                            // Provider messages can reflect request payloads. Preserve only a
+                            // tightly validated error code for diagnostics.
+                            let terminal_status = operation_status.status.to_ascii_lowercase();
+                            let error_code =
+                                safe_async_operation_error_code(operation_status.error.as_ref())
+                                    .unwrap_or("unclassified");
+                            warn!(operation = %operation_name, resource = %resource_name, status = %terminal_status, azure_error_code = %error_code, "❌ Azure async operation failed");
                             Err(AlienError::new(ErrorData::GenericError {
                                 message: format!(
-                                    "Azure {operation_name} for '{resource_name}' {}: {error_msg}",
-                                    operation_status.status.to_lowercase()
+                                    "Azure {operation_name} for '{resource_name}' \
+                                     {terminal_status} (Azure code: {error_code})"
                                 ),
                             }))
                         }
@@ -339,13 +370,12 @@ impl LongRunningOperationApi for LongRunningOperationClient {
 
                     // This is likely a resource response (e.g., storage account), check for provisioningState
                     let parsed_json: serde_json::Value = serde_json::from_str(&body)
-                        .into_alien_error().context(ErrorData::HttpResponseError {
-                            message: format!("Azure {operation_name}: failed to parse response JSON. Body: {body}"),
-                            url: operation.url.clone(),
-                            http_status: 200,
-                            http_request_text: None,
-                            http_response_text: Some(body.clone()),
-                        })?;
+                        .into_alien_error()
+                        .context(safe_http_response_context(
+                            format!("Azure {operation_name}: failed to parse response JSON"),
+                            &diagnostic_url,
+                            StatusCode::OK,
+                        ))?;
 
                     // Look for provisioningState in properties
                     if let Some(properties) = parsed_json.get("properties") {
@@ -405,7 +435,6 @@ impl LongRunningOperationApi for LongRunningOperationClient {
                     resource_name,
                     &body,
                     &operation.url,
-                    None, // GET request has no body
                 ))
             }
         }
@@ -419,7 +448,8 @@ impl LongRunningOperationApi for LongRunningOperationClient {
         resource_name: &str,
     ) -> Result<String> {
         let default_delay = Duration::from_secs(5);
-        info!(operation = %operation_name, resource = %resource_name, url = %operation.url, "🚀 Starting Azure async operation polling");
+        let diagnostic_url = sanitized_diagnostic_url(&operation.url);
+        info!(operation = %operation_name, resource = %resource_name, url = %diagnostic_url, "🚀 Starting Azure async operation polling");
 
         loop {
             match self
@@ -492,5 +522,169 @@ impl<T> OperationResult<T> {
             OperationResult::Completed(result) => Some(result),
             OperationResult::LongRunning(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    use httpmock::{Method::GET, MockServer};
+
+    use super::*;
+    use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+
+    struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_client(server: &MockServer) -> LongRunningOperationClient {
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+        });
+        LongRunningOperationClient::new(Client::new(), AzureTokenCache::new(config))
+    }
+
+    #[test]
+    fn location_failures_keep_safe_context_without_body_or_query_values() {
+        const RESPONSE_SECRET: &str = "LRO_RESPONSE_SECRET_0123456789";
+        const QUERY_SECRET: &str = "LRO_QUERY_SECRET_0123456789";
+        const USER_SECRET: &str = "LRO_USER_SECRET_0123456789";
+        const PASSWORD_SECRET: &str = "LRO_PASSWORD_SECRET_0123456789";
+        let body = format!(
+            r#"{{"error":{{"code":"AuthorizationFailed","message":"{RESPONSE_SECRET}"}}}}"#
+        );
+        let location_url = format!(
+            "https://{USER_SECRET}:{PASSWORD_SECRET}@management.azure.com/operations/operation-id?sig={QUERY_SECRET}"
+        );
+
+        let error = parse_location_result_response::<serde_json::Value>(
+            StatusCode::FORBIDDEN,
+            &body,
+            &location_url,
+            "CreateWidget",
+            "widget",
+        )
+        .expect_err("forbidden Location response should fail");
+        let serialized = serde_json::to_string(&error).unwrap();
+
+        assert_eq!(error.code, "REMOTE_ACCESS_DENIED");
+        assert!(serialized.contains("AuthorizationFailed"));
+        assert!(serialized.contains("https://management.azure.com/operations/operation-id"));
+        assert!(!serialized.contains(RESPONSE_SECRET));
+        assert!(!serialized.contains(QUERY_SECRET));
+        assert!(!serialized.contains(USER_SECRET));
+        assert!(!serialized.contains(PASSWORD_SECRET));
+    }
+
+    #[test]
+    fn malformed_location_result_does_not_retain_query_values() {
+        const QUERY_SECRET: &str = "LRO_PARSE_QUERY_SECRET_0123456789";
+        let location_url =
+            format!("https://management.azure.com/operations/operation-id?sig={QUERY_SECRET}");
+
+        let error = parse_location_result_response::<serde_json::Value>(
+            StatusCode::OK,
+            "not-json",
+            &location_url,
+            "CreateWidget",
+            "widget",
+        )
+        .expect_err("malformed Location result should fail");
+        let serialized = serde_json::to_string(&error).unwrap();
+
+        assert!(serialized.contains("https://management.azure.com/operations/operation-id"));
+        assert!(!serialized.contains(QUERY_SECRET));
+    }
+
+    #[tokio::test]
+    async fn failed_poll_retains_only_safe_code_in_error_and_logs() {
+        const RESPONSE_SECRET: &str = "LRO_TERMINAL_RESPONSE_SECRET_0123456789";
+        let server = MockServer::start_async().await;
+        let failed_poll = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/failed-operation");
+                then.status(200).json_body(serde_json::json!({
+                    "status": "Failed",
+                    "error": {
+                        "code": "OperationFailed",
+                        "message": RESPONSE_SECRET
+                    }
+                }));
+            })
+            .await;
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let captured_logs = Arc::clone(&logs);
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || CapturedLogWriter(Arc::clone(&captured_logs)))
+            .finish();
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+        let client = test_client(&server);
+        let operation = LongRunningOperation {
+            url: format!("{}/failed-operation", server.base_url()),
+            retry_after: None,
+            location_url: None,
+        };
+
+        let error = client
+            .check_status(&operation, "CreateWidget", "widget")
+            .await
+            .expect_err("terminal failed poll should fail");
+        failed_poll.assert_async().await;
+        let serialized = serde_json::to_string(&error).unwrap();
+        let captured = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+
+        assert!(serialized.contains("OperationFailed"));
+        assert!(captured.contains("OperationFailed"));
+        assert!(!serialized.contains(RESPONSE_SECRET));
+        assert!(!captured.contains(RESPONSE_SECRET));
+    }
+
+    #[tokio::test]
+    async fn failed_poll_rejects_unsafe_error_code() {
+        const UNSAFE_CODE: &str = "UNSAFE LRO CODE WITH SPACES";
+        let server = MockServer::start_async().await;
+        let failed_poll = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/unsafe-code-operation");
+                then.status(200).json_body(serde_json::json!({
+                    "status": "Failed",
+                    "error": {
+                        "code": UNSAFE_CODE,
+                        "message": "provider detail"
+                    }
+                }));
+            })
+            .await;
+        let client = test_client(&server);
+        let operation = LongRunningOperation {
+            url: format!("{}/unsafe-code-operation", server.base_url()),
+            retry_after: None,
+            location_url: None,
+        };
+
+        let error = client
+            .check_status(&operation, "CreateWidget", "widget")
+            .await
+            .expect_err("terminal failed poll should fail");
+        failed_poll.assert_async().await;
+        let serialized = serde_json::to_string(&error).unwrap();
+
+        assert!(serialized.contains("Azure code: unclassified"));
+        assert!(!serialized.contains(UNSAFE_CODE));
+        assert!(!serialized.contains("provider detail"));
     }
 }

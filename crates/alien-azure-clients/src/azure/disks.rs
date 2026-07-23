@@ -168,7 +168,7 @@ impl ManagedDisksApi for AzureManagedDisksClient {
                 message: format!("Azure GetDisk: JSON parse error for {}", disk_name),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;

@@ -422,7 +422,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 ),
                 url: url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;
@@ -475,7 +475,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 message: "Azure ListContainerApps: JSON parse error".to_string(),
                 url,
                 http_status: 200,
-                http_response_text: Some(body),
+                http_response_text: None,
                 http_request_text: None,
             })
     }
@@ -689,7 +689,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 url: url,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
             })?;
 
         Ok(managed_environment)
@@ -804,7 +804,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body),
+                http_response_text: None,
                 http_request_text: None,
             })
     }
@@ -947,7 +947,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 message: format!("Azure GetJob: JSON parse error for {}", job_name),
                 url: url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;
@@ -1221,7 +1221,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 ),
                 url: url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 
@@ -1278,7 +1278,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 ),
                 url: url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 
@@ -1339,7 +1339,7 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 ),
                 url: url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 
