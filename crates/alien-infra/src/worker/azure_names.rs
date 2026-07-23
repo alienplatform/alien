@@ -1,3 +1,5 @@
+use alien_azure_clients::authorization::Scope;
+
 const DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
 const DAPR_COMPONENT_IDENTITY_DOMAIN: &str = "alien.azure.dapr.component.v1";
 
@@ -127,6 +129,61 @@ pub(super) fn get_azure_storage_event_subscription_name(
     format!("{stem}{suffix}")
 }
 
+pub(super) fn commands_queue_name(container_app_name: &str) -> String {
+    format!("{container_app_name}-rq")
+}
+
+pub(super) fn storage_trigger_queue_name(container_app_name: &str, storage_id: &str) -> String {
+    format!("{container_app_name}-storage-{storage_id}")
+}
+
+pub(super) fn service_bus_queue_scope(
+    resource_group_name: &str,
+    namespace_name: &str,
+    queue_name: &str,
+) -> Scope {
+    Scope::Resource {
+        resource_group_name: resource_group_name.to_string(),
+        resource_provider: "Microsoft.ServiceBus".to_string(),
+        parent_resource_path: Some(format!("namespaces/{namespace_name}")),
+        resource_type: "queues".to_string(),
+        resource_name: queue_name.to_string(),
+    }
+}
+
+pub(super) fn commands_sender_role_assignment_name(
+    resource_prefix: &str,
+    worker_id: &str,
+    principal_id: &str,
+    namespace_name: &str,
+    queue_name: &str,
+) -> String {
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!(
+            "deployment:azure:commands-sender:{resource_prefix}:{worker_id}:{principal_id}:{namespace_name}:{queue_name}"
+        )
+        .as_bytes(),
+    )
+    .to_string()
+}
+
+pub(super) fn storage_trigger_receiver_role_assignment_name(
+    resource_prefix: &str,
+    worker_id: &str,
+    storage_id: &str,
+    principal_id: &str,
+) -> String {
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!(
+            "deployment:azure:storage-trigger-receiver:{resource_prefix}:{worker_id}:{storage_id}:{principal_id}"
+        )
+        .as_bytes(),
+    )
+    .to_string()
+}
+
 fn append_raw_input_hash(normalized: &str, raw: &str) -> String {
     let hash = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, raw.as_bytes())
         .simple()
@@ -202,13 +259,76 @@ fn append_hash(normalized: &str, hash: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        commands_queue_name, commands_sender_role_assignment_name,
         get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
         get_azure_internal_commands_dapr_component_name,
         get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
         get_legacy_azure_blob_trigger_dapr_component_names,
         get_legacy_azure_internal_commands_dapr_component_names,
-        get_legacy_azure_queue_trigger_dapr_component_names, DAPR_COMPONENT_NAME_MAX_LEN,
+        get_legacy_azure_queue_trigger_dapr_component_names, service_bus_queue_scope,
+        storage_trigger_queue_name, storage_trigger_receiver_role_assignment_name,
+        DAPR_COMPONENT_NAME_MAX_LEN,
     };
+    use alien_azure_clients::authorization::Scope;
+
+    #[test]
+    fn auxiliary_resource_identities_match_the_creation_contract() {
+        assert_eq!(commands_queue_name("app"), "app-rq");
+        assert_eq!(
+            storage_trigger_queue_name("app", "assets"),
+            "app-storage-assets"
+        );
+
+        let commands_name = commands_sender_role_assignment_name(
+            "deployment",
+            "worker",
+            "principal",
+            "namespace",
+            "app-rq",
+        );
+        assert_eq!(
+            commands_name,
+            uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                b"deployment:azure:commands-sender:deployment:worker:principal:namespace:app-rq",
+            )
+            .to_string()
+        );
+
+        let storage_name = storage_trigger_receiver_role_assignment_name(
+            "deployment",
+            "worker",
+            "assets",
+            "principal",
+        );
+        assert_eq!(
+            storage_name,
+            uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                b"deployment:azure:storage-trigger-receiver:deployment:worker:assets:principal",
+            )
+            .to_string()
+        );
+
+        let Scope::Resource {
+            resource_group_name,
+            resource_provider,
+            parent_resource_path,
+            resource_type,
+            resource_name,
+        } = service_bus_queue_scope("rg", "namespace", "app-rq")
+        else {
+            panic!("queue scope must be a resource scope");
+        };
+        assert_eq!(resource_group_name, "rg");
+        assert_eq!(resource_provider, "Microsoft.ServiceBus");
+        assert_eq!(
+            parent_resource_path.as_deref(),
+            Some("namespaces/namespace")
+        );
+        assert_eq!(resource_type, "queues");
+        assert_eq!(resource_name, "app-rq");
+    }
 
     #[test]
     fn dapr_component_name_preserves_canonical_names_within_limit() {

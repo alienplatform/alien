@@ -45,10 +45,14 @@ impl ResourceImporter for AzureWorkerImporter {
             container_apps_certificate_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            commands_resource_group_name: None,
             commands_namespace_name: None,
             commands_queue_name: None,
             commands_dapr_component: None,
+            commands_dapr_component_deletion_candidates: Vec::new(),
             commands_sender_role_assignment_id: None,
+            commands_sender_role_assignment_intent: None,
+            commands_sender_role_assignment_discovery_complete: false,
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
             container_apps_environment_wake_wait_until_epoch_secs: None,
@@ -62,6 +66,7 @@ impl ResourceImporter for AzureWorkerImporter {
             dapr_component_deletion_candidates_initialized: false,
             auxiliary_teardown_candidates_initialized: false,
             commands_update_teardown_candidates_initialized: false,
+            trigger_update_teardown_candidates_initialized: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

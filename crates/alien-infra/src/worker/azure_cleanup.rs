@@ -1,100 +1,166 @@
 use super::{
-    get_azure_internal_commands_dapr_component_name, get_azure_storage_event_subscription_name,
-    management_profile_dispatches_commands, AzureStorageTriggerInfrastructure,
-    AzureStorageTriggerTeardownProgress, AzureWorkerController, CommandsTeardownResult,
-    StorageTriggerTeardownResult,
+    get_azure_storage_event_subscription_name, AzureStorageTriggerInfrastructure,
+    AzureStorageTriggerTeardownProgress, AzureWorkerController, CommandsSenderReconcileResult,
+    CommandsTeardownResult, StorageTriggerTeardownResult,
 };
-use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{ResourceRef, Worker};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, ContextError};
 use std::time::Duration;
 use tracing::info;
 
-use crate::core::{AzurePermissionsHelper, ResourceControllerContext};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_outputs, get_resource_group_name,
 };
+use crate::worker::azure::role_assignments::discover_proven_role_assignments;
+use crate::worker::azure::trigger_targets::storage_trigger_receiver_role_definition_id;
 use crate::worker::azure_dapr_components::{
     delete_dapr_component_if_owned, DaprComponentDeleteOperation,
 };
-
-pub(super) fn commands_queue_name(container_app_name: &str) -> String {
-    format!("{container_app_name}-rq")
-}
-
-pub(super) fn storage_trigger_queue_name(container_app_name: &str, storage_id: &str) -> String {
-    format!("{container_app_name}-storage-{storage_id}")
-}
-
-pub(super) fn service_bus_queue_scope(
-    resource_group_name: &str,
-    namespace_name: &str,
-    queue_name: &str,
-) -> Scope {
-    Scope::Resource {
-        resource_group_name: resource_group_name.to_string(),
-        resource_provider: "Microsoft.ServiceBus".to_string(),
-        parent_resource_path: Some(format!("namespaces/{namespace_name}")),
-        resource_type: "queues".to_string(),
-        resource_name: queue_name.to_string(),
-    }
-}
-
-pub(super) fn commands_sender_role_assignment_name(
-    resource_prefix: &str,
-    worker_id: &str,
-    principal_id: &str,
-    namespace_name: &str,
-    queue_name: &str,
-) -> String {
-    uuid::Uuid::new_v5(
-        &uuid::Uuid::NAMESPACE_OID,
-        format!(
-            "deployment:azure:commands-sender:{resource_prefix}:{worker_id}:{principal_id}:{namespace_name}:{queue_name}"
-        )
-        .as_bytes(),
-    )
-    .to_string()
-}
-
-pub(super) fn storage_trigger_receiver_role_assignment_name(
-    resource_prefix: &str,
-    worker_id: &str,
-    storage_id: &str,
-    principal_id: &str,
-) -> String {
-    uuid::Uuid::new_v5(
-        &uuid::Uuid::NAMESPACE_OID,
-        format!(
-            "deployment:azure:storage-trigger-receiver:{resource_prefix}:{worker_id}:{storage_id}:{principal_id}"
-        )
-        .as_bytes(),
-    )
-    .to_string()
-}
+use crate::worker::azure_dapr_names_migration::commands_component_removal_names;
+use crate::worker::azure_names::{
+    commands_queue_name, service_bus_queue_scope, storage_trigger_queue_name,
+    storage_trigger_receiver_role_assignment_name,
+};
 
 fn commands_queue_cleanup_target(
+    resource_group_name: Option<String>,
     namespace_name: Option<String>,
     queue_name: Option<String>,
     worker_id: &str,
-) -> Result<Option<(String, String)>> {
-    match (namespace_name, queue_name) {
-        (Some(namespace_name), Some(queue_name)) => Ok(Some((namespace_name, queue_name))),
-        (None, None) => Ok(None),
-        (namespace_name, queue_name) => Err(AlienError::new(
+) -> Result<Option<(String, String, String)>> {
+    match (resource_group_name, namespace_name, queue_name) {
+        (Some(resource_group_name), Some(namespace_name), Some(queue_name)) => {
+            Ok(Some((resource_group_name, namespace_name, queue_name)))
+        }
+        (None, None, None) => Ok(None),
+        (resource_group_name, namespace_name, queue_name) => Err(AlienError::new(
             ErrorData::ResourceControllerConfigError {
                 resource_id: worker_id.to_string(),
                 message: format!(
-                    "Commands cleanup state is incomplete: namespace={namespace_name:?}, queue={queue_name:?}"
+                    "Commands cleanup state is incomplete: resource_group={resource_group_name:?}, namespace={namespace_name:?}, queue={queue_name:?}"
                 ),
             },
         )),
     }
 }
 
+pub(super) struct AzureCommandsQueueTarget {
+    pub(super) resource_group_name: String,
+    pub(super) namespace_name: String,
+    pub(super) queue_name: String,
+}
+
+pub(super) enum CommandsQueueTargetPreparation {
+    Ready,
+    Checkpoint,
+    LongRunning(Duration),
+}
+
 impl AzureWorkerController {
+    pub(super) fn commands_cleanup_target(
+        &self,
+        worker_id: &str,
+    ) -> Result<Option<(String, String, String)>> {
+        commands_queue_cleanup_target(
+            self.commands_resource_group_name.clone(),
+            self.commands_namespace_name.clone(),
+            self.commands_queue_name.clone(),
+            worker_id,
+        )
+    }
+
+    pub(super) async fn prepare_commands_target_for_setup(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+        container_app_name: &str,
+        desired: &AzureCommandsQueueTarget,
+    ) -> Result<CommandsQueueTargetPreparation> {
+        // Controllers written before commands resource-group tracking contain
+        // exactly namespace+queue. Preserve that historical target first,
+        // even when the namespace dependency has since rotated, so teardown
+        // can run against the old namespace instead of deadlocking on a
+        // malformed partial triple. Other partial shapes remain fail-closed.
+        if self.commands_resource_group_name.is_none()
+            && self.commands_namespace_name.is_some()
+            && self.commands_queue_name.is_some()
+        {
+            let namespace_ref = ResourceRef::new(
+                alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+                "default-service-bus-namespace",
+            );
+            let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
+            self.commands_resource_group_name =
+                Some(namespace_controller.resource_group_name(ctx)?);
+            self.commands_sender_role_assignment_discovery_complete = false;
+            return Ok(CommandsQueueTargetPreparation::Checkpoint);
+        }
+
+        let target_field_count = [
+            self.commands_resource_group_name.is_some(),
+            self.commands_namespace_name.is_some(),
+            self.commands_queue_name.is_some(),
+        ]
+        .into_iter()
+        .filter(|is_some| *is_some)
+        .count();
+        if target_field_count < 3
+            && self
+                .commands_resource_group_name
+                .as_ref()
+                .is_none_or(|tracked| tracked == &desired.resource_group_name)
+            && self
+                .commands_namespace_name
+                .as_ref()
+                .is_none_or(|tracked| tracked == &desired.namespace_name)
+            && self
+                .commands_queue_name
+                .as_ref()
+                .is_none_or(|tracked| tracked == &desired.queue_name)
+        {
+            self.commands_resource_group_name
+                .get_or_insert_with(|| desired.resource_group_name.clone());
+            self.commands_namespace_name
+                .get_or_insert_with(|| desired.namespace_name.clone());
+            self.commands_queue_name
+                .get_or_insert_with(|| desired.queue_name.clone());
+            self.commands_sender_role_assignment_discovery_complete = false;
+            return Ok(CommandsQueueTargetPreparation::Checkpoint);
+        }
+
+        let Some((tracked_resource_group, tracked_namespace, tracked_queue)) =
+            self.commands_cleanup_target(&worker.id)?
+        else {
+            return Ok(CommandsQueueTargetPreparation::Ready);
+        };
+        if tracked_resource_group == desired.resource_group_name
+            && tracked_namespace == desired.namespace_name
+            && tracked_queue == desired.queue_name
+        {
+            return Ok(CommandsQueueTargetPreparation::Ready);
+        }
+
+        if !self.commands_update_teardown_candidates_initialized {
+            self.initialize_commands_teardown_candidates(ctx, worker, container_app_name)
+                .await?;
+            self.commands_update_teardown_candidates_initialized = true;
+            return Ok(CommandsQueueTargetPreparation::Checkpoint);
+        }
+        match self.delete_commands_infrastructure_step(ctx).await? {
+            CommandsTeardownResult::Complete => {
+                self.commands_update_teardown_candidates_initialized = false;
+                Ok(CommandsQueueTargetPreparation::Checkpoint)
+            }
+            CommandsTeardownResult::Mutated => Ok(CommandsQueueTargetPreparation::Checkpoint),
+            CommandsTeardownResult::LongRunning(delay) => {
+                Ok(CommandsQueueTargetPreparation::LongRunning(delay))
+            }
+        }
+    }
+
     pub(super) async fn delete_commands_infrastructure_step(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -125,7 +191,7 @@ impl AzureWorkerController {
                 DaprComponentDeleteOperation::NotFound
                 | DaprComponentDeleteOperation::Foreign
                 | DaprComponentDeleteOperation::Completed => {
-                    self.commands_dapr_component = None;
+                    self.complete_commands_dapr_component_deletion();
                     return Ok(CommandsTeardownResult::Mutated);
                 }
                 DaprComponentDeleteOperation::LongRunning(lro) => {
@@ -138,26 +204,12 @@ impl AzureWorkerController {
             }
         }
 
-        if let Some(assignment_id) = self.commands_sender_role_assignment_id.clone() {
-            let worker = ctx.desired_resource_config::<Worker>()?;
-            let container_app_name = self.container_app_name.as_deref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: worker.id.clone(),
-                    message: "Container app name not set in commands cleanup state".to_string(),
-                })
-            })?;
-            let expected_assignment_id =
-                Self::provable_commands_sender_role_assignment_id(ctx, worker, container_app_name)
-                    .await?;
-            if expected_assignment_id.as_deref() == Some(assignment_id.as_str()) {
-                Self::delete_commands_role_assignment(ctx, &assignment_id, "sender").await?;
-            } else {
-                info!(
-                    assignment_id,
-                    "Discarding unprovable legacy commands sender cursor without deleting it"
-                );
-            }
-            self.commands_sender_role_assignment_id = None;
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        if !matches!(
+            self.delete_commands_sender_role_assignment_step(ctx, worker)
+                .await?,
+            CommandsSenderReconcileResult::Complete
+        ) {
             return Ok(CommandsTeardownResult::Mutated);
         }
 
@@ -170,21 +222,9 @@ impl AzureWorkerController {
             return Ok(CommandsTeardownResult::Mutated);
         }
 
-        if let Some((namespace_name, queue_name)) = commands_queue_cleanup_target(
-            self.commands_namespace_name.clone(),
-            self.commands_queue_name.clone(),
-            ctx.desired_config.id(),
-        )? {
-            let namespace_ref = ResourceRef::new(
-                alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
-                "default-service-bus-namespace",
-            );
-            let resource_group_name = match ctx
-                .require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)
-            {
-                Ok(controller) => controller.resource_group_name(ctx)?,
-                Err(_) => get_resource_group_name(ctx.state)?,
-            };
+        if let Some((resource_group_name, namespace_name, queue_name)) =
+            self.commands_cleanup_target(ctx.desired_config.id())?
+        {
             info!(namespace=%namespace_name, queue=%queue_name, "Deleting commands Service Bus queue");
             let management_client = ctx
                 .service_provider
@@ -215,12 +255,25 @@ impl AzureWorkerController {
                     }));
                 }
             }
+            self.commands_resource_group_name = None;
             self.commands_namespace_name = None;
             self.commands_queue_name = None;
+            self.commands_sender_role_assignment_discovery_complete = false;
             return Ok(CommandsTeardownResult::Mutated);
         }
 
         Ok(CommandsTeardownResult::Complete)
+    }
+
+    pub(super) fn complete_commands_dapr_component_deletion(&mut self) {
+        if let Some(component_name) = self.commands_dapr_component.take() {
+            self.commands_dapr_component_deletion_candidates
+                .retain(|candidate| candidate != &component_name);
+        }
+        self.commands_dapr_component = self
+            .commands_dapr_component_deletion_candidates
+            .first()
+            .cloned();
     }
 
     pub(super) async fn delete_commands_role_assignment(
@@ -309,17 +362,46 @@ impl AzureWorkerController {
                     AzureStorageTriggerTeardownProgress::ReceiverRoleAssignment;
             }
             AzureStorageTriggerTeardownProgress::ReceiverRoleAssignment => {
-                if let Some(assignment_id) = infrastructure.receiver_role_assignment_id {
-                    let authorization_client = ctx
-                        .service_provider
-                        .get_azure_authorization_client(azure_config)?;
+                let Some(storage_id) = infrastructure.storage_id.as_deref() else {
+                    self.storage_trigger_teardown_progress =
+                        AzureStorageTriggerTeardownProgress::Queue;
+                    return Ok(StorageTriggerTeardownResult::Mutated);
+                };
+                let worker = ctx.desired_resource_config::<Worker>()?;
+                let queue_scope = service_bus_queue_scope(
+                    &infrastructure.service_bus_resource_group,
+                    &infrastructure.namespace_name,
+                    &infrastructure.queue_name,
+                );
+                let authorization_client = ctx
+                    .service_provider
+                    .get_azure_authorization_client(azure_config)?;
+                let role_definition_id =
+                    storage_trigger_receiver_role_definition_id(&azure_config.subscription_id);
+                let assignments = discover_proven_role_assignments(
+                    ctx,
+                    &queue_scope,
+                    &role_definition_id,
+                    &worker.id,
+                    "storage receiver",
+                    |principal_id| {
+                        storage_trigger_receiver_role_assignment_name(
+                            ctx.resource_prefix,
+                            &worker.id,
+                            storage_id,
+                            principal_id,
+                        )
+                    },
+                )
+                .await?;
+                for assignment in assignments {
                     match authorization_client
-                        .delete_role_assignment_by_id(assignment_id.clone())
+                        .delete_role_assignment_by_id(assignment.id.clone())
                         .await
                     {
                         Ok(_) => info!(
-                            assignment_id=%assignment_id,
-                            "Deleted storage-trigger receiver role assignment"
+                            assignment_id=%assignment.id,
+                            "Deleted proven storage-trigger receiver role assignment"
                         ),
                         Err(error)
                             if matches!(
@@ -328,20 +410,21 @@ impl AzureWorkerController {
                             ) =>
                         {
                             info!(
-                                assignment_id=%assignment_id,
-                                "Storage-trigger receiver role assignment was already deleted"
+                                assignment_id=%assignment.id,
+                                "Proven storage-trigger receiver role assignment was already deleted"
                             );
                         }
                         Err(error) => {
                             return Err(error.context(ErrorData::CloudPlatformError {
                                 message: format!(
-                                    "Failed to delete storage-trigger receiver role assignment '{}'",
-                                    assignment_id
+                                    "Failed to delete proven storage-trigger receiver role assignment '{}'",
+                                    assignment.id
                                 ),
-                                resource_id: Some(ctx.desired_config.id().to_string()),
+                                resource_id: Some(worker.id.clone()),
                             }));
                         }
                     }
+                    return Ok(StorageTriggerTeardownResult::Mutated);
                 }
                 self.storage_trigger_teardown_progress = AzureStorageTriggerTeardownProgress::Queue;
             }
@@ -405,9 +488,46 @@ impl AzureWorkerController {
             .triggers
             .iter()
             .any(|trigger| matches!(trigger, alien_core::WorkerTrigger::Storage { .. }));
-        if !worker.commands_enabled && !has_storage_triggers {
+        let has_commands_candidates = worker.commands_enabled
+            || self.commands_resource_group_name.is_some()
+            || self.commands_namespace_name.is_some()
+            || self.commands_queue_name.is_some()
+            || self.commands_dapr_component.is_some()
+            || !self.commands_dapr_component_deletion_candidates.is_empty()
+            || self.commands_sender_role_assignment_id.is_some()
+            || self.commands_sender_role_assignment_intent.is_some()
+            || self.commands_receiver_role_assignment_id.is_some();
+        if !has_commands_candidates && !has_storage_triggers {
             self.auxiliary_teardown_candidates_initialized = true;
             return Ok(true);
+        }
+
+        if has_storage_triggers {
+            self.initialize_storage_trigger_teardown_candidates(ctx, worker, container_app_name)
+                .await?;
+        }
+
+        if has_commands_candidates {
+            self.initialize_commands_teardown_candidates(ctx, worker, container_app_name)
+                .await?;
+        }
+
+        self.auxiliary_teardown_candidates_initialized = true;
+        Ok(true)
+    }
+
+    pub(super) async fn initialize_storage_trigger_teardown_candidates(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        worker: &Worker,
+        container_app_name: &str,
+    ) -> Result<()> {
+        if !worker
+            .triggers
+            .iter()
+            .any(|trigger| matches!(trigger, alien_core::WorkerTrigger::Storage { .. }))
+        {
+            return Ok(());
         }
 
         let azure_config = ctx.get_azure_config()?;
@@ -423,94 +543,91 @@ impl AzureWorkerController {
             })
         })?;
         let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
+        let authorization_client = ctx
+            .service_provider
+            .get_azure_authorization_client(azure_config)?;
+        let service_account_ref = ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            format!("{}-sa", worker.get_permissions()),
+        );
+        let service_account = ctx
+            .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &service_account_ref,
+            )?;
+        let execution_principal_id = service_account
+            .identity_principal_id
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker.id.clone(),
+                    dependency_id: service_account_ref.id.clone(),
+                })
+            })?;
+        let deployment_resource_group = get_resource_group_name(ctx.state)?;
 
-        if has_storage_triggers {
-            let authorization_client = ctx
-                .service_provider
-                .get_azure_authorization_client(azure_config)?;
-            let service_account_ref = ResourceRef::new(
-                alien_core::ServiceAccount::RESOURCE_TYPE,
-                format!("{}-sa", worker.get_permissions()),
-            );
-            let service_account = ctx
-                .require_dependency::<crate::service_account::AzureServiceAccountController>(
-                    &service_account_ref,
-                )?;
-            let execution_principal_id = service_account
-                .identity_principal_id
+        for trigger in &worker.triggers {
+            let alien_core::WorkerTrigger::Storage { storage, .. } = trigger else {
+                continue;
+            };
+            let storage_controller =
+                ctx.require_dependency::<crate::storage::azure::AzureStorageController>(storage)?;
+            let storage_account_name = storage_controller
+                .storage_account_name
                 .as_deref()
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::DependencyNotReady {
                         resource_id: worker.id.clone(),
-                        dependency_id: service_account_ref.id.clone(),
+                        dependency_id: storage.id.clone(),
                     })
                 })?;
-            let deployment_resource_group = get_resource_group_name(ctx.state)?;
-
-            for trigger in &worker.triggers {
-                let alien_core::WorkerTrigger::Storage { storage, .. } = trigger else {
-                    continue;
-                };
-                let storage_controller = ctx
-                    .require_dependency::<crate::storage::azure::AzureStorageController>(storage)?;
-                let storage_account_name = storage_controller
-                    .storage_account_name
-                    .as_deref()
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::DependencyNotReady {
-                            resource_id: worker.id.clone(),
-                            dependency_id: storage.id.clone(),
-                        })
-                    })?;
-                let queue_name = storage_trigger_queue_name(container_app_name, &storage.id);
-                let event_subscription_name =
-                    get_azure_storage_event_subscription_name(&worker.id, &storage.id);
-                if self
-                    .storage_trigger_infrastructure
-                    .iter()
-                    .any(|candidate| candidate.event_subscription_name == event_subscription_name)
-                {
-                    continue;
+            let queue_name = storage_trigger_queue_name(container_app_name, &storage.id);
+            let event_subscription_name =
+                get_azure_storage_event_subscription_name(&worker.id, &storage.id);
+            if let Some(candidate) = self
+                .storage_trigger_infrastructure
+                .iter_mut()
+                .find(|candidate| candidate.event_subscription_name == event_subscription_name)
+            {
+                if candidate.storage_id.is_none() {
+                    candidate.storage_id = Some(storage.id.clone());
                 }
-
-                let queue_scope = service_bus_queue_scope(
-                    &service_bus_resource_group,
-                    &namespace_name,
-                    &queue_name,
-                );
-                let role_assignment_id = storage_trigger_receiver_role_assignment_name(
-                    ctx.resource_prefix,
-                    &worker.id,
-                    &storage.id,
-                    execution_principal_id,
-                );
-                self.storage_trigger_infrastructure
-                    .push(AzureStorageTriggerInfrastructure {
-                        source_resource_id: format!(
-                            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
-                            azure_config.subscription_id,
-                            deployment_resource_group,
-                            storage_account_name
-                        ),
-                        event_subscription_name,
-                        service_bus_resource_group: service_bus_resource_group.clone(),
-                        namespace_name: namespace_name.clone(),
-                        queue_name,
-                        receiver_role_assignment_id: Some(
-                            authorization_client
-                                .build_role_assignment_id(&queue_scope, role_assignment_id),
-                        ),
-                    });
+                continue;
             }
+
+            let queue_scope =
+                service_bus_queue_scope(&service_bus_resource_group, &namespace_name, &queue_name);
+            let role_assignment_id = storage_trigger_receiver_role_assignment_name(
+                ctx.resource_prefix,
+                &worker.id,
+                &storage.id,
+                execution_principal_id,
+            );
+            self.storage_trigger_infrastructure
+                .push(AzureStorageTriggerInfrastructure {
+                    storage_id: Some(storage.id.clone()),
+                    source_resource_id: format!(
+                        "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
+                        azure_config.subscription_id,
+                        deployment_resource_group,
+                        storage_account_name
+                    ),
+                    source_container_name: storage_controller.container_name.clone(),
+                    event_subscription_name,
+                    service_bus_resource_group: service_bus_resource_group.clone(),
+                    namespace_name: namespace_name.clone(),
+                    queue_name,
+                    queue_applied: false,
+                    receiver_role_assignment_id: Some(
+                        authorization_client.build_role_assignment_id(
+                            &queue_scope,
+                            role_assignment_id,
+                        ),
+                    ),
+                    delivery_reconciled: false,
+                });
         }
 
-        if worker.commands_enabled {
-            self.initialize_commands_teardown_candidates(ctx, worker, container_app_name)
-                .await?;
-        }
-
-        self.auxiliary_teardown_candidates_initialized = true;
-        Ok(true)
+        Ok(())
     }
 
     pub(super) async fn initialize_commands_teardown_candidates(
@@ -530,73 +647,27 @@ impl AzureWorkerController {
                 dependency_id: namespace_ref.id.clone(),
             })
         })?;
+        let resource_group_name = namespace_controller.resource_group_name(ctx)?;
         let queue_name = commands_queue_name(container_app_name);
+        self.commands_resource_group_name
+            .get_or_insert(resource_group_name);
         self.commands_namespace_name
             .get_or_insert_with(|| namespace_name.clone());
         self.commands_queue_name
             .get_or_insert_with(|| queue_name.clone());
-        self.commands_dapr_component.get_or_insert_with(|| {
-            get_azure_internal_commands_dapr_component_name(container_app_name)
-        });
+        self.commands_dapr_component_deletion_candidates = commands_component_removal_names(
+            container_app_name,
+            self.commands_dapr_component.as_deref(),
+        );
+        self.commands_dapr_component = self
+            .commands_dapr_component_deletion_candidates
+            .first()
+            .cloned();
 
-        self.commands_sender_role_assignment_id =
-            Self::provable_commands_sender_role_assignment_id(ctx, worker, container_app_name)
-                .await?;
         self.commands_receiver_role_assignment_id = None;
+        self.commands_sender_role_assignment_discovery_complete = false;
 
         Ok(())
-    }
-
-    async fn provable_commands_sender_role_assignment_id(
-        ctx: &ResourceControllerContext<'_>,
-        worker: &Worker,
-        container_app_name: &str,
-    ) -> Result<Option<String>> {
-        if !management_profile_dispatches_commands(ctx, &worker.id)
-            || AzurePermissionsHelper::get_management_uami_principal_id(ctx)?.is_some()
-        {
-            return Ok(None);
-        }
-
-        let namespace_ref = ResourceRef::new(
-            alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
-            "default-service-bus-namespace",
-        );
-        let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
-        let namespace_name = namespace_controller.namespace_name.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: worker.id.clone(),
-                dependency_id: namespace_ref.id.clone(),
-            })
-        })?;
-        let azure_config = ctx.get_azure_config()?;
-        let principal_id = ctx
-            .service_provider
-            .get_azure_caller_principal_id(azure_config)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to resolve imported Azure command sender principal".to_string(),
-                resource_id: Some(worker.id.clone()),
-            })?;
-        let queue_name = commands_queue_name(container_app_name);
-        let queue_scope = service_bus_queue_scope(
-            &namespace_controller.resource_group_name(ctx)?,
-            &namespace_name,
-            &queue_name,
-        );
-        let authorization_client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
-        Ok(Some(authorization_client.build_role_assignment_id(
-            &queue_scope,
-            commands_sender_role_assignment_name(
-                ctx.resource_prefix,
-                &worker.id,
-                &principal_id,
-                &namespace_name,
-                &queue_name,
-            ),
-        )))
     }
 }
 

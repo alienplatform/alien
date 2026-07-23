@@ -10,11 +10,11 @@ use super::azure_dapr_components::{
     DaprComponentOwnership, TrackedDaprComponentDeleteStep,
 };
 use super::azure_names::{
-    get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
+    commands_queue_name, get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
     get_azure_internal_commands_dapr_component_name, get_azure_queue_trigger_dapr_component_name,
     get_legacy_azure_blob_trigger_dapr_component_names,
     get_legacy_azure_internal_commands_dapr_component_names,
-    get_legacy_azure_queue_trigger_dapr_component_names,
+    get_legacy_azure_queue_trigger_dapr_component_names, storage_trigger_queue_name,
 };
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -54,7 +54,7 @@ fn push_unique(names: &mut Vec<String>, name: String) {
     }
 }
 
-fn commands_component_removal_names(
+pub(super) fn commands_component_removal_names(
     container_app_name: &str,
     tracked_component_name: Option<&str>,
 ) -> Vec<String> {
@@ -70,6 +70,51 @@ fn commands_component_removal_names(
         push_unique(&mut names, legacy_name);
     }
     names
+}
+
+fn append_trigger_dapr_component_deletion_candidates(
+    names: &mut Vec<String>,
+    worker: &Worker,
+    container_app_name: &str,
+) {
+    let mut cron_index = 0usize;
+    for trigger in &worker.triggers {
+        match trigger {
+            alien_core::WorkerTrigger::Queue { queue } => {
+                push_unique(
+                    names,
+                    get_azure_queue_trigger_dapr_component_name(container_app_name, &queue.id),
+                );
+                for legacy_name in get_legacy_azure_queue_trigger_dapr_component_names(
+                    container_app_name,
+                    &queue.id,
+                ) {
+                    push_unique(names, legacy_name);
+                }
+            }
+            alien_core::WorkerTrigger::Storage { storage, .. } => {
+                push_unique(
+                    names,
+                    get_azure_blob_trigger_dapr_component_name(container_app_name, &storage.id),
+                );
+                for legacy_name in get_legacy_azure_blob_trigger_dapr_component_names(
+                    container_app_name,
+                    &storage.id,
+                ) {
+                    push_unique(names, legacy_name);
+                }
+            }
+            alien_core::WorkerTrigger::Schedule { .. } => {
+                push_unique(
+                    names,
+                    get_azure_dapr_component_name(&format!(
+                        "cron-{container_app_name}-{cron_index}"
+                    )),
+                );
+                cron_index += 1;
+            }
+        }
+    }
 }
 
 fn dapr_component_deletion_candidates(
@@ -91,44 +136,7 @@ fn dapr_component_deletion_candidates(
         push_unique(&mut names, legacy_name);
     }
 
-    let mut cron_index = 0usize;
-    for trigger in &worker.triggers {
-        match trigger {
-            alien_core::WorkerTrigger::Queue { queue } => {
-                push_unique(
-                    &mut names,
-                    get_azure_queue_trigger_dapr_component_name(container_app_name, &queue.id),
-                );
-                for legacy_name in get_legacy_azure_queue_trigger_dapr_component_names(
-                    container_app_name,
-                    &queue.id,
-                ) {
-                    push_unique(&mut names, legacy_name);
-                }
-            }
-            alien_core::WorkerTrigger::Storage { storage, .. } => {
-                push_unique(
-                    &mut names,
-                    get_azure_blob_trigger_dapr_component_name(container_app_name, &storage.id),
-                );
-                for legacy_name in get_legacy_azure_blob_trigger_dapr_component_names(
-                    container_app_name,
-                    &storage.id,
-                ) {
-                    push_unique(&mut names, legacy_name);
-                }
-            }
-            alien_core::WorkerTrigger::Schedule { .. } => {
-                push_unique(
-                    &mut names,
-                    get_azure_dapr_component_name(&format!(
-                        "cron-{container_app_name}-{cron_index}"
-                    )),
-                );
-                cron_index += 1;
-            }
-        }
-    }
+    append_trigger_dapr_component_deletion_candidates(&mut names, worker, container_app_name);
 
     names
 }
@@ -151,6 +159,20 @@ impl AzureWorkerController {
         );
         self.dapr_component_deletion_candidates_initialized = true;
         true
+    }
+
+    pub(super) fn initialize_trigger_update_teardown_candidates(
+        &mut self,
+        previous_worker: &Worker,
+        container_app_name: &str,
+    ) {
+        let mut names = self.dapr_components.clone();
+        append_trigger_dapr_component_deletion_candidates(
+            &mut names,
+            previous_worker,
+            container_app_name,
+        );
+        self.dapr_components = names;
     }
 
     fn default_service_bus_namespace_name(
@@ -245,7 +267,7 @@ impl AzureWorkerController {
                     component_name,
                     container_app_name,
                     namespace_name,
-                    format!("{container_app_name}-rq"),
+                    commands_queue_name(container_app_name),
                     resolved_worker_execution_client_id()?,
                 ),
                 legacy_names,
@@ -306,7 +328,7 @@ impl AzureWorkerController {
                             component_name,
                             container_app_name,
                             namespace_name,
-                            format!("{container_app_name}-storage-{}", storage.id),
+                            storage_trigger_queue_name(container_app_name, &storage.id),
                             resolved_worker_execution_client_id()?,
                         ),
                         legacy_names: get_legacy_azure_blob_trigger_dapr_component_names(
