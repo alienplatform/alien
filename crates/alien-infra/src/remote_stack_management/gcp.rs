@@ -41,7 +41,7 @@ pub struct GcpRemoteStackManagementController {
     /// Fingerprint of the management grant plan last applied to the service account.
     #[serde(default)]
     pub(crate) applied_management_grant_fingerprint: Option<String>,
-    /// Bucket policies currently owned by this controller, retained for revocation.
+    /// Bucket IAM grant scopes tracked by this controller for reconciliation.
     #[serde(default)]
     pub(crate) remote_storage_bucket_names: Vec<String>,
 }
@@ -516,20 +516,6 @@ impl GcpRemoteStackManagementController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        if let Some(service_account_email) = &self.service_account_email {
-            let mut owned_buckets = self.remote_storage_bucket_names.clone();
-            owned_buckets.extend(super::gcp_remote_storage::observed_bucket_names(ctx)?);
-            owned_buckets.sort_unstable();
-            owned_buckets.dedup();
-            super::gcp_remote_storage::revoke_all_owned_grants(
-                ctx,
-                service_account_email,
-                &owned_buckets,
-            )
-            .await?;
-            self.remote_storage_bucket_names.clear();
-        }
-
         // Remove all IAM bindings where our service account is a member
         if !self.role_bound {
             info!(config_id = %config.id, "Role was never bound, skipping unbinding");
@@ -660,6 +646,10 @@ impl GcpRemoteStackManagementController {
         self.service_account_unique_id = None;
         self.role_bound = false;
         self.impersonation_granted = false;
+        // Bucket IAM members are setup-owned and are removed with their
+        // setup-owned buckets. Deleting this service account revokes its
+        // effective access without requiring it to administer bucket IAM.
+        self.remote_storage_bucket_names.clear();
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -900,6 +890,10 @@ impl GcpRemoteStackManagementController {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "gcp_teardown_tests.rs"]
+mod gcp_teardown_tests;
 
 #[cfg(test)]
 mod tests {

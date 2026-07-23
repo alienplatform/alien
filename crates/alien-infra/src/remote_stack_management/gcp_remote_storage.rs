@@ -239,20 +239,6 @@ pub(super) async fn reconcile_grants(
     Ok(desired_buckets)
 }
 
-pub(super) async fn revoke_all_owned_grants(
-    ctx: &ResourceControllerContext<'_>,
-    service_account_email: &str,
-    bucket_names: &[String],
-) -> Result<()> {
-    if bucket_names.is_empty() {
-        return Ok(());
-    }
-    let gcp_config = ctx.get_gcp_config()?;
-    let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
-    let member = format!("serviceAccount:{service_account_email}");
-    revoke_grants_with_client(&*client, &member, bucket_names).await
-}
-
 async fn revoke_grants_with_client(
     client: &dyn alien_gcp_clients::GcsApi,
     member: &str,
