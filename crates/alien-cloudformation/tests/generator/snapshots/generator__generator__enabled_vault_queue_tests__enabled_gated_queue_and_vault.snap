@@ -1,0 +1,303 @@
+---
+source: crates/alien-cloudformation/tests/generator/enabled_vault_queue_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: gated queue and vault
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Application inputs
+      Parameters:
+      - InputQueueEnabled
+      - InputVaultEnabled
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      HeartbeatsMode:
+        default: Heartbeats
+      InputQueueEnabled:
+        default: queue
+      InputVaultEnabled:
+        default: vault
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      TelemetryMode:
+        default: Telemetry
+      Token:
+        default: Install token
+      UpdatesMode:
+        default: Updates
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - auto
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+  InputQueueEnabled:
+    Type: String
+    Description: Whether to create the queue.
+    Default: 'true'
+    AllowedValues:
+    - 'true'
+    - 'false'
+  InputVaultEnabled:
+    Type: String
+    Description: Whether to create the vault.
+    Default: 'true'
+    AllowedValues:
+    - 'true'
+    - 'false'
+Conditions:
+  InputQueueEnabledIsTrue:
+    Fn::Equals:
+    - Ref: InputQueueEnabled
+    - 'true'
+  InputVaultEnabledIsTrue:
+    Fn::Equals:
+    - Ref: InputVaultEnabled
+    - 'true'
+Resources:
+  ExecutionSaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-execution-sa
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+            - ec2.amazonaws.com
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: execution-sa
+      - Key: resource-type
+        Value: service-account
+  Jobs:
+    Type: AWS::SQS::Queue
+    Properties:
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 345600
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: jobs
+      - Key: resource-type
+        Value: queue
+    Condition: InputQueueEnabledIsTrue
+  JobsExecutionSaRoleQueuePermission00:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-jobs-queue-0-0
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - sqs:ChangeMessageVisibility
+          - sqs:DeleteMessage
+          - sqs:GetQueueAttributes
+          - sqs:GetQueueUrl
+          - sqs:SendMessage
+          Effect: Allow
+          Resource:
+            Fn::GetAtt:
+            - Jobs
+            - Arn
+          Sid: SendSqsMessages
+      Roles:
+      - Ref: ExecutionSaRole
+    DependsOn:
+    - Jobs
+    - ExecutionSaRole
+    Condition: InputQueueEnabledIsTrue
+  AppTokensExecutionSaRoleVaultPermission00:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-app-tokens-vault-0-0
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - ssm:GetParameter
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-app-tokens-*
+          Sid: VaultDataRead
+      Roles:
+      - Ref: ExecutionSaRole
+    DependsOn:
+    - ExecutionSaRole
+    Condition: InputVaultEnabledIsTrue
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentResourcePrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Stable physical resource prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup registration payload format version.
+  DeploymentSetupFingerprintVersion:
+    Value: 1
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Deployment registration management configuration JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+    Description: Deployment registration settings JSON.
+  DeploymentResources:
+    Value:
+      Fn::Join:
+      - ''
+      - - '['
+        - Fn::Join:
+          - ','
+          - - Fn::Sub:
+              - ${entry}
+              - entry:
+                  Fn::ToJsonString:
+                    id: execution-sa
+                    type: service-account
+                    importData:
+                      roleName:
+                        Ref: ExecutionSaRole
+                      roleArn:
+                        Fn::GetAtt:
+                        - ExecutionSaRole
+                        - Arn
+                      stackPermissionsApplied: true
+            - Fn::If:
+              - InputQueueEnabledIsTrue
+              - Fn::Sub:
+                - ${entry}
+                - entry:
+                    Fn::ToJsonString:
+                      id: jobs
+                      type: queue
+                      importData:
+                        queueName:
+                          Fn::GetAtt:
+                          - Jobs
+                          - QueueName
+                        queueUrl:
+                          Ref: Jobs
+                        queueArn:
+                          Fn::GetAtt:
+                          - Jobs
+                          - Arn
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - InputVaultEnabledIsTrue
+              - Fn::Sub:
+                - ${entry}
+                - entry:
+                    Fn::ToJsonString:
+                      id: app-tokens
+                      type: vault
+                      importData:
+                        accountId:
+                          Ref: AWS::AccountId
+                        region:
+                          Ref: AWS::Region
+                        parameterPrefix:
+                          Fn::Sub: ${AWS::StackName}-app-tokens
+              - Ref: AWS::NoValue
+        - ']'
+    Description: Deployment registration resources JSON.

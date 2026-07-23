@@ -12,6 +12,7 @@ use crate::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
         iam_policy_name_sanitize, required_label,
     },
+    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -28,6 +29,7 @@ impl TfEmitter for AwsVaultEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
         let mut fragment = TfFragment::default();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         let context = aws_terraform_permission_context()
             .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
 
@@ -40,6 +42,7 @@ impl TfEmitter for AwsVaultEmitter {
                         continue;
                     }
                     let vault_label_segment = sanitize_label_segment(vault.id());
+                    let appended_from = fragment.resource_blocks.len();
                     emit_iam_role_policy_for_target_with_label(
                         &mut fragment,
                         &owner_label,
@@ -53,6 +56,9 @@ impl TfEmitter for AwsVaultEmitter {
                         &context,
                         BindingTarget::Resource,
                     )?;
+                    for block in &mut fragment.resource_blocks[appended_from..] {
+                        enabled::gate(block, enabled_when)?;
+                    }
                 }
             }
         }
@@ -67,6 +73,7 @@ impl TfEmitter for AwsVaultEmitter {
                         continue;
                     }
                     let vault_label_segment = sanitize_label_segment(vault.id());
+                    let appended_from = fragment.resource_blocks.len();
                     emit_iam_role_policy_for_target_with_label(
                         &mut fragment,
                         management_label,
@@ -80,6 +87,9 @@ impl TfEmitter for AwsVaultEmitter {
                         &context,
                         BindingTarget::Resource,
                     )?;
+                    for block in &mut fragment.resource_blocks[appended_from..] {
+                        enabled::gate(block, enabled_when)?;
+                    }
                 }
             }
         }
@@ -101,6 +111,16 @@ impl TfEmitter for AwsVaultEmitter {
                 expr::template(format!("${{local.resource_prefix}}-{}", vault.id())),
             ),
         ]))
+    }
+
+    /// The IAM policies grant against a static `${local.resource_prefix}-<id>-*`
+    /// pattern, never a resource address, so nothing here needs an index. The
+    /// pattern is a prefix wildcard and resource ids may contain hyphens: a
+    /// declined vault `app` leaves a grant over `<prefix>-app-*`, which matches
+    /// every parameter in a live sibling vault named `app-config`. Declining a
+    /// vault has to withdraw the permission, not just the registration entry.
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {

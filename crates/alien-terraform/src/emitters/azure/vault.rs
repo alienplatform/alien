@@ -18,6 +18,7 @@ use crate::{
         downcast, permission_context, required_label, service_account_principal_id,
         setup_execution_role_label, setup_management_role_label, tags,
     },
+    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -38,6 +39,7 @@ impl TfEmitter for AzureVaultEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         let mut fragment = TfFragment::default();
 
         // Scope the data source label to the vault resource. Multiple vaults can
@@ -50,6 +52,9 @@ impl TfEmitter for AzureVaultEmitter {
             Vec::<hcl::structure::Structure>::new(),
         ));
 
+        // The random suffix is not gated: it is a local value with no cloud
+        // footprint, and leaving it uncounted keeps the vault's reference to it
+        // unindexed.
         let name_suffix_label = vault_name_suffix_label(label);
         fragment.resource_blocks.push(resource_block(
             "random_id",
@@ -60,7 +65,7 @@ impl TfEmitter for AzureVaultEmitter {
             )],
         ));
 
-        fragment.resource_blocks.push(resource_block(
+        let mut key_vault = resource_block(
             "azurerm_key_vault",
             label,
             [
@@ -86,9 +91,11 @@ impl TfEmitter for AzureVaultEmitter {
                 attr("public_network_access_enabled", Expression::Bool(true)),
                 attr("tags", tags(ctx, "vault")),
             ],
-        ));
+        );
+        enabled::gate(&mut key_vault, enabled_when)?;
+        fragment.resource_blocks.push(key_vault);
 
-        emit_vault_permissions(ctx, label, &mut fragment)?;
+        emit_vault_permissions(ctx, label, enabled_when, &mut fragment)?;
 
         Ok(fragment)
     }
@@ -96,18 +103,23 @@ impl TfEmitter for AzureVaultEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let _ = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             (
                 "vaultName",
-                expr::traversal(["azurerm_key_vault", label, "name"]),
+                enabled::attribute(enabled_when, "azurerm_key_vault", label, "name"),
             ),
             (
                 "vaultUri",
-                expr::traversal(["azurerm_key_vault", label, "vault_uri"]),
+                enabled::attribute(enabled_when, "azurerm_key_vault", label, "vault_uri"),
             ),
         ]))
+    }
+
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -141,8 +153,14 @@ fn vault_name_suffix_label(vault_label: &str) -> String {
 fn emit_vault_permissions(
     ctx: &EmitContext<'_>,
     vault_label: &str,
+    enabled_when: Option<&str>,
     fragment: &mut TfFragment,
 ) -> Result<()> {
+    let vault = VaultTarget {
+        label: vault_label,
+        enabled_when,
+    };
+
     for (profile_name, permission_set_refs) in vault_permission_owners(ctx) {
         let Some(principal_id_expr) = service_account_principal_id(ctx, &profile_name) else {
             continue;
@@ -197,13 +215,13 @@ fn emit_vault_permissions(
                 };
                 emit_role_assignment(
                     fragment,
-                    vault_label,
+                    vault,
                     &profile_name,
                     binding_index,
                     &binding.role_name,
                     role_definition_id,
                     principal_id_expr.clone(),
-                );
+                )?;
             }
         }
     }
@@ -265,50 +283,74 @@ fn emit_vault_permissions(
             };
             emit_role_assignment(
                 fragment,
-                vault_label,
+                vault,
                 "management",
                 binding_index,
                 &binding.role_name,
                 role_definition_id,
                 principal_id_expr.clone(),
-            );
+            )?;
         }
     }
 
     Ok(())
 }
 
+/// The vault a role assignment attaches to. The label and the gate travel
+/// together because every reference to the vault has to agree on whether the
+/// `[0]` is there.
+#[derive(Clone, Copy)]
+struct VaultTarget<'a> {
+    label: &'a str,
+    enabled_when: Option<&'a str>,
+}
+
+impl VaultTarget<'_> {
+    /// Address of the vault block, indexed when it is counted.
+    fn address(&self) -> String {
+        match self.enabled_when {
+            Some(_) => format!("azurerm_key_vault.{}[0]", self.label),
+            None => format!("azurerm_key_vault.{}", self.label),
+        }
+    }
+}
+
 fn emit_role_assignment(
     fragment: &mut TfFragment,
-    vault_label: &str,
+    vault: VaultTarget<'_>,
     principal_label: &str,
     binding_index: usize,
     role_name: &str,
     role_definition_id: Expression,
     principal_id_expr: Expression,
-) {
+) -> Result<()> {
     let role_label = sanitize_role_label(role_name);
-    fragment.resource_blocks.push(resource_block(
+    let vault_label = vault.label;
+    // The assignment names the vault twice — once as its scope, once inside the
+    // uuidv5 seed — so both read the same address.
+    let vault_address = vault.address();
+    let mut assignment = resource_block(
         "azurerm_role_assignment",
         &format!("{vault_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
         [
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{azurerm_key_vault.{vault_label}.id}}:{role_label}:{principal_label}:{binding_index}\")"
+                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{{vault_address}.id}}:{role_label}:{principal_label}:{binding_index}\")"
                 )),
             ),
             attr(
                 "scope",
-                expr::traversal(["azurerm_key_vault", vault_label, "id"]),
+                enabled::attribute(vault.enabled_when, "azurerm_key_vault", vault_label, "id"),
             ),
-            attr(
-                "role_definition_id",
-                role_definition_id,
-            ),
+            attr("role_definition_id", role_definition_id),
             attr("principal_id", principal_id_expr),
         ],
-    ));
+    );
+    // The grant targets this vault, so it only exists while the vault does.
+    enabled::gate(&mut assignment, vault.enabled_when)?;
+    fragment.resource_blocks.push(assignment);
+    Ok(())
 }
 
 fn sanitize_role_label(input: &str) -> String {

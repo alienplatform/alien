@@ -76,6 +76,14 @@ impl CfEmitter for AwsVaultEmitter {
         ]))
     }
 
+    /// The vault is a Parameter Store name prefix, so the only resources this
+    /// emitter returns are the IAM policies granting access to it. The generator
+    /// stamps the gate's `Condition` onto each of them, so declining the vault
+    /// also withholds the grants.
+    fn supports_enabled_when(&self) -> bool {
+        true
+    }
+
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         let vault = resource_config::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
         Ok(Some(CfExpression::object([

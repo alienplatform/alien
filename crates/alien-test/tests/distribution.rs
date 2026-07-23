@@ -60,7 +60,141 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("mixed runtime-less checks failed: {error:#}");
             }
         }
+        TestApp::EnabledDemo => {
+            if let Err(error) = check_enabled_demo(ctx).await {
+                panic!("enabled-demo gate checks failed: {error:#}");
+            }
+        }
     }
+}
+
+/// Verifies the `.enabled(input)` gate end to end on a real cloud: after setup
+/// applied the Terraform artifact with four `*On` inputs answered true and four
+/// `*Off` answered false, every gated-on resource (and the ungated control)
+/// must be created and every gated-off resource must be absent — proving the
+/// `count = 0` path applies cleanly and a declined resource never reaches the
+/// cloud.
+async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    // Manager-level outcome: the imported stack_state reflects exactly what the
+    // gated Terraform apply produced. Gated-off resources are absent from the
+    // registration payload, so they never enter stack_state.
+    let resp = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("get_deployment failed: {error}"))?;
+    let state_value = resp
+        .into_inner()
+        .stack_state
+        .context("deployment is missing stack_state")?;
+    let stack_state: alien_core::StackState =
+        serde_json::from_value(state_value).context("failed to parse stack_state")?;
+    let present: std::collections::HashSet<String> =
+        stack_state.resources.keys().cloned().collect();
+
+    for id in [
+        "state",
+        "optional-kv-on",
+        "optional-storage-on",
+        "optional-queue-on",
+        "optional-vault-on",
+    ] {
+        anyhow::ensure!(
+            present.contains(id),
+            "expected gated-on/control resource '{id}' present in stack_state, got {present:?}"
+        );
+    }
+    for id in [
+        "optional-kv-off",
+        "optional-storage-off",
+        "optional-queue-off",
+        "optional-vault-off",
+    ] {
+        anyhow::ensure!(
+            !present.contains(id),
+            "declined resource '{id}' must be absent from stack_state, got {present:?}"
+        );
+    }
+
+    // Cloud-level control: the resource id is embedded in every cloud resource
+    // name, so a substring scan over the target account is naming-agnostic and
+    // proves the count=0 apply left nothing behind. Uses the Terraform cleanup's
+    // target credentials/region.
+    let env = ctx
+        .distribution_cleanups
+        .iter()
+        .map(|cleanup| cleanup.command_env().to_vec())
+        .find(|env| !env.is_empty())
+        .context("no distribution cleanup env for cloud assertions")?;
+
+    assert_cloud_gate_pair(
+        &env,
+        &["dynamodb", "list-tables", "--output", "json"],
+        "optional-kv-on",
+        "optional-kv-off",
+    )
+    .await?;
+    assert_cloud_gate_pair(
+        &env,
+        &["s3api", "list-buckets", "--output", "json"],
+        "optional-storage-on",
+        "optional-storage-off",
+    )
+    .await?;
+    assert_cloud_gate_pair(
+        &env,
+        &["sqs", "list-queues", "--output", "json"],
+        "optional-queue-on",
+        "optional-queue-off",
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Runs one read-only `aws` list call and asserts the enabled sibling's id is
+/// present in the output while the declined sibling's id is absent.
+async fn assert_cloud_gate_pair(
+    env: &[(String, String)],
+    aws_args: &[&str],
+    on_id: &str,
+    off_id: &str,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let mut cmd = tokio::process::Command::new("aws");
+    cmd.args(aws_args);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let output = cmd
+        .output()
+        .await
+        .with_context(|| format!("failed to run aws {}", aws_args.join(" ")))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "aws {} failed: {}",
+        aws_args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    anyhow::ensure!(
+        stdout.contains(on_id),
+        "enabled resource '{on_id}' not found in target account (aws {})",
+        aws_args.join(" ")
+    );
+    anyhow::ensure!(
+        !stdout.contains(off_id),
+        "declined resource '{off_id}' must not exist in target account (aws {})",
+        aws_args.join(" ")
+    );
+    Ok(())
 }
 
 async fn public_url(ctx: &mut alien_test::TestContext) -> anyhow::Result<String> {
@@ -687,6 +821,18 @@ distribution_test_context!(
 #[test_context(TerraformAwsPushRust)]
 #[tokio::test]
 async fn terraform_aws_push_comprehensive_rust(ctx: &mut TerraformAwsPushRust) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAwsPushEnabledDemo,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::EnabledDemo
+);
+
+#[test_context(TerraformAwsPushEnabledDemo)]
+#[tokio::test]
+async fn terraform_aws_push_enabled_demo(ctx: &mut TerraformAwsPushEnabledDemo) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 
