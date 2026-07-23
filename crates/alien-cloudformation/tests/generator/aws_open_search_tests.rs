@@ -35,23 +35,10 @@ fn aws_open_search_renders_collection_with_data_access() {
 
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
-    let encryption = &template["Resources"]["ArticlesEncryptionPolicy"];
-    assert_eq!(
-        encryption["Type"],
-        "AWS::OpenSearchServerless::SecurityPolicy"
-    );
-    assert_eq!(encryption["Properties"]["Type"], "encryption");
-    let encryption_policy = encryption["Properties"]["Policy"]["Fn::Sub"][0]
-        .as_str()
-        .expect("encryption policy should be a Sub template string");
-    let encryption_document: serde_json::Value =
-        serde_json::from_str(encryption_policy).expect("encryption policy should be valid JSON");
-    assert!(
-        encryption_document.is_object(),
-        "AOSS encryption policies require a top-level JSON object"
-    );
-    assert_eq!(encryption_document["AWSOwnedKey"], true);
-    assert!(encryption_document["Rules"].is_array());
+    let group = &template["Resources"]["ArticlesGroup"];
+    assert_eq!(group["Type"], "AWS::OpenSearchServerless::CollectionGroup");
+    assert_eq!(group["Properties"]["Generation"], "NEXTGEN");
+    assert_eq!(group["Properties"]["StandbyReplicas"], "ENABLED");
 
     let network = &template["Resources"]["ArticlesNetworkPolicy"];
     let network_policy = network["Properties"]["Policy"]["Fn::Sub"][0]
@@ -67,6 +54,18 @@ fn aws_open_search_renders_collection_with_data_access() {
     let collection = &template["Resources"]["Articles"];
     assert_eq!(collection["Type"], "AWS::OpenSearchServerless::Collection");
     assert_eq!(collection["Properties"]["Type"], "SEARCH");
+    assert_eq!(
+        collection["Properties"]["CollectionGroupName"],
+        group["Properties"]["Name"]
+    );
+    assert_eq!(
+        collection["Properties"]["EncryptionConfig"]["AWSOwnedKey"],
+        true
+    );
+    assert_eq!(
+        collection["DependsOn"],
+        serde_json::json!(["ArticlesGroup"])
+    );
     // Data access wiring: the SA role is a principal of the data-access
     // policy and gets aoss:APIAccessAll pinned to this collection's ARN.
     let access = &template["Resources"]["ArticlesDataAccessPolicy"];

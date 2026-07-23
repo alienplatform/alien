@@ -1,7 +1,8 @@
-//! AWS OpenSearch Serverless collection.
+//! AWS OpenSearch — next-generation OpenSearch Serverless collection.
 //!
-//! Emits a collection encrypted with an AWS-owned key, a public network
-//! security policy, and — when service
+//! Emits a collection group pinned to `Generation: NEXTGEN` (compute and
+//! storage decoupled, scale-to-zero), a collection inside it encrypted with
+//! an AWS-owned key, a public network security policy, and — when service
 //! accounts are granted `experimental/aws-opensearch/data-access` — a
 //! data-access policy plus the matching `aoss:APIAccessAll` IAM policies.
 //!
@@ -9,7 +10,7 @@
 //! (service name `aoss`, not `es`) and pass both IAM and the data-access
 //! policy, so "public network policy" does not mean anonymous access.
 //!
-//! Physical names: the collection and both policies share
+//! Physical names: the collection, collection group, and both policies share
 //! the name `{resource-id}-{stack-suffix}`. AOSS names must match
 //! `^[a-z][a-z0-9-]{2,31}$`, so the resource id is validated here
 //! (lowercase, max 23 chars) before anything is emitted.
@@ -50,19 +51,26 @@ impl CfEmitter for AwsOpenSearchEmitter {
         let logical_id = required_logical_id(ctx)?;
         let name = collection_name(search.id());
 
-        let mut encryption = CfResource::new(
-            format!("{logical_id}EncryptionPolicy"),
-            "AWS::OpenSearchServerless::SecurityPolicy".to_string(),
+        let group_id = format!("{logical_id}Group");
+        let mut group = CfResource::new(
+            group_id.clone(),
+            "AWS::OpenSearchServerless::CollectionGroup".to_string(),
         );
-        encryption
+        group.properties.insert("Name".to_string(), name.clone());
+        // Next-gen groups have replication built in: the AOSS API rejects
+        // `StandbyReplicas: DISABLED` when `Generation` is `NEXTGEN`, so the
+        // field is fixed to ENABLED and not exposed on the resource.
+        group
             .properties
-            .insert("Name".to_string(), name.clone());
-        encryption
+            .insert("StandbyReplicas".to_string(), CfExpression::from("ENABLED"));
+        group
             .properties
-            .insert("Type".to_string(), CfExpression::from("encryption"));
-        encryption
-            .properties
-            .insert("Policy".to_string(), encryption_policy(&name));
+            .insert("Generation".to_string(), CfExpression::from("NEXTGEN"));
+        group.properties.insert("Tags".to_string(), tags(ctx));
+        // The collection is retained on stack deletion (durable search
+        // state), so the group that contains it must be retained too.
+        group.deletion_policy = Some("Retain".to_string());
+        group.update_replace_policy = Some("Retain".to_string());
 
         let mut network = CfResource::new(
             format!("{logical_id}NetworkPolicy"),
@@ -90,17 +98,19 @@ impl CfEmitter for AwsOpenSearchEmitter {
                 AwsOpenSearchCollectionType::VectorSearch => "VECTORSEARCH",
             }),
         );
+        collection
+            .properties
+            .insert("CollectionGroupName".to_string(), name.clone());
+        collection.properties.insert(
+            "EncryptionConfig".to_string(),
+            CfExpression::object([("AWSOwnedKey", CfExpression::from(true))]),
+        );
         collection.properties.insert("Tags".to_string(), tags(ctx));
-        collection
-            .depends_on
-            .push(format!("{logical_id}EncryptionPolicy"));
-        collection
-            .depends_on
-            .push(format!("{logical_id}NetworkPolicy"));
+        collection.depends_on.push(group_id);
         collection.deletion_policy = Some("Retain".to_string());
         collection.update_replace_policy = Some("Retain".to_string());
 
-        let mut resources = vec![encryption, network, collection];
+        let mut resources = vec![group, network, collection];
 
         let owners = permission_owners(ctx);
         if let Some(access_policy) = data_access_policy(ctx, search, &name, &owners) {
@@ -199,14 +209,6 @@ struct AossNetworkPolicy {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "PascalCase")]
-struct AossEncryptionPolicy {
-    rules: [AossPolicyRule; 1],
-    #[serde(rename = "AWSOwnedKey")]
-    aws_owned_key: bool,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "PascalCase")]
 struct AossDataAccessPolicy {
     description: String,
     rules: [AossPolicyRule; 2],
@@ -236,22 +238,6 @@ fn network_policy(name: &CfExpression) -> CfExpression {
         allow_from_public: true,
     };
     CfExpression::sub_with(policy_json(&[&policy]), [("Name", name.clone())])
-}
-
-/// AWS-owned-key encryption policy required before creating the collection.
-fn encryption_policy(name: &CfExpression) -> CfExpression {
-    let policy = AossEncryptionPolicy {
-        rules: [AossPolicyRule {
-            resource_type: "collection",
-            resource: ["collection/${Name}"],
-            permission: None,
-        }],
-        aws_owned_key: true,
-    };
-    CfExpression::sub_with(
-        serde_json::to_string(&policy).expect("static AOSS encryption policy serializes"),
-        [("Name", name.clone())],
-    )
 }
 
 /// Data-access policy granting collection- and index-level permissions to the
