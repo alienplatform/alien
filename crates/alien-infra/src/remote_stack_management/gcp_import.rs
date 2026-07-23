@@ -2,11 +2,11 @@
 
 use alien_core::{
     import::{data::GcpRemoteStackManagementImportData, ImportContext},
-    ResourceStatus, Result, StackResourceState,
+    Result, StackResourceState,
 };
 
 use crate::import::ResourceImporter;
-use crate::import_helpers::make_imported_state_with_status;
+use crate::import_helpers::make_imported_state;
 use crate::remote_stack_management::{
     GcpRemoteStackManagementController, GcpRemoteStackManagementState,
 };
@@ -25,8 +25,10 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
     ) -> Result<StackResourceState> {
         let _ = data.project_id;
         let controller = GcpRemoteStackManagementController {
-            // Force one ownership-establishing reconciliation before Running.
-            state: GcpRemoteStackManagementState::UpdateStart,
+            // Terraform owns the service account, custom roles, and exact-scope
+            // grants. Runtime only observes and impersonates this identity.
+            setup_managed: Some(true),
+            state: GcpRemoteStackManagementState::Ready,
             service_account_email: Some(data.service_account_email),
             service_account_unique_id: Some(data.service_account_unique_id),
             role_bound: data.management_permissions_applied,
@@ -35,6 +37,6 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             remote_storage_bucket_names: Vec::new(),
             _internal_stay_count: None,
         };
-        make_imported_state_with_status(controller, ctx, ResourceStatus::Updating)
+        make_imported_state(controller, ctx)
     }
 }

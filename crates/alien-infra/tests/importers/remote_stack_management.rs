@@ -41,7 +41,7 @@ fn aws_remote_stack_management_round_trip() {
 }
 
 #[test]
-fn gcp_remote_stack_management_import_requires_runtime_grant_reconciliation() {
+fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = GcpRemoteStackManagementImportData {
         project_id: "my-project".to_string(),
@@ -59,12 +59,14 @@ fn gcp_remote_stack_management_import_requires_runtime_grant_reconciliation() {
         &gcp_management_config(),
     );
 
-    assert_updating_with_internal_state(&state);
-    assert_eq!(internal_state(&state)["state"], "updateStart");
+    assert_eq!(state.status, ResourceStatus::Running);
+    assert_eq!(internal_state(&state)["state"], "ready");
     let internal = internal_state(&state);
+    assert_eq!(internal["setupManaged"], true);
     assert_eq!(
         internal["appliedManagementGrantFingerprint"],
         serde_json::Value::Null,
+        "import must not claim setup-created grants are runtime-owned",
     );
     assert_eq!(internal["remoteStorageBucketNames"], json!([]));
 }
