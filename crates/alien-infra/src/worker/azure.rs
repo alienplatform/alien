@@ -42,9 +42,10 @@ use crate::worker::azure_dapr_names_migration::{
     DaprComponentMigrationStep, CURRENT_DAPR_COMPONENT_NAMING_VERSION,
 };
 use crate::worker::azure_names::{
-    commands_queue_name, get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
-    get_azure_internal_commands_dapr_component_name, get_azure_queue_trigger_dapr_component_name,
-    get_azure_storage_event_subscription_name, get_legacy_azure_blob_trigger_dapr_component_names,
+    commands_queue_name, get_azure_blob_trigger_dapr_component_name, get_azure_container_app_name,
+    get_azure_dapr_component_name, get_azure_internal_commands_dapr_component_name,
+    get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
+    get_legacy_azure_blob_trigger_dapr_component_names,
     get_legacy_azure_internal_commands_dapr_component_names,
     get_legacy_azure_queue_trigger_dapr_component_names,
 };
@@ -68,11 +69,6 @@ mod role_assignments;
 #[path = "azure_trigger_targets.rs"]
 mod trigger_targets;
 use trigger_targets::{StorageDeliveryReconcileResult, StorageTargetPreparation};
-
-/// Generates a deterministic Azure Container Apps name for a worker.
-fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
-}
 
 #[cfg(not(test))]
 const AZURE_PRE_CONTAINER_APP_RBAC_WAIT_SECS: u64 = 60;
@@ -197,9 +193,7 @@ fn is_azure_container_apps_environment_waking_error(error: &AlienError<ErrorData
 }
 
 fn get_container_apps_certificate_name(prefix: &str, worker_id: &str) -> String {
-    format!("{}-{}", prefix, worker_id)
-        .replace('_', "-")
-        .to_lowercase()
+    get_azure_container_app_name(prefix, worker_id)
 }
 
 /// Domain information for a worker.

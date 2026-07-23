@@ -56,8 +56,9 @@ use rstest::rstest;
 
 use super::{
     commands_queue_name, current_unix_timestamp_secs, dns_name_from_url,
-    get_azure_internal_commands_dapr_component_name, AzureCommandsSenderRoleAssignmentIntent,
-    AzureStorageTriggerTeardownProgress, AZURE_RBAC_WAIT_POLL_SECS,
+    get_azure_internal_commands_dapr_component_name, get_container_apps_certificate_name,
+    AzureCommandsSenderRoleAssignmentIntent, AzureStorageTriggerTeardownProgress,
+    AZURE_RBAC_WAIT_POLL_SECS,
 };
 use crate::core::{
     controller_test::{test_storage_1, SingleControllerExecutor},
@@ -76,3 +77,14 @@ use crate::AzureWorkerState;
 include!("azure_reconciliation_tests.rs");
 include!("azure_test_support.rs");
 include!("azure_lifecycle_tests.rs");
+
+#[test]
+fn custom_domain_certificate_name_uses_bounded_container_app_name() {
+    let name = get_container_apps_certificate_name(
+        "e2e-10-azure-terraform-pr-0123456789",
+        "test-alien-ts-function",
+    );
+
+    assert_eq!(name, "e2e10azureterraf731185acf8be53ed");
+    assert!(name.len() <= 32);
+}

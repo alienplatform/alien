@@ -1,10 +1,10 @@
-//! Validates that resource IDs won't exceed cloud provider naming limits when
-//! combined with the resource prefix at deployment time.
+//! Validates resource IDs used by cloud naming algorithms that preserve the raw
+//! resource prefix and ID.
 //!
-//! All cloud resource names are constructed as `{prefix}-{resource_id}` (plus
-//! optional suffixes). The resource prefix is always 8 characters. Each cloud
-//! provider has different maximum name lengths per resource type — some quite
-//! tight (e.g., GCP service accounts: 30, Azure Key Vault: 24).
+//! The rules below model `{prefix}-{resource_id}` names (plus optional suffixes)
+//! using the manager-generated eight-character prefix. Provider-specific
+//! algorithms that normalize and deterministically bound their output, such as
+//! Azure Container App worker names, do not need an ID-length rule here.
 //!
 //! This check catches **length violations** at compile time, before any API call
 //! is made. Character set and pattern validation (e.g., no consecutive hyphens,
@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Platform, Stack};
 
-/// The resource prefix is always 8 characters (1 letter + 7 hex from UUID).
+/// The manager-generated resource prefix is 8 characters (1 letter + 7 UUID hex).
 const PREFIX_LEN: usize = 8;
 
 /// A naming rule for a specific (resource_type, platform) combination.
@@ -133,15 +133,10 @@ fn naming_rules() -> Vec<NamingRule> {
             cloud_limit: 24,
             pattern: "{prefix}-{id}",
         },
-        // Container App (worker): max 32, pattern {prefix}-{id}
-        NamingRule {
-            resource_type: "worker",
-            platform: Platform::Azure,
-            max_id_len: max_id(32, 0), // 23
-            cloud_resource: "Azure Container App name",
-            cloud_limit: 32,
-            pattern: "{prefix}-{id}",
-        },
+        // Azure Container App worker names are normalized and deterministically
+        // shortened by the runtime, so their user-facing IDs do not need a
+        // compile-time length rule.
+
         // Blob Container (storage): max 63, pattern {prefix}-{id}
         NamingRule {
             resource_type: "storage",
@@ -209,7 +204,10 @@ impl CompileTimeCheck for ResourceNameLengthCheck {
 mod tests {
     use super::*;
     use alien_core::permissions::PermissionProfile;
-    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, ServiceAccount, Storage, Vault};
+    use alien_core::{
+        Resource, ResourceEntry, ResourceLifecycle, ServiceAccount, Storage, Vault, Worker,
+        WorkerCode,
+    };
     use indexmap::IndexMap;
 
     fn make_stack(resources: IndexMap<String, ResourceEntry>) -> Stack {
@@ -254,6 +252,22 @@ mod tests {
         ResourceEntry {
             config: Resource::new(vault),
             lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        }
+    }
+
+    fn worker_entry(id: &str) -> ResourceEntry {
+        let worker = Worker::new(id.to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        ResourceEntry {
+            config: Resource::new(worker),
+            lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
             enabled_when: None,
@@ -346,6 +360,20 @@ mod tests {
             .unwrap();
         assert!(!result.success);
         assert!(result.errors[0].contains("Azure Key Vault"));
+    }
+
+    #[tokio::test]
+    async fn azure_worker_id_is_not_rejected_when_runtime_name_is_bounded() {
+        let id = "worker-with-an-id-longer-than-the-container-app-limit";
+        let mut resources = IndexMap::new();
+        resources.insert(id.to_string(), worker_entry(id));
+        let stack = make_stack(resources);
+
+        let result = ResourceNameLengthCheck
+            .check(&stack, Platform::Azure)
+            .await
+            .unwrap();
+        assert!(result.success);
     }
 
     // ── Cross-platform: same ID OK on AWS, fails on Azure ──
