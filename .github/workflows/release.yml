@@ -520,6 +520,11 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build packages used by addon smoke test
+        run: |
+          pnpm --filter @alienplatform/core build
+          pnpm --filter @alienplatform/bindings build
+
       - name: Download staged addon (${{ matrix.triple }})
         uses: actions/download-artifact@v7
         with:
