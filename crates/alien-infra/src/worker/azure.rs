@@ -39,7 +39,8 @@ use crate::infra_requirements::azure_utils::{
     get_resource_group_name, is_azure_authorization_propagation_error,
 };
 use crate::worker::azure_names::{
-    get_azure_dapr_component_name, get_azure_storage_event_subscription_name,
+    get_azure_dapr_component_name, get_azure_internal_commands_dapr_component_name,
+    get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
 };
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
@@ -1734,8 +1735,7 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name =
-            get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-commands"));
+        let component_name = get_azure_internal_commands_dapr_component_name(&container_app_name);
 
         // Use Dapr input binding (not pubsub) because the manager sends directly
         // to Service Bus via Azure SDK — this is external-system integration, not
@@ -3575,8 +3575,7 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name =
-            get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-commands"));
+        let component_name = get_azure_internal_commands_dapr_component_name(&container_app_name);
 
         let mut metadata = vec![
             DaprMetadata {
@@ -4310,11 +4309,8 @@ impl AzureWorkerController {
         })?;
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace);
 
-        // Generate component name: servicebus-{containerAppName}-{queueId}
-        let component_name = get_azure_dapr_component_name(&format!(
-            "servicebus-{container_app_name}-{}",
-            queue_ref.id
-        ));
+        let component_name =
+            get_azure_queue_trigger_dapr_component_name(container_app_name, &queue_ref.id);
 
         // Use Dapr input binding — the manager/user code sends directly to Service Bus
         // via Azure SDK, not through Dapr pubsub. Input bindings auto-deliver from the

@@ -49,6 +49,21 @@ pub(super) fn get_azure_dapr_component_name(raw: &str) -> String {
     append_raw_input_hash(&normalized, raw)
 }
 
+pub(super) fn get_azure_internal_commands_dapr_component_name(container_app_name: &str) -> String {
+    get_azure_dapr_component_name(&format!(
+        "servicebus-{container_app_name}-internal-commands"
+    ))
+}
+
+pub(super) fn get_azure_queue_trigger_dapr_component_name(
+    container_app_name: &str,
+    queue_id: &str,
+) -> String {
+    get_azure_dapr_component_name(&format!(
+        "servicebus-{container_app_name}-queue-trigger-{queue_id}"
+    ))
+}
+
 pub(super) fn get_azure_storage_event_subscription_name(
     worker_id: &str,
     storage_id: &str,
@@ -86,7 +101,8 @@ fn append_raw_input_hash(normalized: &str, raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_azure_dapr_component_name, get_azure_storage_event_subscription_name,
+        get_azure_dapr_component_name, get_azure_internal_commands_dapr_component_name,
+        get_azure_queue_trigger_dapr_component_name, get_azure_storage_event_subscription_name,
         DAPR_COMPONENT_NAME_MAX_LEN,
     };
 
@@ -136,6 +152,28 @@ mod tests {
 
             assert_ne!(name, raw);
             assert_valid_dapr_component_name(&name);
+        }
+    }
+
+    #[test]
+    fn commands_and_commands_queue_trigger_have_distinct_component_names() {
+        let internal_commands = get_azure_internal_commands_dapr_component_name("worker");
+        let commands_queue = get_azure_queue_trigger_dapr_component_name("worker", "commands");
+        assert_eq!(internal_commands, "servicebus-worker-internal-commands");
+        assert_eq!(commands_queue, "servicebus-worker-queue-trigger-commands");
+
+        for container_app_name in [
+            "worker",
+            "e2e-03-azure-terraform-provider-very-long-worker-name",
+        ] {
+            let internal_commands =
+                get_azure_internal_commands_dapr_component_name(container_app_name);
+            let commands_queue =
+                get_azure_queue_trigger_dapr_component_name(container_app_name, "commands");
+
+            assert_ne!(internal_commands, commands_queue);
+            assert_valid_dapr_component_name(&internal_commands);
+            assert_valid_dapr_component_name(&commands_queue);
         }
     }
 
