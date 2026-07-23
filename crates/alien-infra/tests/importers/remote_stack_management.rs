@@ -89,12 +89,13 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         "eastus",
         &azure_management_config(),
     );
-    assert_updating_with_internal_state(&state);
-    assert_eq!(internal_state(&state)["state"], "updateStart");
+    assert_eq!(state.status, ResourceStatus::Provisioning);
+    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
+    assert_eq!(internal_state(&state)["setupManaged"], true);
     assert_eq!(
         internal_state(&state)["appliedManagementGrantFingerprint"],
         serde_json::Value::Null,
-        "import must not claim setup-created grants are runtime-owned before reconciliation"
+        "import must not claim setup-created grants are runtime-owned"
     );
     assert_eq!(
         internal_state(&state)["resourceRoleDefinitionIds"],

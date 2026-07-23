@@ -584,6 +584,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn setup_owns_exact_remote_storage_management_grants() {
+        let permissions = PermissionProfile::new().resource("files", ["storage/remote-data-write"]);
+        let stack = Stack::new("azure-remote-storage-scopes".to_string())
+            .management(ManagementPermissions::override_(permissions))
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let registry = TfRegistry::built_in();
+        let module = generate_terraform_module(
+            &stack,
+            TerraformTarget::Azure,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect("Azure Terraform module should render");
+        let storage_module = module.get("files.tf").expect("storage resource module");
+        let assignments = storage_module
+            .split("resource \"azurerm_role_assignment\"")
+            .skip(1)
+            .filter_map(|chunk| chunk.split_once("\n}\n").map(|(block, _)| block))
+            .filter(|block| {
+                block.contains("azurerm_user_assigned_identity.management.principal_id")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            assignments.len(),
+            2,
+            "expected container and account grants"
+        );
+        assert!(assignments.iter().any(|block| block.contains(
+            "blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}",
+        )));
+        assert!(assignments.iter().any(|block| block.contains(
+            "/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}",
+        ) && !block.contains("blobServices/default/containers")));
+    }
+
     fn assert_principal_assignment_scopes(rendered: &str, principal_id: &str) {
         let assignments = rendered
             .split("resource \"azurerm_role_assignment\"")

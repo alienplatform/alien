@@ -54,6 +54,12 @@ const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
 
 #[controller]
 pub struct AzureRemoteStackManagementController {
+    /// Whether setup owns the identity, FIC, and management grants.
+    ///
+    /// Existing serialized controllers predate this field and came from the
+    /// setup/import path, so deserialization defaults to setup ownership.
+    #[serde(default = "setup_managed_by_default")]
+    pub(crate) setup_managed: bool,
     /// The resource ID of the target UAMI
     pub(crate) uami_resource_id: Option<String>,
     /// The client ID of the target UAMI (used in access_configuration output)
@@ -557,6 +563,17 @@ impl AzureRemoteStackManagementController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
+        if self.setup_managed {
+            info!(
+                config_id = %config.id,
+                "Skipping runtime mutation of setup-managed Azure identity and grants"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         info!(config_id = %config.id, "Reconciling management role assignments and FIC");
 
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
@@ -692,6 +709,18 @@ impl AzureRemoteStackManagementController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+
+        if self.setup_managed {
+            info!(
+                config_id = %config.id,
+                "Leaving setup-managed Azure identity and grants for setup teardown"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
+
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
             .service_provider
@@ -926,10 +955,18 @@ impl AzureRemoteStackManagementController {
     }
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.setup_managed {
+            return Ok(false);
+        }
+
         let desired = super::desired_management_grant_fingerprint(
             ctx,
             &self.desired_remote_storage_scopes(ctx)?,
         )?;
         Ok(self.applied_management_grant_fingerprint.as_ref() != Some(&desired))
     }
+}
+
+fn setup_managed_by_default() -> bool {
+    true
 }
