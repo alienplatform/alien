@@ -12,7 +12,7 @@ app.get("/health", c => {
 
 command("echo", async params => {
   return {
-    ...params,
+    params,
     timestamp: new Date().toISOString(),
   }
 })
