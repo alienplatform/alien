@@ -530,9 +530,7 @@ pub fn extract_aws_service_and_region(host: &str, fallback_region: &str) -> (&'s
     };
 
     let (service, region) = match &labels[..amz_idx] {
-        [_bucket_or_subdomain @ .., service, region]
-            if region.contains('-') && service.len() <= 8 =>
-        {
+        [_bucket_or_subdomain @ .., service, region] if region.contains('-') => {
             (*service, region.to_string())
         }
         [_subdomain @ .., service] => (*service, fallback_region.to_string()),
@@ -747,6 +745,33 @@ mod aws_endpoint_parsing_tests {
             extract_aws_service_and_region("ec2.us-east-1.amazonaws.com", "us-west-2"),
             ("ec2", "us-east-1".to_string())
         );
+    }
+
+    #[test]
+    fn regional_long_service_names_use_the_host_region() {
+        for (host, expected_service, expected_region) in [
+            (
+                "cloudformation.us-west-2.amazonaws.com",
+                "cloudformation",
+                "us-west-2",
+            ),
+            (
+                "secretsmanager.ap-northeast-1.amazonaws.com",
+                "secretsmanager",
+                "ap-northeast-1",
+            ),
+            (
+                "id.execute-api.eu-west-1.amazonaws.com",
+                "execute-api",
+                "eu-west-1",
+            ),
+        ] {
+            assert_eq!(
+                extract_aws_service_and_region(host, "us-east-1"),
+                (expected_service, expected_region.to_string()),
+                "host: {host}"
+            );
+        }
     }
 
     #[test]
