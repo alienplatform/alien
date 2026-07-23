@@ -56,6 +56,18 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
                 .body(r#"{"id":"aws","choices":[{"message":{"content":"aws-pong"}}]}"#);
         })
         .await;
+    // /v1/models probes every catalog model for availability; answer the Claude
+    // InvokeModel path so Claude stays listed for the catalog assertions below.
+    // Probes this mock server matches nowhere (the other OpenAI-protocol models)
+    // return 404 and drop from the list, which the assertions tolerate.
+    let _aws_claude_probe = aws_upstream
+        .mock_async(|when, then| {
+            when.method(POST).matches(|req: &HttpMockRequest| req.path.contains("/model/"));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"msg_probe","content":[{"type":"text","text":"ok"}]}"#);
+        })
+        .await;
 
     let azure_upstream = MockServer::start_async().await;
     let azure_mock = azure_upstream
