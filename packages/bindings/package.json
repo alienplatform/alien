@@ -27,6 +27,7 @@
     "test:bun": "bun scripts/run-bun-tests.mjs",
     "test:ts": "tsc --noEmit",
     "smoke": "node scripts/smoke-envelope.mjs",
+    "smoke:remote-storage": "node scripts/remote-storage-smoke.mjs",
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },

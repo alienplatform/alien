@@ -104,6 +104,78 @@ fn aws_tag_tamper_protection_is_not_a_builtin_boundary_layer() {
 }
 
 #[test]
+fn worker_lambda_tagging_is_limited_to_request_tag_guarded_creation() {
+    let permission_set =
+        get_permission_set("worker/provision").expect("worker/provision permission set must exist");
+    let aws_permissions = permission_set
+        .platforms
+        .aws
+        .as_ref()
+        .expect("worker/provision must have AWS permissions");
+    let tagging_permissions = aws_permissions
+        .iter()
+        .filter(|permission| {
+            permission
+                .grant
+                .actions
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|action| action == "lambda:TagResource")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tagging_permissions.len(),
+        1,
+        "worker/provision must grant Lambda tagging only for tagged function creation"
+    );
+
+    let create_permission = tagging_permissions[0];
+    assert_eq!(
+        create_permission.label.as_deref(),
+        Some("create-lambda-functions")
+    );
+    let actions = create_permission
+        .grant
+        .actions
+        .as_deref()
+        .expect("Lambda creation permission must have actions");
+    assert_eq!(actions, ["lambda:CreateFunction", "lambda:TagResource"]);
+
+    let stack_binding = create_permission
+        .binding
+        .stack
+        .as_ref()
+        .expect("Lambda creation must have a stack binding");
+    assert!(has_condition_key(
+        stack_binding,
+        "aws:RequestTag/${stackTag}"
+    ));
+    assert!(has_condition_key(
+        stack_binding,
+        "aws:RequestTag/${managedByTag}"
+    ));
+    let resource_binding = create_permission
+        .binding
+        .resource
+        .as_ref()
+        .expect("Lambda creation must have a resource binding");
+    assert!(has_condition_key(
+        resource_binding,
+        "aws:RequestTag/${stackTag}"
+    ));
+    assert!(has_condition_key(
+        resource_binding,
+        "aws:RequestTag/${resourceTag}"
+    ));
+    assert!(has_condition_key(
+        resource_binding,
+        "aws:RequestTag/${managedByTag}"
+    ));
+}
+
+#[test]
 fn kv_and_queue_management_do_not_mutate_tags() {
     let cases: [(&str, &[&str]); 2] = [
         (

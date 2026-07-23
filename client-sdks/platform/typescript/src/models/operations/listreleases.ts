@@ -11,6 +11,7 @@ import * as models from "../index.js";
 
 export const ListReleasesInclude = {
   Project: "project",
+  Rollout: "rollout",
 } as const;
 export type ListReleasesInclude = ClosedEnum<typeof ListReleasesInclude>;
 
@@ -24,7 +25,7 @@ export type ListReleasesRequest = {
    */
   workspace?: string | undefined;
   /**
-   * Optional fields to include: project
+   * Optional fields to include: project, rollout
    */
   include?: Array<ListReleasesInclude> | undefined;
   /**

@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use url::{Host, Url};
 
 /// Errors raised by the debug-session producer (manager or agent). Callers
 /// wrap into their own error type when surfacing across crate boundaries.
@@ -36,6 +37,191 @@ pub enum DebugSessionError {
     /// `IAMCredentials.generateAccessToken`).
     #[error("alien debug ({platform}): {message}")]
     TokenMintFailed { platform: String, message: String },
+}
+
+/// Why a cloud endpoint supplied through a debug tunnel was rejected.
+///
+/// Debug tunnel peers are authenticated, but the target URL is still
+/// untrusted input. Keeping this policy in `alien-core` makes the manager-side
+/// push relay and operator-side pull relay enforce the same SSRF boundary.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DebugCloudEndpointError {
+    /// The target is not an absolute URL that the URL parser accepts.
+    #[error("target URL is malformed")]
+    MalformedUrl,
+    /// Cloud API requests must use TLS.
+    #[error("target URL must use HTTPS")]
+    HttpsRequired,
+    /// Userinfo can conceal the real hostname and may leak credentials.
+    #[error("target URL must not contain credentials")]
+    CredentialsForbidden,
+    /// Fragments are not part of an HTTP request target and have no use here.
+    #[error("target URL must not contain a fragment")]
+    FragmentForbidden,
+    /// Only the standard HTTPS port is allowed.
+    #[error("target URL must use the default HTTPS port")]
+    NonDefaultPort,
+    /// IP literals include loopback, link-local, metadata, and private ranges.
+    #[error("target URL must use a provider hostname, not an IP address")]
+    IpLiteralForbidden,
+    /// The parsed hostname is absent or uses a confusing/non-DNS form.
+    #[error("target URL hostname is malformed or confusable")]
+    InvalidHostname,
+    /// The session/provider label is not one the debug relay supports.
+    #[error("unsupported cloud provider '{provider}'")]
+    UnsupportedProvider { provider: String },
+    /// The hostname is not an API endpoint owned by the selected provider.
+    #[error("target hostname is not allowed for provider '{provider}'")]
+    HostNotAllowed { provider: String },
+}
+
+/// OAuth audience for an Azure endpoint accepted by the debug tunnel.
+///
+/// Azure data-plane APIs do not use the endpoint hostname as their token
+/// audience. Keeping the supported host-to-scope mapping here prevents the
+/// manager and operator relays from minting a token for the wrong resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AzureDebugAuthScope {
+    /// Azure Resource Manager.
+    Management,
+    /// Azure Blob, Data Lake, File, Queue, and Table Storage.
+    Storage,
+    /// Azure Key Vault.
+    KeyVault,
+    /// Azure Service Bus data plane.
+    ServiceBus,
+}
+
+impl AzureDebugAuthScope {
+    /// Exact OAuth scope used when minting the endpoint's bearer token.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Management => "https://management.azure.com/.default",
+            Self::Storage => "https://storage.azure.com/.default",
+            Self::KeyVault => "https://vault.azure.net/.default",
+            Self::ServiceBus => "https://servicebus.azure.net/.default",
+        }
+    }
+}
+
+/// Map a validated Azure debug endpoint to its canonical OAuth audience.
+pub fn azure_debug_auth_scope(url: &Url) -> Result<AzureDebugAuthScope, DebugCloudEndpointError> {
+    let host = match url.host() {
+        Some(Host::Domain(host)) => host,
+        Some(Host::Ipv4(_) | Host::Ipv6(_)) => {
+            return Err(DebugCloudEndpointError::IpLiteralForbidden)
+        }
+        None => return Err(DebugCloudEndpointError::InvalidHostname),
+    };
+
+    if host == "management.azure.com" {
+        Ok(AzureDebugAuthScope::Management)
+    } else if [
+        "blob.core.windows.net",
+        "dfs.core.windows.net",
+        "file.core.windows.net",
+        "queue.core.windows.net",
+        "table.core.windows.net",
+    ]
+    .iter()
+    .any(|domain| domain_is_or_below(host, domain))
+    {
+        Ok(AzureDebugAuthScope::Storage)
+    } else if domain_is_or_below(host, "vault.azure.net") {
+        Ok(AzureDebugAuthScope::KeyVault)
+    } else if domain_is_or_below(host, "servicebus.windows.net") {
+        Ok(AzureDebugAuthScope::ServiceBus)
+    } else {
+        Err(DebugCloudEndpointError::HostNotAllowed {
+            provider: "azure".to_string(),
+        })
+    }
+}
+
+/// Parse and validate an outbound cloud API URL used by a debug tunnel.
+///
+/// This is an SSRF boundary. It deliberately accepts only HTTPS endpoints
+/// below cloud-provider-owned API domains, rejects IP literals and confusing
+/// hostnames, and limits requests to the standard TLS port. Call this before
+/// resolving or minting credentials so rejected input cannot trigger any
+/// privileged work.
+pub fn parse_debug_cloud_endpoint(
+    provider: &str,
+    raw_url: &str,
+) -> Result<Url, DebugCloudEndpointError> {
+    let url = Url::parse(raw_url).map_err(|_| DebugCloudEndpointError::MalformedUrl)?;
+
+    if url.scheme() != "https" {
+        return Err(DebugCloudEndpointError::HttpsRequired);
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(DebugCloudEndpointError::CredentialsForbidden);
+    }
+    if url.fragment().is_some() {
+        return Err(DebugCloudEndpointError::FragmentForbidden);
+    }
+    if url.port().is_some_and(|port| port != 443) {
+        return Err(DebugCloudEndpointError::NonDefaultPort);
+    }
+
+    let host = match url.host() {
+        Some(Host::Domain(host)) => host,
+        Some(Host::Ipv4(_) | Host::Ipv6(_)) => {
+            return Err(DebugCloudEndpointError::IpLiteralForbidden)
+        }
+        None => return Err(DebugCloudEndpointError::InvalidHostname),
+    };
+    if !is_unambiguous_dns_hostname(host) {
+        return Err(DebugCloudEndpointError::InvalidHostname);
+    }
+
+    let allowed = match provider {
+        "aws" => {
+            domain_is_or_below(host, "amazonaws.com")
+                || domain_is_or_below(host, "amazonaws.com.cn")
+        }
+        "gcp" => domain_is_or_below(host, "googleapis.com"),
+        "azure" => {
+            azure_debug_auth_scope(&url)?;
+            true
+        }
+        other => {
+            return Err(DebugCloudEndpointError::UnsupportedProvider {
+                provider: other.to_string(),
+            })
+        }
+    };
+
+    if !allowed {
+        return Err(DebugCloudEndpointError::HostNotAllowed {
+            provider: provider.to_string(),
+        });
+    }
+
+    Ok(url)
+}
+
+fn domain_is_or_below(host: &str, domain: &str) -> bool {
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn is_unambiguous_dns_hostname(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 || host.ends_with('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && !label.starts_with("xn--")
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    })
 }
 
 /// Wire response. Discriminated by `kind`. Identical shape on both ends so
@@ -344,9 +530,7 @@ pub fn extract_aws_service_and_region(host: &str, fallback_region: &str) -> (&'s
     };
 
     let (service, region) = match &labels[..amz_idx] {
-        [_bucket_or_subdomain @ .., service, region]
-            if region.contains('-') && service.len() <= 8 =>
-        {
+        [_bucket_or_subdomain @ .., service, region] if region.contains('-') => {
             (*service, region.to_string())
         }
         [_subdomain @ .., service] => (*service, fallback_region.to_string()),
@@ -382,7 +566,178 @@ pub fn extract_aws_service_and_region(host: &str, fallback_region: &str) -> (&'s
 
 #[cfg(test)]
 mod aws_endpoint_parsing_tests {
-    use super::extract_aws_service_and_region;
+    use super::{
+        azure_debug_auth_scope, extract_aws_service_and_region, parse_debug_cloud_endpoint,
+        AzureDebugAuthScope, DebugCloudEndpointError,
+    };
+
+    #[test]
+    fn accepts_provider_owned_public_api_endpoints() {
+        for (provider, target) in [
+            ("aws", "https://sts.us-east-1.amazonaws.com/"),
+            ("aws", "https://s3.cn-north-1.amazonaws.com.cn/bucket"),
+            ("gcp", "https://compute.googleapis.com/compute/v1/projects"),
+            ("azure", "https://management.azure.com/subscriptions"),
+            ("azure", "https://account.blob.core.windows.net/container"),
+            ("azure", "https://account.dfs.core.windows.net/filesystem"),
+            ("azure", "https://example.vault.azure.net/secrets"),
+            ("azure", "https://namespace.servicebus.windows.net/queue"),
+        ] {
+            assert!(
+                parse_debug_cloud_endpoint(provider, target).is_ok(),
+                "{provider} should accept {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_provider_hosts_without_supported_signing_audiences() {
+        for (provider, target) in [
+            ("aws", "https://ec2.us-east-1.api.aws/"),
+            ("azure", "https://graph.microsoft.com/v1.0/me"),
+            ("azure", "https://registry.azurecr.io/v2/"),
+        ] {
+            assert!(
+                matches!(
+                    parse_debug_cloud_endpoint(provider, target),
+                    Err(DebugCloudEndpointError::HostNotAllowed { .. })
+                ),
+                "{provider} should reject unsupported signing target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn azure_endpoints_map_to_canonical_oauth_scopes() {
+        for (target, expected) in [
+            (
+                "https://management.azure.com/subscriptions",
+                AzureDebugAuthScope::Management,
+            ),
+            (
+                "https://account.blob.core.windows.net/container",
+                AzureDebugAuthScope::Storage,
+            ),
+            (
+                "https://account.dfs.core.windows.net/filesystem",
+                AzureDebugAuthScope::Storage,
+            ),
+            (
+                "https://account.file.core.windows.net/share",
+                AzureDebugAuthScope::Storage,
+            ),
+            (
+                "https://account.queue.core.windows.net/queue",
+                AzureDebugAuthScope::Storage,
+            ),
+            (
+                "https://account.table.core.windows.net/table",
+                AzureDebugAuthScope::Storage,
+            ),
+            (
+                "https://example.vault.azure.net/secrets",
+                AzureDebugAuthScope::KeyVault,
+            ),
+            (
+                "https://namespace.servicebus.windows.net/queue",
+                AzureDebugAuthScope::ServiceBus,
+            ),
+        ] {
+            let url = parse_debug_cloud_endpoint("azure", target)
+                .expect("supported Azure endpoint should validate");
+            let scope = azure_debug_auth_scope(&url)
+                .expect("validated Azure endpoint should have an OAuth audience");
+            assert_eq!(scope, expected, "unexpected scope for {target}");
+        }
+
+        assert_eq!(
+            AzureDebugAuthScope::Management.as_str(),
+            "https://management.azure.com/.default"
+        );
+        assert_eq!(
+            AzureDebugAuthScope::Storage.as_str(),
+            "https://storage.azure.com/.default"
+        );
+        assert_eq!(
+            AzureDebugAuthScope::KeyVault.as_str(),
+            "https://vault.azure.net/.default"
+        );
+        assert_eq!(
+            AzureDebugAuthScope::ServiceBus.as_str(),
+            "https://servicebus.azure.net/.default"
+        );
+    }
+
+    #[test]
+    fn rejects_non_https_and_nondefault_ports() {
+        assert_eq!(
+            parse_debug_cloud_endpoint("aws", "http://sts.amazonaws.com/")
+                .expect_err("HTTP endpoint must be rejected"),
+            DebugCloudEndpointError::HttpsRequired
+        );
+        assert_eq!(
+            parse_debug_cloud_endpoint("gcp", "https://compute.googleapis.com:8443/")
+                .expect_err("nondefault port must be rejected"),
+            DebugCloudEndpointError::NonDefaultPort
+        );
+    }
+
+    #[test]
+    fn rejects_ip_literals_localhost_and_private_network_targets() {
+        for target in [
+            "https://127.0.0.1/",
+            "https://10.1.2.3/",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[::1]/",
+            "https://[fe80::1]/",
+        ] {
+            assert_eq!(
+                parse_debug_cloud_endpoint("aws", target).expect_err("IP target must be rejected"),
+                DebugCloudEndpointError::IpLiteralForbidden,
+                "unexpected result for {target}"
+            );
+        }
+        assert!(matches!(
+            parse_debug_cloud_endpoint("gcp", "https://localhost/"),
+            Err(DebugCloudEndpointError::HostNotAllowed { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_credentials_confusable_hosts_and_suffix_tricks() {
+        assert_eq!(
+            parse_debug_cloud_endpoint("azure", "https://operator:secret@management.azure.com/")
+                .expect_err("credential-bearing URL must be rejected"),
+            DebugCloudEndpointError::CredentialsForbidden
+        );
+        assert_eq!(
+            parse_debug_cloud_endpoint("aws", "https://xn--amazn-fsa.amazonaws.com/")
+                .expect_err("punycode hostname must be rejected"),
+            DebugCloudEndpointError::InvalidHostname
+        );
+        for target in [
+            "https://amazonaws.com.attacker.example/",
+            "https://evilamazonaws.com/",
+            "https://googleapis.com.attacker.example/",
+        ] {
+            assert!(matches!(
+                parse_debug_cloud_endpoint("gcp", target),
+                Err(DebugCloudEndpointError::HostNotAllowed { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn provider_allowlists_do_not_overlap() {
+        assert!(matches!(
+            parse_debug_cloud_endpoint("gcp", "https://sts.amazonaws.com/"),
+            Err(DebugCloudEndpointError::HostNotAllowed { .. })
+        ));
+        assert!(matches!(
+            parse_debug_cloud_endpoint("unknown", "https://compute.googleapis.com/"),
+            Err(DebugCloudEndpointError::UnsupportedProvider { .. })
+        ));
+    }
 
     #[test]
     fn regional_service() {
@@ -390,6 +745,33 @@ mod aws_endpoint_parsing_tests {
             extract_aws_service_and_region("ec2.us-east-1.amazonaws.com", "us-west-2"),
             ("ec2", "us-east-1".to_string())
         );
+    }
+
+    #[test]
+    fn regional_long_service_names_use_the_host_region() {
+        for (host, expected_service, expected_region) in [
+            (
+                "cloudformation.us-west-2.amazonaws.com",
+                "cloudformation",
+                "us-west-2",
+            ),
+            (
+                "secretsmanager.ap-northeast-1.amazonaws.com",
+                "secretsmanager",
+                "ap-northeast-1",
+            ),
+            (
+                "id.execute-api.eu-west-1.amazonaws.com",
+                "execute-api",
+                "eu-west-1",
+            ),
+        ] {
+            assert_eq!(
+                extract_aws_service_and_region(host, "us-east-1"),
+                (expected_service, expected_region.to_string()),
+                "host: {host}"
+            );
+        }
     }
 
     #[test]

@@ -155,13 +155,16 @@ jobs:
 
       - name: TypeScript unit tests
         # The per-package vitest suites (commands receiver twins, bindings
-        # loader/error mapping, core schemas) — `test:ts` above is
-        # typecheck-only, so without this step they never ran in CI. Must run
-        # after the dev-addon build: the bindings kv/queue/storage/vault
-        # suites load the native addon.
+        # loader/error mapping, core schemas) and generated SDK wire contracts.
+        # `test:ts` above is typecheck-only, so without this step
+        # they never ran in CI. Must run after the dev-addon build: the bindings
+        # kv/queue/storage/vault suites load the native addon.
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
+        run: |
+          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
+          pnpm test:manager-sdk-wire
+          pnpm test:platform-sdk-wire
 
       - name: Rust fast tests (non-cloud)
         env:
@@ -179,6 +182,16 @@ jobs:
             --exclude endpoint-agent \
             --exclude alien-test-server \
             --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+
+      - name: Manager OpenAPI security contract
+        run: cargo test -p alien-manager --features openapi --lib api::tests::openapi_declares_http_bearer_security_without_dropping_schemas
+
+      - name: Remote bindings tests (non-cloud)
+        run: |
+          depot cargo test -p alien-bindings --features platform-sdk --lib remote::
+          depot cargo test -p alien-aws-clients --lib
+          depot cargo test -p alien-gcp-clients --lib
+          depot cargo test -p alien-azure-clients --lib user_delegation_sas
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'

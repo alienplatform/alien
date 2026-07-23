@@ -15,13 +15,13 @@ let value: ListEventsResponse = {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       debugSessionId: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       data: {
-        platform: "<value>",
-        stack: "<value>",
-        type: "RunningPreflights",
+        agentId: "<id>",
+        releaseId: "<id>",
+        type: "DeletingAgent",
       },
-      state: "started",
+      state: "none",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-      createdAt: new Date("2026-01-05T03:00:56.315Z"),
+      createdAt: new Date("2026-05-23T10:59:53.935Z"),
       workspaceId: "ws_It13CUaGEhLLAB87simX0",
     },
   ],
@@ -31,7 +31,7 @@ let value: ListEventsResponse = {
 
 ## Fields
 
-| Field                                       | Type                                        | Required                                    | Description                                 |
-| ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| `items`                                     | [models.Event](../../models/event.md)[]     | :heavy_check_mark:                          | Items in this page                          |
-| `nextCursor`                                | *string*                                    | :heavy_check_mark:                          | Cursor for the next page, null if last page |
+| Field                                                                   | Type                                                                    | Required                                                                | Description                                                             |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `items`                                                                 | [models.EventListItemResponse](../../models/eventlistitemresponse.md)[] | :heavy_check_mark:                                                      | Items in this page                                                      |
+| `nextCursor`                                                            | *string*                                                                | :heavy_check_mark:                                                      | Cursor for the next page, null if last page                             |

@@ -19,7 +19,9 @@ let value: ManagerRetryResponseSetup = {
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
     },
     environmentVariables: [
       {

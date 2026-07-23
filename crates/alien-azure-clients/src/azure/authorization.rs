@@ -12,6 +12,10 @@ use serde::Deserialize;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
+fn role_definition_ids_match(actual: &str, expected: &str) -> bool {
+    actual.eq_ignore_ascii_case(expected)
+}
+
 // -----------------------------------------------------------------------------
 // Authorization API trait
 // -----------------------------------------------------------------------------
@@ -609,10 +613,9 @@ impl AuthorizationApi for AzureAuthorizationClient {
                 .value
                 .into_iter()
                 .filter(|assignment| {
-                    assignment
-                        .properties
-                        .as_ref()
-                        .map_or(false, |props| props.role_definition_id == role_def_id)
+                    assignment.properties.as_ref().is_some_and(|props| {
+                        role_definition_ids_match(&props.role_definition_id, &role_def_id)
+                    })
                 })
                 .collect()
         } else {
@@ -731,5 +734,13 @@ mod tests {
             resource_scope.to_resource_id_string(&config),
             "/subscriptions/sub-123/resourceGroups/rg-1/providers/Microsoft.ServiceBus/namespaces/bus-1"
         );
+    }
+
+    #[test]
+    fn role_definition_filter_is_case_insensitive_for_arm_ids() {
+        assert!(role_definition_ids_match(
+            "/subscriptions/SUB/providers/Microsoft.Authorization/roleDefinitions/ABC",
+            "/subscriptions/sub/providers/microsoft.authorization/roledefinitions/abc",
+        ));
     }
 }

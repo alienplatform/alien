@@ -1,60 +1,8 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use crate::core::ResourceControllerContext;
-use crate::error::{ErrorData, Result};
-use alien_azure_clients::models::container_apps::ContainerApp;
-use alien_core::{
-    AzureContainerAppsWorkerHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, Worker, WorkerHeartbeatData,
-    WorkloadHeartbeatStatus,
-};
-use alien_error::{AlienError, Context};
-use chrono::Utc;
+use super::*;
 
 /// Generates a deterministic Azure Container Apps name for a worker.
 pub(super) fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
-}
-
-pub(super) fn get_azure_storage_event_subscription_name(
-    worker_id: &str,
-    storage_id: &str,
-) -> String {
-    let mut stem: String = format!("alien{worker_id}{storage_id}")
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect();
-    stem.truncate(31);
-    let suffix = uuid::Uuid::new_v5(
-        &uuid::Uuid::NAMESPACE_OID,
-        format!("azure-storage-trigger:{worker_id}:{storage_id}").as_bytes(),
-    )
-    .simple()
-    .to_string();
-    format!("{stem}{suffix}")
-}
-
-pub(super) fn azure_storage_event_types(events: &[String], worker_id: &str) -> Result<Vec<String>> {
-    events
-        .iter()
-        .map(|event| {
-            let event_type = match event.as_str() {
-                "created" => "Microsoft.Storage.BlobCreated",
-                "deleted" => "Microsoft.Storage.BlobDeleted",
-                "tierChanged" => "Microsoft.Storage.BlobTierChanged",
-                _ => {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Azure storage trigger event '{}' is not supported; expected one of: created, deleted, tierChanged",
-                            event
-                        ),
-                        resource_id: Some(worker_id.to_string()),
-                    }));
-                }
-            };
-            Ok(event_type.to_string())
-        })
-        .collect()
 }
 
 #[cfg(not(test))]
@@ -201,19 +149,55 @@ pub(super) struct DomainInfo {
 
 pub(super) enum DaprComponentOperation {
     Completed,
-    LongRunning(Duration),
+    Creating(Duration),
+    Deleting(Duration),
+    Pending(Duration),
+}
+
+pub(super) enum CommandsSetupOperation {
+    Completed,
+    Creating(Duration),
+    Deleting(Duration),
     Pending(Duration),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AzureStorageTriggerInfrastructure {
+    #[serde(default)]
+    pub storage_id: Option<String>,
     pub source_resource_id: String,
+    #[serde(default)]
+    pub source_container_name: Option<String>,
     pub event_subscription_name: String,
     pub service_bus_resource_group: String,
     pub namespace_name: String,
     pub queue_name: String,
+    #[serde(default)]
+    pub queue_applied: bool,
     pub receiver_role_assignment_id: Option<String>,
+    #[serde(default)]
+    pub delivery_reconciled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AzureStorageTriggerTeardownProgress {
+    #[default]
+    EventSubscription,
+    ReceiverRoleAssignment,
+    Queue,
+}
+
+pub(super) enum StorageTriggerTeardownResult {
+    Complete,
+    Mutated,
+}
+
+pub(super) enum CommandsTeardownResult {
+    Complete,
+    Mutated,
+    LongRunning(Duration),
 }
 
 pub(super) fn emit_azure_container_apps_worker_heartbeat(

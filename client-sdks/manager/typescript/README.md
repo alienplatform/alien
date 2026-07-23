@@ -111,9 +111,9 @@ run();
 
 This SDK supports the following security scheme globally:
 
-| Name     | Type   | Scheme  | Environment Variable   |
-| -------- | ------ | ------- | ---------------------- |
-| `bearer` | apiKey | API key | `ALIEN_MANAGER_BEARER` |
+| Name     | Type | Scheme      | Environment Variable   |
+| -------- | ---- | ----------- | ---------------------- |
+| `bearer` | http | HTTP Bearer | `ALIEN_MANAGER_BEARER` |
 
 To authenticate with the API the `bearer` parameter must be set when initializing the SDK client instance. For example:
 ```typescript
@@ -141,6 +141,10 @@ run();
 <details open>
 <summary>Available methods</summary>
 
+### [Bindings](docs/sdks/bindings/README.md)
+
+* [resolveBinding](docs/sdks/bindings/README.md#resolvebinding)
+
 ### [Commands](docs/sdks/commands/README.md)
 
 * [createCommand](docs/sdks/commands/README.md#createcommand) - Create a new command
@@ -153,7 +157,6 @@ run();
 ### [Credentials](docs/sdks/credentials/README.md)
 
 * [mintCredentials](docs/sdks/credentials/README.md#mintcredentials)
-* [resolveCredentials](docs/sdks/credentials/README.md#resolvecredentials)
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
@@ -240,6 +243,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 
 <summary>Available standalone functions</summary>
 
+- [`bindingsResolveBinding`](docs/sdks/bindings/README.md#resolvebinding)
 - [`commandsCreateCommand`](docs/sdks/commands/README.md#createcommand) - Create a new command
 - [`commandsGetCommandPayload`](docs/sdks/commands/README.md#getcommandpayload) - Get command payload (params and response) from KV
 - [`commandsGetCommandStatus`](docs/sdks/commands/README.md#getcommandstatus) - Get command status
@@ -247,7 +251,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsSubmitResponse`](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 - [`commandsUploadComplete`](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
 - [`credentialsMintCredentials`](docs/sdks/credentials/README.md#mintcredentials)
-- [`credentialsResolveCredentials`](docs/sdks/credentials/README.md#resolvecredentials)
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
 and then threads `&subject` into the `DeploymentStore` calls — see the
 trait doc on [`DeploymentStore`] for the convention.
@@ -386,12 +389,9 @@ const alienManager = new AlienManager({
 
 async function run() {
   try {
-    const result = await alienManager.commands.createCommand({
-      command: "<value>",
+    const result = await alienManager.bindings.resolveBinding({
       deploymentId: "<id>",
-      params: {
-        mode: "storage",
-      },
+      resourceId: "<id>",
     });
 
     console.log(result);
@@ -404,10 +404,12 @@ async function run() {
       console.log(error.headers);
 
       // Depending on the method different errors may be thrown
-      if (error instanceof errors.ErrorResponse) {
+      if (error instanceof errors.AlienError) {
         console.log(error.data$.code); // string
-        console.log(error.data$.details); // string
-        console.log(error.data$.message); // string
+        console.log(error.data$.context); // any
+        console.log(error.data$.hint); // string
+        console.log(error.data$.httpStatusCode); // number
+        console.log(error.data$.internal); // boolean
       }
     }
   }
@@ -421,7 +423,7 @@ run();
 **Primary error:**
 * [`AlienManagerError`](./src/models/errors/alienmanagererror.ts): The base class for HTTP error responses.
 
-<details><summary>Less common errors (7)</summary>
+<details><summary>Less common errors (8)</summary>
 
 <br />
 
@@ -435,6 +437,7 @@ run();
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
 * [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 33 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 1 of 33 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

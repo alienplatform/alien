@@ -13,8 +13,7 @@ use crate::traits::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// App-facing entry point for accessing bindings configured via `ALIEN_*_BINDING`
-/// environment variables.
+/// App-facing entry point for environment-backed bindings.
 ///
 /// Construction is synchronous and only validates each configured binding's JSON
 /// shape (see [`BindingsProvider::from_env_deferred`]); the deployment platform,
@@ -120,8 +119,8 @@ impl Bindings {
     /// Loads the object storage binding named `binding_name`.
     ///
     /// The returned handle checks credential freshness before each operation.
-    /// Native credentials and fresh minted credentials remain cached; a minted
-    /// provider inside its refresh window is re-minted once under the shared
+    /// Native credentials and fresh short-lived credentials remain cached; a
+    /// provider inside its refresh window is refreshed once under its shared
     /// resolver's single-flight guard.
     pub async fn storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
         let initial = self.provider.load_storage(binding_name).await?;
@@ -132,7 +131,8 @@ impl Bindings {
         )))
     }
 
-    /// Loads a key-value binding that refreshes minted credentials before use.
+    /// Loads an environment-backed key-value binding that refreshes minted
+    /// credentials before use.
     pub async fn kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
         self.provider.load_kv(binding_name).await?;
         Ok(Arc::new(RefreshingKv::new(
@@ -151,7 +151,8 @@ impl Bindings {
         Ok(BoundQueue::new(queue, binding_name))
     }
 
-    /// Loads a vault binding that refreshes minted credentials before use.
+    /// Loads an environment-backed vault binding that refreshes minted
+    /// credentials before use.
     pub async fn vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
         self.provider.load_vault(binding_name).await?;
         Ok(Arc::new(RefreshingVault::new(

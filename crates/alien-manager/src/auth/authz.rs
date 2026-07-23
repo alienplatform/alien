@@ -38,6 +38,19 @@ pub trait Authz: Send + Sync {
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
     fn can_read_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_update_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Whether a caller may resolve a remote resource binding for a deployment.
+    /// This is deliberately separate from read access because the response
+    /// includes short-lived credentials for the deployment's management identity.
+    fn can_resolve_remote_bindings(
+        &self,
+        _subject: &Subject,
+        _deployment: &DeploymentRecord,
+    ) -> bool {
+        // Adding a credential-bearing endpoint must not silently grant access
+        // in downstream Authz implementations that have not made an explicit
+        // policy decision for it.
+        false
+    }
     fn can_delete_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
 
     // -- Deployment groups -------------------------------------------------
@@ -55,6 +68,11 @@ pub trait Authz: Send + Sync {
         self.can_act_on_deployment(subject, deployment)
     }
     fn can_read_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Whether a caller holds an exact capability for one command payload.
+    /// This path deliberately does not infer access from workspace scope: a
+    /// manager may serve multiple workspaces and externally registered
+    /// commands have no local entity to authorize against.
+    fn can_read_command_payload(&self, subject: &Subject, command_id: &str) -> bool;
     /// Authorize a read from the canonical command record without loading its
     /// deployment. Deployment-group scope is intentionally handled through
     /// `can_read_command`, because the command record does not carry the group.

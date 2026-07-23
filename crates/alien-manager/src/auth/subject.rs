@@ -93,6 +93,16 @@ pub enum Scope {
         project_id: String,
         deployment_id: String,
     },
+    /// Exact capability for reading one manager-local command payload.
+    ///
+    /// Platform-issued browser tokens use this scope after the control plane
+    /// has authorized the command and verified its current manager assignment.
+    /// It must not imply access to the owning deployment or project.
+    Command {
+        project_id: String,
+        deployment_id: String,
+        command_id: String,
+    },
 }
 
 impl Scope {
@@ -103,7 +113,8 @@ impl Scope {
             Scope::Workspace => None,
             Scope::Project { project_id }
             | Scope::DeploymentGroup { project_id, .. }
-            | Scope::Deployment { project_id, .. } => Some(project_id),
+            | Scope::Deployment { project_id, .. }
+            | Scope::Command { project_id, .. } => Some(project_id),
         }
     }
 }
@@ -164,6 +175,18 @@ pub enum Role {
     DeploymentTelemetryWriter,
     DeploymentViewer,
     DeploymentGroupDeployer,
+    /// Read-only capability used by Platform telemetry-query JWTs. Query
+    /// handlers validate their signed scopes separately; generic manager
+    /// control-plane authorization grants this role nothing.
+    WorkspaceTelemetryReader,
+    /// Read-only capability for one command payload, paired with
+    /// [`Scope::Command`].
+    CommandPayloadReader,
+    /// Exact capability for resolving remote bindings for one deployment.
+    ///
+    /// This role is paired with [`Scope::Deployment`] and must not imply generic
+    /// deployment read or mutation access.
+    RemoteBindingResolver,
 }
 
 #[cfg(test)]
@@ -257,5 +280,15 @@ mod tests {
             }
             other => panic!("unexpected scope {:?}", other),
         }
+    }
+
+    #[test]
+    fn remote_binding_capability_has_a_stable_wire_name() {
+        let json = serde_json::to_string(&Role::RemoteBindingResolver).expect("serialize role");
+        assert_eq!(json, r#""remote-binding-resolver""#);
+        assert_eq!(
+            serde_json::from_str::<Role>(&json).expect("deserialize role"),
+            Role::RemoteBindingResolver
+        );
     }
 }

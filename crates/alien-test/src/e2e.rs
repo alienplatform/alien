@@ -3,7 +3,9 @@
 //! Provides the high-level `setup()` entry point that each E2E test calls,
 //! plus the support matrix, deployment helpers, and stack evaluation logic.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1623,7 +1625,18 @@ mod tests {
 /// 6. The caller is responsible for running checks and cleanup
 ///
 /// Returns an `TestContext` with the running deployment ready for checks.
-pub async fn setup(
+pub fn setup(
+    platform: Platform,
+    model: DeploymentModel,
+    app: TestApp,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<TestContext>> + Send>> {
+    // E2E setup composes every platform and deployment path into one large
+    // future. Allocate it on the heap so nextest's test-thread stack does not
+    // depend on the largest generated SDK or cloud-controller future.
+    Box::pin(setup_inner(platform, model, app))
+}
+
+async fn setup_inner(
     platform: Platform,
     model: DeploymentModel,
     app: TestApp,

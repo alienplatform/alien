@@ -2,10 +2,6 @@ use alien_azure_clients::container_apps::{
     ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
     ManagedEnvironmentCertificateProperties,
 };
-use alien_azure_clients::event_grid::{
-    EventSubscriptionFilter, EventSubscriptionRequest, EventSubscriptionRequestProperties,
-    ServiceBusQueueDestination, ServiceBusQueueDestinationProperties,
-};
 use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
@@ -17,30 +13,64 @@ use alien_azure_clients::models::container_apps::{
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, RemoteStackManagement, RemoteStackManagementOutputs,
-    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs, ENV_AZURE_CLIENT_ID,
+    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
+    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
+use chrono::Utc;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
-use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
+use crate::core::{ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
     get_resource_group_name, is_azure_authorization_propagation_error,
 };
+use crate::worker::azure_dapr_components::{
+    delete_owned_legacy_dapr_components, ensure_dapr_component, service_bus_dapr_component,
+    DaprComponentEnsureOperation, LegacyDaprComponentCleanupStep, TrackedDaprComponentDeleteStep,
+};
+use crate::worker::azure_dapr_names_migration::{
+    DaprComponentMigrationStep, CURRENT_DAPR_COMPONENT_NAMING_VERSION,
+};
+use crate::worker::azure_names::{
+    commands_queue_name, get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
+    get_azure_internal_commands_dapr_component_name, get_azure_queue_trigger_dapr_component_name,
+    get_azure_storage_event_subscription_name, get_legacy_azure_blob_trigger_dapr_component_names,
+    get_legacy_azure_internal_commands_dapr_component_names,
+    get_legacy_azure_queue_trigger_dapr_component_names,
+};
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
 
+#[path = "../azure_cleanup.rs"]
+mod cleanup;
+use cleanup::{AzureCommandsQueueTarget, CommandsQueueTargetPreparation};
+#[path = "../azure_command_sender.rs"]
+mod command_sender;
+use command_sender::{AzureCommandsSenderRoleAssignmentIntent, CommandsSenderReconcileResult};
+#[path = "../azure_operations.rs"]
+mod operations;
+use operations::{
+    poll_pending_operation, poll_reconciled_operation, AzureOperationPoll,
+    AzureOperationPollRequest, AzureStrictOperationPoll,
+};
+#[path = "../azure_role_assignments.rs"]
+mod role_assignments;
+#[path = "../azure_trigger_targets.rs"]
+mod trigger_targets;
+use trigger_targets::{StorageDeliveryReconcileResult, StorageTargetPreparation};
+
 mod helpers;
 mod support;
-#[cfg(test)]
-mod tests;
 
 use support::*;
 
@@ -69,11 +99,14 @@ pub struct AzureWorkerController {
     pub(crate) pending_operation_url: Option<String>,
     /// Retry‑after seconds for the current LRO (populated when Azure returns it).
     pub(crate) pending_operation_retry_after: Option<u64>,
-    /// Dapr component names for queue triggers (one per queue trigger)
+    /// Dapr component names for all worker triggers.
     pub(crate) dapr_components: Vec<String>,
     /// Event Grid and Service Bus resources created for storage triggers.
     #[serde(default)]
     pub(crate) storage_trigger_infrastructure: Vec<AzureStorageTriggerInfrastructure>,
+    /// Next durable resource deletion within the first tracked storage trigger.
+    #[serde(default)]
+    pub(crate) storage_trigger_teardown_progress: AzureStorageTriggerTeardownProgress,
 
     // Domain & Certificate
     /// The fully qualified domain name for the worker
@@ -90,15 +123,31 @@ pub struct AzureWorkerController {
     pub(crate) certificate_issued_at: Option<String>,
 
     // Commands infrastructure
+    /// Service Bus resource group used for commands delivery.
+    #[serde(default)]
+    pub(crate) commands_resource_group_name: Option<String>,
     /// Service Bus namespace name for commands delivery
     pub(crate) commands_namespace_name: Option<String>,
     /// Service Bus queue name for commands delivery
     pub(crate) commands_queue_name: Option<String>,
+    /// Whether the tracked commands queue has been applied in the current setup cycle.
+    #[serde(default)]
+    pub(crate) commands_queue_applied: bool,
     /// Dapr component name for commands queue
     pub(crate) commands_dapr_component: Option<String>,
+    /// Current and historical command Dapr names still requiring ownership-aware teardown.
+    #[serde(default)]
+    pub(crate) commands_dapr_component_deletion_candidates: Vec<String>,
     /// Role assignment ID for Service Bus Data Sender on the deploying identity (for cleanup)
     pub(crate) commands_sender_role_assignment_id: Option<String>,
-    /// Role assignment ID for Service Bus Data Receiver on the execution UAMI (for cleanup)
+    /// Durable direct-manager sender grant planned before its idempotent Azure PUT.
+    #[serde(default)]
+    pub(crate) commands_sender_role_assignment_intent:
+        Option<AzureCommandsSenderRoleAssignmentIntent>,
+    /// Whether the exact commands queue has been inspected for controller-owned sender grants.
+    #[serde(default)]
+    pub(crate) commands_sender_role_assignment_discovery_complete: bool,
+    /// Legacy setup-owned receiver cursor. It is ignored and never remotely deleted.
     pub(crate) commands_receiver_role_assignment_id: Option<String>,
 
     /// Deadline for retrying commands infrastructure creation while Azure IAM grants propagate.
@@ -122,41 +171,29 @@ pub struct AzureWorkerController {
     /// Whether the current update flow has already deleted old Dapr trigger components.
     #[serde(default)]
     pub(crate) update_dapr_components_deleted: bool,
+    /// Version of the deterministic Dapr component naming scheme applied to this worker.
+    #[serde(default)]
+    pub(crate) dapr_component_naming_version: u8,
+    /// Trigger component whose asynchronous deletion is currently being polled.
+    #[serde(default)]
+    pub(crate) pending_dapr_component_deletion_name: Option<String>,
+    /// Whether delete has persisted the complete current and historical Dapr cleanup plan.
+    #[serde(default)]
+    pub(crate) dapr_component_deletion_candidates_initialized: bool,
+    /// Whether imported auxiliary command/storage cleanup candidates have been reconstructed.
+    #[serde(default)]
+    pub(crate) auxiliary_teardown_candidates_initialized: bool,
+    /// Whether a commands-only update teardown has reconstructed imported cleanup cursors.
+    #[serde(default)]
+    pub(crate) commands_update_teardown_candidates_initialized: bool,
+    /// Whether trigger update teardown has reconstructed candidates from the previous config.
+    #[serde(default)]
+    pub(crate) trigger_update_teardown_candidates_initialized: bool,
+    /// Whether this update durably invalidated storage delivery verification latches.
+    #[serde(default)]
+    pub(crate) storage_delivery_update_reconciliation_initialized: bool,
 }
 
-impl AzureWorkerController {
-    fn wait_for_container_apps_environment_wake_retry(
-        &mut self,
-        worker_id: &str,
-        operation: &str,
-    ) -> Option<Duration> {
-        let retry_after = self.container_apps_environment_wake_retry_after_epoch_secs?;
-        if let Some(delay) = retry_after_delay(retry_after) {
-            debug!(
-                worker=%worker_id,
-                operation=%operation,
-                remaining_secs=retry_after.saturating_sub(current_unix_timestamp_secs()),
-                "Waiting before retrying Azure Container Apps Environment operation"
-            );
-            Some(delay)
-        } else {
-            self.container_apps_environment_wake_retry_after_epoch_secs = None;
-            None
-        }
-    }
-
-    fn record_container_apps_environment_wake_retry(
-        &mut self,
-        deadline_epoch_secs: u64,
-    ) -> Option<Duration> {
-        let delay = container_apps_environment_wake_delay(deadline_epoch_secs)?;
-        self.container_apps_environment_wake_retry_after_epoch_secs =
-            Some(current_unix_timestamp_secs().saturating_add(delay.as_secs()));
-        Some(delay)
-    }
-}
-
-// ≡ Lifecycle implementation ===================================================
 #[controller]
 impl AzureWorkerController {
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -219,18 +256,24 @@ impl AzureWorkerController {
                 .setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
                 .await
             {
-                Ok(DaprComponentOperation::Completed) => {
+                Ok(CommandsSetupOperation::Completed) => {
                     self.commands_infrastructure_auth_wait_until_epoch_secs = None;
                     self.container_apps_environment_wake_wait_until_epoch_secs = None;
                     self.container_apps_environment_wake_retry_after_epoch_secs = None;
                 }
-                Ok(DaprComponentOperation::LongRunning(delay)) => {
+                Ok(CommandsSetupOperation::Creating(delay)) => {
                     return Ok(HandlerAction::Continue {
                         state: WaitingForPreCreateCommandsDaprComponentOperation,
                         suggested_delay: Some(delay),
                     });
                 }
-                Ok(DaprComponentOperation::Pending(delay)) => {
+                Ok(CommandsSetupOperation::Deleting(delay)) => {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForPreCreateDaprComponentDeletion,
+                        suggested_delay: Some(delay),
+                    });
+                }
+                Ok(CommandsSetupOperation::Pending(delay)) => {
                     return Ok(HandlerAction::Stay {
                         max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                         suggested_delay: Some(delay),
@@ -328,9 +371,15 @@ impl AzureWorkerController {
 
             match operation {
                 DaprComponentOperation::Completed => {}
-                DaprComponentOperation::LongRunning(delay) => {
+                DaprComponentOperation::Creating(delay) => {
                     return Ok(HandlerAction::Continue {
                         state: WaitingForPreCreateCommandsDaprComponentOperation,
+                        suggested_delay: Some(delay),
+                    });
+                }
+                DaprComponentOperation::Deleting(delay) => {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForPreCreateDaprComponentDeletion,
                         suggested_delay: Some(delay),
                     });
                 }
@@ -408,6 +457,34 @@ impl AzureWorkerController {
                 max_times: Some(100),
                 suggested_delay: Some(delay),
             })
+        }
+    }
+
+    #[handler(
+        state = WaitingForPreCreateDaprComponentDeletion,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_pre_create_dapr_component_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self
+            .wait_for_reconciled_dapr_component_deletion(
+                ctx,
+                "waiting_for_pre_create_dapr_component_deletion",
+                "Azure ARM operation failed for pre-create Dapr deletion",
+            )
+            .await?
+        {
+            None => Ok(HandlerAction::Continue {
+                state: CreateStart,
+                suggested_delay: None,
+            }),
+            Some(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
         }
     }
 
@@ -1089,9 +1166,15 @@ impl AzureWorkerController {
                         }
                     };
                     match operation {
-                        DaprComponentOperation::LongRunning(delay) => {
+                        DaprComponentOperation::Creating(delay) => {
                             return Ok(HandlerAction::Continue {
                                 state: WaitingForDaprComponentCreateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Deleting(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForLegacyDaprComponentDeletionDuringCreate,
                                 suggested_delay: Some(delay),
                             });
                         }
@@ -1143,9 +1226,15 @@ impl AzureWorkerController {
                         }
                     };
                     match operation {
-                        DaprComponentOperation::LongRunning(delay) => {
+                        DaprComponentOperation::Creating(delay) => {
                             return Ok(HandlerAction::Continue {
                                 state: WaitingForDaprComponentCreateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Deleting(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForLegacyDaprComponentDeletionDuringCreate,
                                 suggested_delay: Some(delay),
                             });
                         }
@@ -1197,9 +1286,15 @@ impl AzureWorkerController {
                         }
                     };
                     match operation {
-                        DaprComponentOperation::LongRunning(delay) => {
+                        DaprComponentOperation::Creating(delay) => {
                             return Ok(HandlerAction::Continue {
                                 state: WaitingForDaprComponentCreateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Deleting(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForLegacyDaprComponentDeletionDuringCreate,
                                 suggested_delay: Some(delay),
                             });
                         }
@@ -1286,6 +1381,34 @@ impl AzureWorkerController {
     }
 
     #[handler(
+        state = WaitingForLegacyDaprComponentDeletionDuringCreate,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_legacy_dapr_component_deletion_during_create(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self
+            .wait_for_reconciled_dapr_component_deletion(
+                ctx,
+                "waiting_for_legacy_dapr_component_deletion_during_create",
+                "Azure ARM operation failed for legacy Dapr component deletion during create",
+            )
+            .await?
+        {
+            None => Ok(HandlerAction::Continue {
+                state: ConfiguringDaprComponents,
+                suggested_delay: None,
+            }),
+            Some(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
+    }
+
+    #[handler(
         state = CreatingCommandsInfrastructure,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
@@ -1312,250 +1435,61 @@ impl AzureWorkerController {
             });
         }
 
-        // Commands infrastructure (queue, Dapr component, role assignments) is now
-        // pre-created in CreateStart before the Container App, so the Dapr sidecar
-        // starts with permissions already propagated. Skip if already done.
-        if self.commands_namespace_name.is_some() {
-            info!(worker=%func_cfg.id, "Commands infrastructure already created in CreateStart, skipping");
-            return Ok(HandlerAction::Continue {
-                state: ApplyingPermissions,
-                suggested_delay: None,
-            });
-        }
-
         let azure_config = ctx.get_azure_config()?;
-        // Dapr components live on the Container Apps Environment, which may be in a
-        // different resource group than the deployment (shared/external environments).
-        let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
-        let env_resource_group_name = env_outputs.resource_group_name.clone();
-        let environment_name = env_outputs.environment_name.clone();
-
-        // Get the Service Bus namespace from the dependent resource
-        let namespace_ref = ResourceRef::new(
-            alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
-            "default-service-bus-namespace",
-        );
-        let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
-        let namespace_name = namespace_controller
-            .namespace_name
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: func_cfg.id.clone(),
-                    dependency_id: namespace_ref.id.clone(),
-                })
-            })?
-            .clone();
-        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
-
-        let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: func_cfg.id.clone(),
                 message: "Container app name not set in state".to_string(),
             })
         })?;
-
-        // Create commands queue in the Service Bus namespace
-        let queue_name = format!("{}-rq", container_app_name);
-        let mgmt = ctx
-            .service_provider
-            .get_azure_service_bus_management_client(azure_config)?;
-
-        info!(
-            worker=%func_cfg.id,
-            namespace=%namespace_name,
-            queue=%queue_name,
-            "Creating commands Service Bus queue"
-        );
-
-        mgmt.create_or_update_queue(
-            service_bus_resource_group.clone(),
-            namespace_name.clone(),
-            queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties {
-                accessed_at: None,
-                auto_delete_on_idle: None,
-                count_details: None,
-                created_at: None,
-                dead_lettering_on_message_expiration: None,
-                default_message_time_to_live: None,
-                duplicate_detection_history_time_window: None,
-                enable_batched_operations: None,
-                enable_express: None,
-                enable_partitioning: None,
-                forward_dead_lettered_messages_to: None,
-                forward_to: None,
-                lock_duration: None,
-                max_delivery_count: None,
-                max_message_size_in_kilobytes: None,
-                max_size_in_megabytes: None,
-                message_count: None,
-                requires_duplicate_detection: None,
-                requires_session: None,
-                size_in_bytes: None,
-                status: None,
-                updated_at: None,
-            },
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to create commands Service Bus queue '{}'",
-                queue_name
-            ),
-            resource_id: Some(func_cfg.id.clone()),
-        })?;
-
-        // Create Dapr component for commands queue
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
-
-        let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = format!("servicebus-{}-commands", container_app_name);
-
-        // Use Dapr input binding (not pubsub) because the manager sends directly
-        // to Service Bus via Azure SDK — this is external-system integration, not
-        // Dapr-to-Dapr communication. Input bindings auto-deliver messages without
-        // requiring GET /dapr/subscribe subscriptions.
-        let mut metadata = vec![
-            DaprMetadata {
-                name: Some("namespaceName".into()),
-                value: Some(ns_fqdn),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("queueName".into()),
-                value: Some(queue_name.clone()),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("direction".into()),
-                value: Some("input".into()),
-                secret_ref: None,
-            },
-        ];
-
-        // Add client ID for user-assigned managed identity
-        let service_account_id = format!("{}-sa", func_cfg.get_permissions());
-        let service_account_ref = alien_core::ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-        if let Ok(sa_state) = ctx
-            .require_dependency::<crate::service_account::AzureServiceAccountController>(
-                &service_account_ref,
-            )
-        {
-            if let Some(client_id) = &sa_state.identity_client_id {
-                metadata.push(DaprMetadata {
-                    name: Some("azureClientId".into()),
-                    value: Some(client_id.clone()),
-                    secret_ref: None,
-                });
-            }
-        }
-
-        let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
-                component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
-                init_timeout: None,
-                version: Some("v1".to_string()),
-                metadata,
-                scopes: vec![container_app_name.clone()],
-                secret_store_component: None,
-                secrets: vec![],
-            }),
-            id: None,
-            system_data: None,
-            type_: None,
-        };
-
-        info!(
-            worker=%func_cfg.id,
-            component=%component_name,
-            "Creating commands Dapr Service Bus component"
-        );
-
-        let client = ctx
-            .service_provider
-            .get_azure_container_apps_client(azure_config)?;
-
-        match client
-            .create_or_update_dapr_component(
-                &env_resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
+        match self
+            .setup_commands_infrastructure(ctx, azure_config, func_cfg, &container_app_name)
             .await
         {
-            Ok(OperationResult::Completed(_)) => {
-                self.container_apps_environment_wake_wait_until_epoch_secs = None;
-                self.container_apps_environment_wake_retry_after_epoch_secs = None;
-            }
-            Ok(OperationResult::LongRunning(lro)) => {
-                self.pending_operation_url = Some(lro.url.clone());
-                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
-                return Ok(HandlerAction::Continue {
-                    state: WaitingForCommandsDaprComponentOperation,
-                    suggested_delay: Some(lro.retry_after.unwrap_or(Duration::from_secs(15))),
-                });
-            }
-            Err(e) => {
-                let e = e.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create commands Dapr component '{}'",
-                        component_name
-                    ),
-                    resource_id: Some(func_cfg.id.clone()),
-                });
-                if is_azure_container_apps_environment_waking_error(&e) {
-                    let deadline = ensure_rbac_wait_deadline(
-                        &mut self.container_apps_environment_wake_wait_until_epoch_secs,
-                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
-                    );
-                    if let Some(delay) = self.record_container_apps_environment_wake_retry(deadline)
-                    {
-                        warn!(
-                            worker=%func_cfg.id,
-                            error=%e,
-                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
-                            "Azure Container Apps Environment is waking; retrying commands Dapr component"
-                        );
-                        return Ok(HandlerAction::Stay {
-                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                            suggested_delay: Some(delay),
-                        });
-                    }
+            Ok(CommandsSetupOperation::Completed) => Ok(HandlerAction::Continue {
+                state: ApplyingPermissions,
+                suggested_delay: None,
+            }),
+            Ok(CommandsSetupOperation::Creating(delay)) => Ok(HandlerAction::Continue {
+                state: WaitingForCommandsDaprComponentOperation,
+                suggested_delay: Some(delay),
+            }),
+            Ok(CommandsSetupOperation::Deleting(delay)) => Ok(HandlerAction::Continue {
+                state: WaitingForLegacyCommandsDaprComponentDeletionDuringCreate,
+                suggested_delay: Some(delay),
+            }),
+            Ok(CommandsSetupOperation::Pending(delay)) => Ok(HandlerAction::Stay {
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                suggested_delay: Some(delay),
+            }),
+            Err(error) if is_azure_authorization_propagation_error(&error) => {
+                let deadline = ensure_rbac_wait_deadline(
+                    &mut self.commands_infrastructure_auth_wait_until_epoch_secs,
+                    AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS,
+                );
+                if let Some(delay) = rbac_wait_delay(deadline) {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                        suggested_delay: Some(delay),
+                    });
                 }
-                return Err(e);
+                Err(error)
             }
+            Err(error) if is_azure_container_apps_environment_waking_error(&error) => {
+                let deadline = ensure_rbac_wait_deadline(
+                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                );
+                if let Some(delay) = self.record_container_apps_environment_wake_retry(deadline) {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                        suggested_delay: Some(delay),
+                    });
+                }
+                Err(error)
+            }
+            Err(error) => Err(error),
         }
-
-        self.commands_namespace_name = Some(namespace_name.clone());
-        self.commands_queue_name = Some(queue_name);
-        self.commands_dapr_component = Some(component_name);
-
-        // Verify that command transport permissions are part of the setup-applied
-        // management profile. Live worker provisioning should not create RBAC grants.
-        self.assign_commands_sender_role(
-            ctx,
-            azure_config,
-            &service_bus_resource_group,
-            &namespace_name,
-            func_cfg,
-        )
-        .await?;
-
-        info!(worker=%func_cfg.id, "Commands Service Bus infrastructure created");
-
-        Ok(HandlerAction::Continue {
-            state: ApplyingPermissions,
-            suggested_delay: None,
-        })
     }
 
     #[handler(
@@ -1611,6 +1545,34 @@ impl AzureWorkerController {
                 max_times: Some(100),
                 suggested_delay: Some(delay),
             })
+        }
+    }
+
+    #[handler(
+        state = WaitingForLegacyCommandsDaprComponentDeletionDuringCreate,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_legacy_commands_dapr_component_deletion_during_create(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self
+            .wait_for_reconciled_dapr_component_deletion(
+                ctx,
+                "waiting_for_legacy_commands_dapr_component_deletion_during_create",
+                "Azure ARM operation failed for legacy commands Dapr deletion during create",
+            )
+            .await?
+        {
+            None => Ok(HandlerAction::Continue {
+                state: CreatingCommandsInfrastructure,
+                suggested_delay: None,
+            }),
+            Some(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
         }
     }
 
@@ -1771,6 +1733,108 @@ impl AzureWorkerController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let azure_cfg = ctx.get_azure_config()?;
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let storage_trigger_count = func_cfg
+            .triggers
+            .iter()
+            .filter(|trigger| matches!(trigger, alien_core::WorkerTrigger::Storage { .. }))
+            .count();
+        let needs_auxiliary_checkpoint = !self.auxiliary_teardown_candidates_initialized
+            && (storage_trigger_count > 0
+                || self.dapr_component_naming_version < CURRENT_DAPR_COMPONENT_NAMING_VERSION);
+        let needs_storage_delivery_reconciliation = storage_trigger_count
+            != self.storage_trigger_infrastructure.len()
+            || self
+                .storage_trigger_infrastructure
+                .iter()
+                .any(|target| !target.delivery_reconciled || target.storage_id.is_none());
+        if needs_auxiliary_checkpoint || needs_storage_delivery_reconciliation {
+            let container_app_name = self.container_app_name.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: func_cfg.id.clone(),
+                    message: "Container app name not set in state".to_string(),
+                })
+            })?;
+            if needs_auxiliary_checkpoint {
+                self.initialize_auxiliary_teardown_candidates(ctx, func_cfg, &container_app_name)
+                    .await?;
+                return Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: None,
+                });
+            }
+            for trigger in &func_cfg.triggers {
+                let alien_core::WorkerTrigger::Storage { storage, events } = trigger else {
+                    continue;
+                };
+                let desired = self
+                    .desired_storage_trigger_target(ctx, func_cfg, &container_app_name, storage)
+                    .await?;
+                if matches!(
+                    self.prepare_storage_trigger_target(ctx, &desired.infrastructure)
+                        .await?,
+                    StorageTargetPreparation::Pending
+                ) {
+                    return Ok(HandlerAction::Continue {
+                        state: Ready,
+                        suggested_delay: None,
+                    });
+                }
+                match self
+                    .ensure_storage_delivery_infrastructure(
+                        ctx, func_cfg, storage, events, &desired,
+                    )
+                    .await?
+                {
+                    StorageDeliveryReconcileResult::Complete => {}
+                    StorageDeliveryReconcileResult::Pending(delay) => {
+                        return Ok(HandlerAction::Continue {
+                            state: Ready,
+                            suggested_delay: Some(delay),
+                        });
+                    }
+                }
+            }
+        }
+        if self.dapr_component_naming_version < CURRENT_DAPR_COMPONENT_NAMING_VERSION {
+            info!(
+                worker=%func_cfg.id,
+                from_version=self.dapr_component_naming_version,
+                to_version=CURRENT_DAPR_COMPONENT_NAMING_VERSION,
+                "Migrating Dapr component names"
+            );
+            return Ok(HandlerAction::Continue {
+                state: MigratingDaprComponentNames,
+                suggested_delay: None,
+            });
+        }
+        if func_cfg.commands_enabled
+            && (self.commands_resource_group_name.is_none()
+                || self.commands_namespace_name.is_none()
+                || self.commands_queue_name.is_none())
+        {
+            let container_app_name = self.container_app_name.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: func_cfg.id.clone(),
+                    message: "Container app name not set in state".to_string(),
+                })
+            })?;
+            self.initialize_commands_teardown_candidates(ctx, func_cfg, &container_app_name)
+                .await?;
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+        if !matches!(
+            self.reconcile_commands_sender_role_assignment(ctx, func_cfg)
+                .await?,
+            CommandsSenderReconcileResult::Complete
+        ) {
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
         let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: func_cfg.id.clone(),
@@ -1848,6 +1912,93 @@ impl AzureWorkerController {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
         })
+    }
+
+    #[handler(
+        state = MigratingDaprComponentNames,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn migrating_dapr_component_names(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self.migrate_dapr_component_names(ctx).await? {
+            DaprComponentMigrationStep::Complete => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            }),
+            DaprComponentMigrationStep::Mutated => Ok(HandlerAction::Continue {
+                state: MigratingDaprComponentNames,
+                suggested_delay: None,
+            }),
+            DaprComponentMigrationStep::LongRunning {
+                operation,
+                deleted_component,
+            } => {
+                let delay = operation.retry_after.unwrap_or(Duration::from_secs(15));
+                self.pending_operation_url = Some(operation.url);
+                self.pending_operation_retry_after = operation
+                    .retry_after
+                    .map(|retry_after| retry_after.as_secs());
+                self.pending_dapr_component_deletion_name = deleted_component;
+                Ok(HandlerAction::Continue {
+                    state: WaitingForDaprComponentNameMigrationOperation,
+                    suggested_delay: Some(delay),
+                })
+            }
+        }
+    }
+
+    #[handler(
+        state = WaitingForDaprComponentNameMigrationOperation,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn waiting_for_dapr_component_name_migration_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "MigrateDaprComponent",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_dapr_component_name_migration_operation",
+                failure_message: "Azure ARM operation failed during Dapr name migration",
+                // A missing operation URL is not proof that either a create or
+                // delete finished. Re-enter migration and let ownership GETs
+                // plus idempotent ensure/delete determine the remote state.
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.complete_pending_dapr_component_deletion();
+                Ok(HandlerAction::Continue {
+                    state: MigratingDaprComponentNames,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: MigratingDaprComponentNames,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
@@ -1990,25 +2141,54 @@ impl AzureWorkerController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         self.ready_rbac_wait_until_epoch_secs = None;
         self.update_dapr_components_deleted = false;
-        if func_cfg == previous_cfg {
-            self.update_rbac_wait_required = false;
-            return Ok(HandlerAction::Continue {
-                state: UpdateRunningReadinessProbe,
-                suggested_delay: None,
-            });
-        }
+        self.commands_update_teardown_candidates_initialized = false;
+        self.trigger_update_teardown_candidates_initialized = false;
+        self.commands_sender_role_assignment_discovery_complete = false;
+        self.commands_queue_applied = false;
 
         let azure_cfg = ctx.get_azure_config()?;
-        let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "container_app_name missing prior to update_start".to_string(),
                 operation: Some("update_start".to_string()),
                 resource_id: Some(func_cfg.id.clone()),
             })
         })?;
+        if !self.storage_delivery_update_reconciliation_initialized {
+            let mut desired_storage_targets = Vec::new();
+            for trigger in &func_cfg.triggers {
+                let alien_core::WorkerTrigger::Storage { storage, .. } = trigger else {
+                    continue;
+                };
+                desired_storage_targets.push(
+                    self.desired_storage_trigger_target(
+                        ctx,
+                        func_cfg,
+                        &container_app_name,
+                        storage,
+                    )
+                    .await?
+                    .infrastructure,
+                );
+            }
+            for desired in desired_storage_targets {
+                if let Some(tracked) = self
+                    .storage_trigger_infrastructure
+                    .iter_mut()
+                    .find(|tracked| tracked.matches_target(&desired))
+                {
+                    tracked.queue_applied = false;
+                    tracked.delivery_reconciled = false;
+                }
+            }
+            self.storage_delivery_update_reconciliation_initialized = true;
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         let client = ctx
@@ -2021,7 +2201,7 @@ impl AzureWorkerController {
             .build_container_app(
                 func_cfg,
                 &environment_name,
-                container_app_name,
+                &container_app_name,
                 azure_cfg,
                 ctx,
             )
@@ -2033,7 +2213,7 @@ impl AzureWorkerController {
 
         // Issue UPDATE
         let op_result = client
-            .update_container_app(&resource_group_name, container_app_name, &desired_app)
+            .update_container_app(&resource_group_name, &container_app_name, &desired_app)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to initiate container app update".to_string(),
@@ -2070,52 +2250,39 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let operation_url = match &self.pending_operation_url {
-            Some(u) => u.clone(),
-            None => {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: "No pending operation URL recorded in WaitingForUpdateOperation"
-                        .to_string(),
-                    operation: Some("waiting_for_update_operation".to_string()),
-                    resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-                }));
-            }
-        };
-
-        let azure_cfg = ctx.get_azure_config()?;
-        let container_app_name = self.container_app_name.as_ref().unwrap();
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let op_status = operation_client
-            .check_status(&lro, "UpdateContainerApp", container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for container app update".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-            })?;
-
-        if op_status.is_some() {
-            Ok(HandlerAction::Continue {
-                state: UpdatingContainerApp,
-                suggested_delay: None,
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        let container_app_name = self.container_app_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: worker.id.clone(),
+                message: "Container app name not set while polling update".to_string(),
             })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
+        })?;
+        match poll_pending_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "UpdateContainerApp",
+                operation_target: container_app_name,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_update_operation",
+                failure_message: "Azure ARM operation failed for container app update",
+            },
+        )
+        .await?
+        {
+            AzureStrictOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: UpdatingContainerApp,
+                    suggested_delay: None,
+                })
+            }
+            AzureStrictOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
                 max_times: Some(100),
                 suggested_delay: Some(delay),
-            })
+            }),
         }
     }
 
@@ -2219,189 +2386,323 @@ impl AzureWorkerController {
             })
         })?;
 
-        // Check if triggers have changed
-        let triggers_changed = current_config.triggers != previous_config.triggers;
+        let permissions_changed =
+            current_config.get_permissions() != previous_config.get_permissions();
+        let commands_changed = current_config.commands_enabled != previous_config.commands_enabled;
+        if current_config.commands_enabled {
+            let azure_config = ctx.get_azure_config()?;
+            match self
+                .setup_commands_infrastructure(
+                    ctx,
+                    azure_config,
+                    current_config,
+                    &container_app_name,
+                )
+                .await?
+            {
+                CommandsSetupOperation::Completed => {
+                    self.commands_update_teardown_candidates_initialized = false;
+                }
+                CommandsSetupOperation::Creating(delay) => {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForDaprComponentUpdateOperation,
+                        suggested_delay: Some(delay),
+                    });
+                }
+                CommandsSetupOperation::Deleting(delay) => {
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateWaitingForCommandsDaprComponentDeletionForSetup,
+                        suggested_delay: Some(delay),
+                    });
+                }
+                CommandsSetupOperation::Pending(delay) => {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                        suggested_delay: Some(delay),
+                    });
+                }
+            }
+        } else if !self.commands_update_teardown_candidates_initialized
+            && (commands_changed
+                || self.commands_dapr_component.is_some()
+                || self.commands_sender_role_assignment_id.is_some()
+                || self.commands_sender_role_assignment_intent.is_some()
+                || self.commands_resource_group_name.is_some()
+                || self.commands_namespace_name.is_some()
+                || self.commands_queue_name.is_some())
+        {
+            self.initialize_commands_teardown_candidates(ctx, previous_config, &container_app_name)
+                .await?;
+            self.commands_update_teardown_candidates_initialized = true;
+            return Ok(HandlerAction::Continue {
+                state: UpdateDeletingCommandsInfrastructure,
+                suggested_delay: None,
+            });
+        }
+
+        let storage_targets_changed = self
+            .storage_trigger_targets_changed(ctx, current_config, &container_app_name)
+            .await?;
+        let triggers_changed = current_config.triggers != previous_config.triggers
+            || permissions_changed
+            || storage_targets_changed;
 
         if triggers_changed {
             info!(worker=%current_config.id, "Worker triggers changed, updating Dapr components");
 
             if !self.update_dapr_components_deleted {
+                if !self.trigger_update_teardown_candidates_initialized {
+                    self.initialize_storage_trigger_teardown_candidates(
+                        ctx,
+                        previous_config,
+                        &container_app_name,
+                    )
+                    .await?;
+                    self.initialize_trigger_update_teardown_candidates(
+                        previous_config,
+                        &container_app_name,
+                    );
+                    self.trigger_update_teardown_candidates_initialized = true;
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateDaprComponents,
+                        suggested_delay: None,
+                    });
+                }
+
                 // Trigger components are keyed by trigger shape. Delete the previous
                 // set once, then recreate desired components across possible ARM LROs.
-                self.delete_storage_trigger_infrastructure(ctx).await?;
-                self.delete_all_dapr_components(ctx).await?;
-                self.update_dapr_components_deleted = true;
-            }
-
-            // Recreate components for ALL triggers
-            let mut cron_index = 0usize;
-            for trigger in &current_config.triggers {
-                match trigger {
-                    alien_core::WorkerTrigger::Queue { queue } => {
-                        let operation = match self
-                            .create_dapr_service_bus_component(
-                                ctx,
-                                &container_app_name,
-                                &current_config,
-                                queue,
-                            )
-                            .await
-                        {
-                            Ok(operation) => operation,
-                            Err(e) => {
-                                if is_azure_container_apps_environment_waking_error(&e) {
-                                    let deadline = ensure_rbac_wait_deadline(
-                                        &mut self
-                                            .container_apps_environment_wake_wait_until_epoch_secs,
-                                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
-                                    );
-                                    if let Some(delay) =
-                                        self.record_container_apps_environment_wake_retry(deadline)
-                                    {
-                                        warn!(
-                                            worker=%current_config.id,
-                                            error=%e,
-                                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
-                                            "Azure Container Apps Environment is waking; retrying Dapr component update"
-                                        );
-                                        return Ok(HandlerAction::Stay {
-                                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                                            suggested_delay: Some(delay),
-                                        });
-                                    }
-                                }
-                                return Err(e);
-                            }
-                        };
-                        match operation {
-                            DaprComponentOperation::LongRunning(delay) => {
-                                return Ok(HandlerAction::Continue {
-                                    state: WaitingForDaprComponentUpdateOperation,
-                                    suggested_delay: Some(delay),
-                                });
-                            }
-                            DaprComponentOperation::Pending(delay) => {
-                                return Ok(HandlerAction::Stay {
-                                    max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                                    suggested_delay: Some(delay),
-                                });
-                            }
-                            DaprComponentOperation::Completed => {}
-                        }
+                if matches!(
+                    self.delete_storage_trigger_infrastructure(ctx).await?,
+                    StorageTriggerTeardownResult::Mutated
+                ) {
+                    return Ok(HandlerAction::Continue {
+                        state: UpdateDaprComponents,
+                        suggested_delay: None,
+                    });
+                }
+                match self.delete_all_dapr_components(ctx).await? {
+                    TrackedDaprComponentDeleteStep::Complete => {
+                        self.update_dapr_components_deleted = true;
                     }
-                    alien_core::WorkerTrigger::Storage { storage, events } => {
-                        let operation = match self
-                            .create_azure_storage_trigger(
-                                ctx,
-                                &container_app_name,
-                                &current_config,
-                                storage,
-                                events,
-                            )
-                            .await
-                        {
-                            Ok(operation) => operation,
-                            Err(e) => {
-                                if is_azure_container_apps_environment_waking_error(&e) {
-                                    let deadline = ensure_rbac_wait_deadline(
-                                        &mut self
-                                            .container_apps_environment_wake_wait_until_epoch_secs,
-                                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
-                                    );
-                                    if let Some(delay) =
-                                        self.record_container_apps_environment_wake_retry(deadline)
-                                    {
-                                        warn!(
-                                            worker=%current_config.id,
-                                            error=%e,
-                                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
-                                            "Azure Container Apps Environment is waking; retrying Dapr component update"
-                                        );
-                                        return Ok(HandlerAction::Stay {
-                                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                                            suggested_delay: Some(delay),
-                                        });
-                                    }
-                                }
-                                return Err(e);
-                            }
-                        };
-                        match operation {
-                            DaprComponentOperation::LongRunning(delay) => {
-                                return Ok(HandlerAction::Continue {
-                                    state: WaitingForDaprComponentUpdateOperation,
-                                    suggested_delay: Some(delay),
-                                });
-                            }
-                            DaprComponentOperation::Pending(delay) => {
-                                return Ok(HandlerAction::Stay {
-                                    max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                                    suggested_delay: Some(delay),
-                                });
-                            }
-                            DaprComponentOperation::Completed => {}
-                        }
+                    TrackedDaprComponentDeleteStep::Mutated => {
+                        return Ok(HandlerAction::Continue {
+                            state: UpdateDaprComponents,
+                            suggested_delay: None,
+                        });
                     }
-                    alien_core::WorkerTrigger::Schedule { cron } => {
-                        let operation = match self
-                            .create_dapr_cron_component(
-                                ctx,
-                                &container_app_name,
-                                &current_config,
-                                cron,
-                                cron_index,
-                            )
-                            .await
-                        {
-                            Ok(operation) => operation,
-                            Err(e) => {
-                                if is_azure_container_apps_environment_waking_error(&e) {
-                                    let deadline = ensure_rbac_wait_deadline(
-                                        &mut self
-                                            .container_apps_environment_wake_wait_until_epoch_secs,
-                                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
-                                    );
-                                    if let Some(delay) =
-                                        self.record_container_apps_environment_wake_retry(deadline)
-                                    {
-                                        warn!(
-                                            worker=%current_config.id,
-                                            error=%e,
-                                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
-                                            "Azure Container Apps Environment is waking; retrying Dapr component update"
-                                        );
-                                        return Ok(HandlerAction::Stay {
-                                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                                            suggested_delay: Some(delay),
-                                        });
-                                    }
-                                }
-                                return Err(e);
-                            }
-                        };
-                        match operation {
-                            DaprComponentOperation::LongRunning(delay) => {
-                                return Ok(HandlerAction::Continue {
-                                    state: WaitingForDaprComponentUpdateOperation,
-                                    suggested_delay: Some(delay),
-                                });
-                            }
-                            DaprComponentOperation::Pending(delay) => {
-                                return Ok(HandlerAction::Stay {
-                                    max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
-                                    suggested_delay: Some(delay),
-                                });
-                            }
-                            DaprComponentOperation::Completed => {}
-                        }
-                        cron_index += 1;
+                    TrackedDaprComponentDeleteStep::LongRunning {
+                        operation,
+                        component_name,
+                    } => {
+                        let delay = operation.retry_after.unwrap_or(Duration::from_secs(15));
+                        self.pending_operation_url = Some(operation.url);
+                        self.pending_operation_retry_after = operation
+                            .retry_after
+                            .map(|retry_after| retry_after.as_secs());
+                        self.pending_dapr_component_deletion_name = Some(component_name);
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForDaprComponentDeletionForUpdate,
+                            suggested_delay: Some(delay),
+                        });
                     }
                 }
             }
-            self.container_apps_environment_wake_wait_until_epoch_secs = None;
-            self.container_apps_environment_wake_retry_after_epoch_secs = None;
-        } else {
-            info!(worker=%current_config.id, "No trigger changes detected");
+        }
+
+        // Reconcile components for all triggers. This is intentionally
+        // idempotent so dependency-only changes update Dapr metadata even
+        // when the Worker config itself is unchanged.
+        let mut cron_index = 0usize;
+        for trigger in &current_config.triggers {
+            match trigger {
+                alien_core::WorkerTrigger::Queue { queue } => {
+                    let operation = match self
+                        .create_dapr_service_bus_component(
+                            ctx,
+                            &container_app_name,
+                            &current_config,
+                            queue,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(e) => {
+                            if is_azure_container_apps_environment_waking_error(&e) {
+                                let deadline = ensure_rbac_wait_deadline(
+                                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                );
+                                if let Some(delay) =
+                                    self.record_container_apps_environment_wake_retry(deadline)
+                                {
+                                    warn!(
+                                        worker=%current_config.id,
+                                        error=%e,
+                                        remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                        "Azure Container Apps Environment is waking; retrying Dapr component update"
+                                    );
+                                    return Ok(HandlerAction::Stay {
+                                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                        suggested_delay: Some(delay),
+                                    });
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
+                    match operation {
+                        DaprComponentOperation::Creating(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentUpdateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Deleting(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: UpdateWaitingForLegacyDaprComponentDeletion,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Pending(delay) => {
+                            return Ok(HandlerAction::Stay {
+                                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Completed => {}
+                    }
+                }
+                alien_core::WorkerTrigger::Storage { storage, events } => {
+                    let operation = match self
+                        .create_azure_storage_trigger(
+                            ctx,
+                            &container_app_name,
+                            &current_config,
+                            storage,
+                            events,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(e) => {
+                            if is_azure_container_apps_environment_waking_error(&e) {
+                                let deadline = ensure_rbac_wait_deadline(
+                                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                );
+                                if let Some(delay) =
+                                    self.record_container_apps_environment_wake_retry(deadline)
+                                {
+                                    warn!(
+                                        worker=%current_config.id,
+                                        error=%e,
+                                        remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                        "Azure Container Apps Environment is waking; retrying Dapr component update"
+                                    );
+                                    return Ok(HandlerAction::Stay {
+                                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                        suggested_delay: Some(delay),
+                                    });
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
+                    match operation {
+                        DaprComponentOperation::Creating(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentUpdateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Deleting(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: UpdateWaitingForLegacyDaprComponentDeletion,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Pending(delay) => {
+                            return Ok(HandlerAction::Stay {
+                                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Completed => {}
+                    }
+                }
+                alien_core::WorkerTrigger::Schedule { cron } => {
+                    let operation = match self
+                        .create_dapr_cron_component(
+                            ctx,
+                            &container_app_name,
+                            &current_config,
+                            cron,
+                            cron_index,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(e) => {
+                            if is_azure_container_apps_environment_waking_error(&e) {
+                                let deadline = ensure_rbac_wait_deadline(
+                                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                );
+                                if let Some(delay) =
+                                    self.record_container_apps_environment_wake_retry(deadline)
+                                {
+                                    warn!(
+                                        worker=%current_config.id,
+                                        error=%e,
+                                        remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                        "Azure Container Apps Environment is waking; retrying Dapr component update"
+                                    );
+                                    return Ok(HandlerAction::Stay {
+                                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                        suggested_delay: Some(delay),
+                                    });
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
+                    match operation {
+                        DaprComponentOperation::Creating(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentUpdateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Deleting(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: UpdateWaitingForLegacyDaprComponentDeletion,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Pending(delay) => {
+                            return Ok(HandlerAction::Stay {
+                                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Completed => {}
+                    }
+                    cron_index += 1;
+                }
+            }
+        }
+        self.container_apps_environment_wake_wait_until_epoch_secs = None;
+        self.container_apps_environment_wake_retry_after_epoch_secs = None;
+
+        if !matches!(
+            self.reconcile_commands_sender_role_assignment(ctx, current_config)
+                .await?,
+            CommandsSenderReconcileResult::Complete
+        ) {
+            return Ok(HandlerAction::Continue {
+                state: UpdateDaprComponents,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
         }
 
         if self.update_rbac_wait_required {
@@ -2418,6 +2719,82 @@ impl AzureWorkerController {
     }
 
     #[handler(
+        state = WaitingForDaprComponentDeletionForUpdate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn waiting_for_dapr_component_deletion_for_update(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteDaprComponent",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_dapr_component_deletion_for_update",
+                failure_message: "Azure ARM operation failed for Dapr component deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.complete_pending_dapr_component_deletion();
+                Ok(HandlerAction::Continue {
+                    state: UpdateDaprComponents,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: UpdateDaprComponents,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForLegacyDaprComponentDeletion,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_legacy_dapr_component_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self
+            .wait_for_reconciled_dapr_component_deletion(
+                ctx,
+                "update_waiting_for_legacy_dapr_component_deletion",
+                "Azure ARM operation failed for legacy Dapr component deletion during update",
+            )
+            .await?
+        {
+            None => Ok(HandlerAction::Continue {
+                state: UpdateDaprComponents,
+                suggested_delay: None,
+            }),
+            Some(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
+    }
+
+    #[handler(
         state = WaitingForDaprComponentUpdateOperation,
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
@@ -2427,48 +2804,32 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "No pending operation URL recorded for Dapr component update".to_string(),
-                operation: Some("waiting_for_dapr_component_update_operation".to_string()),
-                resource_id: Some(func_cfg.id.clone()),
-            })
-        })?;
-
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let status = operation_client
-            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for Dapr component update".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: UpdateDaprComponents,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
+        match poll_pending_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "CreateOrUpdateDaprComponent",
+                operation_target: &func_cfg.id,
+                resource_id: &func_cfg.id,
+                handler_name: "waiting_for_dapr_component_update_operation",
+                failure_message: "Azure ARM operation failed for Dapr component update",
+            },
+        )
+        .await?
+        {
+            AzureStrictOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: UpdateDaprComponents,
+                    suggested_delay: None,
+                })
+            }
+            AzureStrictOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
                 max_times: Some(100),
                 suggested_delay: Some(delay),
-            })
+            }),
         }
     }
 
@@ -2484,6 +2845,7 @@ impl AzureWorkerController {
         // Re‑use the same readiness‑probe helper.
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
         if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
+            self.storage_delivery_update_reconciliation_initialized = false;
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
@@ -2502,10 +2864,13 @@ impl AzureWorkerController {
             .clone();
 
         match run_readiness_probe(ctx, &url).await {
-            Ok(()) => Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            }),
+            Ok(()) => {
+                self.storage_delivery_update_reconciliation_initialized = false;
+                Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: None,
+                })
+            }
             Err(_) => {
                 // Probe failed, let the framework handle retries
                 Ok(HandlerAction::Stay {
@@ -2562,6 +2927,13 @@ impl AzureWorkerController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
 
+        if self.pending_operation_url.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: WaitingForPendingOperationBeforeDelete,
+                suggested_delay: self.pending_operation_retry_after.map(Duration::from_secs),
+            });
+        }
+
         // Handle case where container_app_name is not set (e.g., creation failed early)
         let _container_app_name = match self.container_app_name.as_ref() {
             Some(name) => name.clone(),
@@ -2587,6 +2959,54 @@ impl AzureWorkerController {
     }
 
     #[handler(
+        state = WaitingForPendingOperationBeforeDelete,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn waiting_for_pending_operation_before_delete(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "CompleteOperationBeforeWorkerDelete",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_pending_operation_before_delete",
+                failure_message: "Azure ARM operation failed before worker deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.complete_pending_dapr_component_deletion();
+                Ok(HandlerAction::Continue {
+                    state: DeleteStart,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: DeleteStart,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
+    }
+
+    #[handler(
         state = DeletingDaprComponents,
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting,
@@ -2599,16 +3019,116 @@ impl AzureWorkerController {
 
         info!(worker=%worker_config.id, components=?self.dapr_components, "Deleting Dapr components");
 
-        self.delete_storage_trigger_infrastructure(ctx).await?;
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: worker_config.id.clone(),
+                message: "Container app name not set in state".to_string(),
+            })
+        })?;
+        if self.initialize_dapr_component_deletion_candidates(worker_config, &container_app_name) {
+            return Ok(HandlerAction::Continue {
+                state: DeletingDaprComponents,
+                suggested_delay: None,
+            });
+        }
+        if self
+            .initialize_auxiliary_teardown_candidates(ctx, worker_config, &container_app_name)
+            .await?
+        {
+            return Ok(HandlerAction::Continue {
+                state: DeletingDaprComponents,
+                suggested_delay: None,
+            });
+        }
 
-        // Delete all Dapr components using best-effort approach (ignore NotFound)
-        self.delete_all_dapr_components(ctx).await?;
+        if matches!(
+            self.delete_storage_trigger_infrastructure(ctx).await?,
+            StorageTriggerTeardownResult::Mutated
+        ) {
+            return Ok(HandlerAction::Continue {
+                state: DeletingDaprComponents,
+                suggested_delay: None,
+            });
+        }
+
+        match self.delete_all_dapr_components(ctx).await? {
+            TrackedDaprComponentDeleteStep::Complete => {}
+            TrackedDaprComponentDeleteStep::Mutated => {
+                return Ok(HandlerAction::Continue {
+                    state: DeletingDaprComponents,
+                    suggested_delay: None,
+                });
+            }
+            TrackedDaprComponentDeleteStep::LongRunning {
+                operation,
+                component_name,
+            } => {
+                let delay = operation.retry_after.unwrap_or(Duration::from_secs(15));
+                self.pending_operation_url = Some(operation.url);
+                self.pending_operation_retry_after = operation
+                    .retry_after
+                    .map(|retry_after| retry_after.as_secs());
+                self.pending_dapr_component_deletion_name = Some(component_name);
+                return Ok(HandlerAction::Continue {
+                    state: WaitingForDaprComponentDeletion,
+                    suggested_delay: Some(delay),
+                });
+            }
+        }
 
         // Continue to commands infrastructure cleanup
         Ok(HandlerAction::Continue {
             state: DeletingCommandsInfrastructure,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = WaitingForDaprComponentDeletion,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn waiting_for_dapr_component_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteDaprComponent",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_dapr_component_deletion",
+                failure_message: "Azure ARM operation failed for Dapr component deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.complete_pending_dapr_component_deletion();
+                Ok(HandlerAction::Continue {
+                    state: DeletingDaprComponents,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: DeletingDaprComponents,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
     }
 
     #[handler(
@@ -2620,130 +3140,171 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let azure_config = ctx.get_azure_config()?;
-
-        // Delete commands Dapr component (best-effort)
-        if let Some(component_name) = self.commands_dapr_component.take() {
-            let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
-            let client = ctx
-                .service_provider
-                .get_azure_container_apps_client(azure_config)?;
-
-            match client
-                .delete_dapr_component(
-                    &env_outputs.resource_group_name,
-                    &env_outputs.environment_name,
-                    &component_name,
-                )
-                .await
-            {
-                Ok(_) => {
-                    info!(component=%component_name, "Commands Dapr component delete requested");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(component=%component_name, "Commands Dapr component was already deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        component=%component_name,
-                        error=%e,
-                        "Failed to delete commands Dapr component"
-                    );
-                }
-            }
+        match self.delete_commands_infrastructure_step(ctx).await? {
+            CommandsTeardownResult::Complete => Ok(HandlerAction::Continue {
+                state: DeletingApp,
+                suggested_delay: None,
+            }),
+            CommandsTeardownResult::Mutated => Ok(HandlerAction::Continue {
+                state: DeletingCommandsInfrastructure,
+                suggested_delay: None,
+            }),
+            CommandsTeardownResult::LongRunning(delay) => Ok(HandlerAction::Continue {
+                state: WaitingForCommandsDaprComponentDeletion,
+                suggested_delay: Some(delay),
+            }),
         }
+    }
 
-        // Delete commands role assignments (best-effort)
-        let authorization_client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
-
-        if let Some(assignment_id) = self.commands_sender_role_assignment_id.take() {
-            match authorization_client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
-            {
-                Ok(_) => {
-                    info!(assignment_id=%assignment_id, "Commands sender role assignment deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        assignment_id=%assignment_id,
-                        error=%e,
-                        "Failed to delete commands sender role assignment (may already be deleted)"
-                    );
-                }
+    #[handler(
+        state = WaitingForCommandsDaprComponentDeletion,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn waiting_for_commands_dapr_component_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteDaprComponent",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_commands_dapr_component_deletion",
+                failure_message: "Azure ARM operation failed for commands Dapr deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.complete_commands_dapr_component_deletion();
+                Ok(HandlerAction::Continue {
+                    state: DeletingCommandsInfrastructure,
+                    suggested_delay: None,
+                })
             }
-        }
-
-        // Delete commands receiver role assignment (best-effort)
-        if let Some(assignment_id) = self.commands_receiver_role_assignment_id.take() {
-            match authorization_client
-                .delete_role_assignment_by_id(assignment_id.clone())
-                .await
-            {
-                Ok(_) => {
-                    info!(assignment_id=%assignment_id, "Commands receiver role assignment deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        assignment_id=%assignment_id,
-                        error=%e,
-                        "Failed to delete commands receiver role assignment (may already be deleted)"
-                    );
-                }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: DeletingCommandsInfrastructure,
+                    suggested_delay: None,
+                })
             }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
         }
+    }
 
-        // Delete commands Service Bus queue (best-effort)
-        if let (Some(namespace_name), Some(queue_name)) = (
-            self.commands_namespace_name.take(),
-            self.commands_queue_name.take(),
-        ) {
-            let namespace_ref = ResourceRef::new(
-                alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
-                "default-service-bus-namespace",
-            );
-            let resource_group_name = match ctx
-                .require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)
-            {
-                Ok(controller) => controller.resource_group_name(ctx)?,
-                Err(_) => get_resource_group_name(ctx.state)?,
-            };
-            info!(namespace=%namespace_name, queue=%queue_name, "Deleting commands Service Bus queue");
-            let mgmt = ctx
-                .service_provider
-                .get_azure_service_bus_management_client(azure_config)?;
-            match mgmt
-                .delete_queue(
-                    resource_group_name,
-                    namespace_name.clone(),
-                    queue_name.clone(),
-                )
-                .await
-            {
-                Ok(_) => {
-                    info!(queue=%queue_name, "Commands Service Bus queue deleted");
-                }
-                Err(e) => {
-                    warn!(
-                        queue=%queue_name,
-                        error=%e,
-                        "Failed to delete commands Service Bus queue (may already be deleted)"
-                    );
-                }
+    #[handler(
+        state = UpdateDeletingCommandsInfrastructure,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_deleting_commands_infrastructure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self.delete_commands_infrastructure_step(ctx).await? {
+            // Keep the checkpoint latched until the next UpdateStart. `commands_changed` remains
+            // true for this whole update, so clearing it here would restart teardown forever.
+            CommandsTeardownResult::Complete => Ok(HandlerAction::Continue {
+                state: UpdateDaprComponents,
+                suggested_delay: None,
+            }),
+            CommandsTeardownResult::Mutated => Ok(HandlerAction::Continue {
+                state: UpdateDeletingCommandsInfrastructure,
+                suggested_delay: None,
+            }),
+            CommandsTeardownResult::LongRunning(delay) => Ok(HandlerAction::Continue {
+                state: UpdateWaitingForCommandsDaprComponentDeletion,
+                suggested_delay: Some(delay),
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateWaitingForCommandsDaprComponentDeletion,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_commands_dapr_component_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteDaprComponent",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name: "update_waiting_for_commands_dapr_component_deletion",
+                failure_message: "Azure ARM operation failed for commands Dapr update deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.complete_commands_dapr_component_deletion();
+                Ok(HandlerAction::Continue {
+                    state: UpdateDeletingCommandsInfrastructure,
+                    suggested_delay: None,
+                })
             }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: UpdateDeletingCommandsInfrastructure,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
         }
+    }
 
-        Ok(HandlerAction::Continue {
-            state: DeletingApp,
-            suggested_delay: None,
-        })
+    #[handler(
+        state = UpdateWaitingForCommandsDaprComponentDeletionForSetup,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_waiting_for_commands_dapr_component_deletion_for_setup(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self
+            .wait_for_reconciled_dapr_component_deletion(
+                ctx,
+                "update_waiting_for_commands_dapr_component_deletion_for_setup",
+                "Azure ARM operation failed for commands setup Dapr deletion",
+            )
+            .await?
+        {
+            None => Ok(HandlerAction::Continue {
+                state: UpdateDaprComponents,
+                suggested_delay: None,
+            }),
+            Some(delay) => Ok(HandlerAction::Stay {
+                max_times: Some(100),
+                suggested_delay: Some(delay),
+            }),
+        }
     }
 
     #[handler(
@@ -2816,53 +3377,47 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let operation_url = match &self.pending_operation_url {
-            Some(u) => u.clone(),
-            None => {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
-                    message: "No pending_operation_url in WaitingForDeleteOperation".to_string(),
-                    operation: Some("waiting_for_delete_operation".to_string()),
-                    resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-                }));
-            }
-        };
-
-        let azure_cfg = ctx.get_azure_config()?;
-        let container_app_name = self.container_app_name.as_ref().unwrap();
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
-
-        let op_status = operation_client
-            .check_status(&lro, "DeleteContainerApp", container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for container app deletion".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
-            })?;
-
-        if op_status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            Ok(HandlerAction::Continue {
-                state: DeletingContainerApp,
-                suggested_delay: None,
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        let container_app_name = self.container_app_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: worker.id.clone(),
+                message: "Container app name not set while polling deletion".to_string(),
             })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
+        })?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteContainerApp",
+                operation_target: container_app_name,
+                resource_id: &worker.id,
+                handler_name: "waiting_for_delete_operation",
+                failure_message: "Azure ARM operation failed for container app deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: DeletingContainerApp,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: DeletingApp,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
                 max_times: Some(60),
                 suggested_delay: Some(delay),
-            })
+            }),
         }
     }
 
@@ -2929,7 +3484,13 @@ impl AzureWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.container_apps_certificate_id.is_none() {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let has_resolvable_domain = !worker_config.public_endpoints.is_empty()
+            && Self::resolve_domain_info(ctx, &worker_config.id).is_ok();
+        if self.container_apps_certificate_id.is_none()
+            && !self.uses_custom_domain
+            && !has_resolvable_domain
+        {
             self.clear_all();
             return Ok(HandlerAction::Continue {
                 state: Deleted,
@@ -2937,7 +3498,6 @@ impl AzureWorkerController {
             });
         }
 
-        let worker_config = ctx.desired_resource_config::<Worker>()?;
         let azure_cfg = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_name = get_container_apps_environment_name(ctx.state)?;
@@ -3000,57 +3560,44 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
-        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "No pending_operation_url in WaitingForCertificateDeleteOperation"
-                    .to_string(),
-                operation: Some("waiting_for_certificate_delete_operation".to_string()),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?;
-
-        let azure_cfg = ctx.get_azure_config()?;
-        let operation_client = ctx
-            .service_provider
-            .get_azure_long_running_operation_client(azure_cfg)?;
-        let lro = LongRunningOperation {
-            url: operation_url,
-            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
-            location_url: None,
-        };
         let certificate_name =
             get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
-
-        let status = operation_client
-            .check_status(
-                &lro,
-                "DeleteManagedEnvironmentCertificate",
-                &certificate_name,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for managed environment certificate deletion"
-                    .to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
-
-        if status.is_some() {
-            self.pending_operation_url = None;
-            self.pending_operation_retry_after = None;
-            self.clear_all();
-            Ok(HandlerAction::Continue {
-                state: Deleted,
-                suggested_delay: None,
-            })
-        } else {
-            let delay = self
-                .pending_operation_retry_after
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(15));
-            Ok(HandlerAction::Stay {
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteManagedEnvironmentCertificate",
+                operation_target: &certificate_name,
+                resource_id: &worker_config.id,
+                handler_name: "waiting_for_certificate_delete_operation",
+                failure_message:
+                    "Azure ARM operation failed for managed environment certificate deletion",
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                self.clear_all();
+                Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(HandlerAction::Continue {
+                    state: DeletingCertificate,
+                    suggested_delay: None,
+                })
+            }
+            AzureOperationPoll::Pending(delay) => Ok(HandlerAction::Stay {
                 max_times: Some(60),
                 suggested_delay: Some(delay),
-            })
+            }),
         }
     }
 
@@ -3182,3 +3729,7 @@ impl AzureWorkerController {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../azure_tests.rs"]
+mod tests;

@@ -9,12 +9,28 @@ use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
-use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform};
+use alien_core::{
+    ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform,
+    RemoteStackManagement, RemoteStackManagementOutputs,
+};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
+use alien_permissions::{
+    generators::GcpRuntimePermissionsGenerator, get_permission_set, PermissionContext,
+};
 use async_trait::async_trait;
 
 use crate::error::ErrorData;
-use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
+use crate::traits::{
+    CredentialResolver, DeploymentRecord, GcpCredentialAccessBoundarySource,
+    RemoteStorageCredentialSource, ResolvedCredentials,
+};
+
+const GCP_REMOTE_STORAGE_PERMISSIONS: [&str; 4] = [
+    "storage.objects.create",
+    "storage.objects.delete",
+    "storage.objects.get",
+    "storage.objects.list",
+];
 
 /// Resolves cloud credentials for push-model deployments via service account impersonation.
 ///
@@ -167,6 +183,119 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         })
     }
 
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        if deployment.platform == Platform::Gcp
+            && self.management_binding_platforms.contains(&Platform::Gcp)
+            && !uses_direct_impersonation_credentials(deployment)
+        {
+            let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Remote stack state is required to attenuate GCP Storage credentials for deployment {}",
+                        deployment.id
+                    ),
+                })
+            })?;
+            let provider = self.provider_for_target(Platform::Gcp);
+            let base_config = impersonate_management_sa(&**provider, Platform::Gcp).await?;
+            let resolved = alien_infra::RemoteAccessResolver::default()
+                .resolve_gcp_for_access_boundary(
+                    base_config,
+                    stack_state,
+                    deployment.environment_info.as_ref(),
+                )
+                .await
+                .context(ErrorData::RemoteCredentialHandoffFailed {
+                    deployment_id: deployment.id.clone(),
+                    platform: Platform::Gcp,
+                })
+                .map_err(AlienError::into_generic)?;
+            let ClientConfig::Gcp(source) = resolved else {
+                return Err(AlienError::new(GenericError {
+                    message: "GCP remote Storage credential handoff returned a non-GCP config"
+                        .to_string(),
+                }));
+            };
+            return Ok(RemoteStorageCredentialSource::GcpCredentialAccessBoundary(
+                GcpCredentialAccessBoundarySource {
+                    source,
+                    available_role: gcp_remote_storage_access_boundary_role(deployment)?,
+                },
+            ));
+        }
+
+        if deployment.platform != Platform::Aws
+            || !self.management_binding_platforms.contains(&Platform::Aws)
+            || uses_direct_impersonation_credentials(deployment)
+        {
+            return Ok(RemoteStorageCredentialSource::Direct(
+                self.resolve(deployment).await?,
+            ));
+        }
+
+        let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!(
+                    "Remote stack state is required to attenuate AWS Storage credentials for deployment {}",
+                    deployment.id
+                ),
+            })
+        })?;
+        let outputs = stack_state
+            .resources
+            .values()
+            .find(|resource| {
+                resource.resource_type == RemoteStackManagement::RESOURCE_TYPE.as_ref()
+            })
+            .and_then(|resource| resource.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Remote stack management outputs are required to attenuate AWS Storage credentials for deployment {}",
+                        deployment.id
+                    ),
+                })
+            })?;
+        let provider = self.provider_for_target(Platform::Aws);
+        let base = impersonate_management_sa(&**provider, Platform::Aws).await?;
+        let ClientConfig::Aws(source) = base else {
+            return Err(AlienError::new(GenericError {
+                message: "AWS management service-account impersonation returned a non-AWS config"
+                    .to_string(),
+            }));
+        };
+        let (target_account_id, target_region) = if let Some(EnvironmentInfo::Aws(environment)) =
+            &deployment.environment_info
+        {
+            (environment.account_id.clone(), environment.region.clone())
+        } else {
+            let account_id = outputs
+                    .access_configuration
+                    .split(':')
+                    .nth(4)
+                    .filter(|account| account.len() == 12 && account.bytes().all(|b| b.is_ascii_digit()))
+                    .ok_or_else(|| {
+                        AlienError::new(GenericError {
+                            message: "AWS target account cannot be proven from deployment environment or remote role ARN".to_string(),
+                        })
+                    })?
+                    .to_string();
+            (account_id, source.region.clone())
+        };
+
+        Ok(RemoteStorageCredentialSource::AwsAssumeRole {
+            source,
+            role_arn: outputs.access_configuration.clone(),
+            role_session_name: format!("alien-remote-storage-{}", uuid::Uuid::new_v4().simple()),
+            target_account_id,
+            target_region,
+        })
+    }
+
     async fn resolve_management_config(
         &self,
         platform: Platform,
@@ -202,6 +331,54 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         Ok(Some(management_config_from_info(info, platform)?))
     }
+}
+
+fn gcp_remote_storage_access_boundary_role(
+    deployment: &DeploymentRecord,
+) -> Result<String, AlienError> {
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        AlienError::new(GenericError {
+            message: format!(
+                "Remote stack state is required to attenuate GCP Storage credentials for deployment {}",
+                deployment.id
+            ),
+        })
+    })?;
+    let EnvironmentInfo::Gcp(environment) = deployment.environment_info.as_ref().ok_or_else(|| {
+        AlienError::new(GenericError {
+            message: format!(
+                "GCP environment identity is required to attenuate Storage credentials for deployment {}",
+                deployment.id
+            ),
+        })
+    })? else {
+        return Err(AlienError::new(GenericError {
+            message: format!(
+                "GCP deployment {} has non-GCP environment identity",
+                deployment.id
+            ),
+        }));
+    };
+    let permission_set = get_permission_set("storage/remote-data-write").ok_or_else(|| {
+        AlienError::new(GenericError {
+            message: "GCP remote Storage permission set is unavailable".to_string(),
+        })
+    })?;
+    let context = PermissionContext::new()
+        .with_stack_prefix(stack_state.resource_prefix.clone())
+        .with_project_name(environment.project_id.clone());
+    let mut roles = GcpRuntimePermissionsGenerator::new()
+        .generate_custom_roles(permission_set, &context)
+        .map_err(AlienError::into_generic)?;
+    if roles.len() != 1 || roles[0].included_permissions != GCP_REMOTE_STORAGE_PERMISSIONS {
+        return Err(AlienError::new(GenericError {
+            message: format!(
+                "GCP remote Storage permission set must generate one exact least-privilege custom role; generated {} role(s)",
+                roles.len(),
+            ),
+        }));
+    }
+    Ok(roles.remove(0).name)
 }
 
 /// Impersonate the management service account to get base credentials.
@@ -392,6 +569,9 @@ fn uses_control_plane_credentials(platform: Platform) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credential_materialization::{
+        materialize_remote_storage_lease, RemoteStorageCredentialScope,
+    };
     use alien_bindings::BindingsProvider;
     use alien_core::{
         bindings::ServiceAccountBinding, AwsClientConfig, AwsCredentials, AwsEnvironmentInfo,
@@ -401,6 +581,8 @@ mod tests {
         StackResourceState, StackState,
     };
     use chrono::Utc;
+    use httpmock::{Method::POST, MockServer};
+    use serde_json::json;
 
     #[test]
     fn azure_target_environment_overrides_subscription_and_region_but_keeps_managing_tenant() {
@@ -536,6 +718,119 @@ mod tests {
             updated_at: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn gcp_remote_storage_uses_exact_generated_custom_role() {
+        let role = gcp_remote_storage_access_boundary_role(&gcp_handoff_deployment())
+            .expect("managed GCP deployment should have an exact access-boundary role");
+
+        assert_eq!(
+            role,
+            "projects/target-project/roles/role_test_prefix_storage_remote_data_write"
+        );
+    }
+
+    #[test]
+    fn gcp_remote_storage_role_fails_closed_without_target_environment_identity() {
+        let mut deployment = gcp_handoff_deployment();
+        deployment.environment_info = None;
+
+        assert!(gcp_remote_storage_access_boundary_role(&deployment).is_err());
+    }
+
+    #[tokio::test]
+    async fn gcp_remote_storage_mints_each_impersonated_identity_once() {
+        let server = MockServer::start_async().await;
+        let management_mint = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("authorization", "Bearer source-token");
+                then.status(200).json_body(json!({
+                    "accessToken": "management-token",
+                    "expireTime": "2099-01-01T00:00:00Z"
+                }));
+            })
+            .await;
+        let target_mint = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .header("authorization", "Bearer management-token");
+                then.status(200).json_body(json!({
+                    "accessToken": "target-token",
+                    "expireTime": "2099-01-01T00:00:00Z"
+                }));
+            })
+            .await;
+        let downscope_exchange = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/downscope");
+                then.status(200).json_body(json!({
+                    "access_token": "bucket-confined-token",
+                    "expires_in": 900,
+                    "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                    "token_type": "Bearer"
+                }));
+            })
+            .await;
+        let base_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "source-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([
+                    ("iamcredentials".to_string(), server.url("/v1")),
+                    ("sts".to_string(), server.url("/downscope")),
+                ]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let bindings = HashMap::from([(
+            "management".to_string(),
+            serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                "management@managing-project.iam.gserviceaccount.com",
+                "management-unique-id",
+            ))
+            .expect("management binding should serialize"),
+        )]);
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(base_config, bindings)
+                .expect("GCP management bindings provider should be valid"),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        );
+
+        let source = resolver
+            .resolve_remote_storage_source(&gcp_handoff_deployment())
+            .await
+            .expect("GCP remote Storage source should resolve lazily");
+        let lease = materialize_remote_storage_lease(
+            source,
+            RemoteStorageCredentialScope::GcpGcs {
+                bucket_name: "one-bucket".to_string(),
+            },
+        )
+        .await
+        .expect("GCP remote Storage lease should be downscoped");
+
+        let gcp = lease
+            .client_config
+            .gcp_config()
+            .expect("materialized lease should remain GCP");
+        assert_eq!(
+            gcp.credentials,
+            GcpCredentials::AccessToken {
+                token: "bucket-confined-token".to_string()
+            }
+        );
+        assert_eq!(management_mint.hits_async().await, 1);
+        assert_eq!(target_mint.hits_async().await, 1);
+        assert_eq!(downscope_exchange.hits_async().await, 1);
     }
 
     #[tokio::test]

@@ -379,9 +379,8 @@ async fn create_deployment(
                 },
             }
         }
-        crate::auth::Scope::Deployment { .. } => {
-            return ErrorData::forbidden("Deployment tokens cannot create deployments")
-                .into_response();
+        crate::auth::Scope::Deployment { .. } | crate::auth::Scope::Command { .. } => {
+            return ErrorData::forbidden("This token cannot create deployments").into_response();
         }
     };
 
@@ -542,6 +541,10 @@ async fn list_deployments(
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
+                .into_response();
+        }
+        crate::auth::Scope::Command { .. } => {
+            return ErrorData::forbidden("Command payload tokens cannot list deployments")
                 .into_response();
         }
     };

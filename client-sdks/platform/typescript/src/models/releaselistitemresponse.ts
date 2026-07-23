@@ -30,6 +30,24 @@ export type ReleaseListItemResponseProject = {
   name: string;
 };
 
+/**
+ * Rollout stats, included when ?include=rollout is used
+ */
+export type Rollout = {
+  /**
+   * Deployments that finished updating to this release (excludes initial provisions)
+   */
+  updatedCount: number;
+  /**
+   * Deployments currently targeting this release but not yet running it
+   */
+  pendingCount: number;
+  /**
+   * Average time from release creation until a deployment finished updating, in milliseconds
+   */
+  avgDurationMs: number | null;
+};
+
 export type ReleaseListItemResponse = {
   /**
    * Unique identifier for the release.
@@ -47,6 +65,10 @@ export type ReleaseListItemResponse = {
    * Project info, included when ?include=project is used
    */
   project?: ReleaseListItemResponseProject | null | undefined;
+  /**
+   * Rollout stats, included when ?include=rollout is used
+   */
+  rollout?: Rollout | null | undefined;
 };
 
 /** @internal */
@@ -69,6 +91,23 @@ export function releaseListItemResponseProjectFromJSON(
 }
 
 /** @internal */
+export const Rollout$inboundSchema: z.ZodType<Rollout, unknown> = z.object({
+  updatedCount: z.int(),
+  pendingCount: z.int(),
+  avgDurationMs: z.nullable(z.number()),
+});
+
+export function rolloutFromJSON(
+  jsonString: string,
+): SafeParseResult<Rollout, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Rollout$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Rollout' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   ReleaseListItemResponse,
   unknown
@@ -85,6 +124,7 @@ export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   project: z.nullable(
     z.lazy(() => ReleaseListItemResponseProject$inboundSchema),
   ).optional(),
+  rollout: z.nullable(z.lazy(() => Rollout$inboundSchema)).optional(),
 });
 
 export function releaseListItemResponseFromJSON(

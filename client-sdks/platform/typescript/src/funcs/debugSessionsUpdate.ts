@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+ * Update debug-session state. Called by the immutable creating manager on tunnel attach, close, or deadline expiry.
  */
 export function debugSessionsUpdate(
   client: AlienCore,
@@ -143,7 +143,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["403", "404", "409", "422", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -169,7 +169,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, models.DebugSession$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
+    M.jsonErr([403, 404, 409, 422], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

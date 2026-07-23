@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+ * Create a debug-session audit row. The assigned manager attests the original actor in owner; workspace, project, and initial pending state are derived by the server.
  */
 export function debugSessionsCreate(
   client: AlienCore,
@@ -139,7 +139,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["403", "404", "422", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -165,7 +165,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(201, models.DebugSession$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
+    M.jsonErr([403, 404, 422], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

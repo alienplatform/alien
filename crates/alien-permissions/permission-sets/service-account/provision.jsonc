@@ -36,6 +36,8 @@
             "iam.serviceAccounts.update",
             "iam.roles.create",
             "iam.roles.get",
+            "iam.roles.list",
+            "iam.roles.undelete",
             "iam.roles.update",
             "resourcemanager.projects.getIamPolicy",
             "resourcemanager.projects.setIamPolicy"

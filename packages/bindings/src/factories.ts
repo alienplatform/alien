@@ -20,6 +20,8 @@ import type {
   RawContainerHandle,
   RawKvHandle,
   RawQueueHandle,
+  RawRemoteBindingsHandle,
+  RawRemoteStorageHandle,
   RawStorageHandle,
   RawVaultHandle,
 } from "./loader.js"
@@ -31,36 +33,38 @@ import type {
   PresignedRequest,
   Queue,
   QueueMessage,
+  RemoteStorage,
   SignedUrlOptions,
   Storage,
   Vault,
 } from "./types.js"
 
+type BindingsHandleProvider = () => Promise<RawBindingsHandle>
+
 /**
  * Build a lazy, cached resolver for one resource handle. The returned function
- * loads the addon, constructs a `BindingsHandle`, and resolves the resource
- * handle on first call; subsequent calls reuse the cached handle.
+ * obtains a `BindingsHandle` and resolves the resource handle on first call;
+ * subsequent calls reuse the cached handle.
  */
-function lazyHandle<THandle>(
-  getAddon: () => NativeAddon,
-  name: string,
-  resolve: (bindings: RawBindingsHandle, name: string) => Promise<THandle>,
-): () => Promise<THandle> {
+function lazyHandle<THandle>(resolve: () => Promise<THandle>): () => Promise<THandle> {
   let pending: Promise<THandle> | undefined
 
   return () => {
     if (!pending) {
-      pending = (async () => {
-        const addon = getAddon()
-        const bindings = new addon.BindingsHandle()
-        return await resolve(bindings, name)
-      })().catch(err => {
+      pending = resolve().catch(err => {
         // Do not cache a failed materialization; allow a later retry.
         pending = undefined
         throw err
       })
     }
     return pending
+  }
+}
+
+function bindingsFromAddon(getAddon: () => NativeAddon): BindingsHandleProvider {
+  return async () => {
+    const addon = getAddon()
+    return new addon.BindingsHandle()
   }
 }
 
@@ -90,6 +94,16 @@ function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
     copy: (from, to) => guard(handle, raw => raw.copy(from, to)),
     signedUrl: (options: SignedUrlOptions): Promise<PresignedRequest> =>
       guard(handle, raw => raw.signedUrl(options.method, options.path, options.expiresIn)),
+  }
+}
+
+function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): RemoteStorage {
+  return {
+    get: path => guard(handle, raw => raw.get(path)),
+    put: (path, data) => guard(handle, raw => raw.put(path, toBuffer(data))),
+    delete: path => guard(handle, raw => raw.delete(path)),
+    list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
+    head: path => guard(handle, raw => raw.head(path)),
   }
 }
 
@@ -136,8 +150,7 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
   }
 }
 
-// The napi queue methods take the queue name as their first argument; the
-// binding name is used for it (providers key the queue off the binding).
+// The native bound queue already carries its configured queue name.
 function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
   return {
     send: message => guard(handle, raw => raw.sendJson(JSON.stringify(message))),
@@ -179,11 +192,25 @@ export interface Factories {
 
 /** Build the factories bound to a given addon provider. */
 export function createFactories(getAddon: () => NativeAddon): Factories {
+  const getBindings = bindingsFromAddon(getAddon)
   return {
-    storage: name => makeStorage(lazyHandle(getAddon, name, (b, n) => b.storage(n))),
-    kv: name => makeKv(lazyHandle(getAddon, name, (b, n) => b.kv(n))),
-    queue: name => makeQueue(lazyHandle(getAddon, name, (b, n) => b.queue(n))),
-    vault: name => makeVault(lazyHandle(getAddon, name, (b, n) => b.vault(n))),
-    container: name => makeContainer(lazyHandle(getAddon, name, (b, n) => b.container(n))),
+    storage: name => makeStorage(lazyHandle(async () => (await getBindings()).storage(name))),
+    kv: name => makeKv(lazyHandle(async () => (await getBindings()).kv(name))),
+    queue: name => makeQueue(lazyHandle(async () => (await getBindings()).queue(name))),
+    vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
+    container: name => makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
+  }
+}
+
+/** Build the remote-only storage factory around one native bindings handle. */
+export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
+  const storages = new Map<string, RemoteStorage>()
+  return (name: string): RemoteStorage => {
+    let storage = storages.get(name)
+    if (!storage) {
+      storage = makeRemoteStorage(lazyHandle(() => bindings.storage(name)))
+      storages.set(name, storage)
+    }
+    return storage
   }
 }

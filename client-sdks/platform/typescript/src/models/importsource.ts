@@ -36,7 +36,29 @@ export const ImportSourcePlatform = {
  */
 export type ImportSourcePlatform = ClosedEnum<typeof ImportSourcePlatform>;
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ImportSourceFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ImportSourceFailureDomainsUnion2 =
+  | ImportSourceFailureDomains2
+  | any;
+
 export type ImportSourcePoolsAutoscale = {
+  failureDomains?: ImportSourceFailureDomains2 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -52,7 +74,29 @@ export type ImportSourcePoolsAutoscale = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ImportSourceFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ImportSourceFailureDomainsUnion1 =
+  | ImportSourceFailureDomains1
+  | any;
+
 export type ImportSourcePoolsFixed = {
+  failureDomains?: ImportSourceFailureDomains1 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1294,7 +1338,61 @@ export const ImportSourcePlatform$outboundSchema: z.ZodEnum<
 > = z.enum(ImportSourcePlatform);
 
 /** @internal */
+export type ImportSourceFailureDomains2$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const ImportSourceFailureDomains2$outboundSchema: z.ZodType<
+  ImportSourceFailureDomains2$Outbound,
+  ImportSourceFailureDomains2
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function importSourceFailureDomains2ToJSON(
+  importSourceFailureDomains2: ImportSourceFailureDomains2,
+): string {
+  return JSON.stringify(
+    ImportSourceFailureDomains2$outboundSchema.parse(
+      importSourceFailureDomains2,
+    ),
+  );
+}
+
+/** @internal */
+export type ImportSourceFailureDomainsUnion2$Outbound =
+  | ImportSourceFailureDomains2$Outbound
+  | any;
+
+/** @internal */
+export const ImportSourceFailureDomainsUnion2$outboundSchema: z.ZodType<
+  ImportSourceFailureDomainsUnion2$Outbound,
+  ImportSourceFailureDomainsUnion2
+> = z.union([
+  z.lazy(() => ImportSourceFailureDomains2$outboundSchema),
+  z.any(),
+]);
+
+export function importSourceFailureDomainsUnion2ToJSON(
+  importSourceFailureDomainsUnion2: ImportSourceFailureDomainsUnion2,
+): string {
+  return JSON.stringify(
+    ImportSourceFailureDomainsUnion2$outboundSchema.parse(
+      importSourceFailureDomainsUnion2,
+    ),
+  );
+}
+
+/** @internal */
 export type ImportSourcePoolsAutoscale$Outbound = {
+  failure_domains?:
+    | ImportSourceFailureDomains2$Outbound
+    | any
+    | null
+    | undefined;
   machine?: string | null | undefined;
   max: number;
   min: number;
@@ -1306,10 +1404,20 @@ export const ImportSourcePoolsAutoscale$outboundSchema: z.ZodType<
   ImportSourcePoolsAutoscale$Outbound,
   ImportSourcePoolsAutoscale
 > = z.object({
+  failureDomains: z.nullable(
+    z.union([
+      z.lazy(() => ImportSourceFailureDomains2$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    failureDomains: "failure_domains",
+  });
 });
 
 export function importSourcePoolsAutoscaleToJSON(
@@ -1321,7 +1429,61 @@ export function importSourcePoolsAutoscaleToJSON(
 }
 
 /** @internal */
+export type ImportSourceFailureDomains1$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const ImportSourceFailureDomains1$outboundSchema: z.ZodType<
+  ImportSourceFailureDomains1$Outbound,
+  ImportSourceFailureDomains1
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function importSourceFailureDomains1ToJSON(
+  importSourceFailureDomains1: ImportSourceFailureDomains1,
+): string {
+  return JSON.stringify(
+    ImportSourceFailureDomains1$outboundSchema.parse(
+      importSourceFailureDomains1,
+    ),
+  );
+}
+
+/** @internal */
+export type ImportSourceFailureDomainsUnion1$Outbound =
+  | ImportSourceFailureDomains1$Outbound
+  | any;
+
+/** @internal */
+export const ImportSourceFailureDomainsUnion1$outboundSchema: z.ZodType<
+  ImportSourceFailureDomainsUnion1$Outbound,
+  ImportSourceFailureDomainsUnion1
+> = z.union([
+  z.lazy(() => ImportSourceFailureDomains1$outboundSchema),
+  z.any(),
+]);
+
+export function importSourceFailureDomainsUnion1ToJSON(
+  importSourceFailureDomainsUnion1: ImportSourceFailureDomainsUnion1,
+): string {
+  return JSON.stringify(
+    ImportSourceFailureDomainsUnion1$outboundSchema.parse(
+      importSourceFailureDomainsUnion1,
+    ),
+  );
+}
+
+/** @internal */
 export type ImportSourcePoolsFixed$Outbound = {
+  failure_domains?:
+    | ImportSourceFailureDomains1$Outbound
+    | any
+    | null
+    | undefined;
   machine?: string | null | undefined;
   machines: number;
   mode: "fixed";
@@ -1332,9 +1494,19 @@ export const ImportSourcePoolsFixed$outboundSchema: z.ZodType<
   ImportSourcePoolsFixed$Outbound,
   ImportSourcePoolsFixed
 > = z.object({
+  failureDomains: z.nullable(
+    z.union([
+      z.lazy(() => ImportSourceFailureDomains1$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    failureDomains: "failure_domains",
+  });
 });
 
 export function importSourcePoolsFixedToJSON(

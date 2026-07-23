@@ -916,36 +916,66 @@ async fn test_best_effort_deletion_when_resources_missing(
     assert!(executor.outputs().is_none());
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LoadBalancerDeleteDependency {
+    TargetProxy,
+    ServerlessNeg,
+}
+
+#[rstest]
+#[case::target_proxy(LoadBalancerDeleteDependency::TargetProxy)]
+#[case::serverless_neg(LoadBalancerDeleteDependency::ServerlessNeg)]
 #[tokio::test]
-async fn test_delete_retries_target_proxy_while_forwarding_rule_reference_drains() {
+async fn test_delete_retries_while_load_balancer_dependency_drains(
+    #[case] dependency: LoadBalancerDeleteDependency,
+) {
     let worker = function_public_ingress();
     let function_name = format!("test-{}", worker.id);
-    let proxy_delete_attempts = Arc::new(AtomicUsize::new(0));
-    let proxy_delete_attempts_for_mock = Arc::clone(&proxy_delete_attempts);
+    let delete_attempts = Arc::new(AtomicUsize::new(0));
     let mock_cloudrun = setup_mock_client_for_creation_and_deletion(&function_name, true);
 
     let mut mock_compute = MockComputeApi::new();
     mock_compute
         .expect_delete_global_forwarding_rule()
         .returning(|_| Ok(Operation::default()));
-    mock_compute
-        .expect_delete_target_https_proxy()
-        .returning(move |_| {
-            if proxy_delete_attempts_for_mock.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(resource_in_use_error())
-            } else {
-                Ok(Operation::default())
-            }
-        });
+    match dependency {
+        LoadBalancerDeleteDependency::TargetProxy => {
+            let delete_attempts = Arc::clone(&delete_attempts);
+            mock_compute
+                .expect_delete_target_https_proxy()
+                .returning(move |_| {
+                    if delete_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(resource_in_use_error())
+                    } else {
+                        Ok(Operation::default())
+                    }
+                });
+            mock_compute
+                .expect_delete_region_network_endpoint_group()
+                .returning(|_, _| Ok(Operation::default()));
+        }
+        LoadBalancerDeleteDependency::ServerlessNeg => {
+            mock_compute
+                .expect_delete_target_https_proxy()
+                .returning(|_| Ok(Operation::default()));
+            let delete_attempts = Arc::clone(&delete_attempts);
+            mock_compute
+                .expect_delete_region_network_endpoint_group()
+                .returning(move |_, _| {
+                    if delete_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(resource_in_use_error())
+                    } else {
+                        Ok(Operation::default())
+                    }
+                });
+        }
+    }
     mock_compute
         .expect_delete_url_map()
         .returning(|_| Ok(Operation::default()));
     mock_compute
         .expect_delete_backend_service()
         .returning(|_| Ok(Operation::default()));
-    mock_compute
-        .expect_delete_region_network_endpoint_group()
-        .returning(|_, _| Ok(Operation::default()));
     mock_compute
         .expect_delete_global_address()
         .returning(|_| Ok(Operation::default()));
@@ -974,7 +1004,7 @@ async fn test_delete_retries_target_proxy_while_forwarding_rule_reference_drains
     executor.run_until_terminal().await.unwrap();
 
     assert_eq!(executor.status(), ResourceStatus::Deleted);
-    assert_eq!(proxy_delete_attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(delete_attempts.load(Ordering::SeqCst), 2);
 }
 
 // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────

@@ -4,6 +4,7 @@ Each example is a self-contained template you can initialize with `alien init`.
 
 | Template | Description | Language |
 |----------|-------------|----------|
+| [byob-storage-ts](./byob-storage-ts) | Provision customer-owned object storage and access it from an external SaaS backend. | TypeScript |
 | [remote-worker-ts](./remote-worker-ts) | Execute tool calls in your customer's cloud. The AI worker pattern. | TypeScript |
 | [basic-worker-ts](./basic-worker-ts) | The simplest Alien worker, in TypeScript. | TypeScript |
 | [basic-worker-rs](./basic-worker-rs) | The simplest Alien worker, in Rust. | Rust |

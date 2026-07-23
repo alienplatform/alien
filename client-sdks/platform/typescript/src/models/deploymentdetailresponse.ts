@@ -238,7 +238,33 @@ export type DeploymentDetailResponseEnvironmentInfoUnion =
   | DeploymentDetailResponseEnvironmentInfoTest
   | any;
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type DeploymentDetailResponseFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type DeploymentDetailResponseFailureDomainsUnion2 =
+  | DeploymentDetailResponseFailureDomains2
+  | any;
+
 export type DeploymentDetailResponsePoolsAutoscale = {
+  failureDomains?:
+    | DeploymentDetailResponseFailureDomains2
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -254,7 +280,33 @@ export type DeploymentDetailResponsePoolsAutoscale = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type DeploymentDetailResponseFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type DeploymentDetailResponseFailureDomainsUnion1 =
+  | DeploymentDetailResponseFailureDomains1
+  | any;
+
 export type DeploymentDetailResponsePoolsFixed = {
+  failureDomains?:
+    | DeploymentDetailResponseFailureDomains1
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1708,95 +1760,92 @@ export type DeploymentDetailResponseStackState = {
   resources: { [k: string]: DeploymentDetailResponseStackStateResources };
 };
 
-export const DeploymentDetailResponseTypeStringList = {
+export const DeploymentDetailResponsePendingPreparedStackTypeStringList = {
   StringList: "stringList",
 } as const;
-export type DeploymentDetailResponseTypeStringList = ClosedEnum<
-  typeof DeploymentDetailResponseTypeStringList
->;
+export type DeploymentDetailResponsePendingPreparedStackTypeStringList =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeStringList>;
 
-export type DeploymentDetailResponseDefaultStringList = {
-  type: DeploymentDetailResponseTypeStringList;
+export type DeploymentDetailResponsePendingPreparedStackDefaultStringList = {
+  type: DeploymentDetailResponsePendingPreparedStackTypeStringList;
   /**
    * String list default.
    */
   value: Array<string>;
 };
 
-export const DeploymentDetailResponseTypeBoolean = {
+export const DeploymentDetailResponsePendingPreparedStackTypeBoolean = {
   Boolean: "boolean",
 } as const;
-export type DeploymentDetailResponseTypeBoolean = ClosedEnum<
-  typeof DeploymentDetailResponseTypeBoolean
->;
+export type DeploymentDetailResponsePendingPreparedStackTypeBoolean =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeBoolean>;
 
-export type DeploymentDetailResponseDefaultBoolean = {
-  type: DeploymentDetailResponseTypeBoolean;
+export type DeploymentDetailResponsePendingPreparedStackDefaultBoolean = {
+  type: DeploymentDetailResponsePendingPreparedStackTypeBoolean;
   /**
    * Boolean default.
    */
   value: boolean;
 };
 
-export const DeploymentDetailResponseTypeNumber = {
+export const DeploymentDetailResponsePendingPreparedStackTypeNumber = {
   Number: "number",
 } as const;
-export type DeploymentDetailResponseTypeNumber = ClosedEnum<
-  typeof DeploymentDetailResponseTypeNumber
+export type DeploymentDetailResponsePendingPreparedStackTypeNumber = ClosedEnum<
+  typeof DeploymentDetailResponsePendingPreparedStackTypeNumber
 >;
 
-export type DeploymentDetailResponseDefaultNumber = {
-  type: DeploymentDetailResponseTypeNumber;
+export type DeploymentDetailResponsePendingPreparedStackDefaultNumber = {
+  type: DeploymentDetailResponsePendingPreparedStackTypeNumber;
   /**
    * Number default.
    */
   value: string;
 };
 
-export const DeploymentDetailResponseTypeString = {
+export const DeploymentDetailResponsePendingPreparedStackTypeString = {
   String: "string",
 } as const;
-export type DeploymentDetailResponseTypeString = ClosedEnum<
-  typeof DeploymentDetailResponseTypeString
+export type DeploymentDetailResponsePendingPreparedStackTypeString = ClosedEnum<
+  typeof DeploymentDetailResponsePendingPreparedStackTypeString
 >;
 
-export type DeploymentDetailResponseDefaultString = {
-  type: DeploymentDetailResponseTypeString;
+export type DeploymentDetailResponsePendingPreparedStackDefaultString = {
+  type: DeploymentDetailResponsePendingPreparedStackTypeString;
   /**
    * String default.
    */
   value: string;
 };
 
-export type DeploymentDetailResponseDefaultUnion =
-  | DeploymentDetailResponseDefaultString
-  | DeploymentDetailResponseDefaultNumber
-  | DeploymentDetailResponseDefaultBoolean
-  | DeploymentDetailResponseDefaultStringList
+export type DeploymentDetailResponsePendingPreparedStackDefaultUnion =
+  | DeploymentDetailResponsePendingPreparedStackDefaultString
+  | DeploymentDetailResponsePendingPreparedStackDefaultNumber
+  | DeploymentDetailResponsePendingPreparedStackDefaultBoolean
+  | DeploymentDetailResponsePendingPreparedStackDefaultStringList
   | any;
 
 /**
  * Environment variable handling for a stack input mapping.
  */
-export const DeploymentDetailResponseTypeEnvEnum = {
+export const DeploymentDetailResponsePendingPreparedStackTypeEnvEnum = {
   Plain: "plain",
   Secret: "secret",
 } as const;
 /**
  * Environment variable handling for a stack input mapping.
  */
-export type DeploymentDetailResponseTypeEnvEnum = ClosedEnum<
-  typeof DeploymentDetailResponseTypeEnvEnum
->;
+export type DeploymentDetailResponsePendingPreparedStackTypeEnvEnum =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeEnvEnum>;
 
-export type DeploymentDetailResponseTypeUnion =
-  | DeploymentDetailResponseTypeEnvEnum
+export type DeploymentDetailResponsePendingPreparedStackTypeUnion =
+  | DeploymentDetailResponsePendingPreparedStackTypeEnvEnum
   | any;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
  */
-export type DeploymentDetailResponseEnv = {
+export type DeploymentDetailResponsePendingPreparedStackEnv = {
   /**
    * Environment variable name.
    */
@@ -1805,13 +1854,17 @@ export type DeploymentDetailResponseEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?: DeploymentDetailResponseTypeEnvEnum | any | null | undefined;
+  type?:
+    | DeploymentDetailResponsePendingPreparedStackTypeEnvEnum
+    | any
+    | null
+    | undefined;
 };
 
 /**
  * Primitive stack input kind.
  */
-export const DeploymentDetailResponseKind = {
+export const DeploymentDetailResponsePendingPreparedStackKind = {
   String: "string",
   Secret: "secret",
   Number: "number",
@@ -1823,14 +1876,14 @@ export const DeploymentDetailResponseKind = {
 /**
  * Primitive stack input kind.
  */
-export type DeploymentDetailResponseKind = ClosedEnum<
-  typeof DeploymentDetailResponseKind
+export type DeploymentDetailResponsePendingPreparedStackKind = ClosedEnum<
+  typeof DeploymentDetailResponsePendingPreparedStackKind
 >;
 
 /**
  * Represents the target cloud platform.
  */
-export const DeploymentDetailResponsePreparedStackPlatform = {
+export const DeploymentDetailResponsePendingPreparedStackPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -1842,28 +1895,28 @@ export const DeploymentDetailResponsePreparedStackPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type DeploymentDetailResponsePreparedStackPlatform = ClosedEnum<
-  typeof DeploymentDetailResponsePreparedStackPlatform
+export type DeploymentDetailResponsePendingPreparedStackPlatform = ClosedEnum<
+  typeof DeploymentDetailResponsePendingPreparedStackPlatform
 >;
 
 /**
  * Who can provide a stack input value.
  */
-export const DeploymentDetailResponseProvidedBy = {
+export const DeploymentDetailResponsePendingPreparedStackProvidedBy = {
   Developer: "developer",
   Deployer: "deployer",
 } as const;
 /**
  * Who can provide a stack input value.
  */
-export type DeploymentDetailResponseProvidedBy = ClosedEnum<
-  typeof DeploymentDetailResponseProvidedBy
+export type DeploymentDetailResponsePendingPreparedStackProvidedBy = ClosedEnum<
+  typeof DeploymentDetailResponsePendingPreparedStackProvidedBy
 >;
 
 /**
  * Portable stack input validation constraints.
  */
-export type DeploymentDetailResponseValidation = {
+export type DeploymentDetailResponsePendingPreparedStackValidation = {
   /**
    * Semantic format hint such as url.
    */
@@ -1902,19 +1955,19 @@ export type DeploymentDetailResponseValidation = {
   values?: Array<string> | null | undefined;
 };
 
-export type DeploymentDetailResponseValidationUnion =
-  | DeploymentDetailResponseValidation
+export type DeploymentDetailResponsePendingPreparedStackValidationUnion =
+  | DeploymentDetailResponsePendingPreparedStackValidation
   | any;
 
 /**
  * Stack input definition serialized into a release stack.
  */
-export type DeploymentDetailResponseInput = {
+export type DeploymentDetailResponsePendingPreparedStackInput = {
   default?:
-    | DeploymentDetailResponseDefaultString
-    | DeploymentDetailResponseDefaultNumber
-    | DeploymentDetailResponseDefaultBoolean
-    | DeploymentDetailResponseDefaultStringList
+    | DeploymentDetailResponsePendingPreparedStackDefaultString
+    | DeploymentDetailResponsePendingPreparedStackDefaultNumber
+    | DeploymentDetailResponsePendingPreparedStackDefaultBoolean
+    | DeploymentDetailResponsePendingPreparedStackDefaultStringList
     | any
     | null
     | undefined;
@@ -1925,7 +1978,7 @@ export type DeploymentDetailResponseInput = {
   /**
    * Runtime env-var mappings for v1 input resolution.
    */
-  env?: Array<DeploymentDetailResponseEnv> | undefined;
+  env?: Array<DeploymentDetailResponsePendingPreparedStackEnv> | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -1933,7 +1986,1585 @@ export type DeploymentDetailResponseInput = {
   /**
    * Primitive stack input kind.
    */
-  kind: DeploymentDetailResponseKind;
+  kind: DeploymentDetailResponsePendingPreparedStackKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<DeploymentDetailResponsePendingPreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<DeploymentDetailResponsePendingPreparedStackProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | DeploymentDetailResponsePendingPreparedStackValidation
+    | any
+    | null
+    | undefined;
+};
+
+export const DeploymentDetailResponsePendingPreparedStackManagementEnum = {
+  Auto: "auto",
+} as const;
+export type DeploymentDetailResponsePendingPreparedStackManagementEnum =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackManagementEnum>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideAwResource
+    | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideAwStack
+    | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponsePendingPreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideEffect =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackOverrideEffect>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackOverrideAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideEffect
+    | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAzureResource =
+  {
+    /**
+     * Scope (subscription/resource group/resource level)
+     */
+    scope: string;
+  };
+
+/**
+ * Azure-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideAzureResource
+    | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideAzureStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideConditionResource =
+  {
+    expression: string;
+    title: string;
+  };
+
+export type DeploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnion =
+  | DeploymentDetailResponsePendingPreparedStackOverrideConditionResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideGcpResource = {
+  condition?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideConditionResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideConditionStack =
+  {
+    expression: string;
+    title: string;
+  };
+
+export type DeploymentDetailResponsePendingPreparedStackOverrideStackConditionUnion =
+  | DeploymentDetailResponsePendingPreparedStackOverrideConditionStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideGcpStack = {
+  condition?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideConditionStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideGcpResource
+    | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackOverrideGcpStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverridePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<DeploymentDetailResponsePendingPreparedStackOverrideAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<DeploymentDetailResponsePendingPreparedStackOverrideAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<DeploymentDetailResponsePendingPreparedStackOverrideGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverride = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: DeploymentDetailResponsePendingPreparedStackOverridePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type DeploymentDetailResponsePendingPreparedStackOverrideUnion =
+  | DeploymentDetailResponsePendingPreparedStackOverride
+  | string;
+
+export type DeploymentDetailResponsePendingPreparedStackManagement2 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  override: {
+    [k: string]: Array<
+      DeploymentDetailResponsePendingPreparedStackOverride | string
+    >;
+  };
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackExtendAwResource
+    | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: DeploymentDetailResponsePendingPreparedStackExtendAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponsePendingPreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendEffect =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackExtendEffect>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackExtendAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentDetailResponsePendingPreparedStackExtendEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackExtendAzureResource
+    | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackExtendAzureStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackExtendAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendConditionResource =
+  {
+    expression: string;
+    title: string;
+  };
+
+export type DeploymentDetailResponsePendingPreparedStackExtendResourceConditionUnion =
+  | DeploymentDetailResponsePendingPreparedStackExtendConditionResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendGcpResource = {
+  condition?:
+    | DeploymentDetailResponsePendingPreparedStackExtendConditionResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendConditionStack = {
+  expression: string;
+  title: string;
+};
+
+export type DeploymentDetailResponsePendingPreparedStackExtendStackConditionUnion =
+  | DeploymentDetailResponsePendingPreparedStackExtendConditionStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendGcpStack = {
+  condition?:
+    | DeploymentDetailResponsePendingPreparedStackExtendConditionStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackExtendGcpResource
+    | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackExtendGcpStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackExtendGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<DeploymentDetailResponsePendingPreparedStackExtendAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<DeploymentDetailResponsePendingPreparedStackExtendAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<DeploymentDetailResponsePendingPreparedStackExtendGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtend = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: DeploymentDetailResponsePendingPreparedStackExtendPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type DeploymentDetailResponsePendingPreparedStackExtendUnion =
+  | DeploymentDetailResponsePendingPreparedStackExtend
+  | string;
+
+export type DeploymentDetailResponsePendingPreparedStackManagement1 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  extend: {
+    [k: string]: Array<
+      DeploymentDetailResponsePendingPreparedStackExtend | string
+    >;
+  };
+};
+
+/**
+ * Management permissions configuration for stack management access
+ */
+export type DeploymentDetailResponsePendingPreparedStackManagementUnion =
+  | DeploymentDetailResponsePendingPreparedStackManagement1
+  | DeploymentDetailResponsePendingPreparedStackManagement2
+  | DeploymentDetailResponsePendingPreparedStackManagementEnum;
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackProfileAwResource
+    | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackProfileAwStack
+    | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentDetailResponsePendingPreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileEffect =
+  ClosedEnum<typeof DeploymentDetailResponsePendingPreparedStackProfileEffect>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackProfileAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?:
+    | DeploymentDetailResponsePendingPreparedStackProfileEffect
+    | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackProfileAzureResource
+    | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackProfileAzureStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackProfileAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileConditionResource =
+  {
+    expression: string;
+    title: string;
+  };
+
+export type DeploymentDetailResponsePendingPreparedStackProfileResourceConditionUnion =
+  | DeploymentDetailResponsePendingPreparedStackProfileConditionResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileGcpResource = {
+  condition?:
+    | DeploymentDetailResponsePendingPreparedStackProfileConditionResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileConditionStack =
+  {
+    expression: string;
+    title: string;
+  };
+
+export type DeploymentDetailResponsePendingPreparedStackProfileStackConditionUnion =
+  | DeploymentDetailResponsePendingPreparedStackProfileConditionStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileGcpStack = {
+  condition?:
+    | DeploymentDetailResponsePendingPreparedStackProfileConditionStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?:
+    | DeploymentDetailResponsePendingPreparedStackProfileGcpResource
+    | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?:
+    | DeploymentDetailResponsePendingPreparedStackProfileGcpStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentDetailResponsePendingPreparedStackProfileGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentDetailResponsePendingPreparedStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfilePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<DeploymentDetailResponsePendingPreparedStackProfileAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<DeploymentDetailResponsePendingPreparedStackProfileAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<DeploymentDetailResponsePendingPreparedStackProfileGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfile = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: DeploymentDetailResponsePendingPreparedStackProfilePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type DeploymentDetailResponsePendingPreparedStackProfileUnion =
+  | DeploymentDetailResponsePendingPreparedStackProfile
+  | string;
+
+/**
+ * Combined permissions configuration that contains both profiles and management
+ */
+export type DeploymentDetailResponsePendingPreparedStackPermissions = {
+  /**
+   * Management permissions configuration for stack management access
+   */
+  management?:
+    | DeploymentDetailResponsePendingPreparedStackManagement1
+    | DeploymentDetailResponsePendingPreparedStackManagement2
+    | DeploymentDetailResponsePendingPreparedStackManagementEnum
+    | undefined;
+  /**
+   * Permission profiles that define access control for compute services
+   *
+   * @remarks
+   * Key is the profile name, value is the permission configuration
+   */
+  profiles: {
+    [k: string]: {
+      [k: string]: Array<
+        DeploymentDetailResponsePendingPreparedStackProfile | string
+      >;
+    };
+  };
+};
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type DeploymentDetailResponsePendingPreparedStackConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+/**
+ * Reference to a resource by its stable id and resource type.
+ */
+export type DeploymentDetailResponsePendingPreparedStackDependency = {
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+};
+
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export const DeploymentDetailResponsePendingPreparedStackLifecycle = {
+  Frozen: "frozen",
+  Live: "live",
+} as const;
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export type DeploymentDetailResponsePendingPreparedStackLifecycle = ClosedEnum<
+  typeof DeploymentDetailResponsePendingPreparedStackLifecycle
+>;
+
+export type DeploymentDetailResponsePendingPreparedStackResources = {
+  /**
+   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+   */
+  config: DeploymentDetailResponsePendingPreparedStackConfig;
+  /**
+   * Additional dependencies for this resource beyond those defined in the resource itself.
+   *
+   * @remarks
+   * The total dependencies are: resource.get_dependencies() + this list
+   */
+  dependencies: Array<DeploymentDetailResponsePendingPreparedStackDependency>;
+  /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
+   * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+   */
+  lifecycle: DeploymentDetailResponsePendingPreparedStackLifecycle;
+  /**
+   * Enable remote bindings for this resource (BYOB use case).
+   *
+   * @remarks
+   * When true, binding params are synced to StackState's `remote_binding_params`.
+   * Default: false (prevents sensitive data in synced state).
+   */
+  remoteAccess?: boolean | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentDetailResponsePendingPreparedStackSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentDetailResponsePendingPreparedStackSupportedPlatform =
+  ClosedEnum<
+    typeof DeploymentDetailResponsePendingPreparedStackSupportedPlatform
+  >;
+
+/**
+ * A bag of resources, unaware of any cloud.
+ */
+export type DeploymentDetailResponsePendingPreparedStack = {
+  /**
+   * Unique identifier for the stack
+   */
+  id: string;
+  /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<DeploymentDetailResponsePendingPreparedStackInput> | undefined;
+  /**
+   * Combined permissions configuration that contains both profiles and management
+   */
+  permissions?:
+    | DeploymentDetailResponsePendingPreparedStackPermissions
+    | undefined;
+  /**
+   * Map of resource IDs to their configurations and lifecycle settings
+   */
+  resources: {
+    [k: string]: DeploymentDetailResponsePendingPreparedStackResources;
+  };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<DeploymentDetailResponsePendingPreparedStackSupportedPlatform>
+    | null
+    | undefined;
+};
+
+export type DeploymentDetailResponsePendingPreparedStackUnion =
+  | DeploymentDetailResponsePendingPreparedStack
+  | any;
+
+export const DeploymentDetailResponsePreparedStackTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type DeploymentDetailResponsePreparedStackTypeStringList = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackTypeStringList
+>;
+
+export type DeploymentDetailResponsePreparedStackDefaultStringList = {
+  type: DeploymentDetailResponsePreparedStackTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const DeploymentDetailResponsePreparedStackTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type DeploymentDetailResponsePreparedStackTypeBoolean = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackTypeBoolean
+>;
+
+export type DeploymentDetailResponsePreparedStackDefaultBoolean = {
+  type: DeploymentDetailResponsePreparedStackTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const DeploymentDetailResponsePreparedStackTypeNumber = {
+  Number: "number",
+} as const;
+export type DeploymentDetailResponsePreparedStackTypeNumber = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackTypeNumber
+>;
+
+export type DeploymentDetailResponsePreparedStackDefaultNumber = {
+  type: DeploymentDetailResponsePreparedStackTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const DeploymentDetailResponsePreparedStackTypeString = {
+  String: "string",
+} as const;
+export type DeploymentDetailResponsePreparedStackTypeString = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackTypeString
+>;
+
+export type DeploymentDetailResponsePreparedStackDefaultString = {
+  type: DeploymentDetailResponsePreparedStackTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type DeploymentDetailResponsePreparedStackDefaultUnion =
+  | DeploymentDetailResponsePreparedStackDefaultString
+  | DeploymentDetailResponsePreparedStackDefaultNumber
+  | DeploymentDetailResponsePreparedStackDefaultBoolean
+  | DeploymentDetailResponsePreparedStackDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const DeploymentDetailResponsePreparedStackTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type DeploymentDetailResponsePreparedStackTypeEnvEnum = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackTypeEnvEnum
+>;
+
+export type DeploymentDetailResponsePreparedStackTypeUnion =
+  | DeploymentDetailResponsePreparedStackTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type DeploymentDetailResponsePreparedStackEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?:
+    | DeploymentDetailResponsePreparedStackTypeEnvEnum
+    | any
+    | null
+    | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const DeploymentDetailResponsePreparedStackKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type DeploymentDetailResponsePreparedStackKind = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentDetailResponsePreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentDetailResponsePreparedStackPlatform = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const DeploymentDetailResponsePreparedStackProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type DeploymentDetailResponsePreparedStackProvidedBy = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type DeploymentDetailResponsePreparedStackValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type DeploymentDetailResponsePreparedStackValidationUnion =
+  | DeploymentDetailResponsePreparedStackValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type DeploymentDetailResponsePreparedStackInput = {
+  default?:
+    | DeploymentDetailResponsePreparedStackDefaultString
+    | DeploymentDetailResponsePreparedStackDefaultNumber
+    | DeploymentDetailResponsePreparedStackDefaultBoolean
+    | DeploymentDetailResponsePreparedStackDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<DeploymentDetailResponsePreparedStackEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: DeploymentDetailResponsePreparedStackKind;
   /**
    * Human-facing field label.
    */
@@ -1952,25 +3583,29 @@ export type DeploymentDetailResponseInput = {
   /**
    * Who can provide this value.
    */
-  providedBy: Array<DeploymentDetailResponseProvidedBy>;
+  providedBy: Array<DeploymentDetailResponsePreparedStackProvidedBy>;
   /**
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  validation?: DeploymentDetailResponseValidation | any | null | undefined;
+  validation?:
+    | DeploymentDetailResponsePreparedStackValidation
+    | any
+    | null
+    | undefined;
 };
 
-export const DeploymentDetailResponseManagementEnum = {
+export const DeploymentDetailResponsePreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
-export type DeploymentDetailResponseManagementEnum = ClosedEnum<
-  typeof DeploymentDetailResponseManagementEnum
+export type DeploymentDetailResponsePreparedStackManagementEnum = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackManagementEnum
 >;
 
 /**
  * AWS-specific binding specification
  */
-export type DeploymentDetailResponseOverrideAwResource = {
+export type DeploymentDetailResponsePreparedStackOverrideAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -1984,7 +3619,7 @@ export type DeploymentDetailResponseOverrideAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type DeploymentDetailResponseOverrideAwStack = {
+export type DeploymentDetailResponsePreparedStackOverrideAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -1998,35 +3633,37 @@ export type DeploymentDetailResponseOverrideAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseOverrideAwBinding = {
+export type DeploymentDetailResponsePreparedStackOverrideAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: DeploymentDetailResponseOverrideAwResource | undefined;
+  resource?:
+    | DeploymentDetailResponsePreparedStackOverrideAwResource
+    | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?: DeploymentDetailResponseOverrideAwStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackOverrideAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const DeploymentDetailResponseOverrideEffect = {
+export const DeploymentDetailResponsePreparedStackOverrideEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type DeploymentDetailResponseOverrideEffect = ClosedEnum<
-  typeof DeploymentDetailResponseOverrideEffect
+export type DeploymentDetailResponsePreparedStackOverrideEffect = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackOverrideEffect
 >;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseOverrideAwGrant = {
+export type DeploymentDetailResponsePreparedStackOverrideAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2052,11 +3689,11 @@ export type DeploymentDetailResponseOverrideAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type DeploymentDetailResponseOverrideAw = {
+export type DeploymentDetailResponsePreparedStackOverrideAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseOverrideAwBinding;
+  binding: DeploymentDetailResponsePreparedStackOverrideAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2064,11 +3701,11 @@ export type DeploymentDetailResponseOverrideAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?: DeploymentDetailResponseOverrideEffect | undefined;
+  effect?: DeploymentDetailResponsePreparedStackOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseOverrideAwGrant;
+  grant: DeploymentDetailResponsePreparedStackOverrideAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2078,7 +3715,7 @@ export type DeploymentDetailResponseOverrideAw = {
 /**
  * Azure-specific binding specification
  */
-export type DeploymentDetailResponseOverrideAzureResource = {
+export type DeploymentDetailResponsePreparedStackOverrideAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2088,7 +3725,7 @@ export type DeploymentDetailResponseOverrideAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type DeploymentDetailResponseOverrideAzureStack = {
+export type DeploymentDetailResponsePreparedStackOverrideAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2098,21 +3735,23 @@ export type DeploymentDetailResponseOverrideAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseOverrideAzureBinding = {
+export type DeploymentDetailResponsePreparedStackOverrideAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: DeploymentDetailResponseOverrideAzureResource | undefined;
+  resource?:
+    | DeploymentDetailResponsePreparedStackOverrideAzureResource
+    | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?: DeploymentDetailResponseOverrideAzureStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackOverrideAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseOverrideAzureGrant = {
+export type DeploymentDetailResponsePreparedStackOverrideAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2138,11 +3777,11 @@ export type DeploymentDetailResponseOverrideAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type DeploymentDetailResponseOverrideAzure = {
+export type DeploymentDetailResponsePreparedStackOverrideAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseOverrideAzureBinding;
+  binding: DeploymentDetailResponsePreparedStackOverrideAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2150,7 +3789,7 @@ export type DeploymentDetailResponseOverrideAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseOverrideAzureGrant;
+  grant: DeploymentDetailResponsePreparedStackOverrideAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2160,21 +3799,21 @@ export type DeploymentDetailResponseOverrideAzure = {
 /**
  * GCP IAM condition
  */
-export type DeploymentDetailResponseOverrideConditionResource = {
+export type DeploymentDetailResponsePreparedStackOverrideConditionResource = {
   expression: string;
   title: string;
 };
 
-export type DeploymentDetailResponseOverrideResourceConditionUnion =
-  | DeploymentDetailResponseOverrideConditionResource
+export type DeploymentDetailResponsePreparedStackOverrideResourceConditionUnion =
+  | DeploymentDetailResponsePreparedStackOverrideConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type DeploymentDetailResponseOverrideGcpResource = {
+export type DeploymentDetailResponsePreparedStackOverrideGcpResource = {
   condition?:
-    | DeploymentDetailResponseOverrideConditionResource
+    | DeploymentDetailResponsePreparedStackOverrideConditionResource
     | any
     | null
     | undefined;
@@ -2187,21 +3826,21 @@ export type DeploymentDetailResponseOverrideGcpResource = {
 /**
  * GCP IAM condition
  */
-export type DeploymentDetailResponseOverrideConditionStack = {
+export type DeploymentDetailResponsePreparedStackOverrideConditionStack = {
   expression: string;
   title: string;
 };
 
-export type DeploymentDetailResponseOverrideStackConditionUnion =
-  | DeploymentDetailResponseOverrideConditionStack
+export type DeploymentDetailResponsePreparedStackOverrideStackConditionUnion =
+  | DeploymentDetailResponsePreparedStackOverrideConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type DeploymentDetailResponseOverrideGcpStack = {
+export type DeploymentDetailResponsePreparedStackOverrideGcpStack = {
   condition?:
-    | DeploymentDetailResponseOverrideConditionStack
+    | DeploymentDetailResponsePreparedStackOverrideConditionStack
     | any
     | null
     | undefined;
@@ -2214,21 +3853,23 @@ export type DeploymentDetailResponseOverrideGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseOverrideGcpBinding = {
+export type DeploymentDetailResponsePreparedStackOverrideGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: DeploymentDetailResponseOverrideGcpResource | undefined;
+  resource?:
+    | DeploymentDetailResponsePreparedStackOverrideGcpResource
+    | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?: DeploymentDetailResponseOverrideGcpStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackOverrideGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseOverrideGcpGrant = {
+export type DeploymentDetailResponsePreparedStackOverrideGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2254,11 +3895,11 @@ export type DeploymentDetailResponseOverrideGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type DeploymentDetailResponseOverrideGcp = {
+export type DeploymentDetailResponsePreparedStackOverrideGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseOverrideGcpBinding;
+  binding: DeploymentDetailResponsePreparedStackOverrideGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2266,7 +3907,7 @@ export type DeploymentDetailResponseOverrideGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseOverrideGcpGrant;
+  grant: DeploymentDetailResponsePreparedStackOverrideGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2276,25 +3917,34 @@ export type DeploymentDetailResponseOverrideGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type DeploymentDetailResponseOverridePlatforms = {
+export type DeploymentDetailResponsePreparedStackOverridePlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?: Array<DeploymentDetailResponseOverrideAw> | null | undefined;
+  aws?:
+    | Array<DeploymentDetailResponsePreparedStackOverrideAw>
+    | null
+    | undefined;
   /**
    * Azure permission configurations
    */
-  azure?: Array<DeploymentDetailResponseOverrideAzure> | null | undefined;
+  azure?:
+    | Array<DeploymentDetailResponsePreparedStackOverrideAzure>
+    | null
+    | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?: Array<DeploymentDetailResponseOverrideGcp> | null | undefined;
+  gcp?:
+    | Array<DeploymentDetailResponsePreparedStackOverrideGcp>
+    | null
+    | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type DeploymentDetailResponseOverride = {
+export type DeploymentDetailResponsePreparedStackOverride = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -2306,30 +3956,32 @@ export type DeploymentDetailResponseOverride = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: DeploymentDetailResponseOverridePlatforms;
+  platforms: DeploymentDetailResponsePreparedStackOverridePlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type DeploymentDetailResponseOverrideUnion =
-  | DeploymentDetailResponseOverride
+export type DeploymentDetailResponsePreparedStackOverrideUnion =
+  | DeploymentDetailResponsePreparedStackOverride
   | string;
 
-export type DeploymentDetailResponseManagement2 = {
+export type DeploymentDetailResponsePreparedStackManagement2 = {
   /**
    * Permission profile that maps resources to permission sets
    *
    * @remarks
    * Key can be "*" for all resources or resource name for specific resource
    */
-  override: { [k: string]: Array<DeploymentDetailResponseOverride | string> };
+  override: {
+    [k: string]: Array<DeploymentDetailResponsePreparedStackOverride | string>;
+  };
 };
 
 /**
  * AWS-specific binding specification
  */
-export type DeploymentDetailResponseExtendAwResource = {
+export type DeploymentDetailResponsePreparedStackExtendAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2343,7 +3995,7 @@ export type DeploymentDetailResponseExtendAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type DeploymentDetailResponseExtendAwStack = {
+export type DeploymentDetailResponsePreparedStackExtendAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2357,35 +4009,35 @@ export type DeploymentDetailResponseExtendAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseExtendAwBinding = {
+export type DeploymentDetailResponsePreparedStackExtendAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: DeploymentDetailResponseExtendAwResource | undefined;
+  resource?: DeploymentDetailResponsePreparedStackExtendAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?: DeploymentDetailResponseExtendAwStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackExtendAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const DeploymentDetailResponseExtendEffect = {
+export const DeploymentDetailResponsePreparedStackExtendEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type DeploymentDetailResponseExtendEffect = ClosedEnum<
-  typeof DeploymentDetailResponseExtendEffect
+export type DeploymentDetailResponsePreparedStackExtendEffect = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackExtendEffect
 >;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseExtendAwGrant = {
+export type DeploymentDetailResponsePreparedStackExtendAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2411,11 +4063,11 @@ export type DeploymentDetailResponseExtendAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type DeploymentDetailResponseExtendAw = {
+export type DeploymentDetailResponsePreparedStackExtendAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseExtendAwBinding;
+  binding: DeploymentDetailResponsePreparedStackExtendAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2423,11 +4075,11 @@ export type DeploymentDetailResponseExtendAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?: DeploymentDetailResponseExtendEffect | undefined;
+  effect?: DeploymentDetailResponsePreparedStackExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseExtendAwGrant;
+  grant: DeploymentDetailResponsePreparedStackExtendAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2437,7 +4089,7 @@ export type DeploymentDetailResponseExtendAw = {
 /**
  * Azure-specific binding specification
  */
-export type DeploymentDetailResponseExtendAzureResource = {
+export type DeploymentDetailResponsePreparedStackExtendAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2447,7 +4099,7 @@ export type DeploymentDetailResponseExtendAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type DeploymentDetailResponseExtendAzureStack = {
+export type DeploymentDetailResponsePreparedStackExtendAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2457,21 +4109,23 @@ export type DeploymentDetailResponseExtendAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseExtendAzureBinding = {
+export type DeploymentDetailResponsePreparedStackExtendAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: DeploymentDetailResponseExtendAzureResource | undefined;
+  resource?:
+    | DeploymentDetailResponsePreparedStackExtendAzureResource
+    | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?: DeploymentDetailResponseExtendAzureStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackExtendAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseExtendAzureGrant = {
+export type DeploymentDetailResponsePreparedStackExtendAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2497,11 +4151,11 @@ export type DeploymentDetailResponseExtendAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type DeploymentDetailResponseExtendAzure = {
+export type DeploymentDetailResponsePreparedStackExtendAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseExtendAzureBinding;
+  binding: DeploymentDetailResponsePreparedStackExtendAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2509,7 +4163,7 @@ export type DeploymentDetailResponseExtendAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseExtendAzureGrant;
+  grant: DeploymentDetailResponsePreparedStackExtendAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2519,21 +4173,21 @@ export type DeploymentDetailResponseExtendAzure = {
 /**
  * GCP IAM condition
  */
-export type DeploymentDetailResponseExtendConditionResource = {
+export type DeploymentDetailResponsePreparedStackExtendConditionResource = {
   expression: string;
   title: string;
 };
 
-export type DeploymentDetailResponseExtendResourceConditionUnion =
-  | DeploymentDetailResponseExtendConditionResource
+export type DeploymentDetailResponsePreparedStackExtendResourceConditionUnion =
+  | DeploymentDetailResponsePreparedStackExtendConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type DeploymentDetailResponseExtendGcpResource = {
+export type DeploymentDetailResponsePreparedStackExtendGcpResource = {
   condition?:
-    | DeploymentDetailResponseExtendConditionResource
+    | DeploymentDetailResponsePreparedStackExtendConditionResource
     | any
     | null
     | undefined;
@@ -2546,21 +4200,21 @@ export type DeploymentDetailResponseExtendGcpResource = {
 /**
  * GCP IAM condition
  */
-export type DeploymentDetailResponseExtendConditionStack = {
+export type DeploymentDetailResponsePreparedStackExtendConditionStack = {
   expression: string;
   title: string;
 };
 
-export type DeploymentDetailResponseExtendStackConditionUnion =
-  | DeploymentDetailResponseExtendConditionStack
+export type DeploymentDetailResponsePreparedStackExtendStackConditionUnion =
+  | DeploymentDetailResponsePreparedStackExtendConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type DeploymentDetailResponseExtendGcpStack = {
+export type DeploymentDetailResponsePreparedStackExtendGcpStack = {
   condition?:
-    | DeploymentDetailResponseExtendConditionStack
+    | DeploymentDetailResponsePreparedStackExtendConditionStack
     | any
     | null
     | undefined;
@@ -2573,21 +4227,21 @@ export type DeploymentDetailResponseExtendGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseExtendGcpBinding = {
+export type DeploymentDetailResponsePreparedStackExtendGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: DeploymentDetailResponseExtendGcpResource | undefined;
+  resource?: DeploymentDetailResponsePreparedStackExtendGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?: DeploymentDetailResponseExtendGcpStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackExtendGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseExtendGcpGrant = {
+export type DeploymentDetailResponsePreparedStackExtendGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2613,11 +4267,11 @@ export type DeploymentDetailResponseExtendGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type DeploymentDetailResponseExtendGcp = {
+export type DeploymentDetailResponsePreparedStackExtendGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseExtendGcpBinding;
+  binding: DeploymentDetailResponsePreparedStackExtendGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2625,7 +4279,7 @@ export type DeploymentDetailResponseExtendGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseExtendGcpGrant;
+  grant: DeploymentDetailResponsePreparedStackExtendGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2635,25 +4289,31 @@ export type DeploymentDetailResponseExtendGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type DeploymentDetailResponseExtendPlatforms = {
+export type DeploymentDetailResponsePreparedStackExtendPlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?: Array<DeploymentDetailResponseExtendAw> | null | undefined;
+  aws?: Array<DeploymentDetailResponsePreparedStackExtendAw> | null | undefined;
   /**
    * Azure permission configurations
    */
-  azure?: Array<DeploymentDetailResponseExtendAzure> | null | undefined;
+  azure?:
+    | Array<DeploymentDetailResponsePreparedStackExtendAzure>
+    | null
+    | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?: Array<DeploymentDetailResponseExtendGcp> | null | undefined;
+  gcp?:
+    | Array<DeploymentDetailResponsePreparedStackExtendGcp>
+    | null
+    | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type DeploymentDetailResponseExtend = {
+export type DeploymentDetailResponsePreparedStackExtend = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -2665,38 +4325,40 @@ export type DeploymentDetailResponseExtend = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: DeploymentDetailResponseExtendPlatforms;
+  platforms: DeploymentDetailResponsePreparedStackExtendPlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type DeploymentDetailResponseExtendUnion =
-  | DeploymentDetailResponseExtend
+export type DeploymentDetailResponsePreparedStackExtendUnion =
+  | DeploymentDetailResponsePreparedStackExtend
   | string;
 
-export type DeploymentDetailResponseManagement1 = {
+export type DeploymentDetailResponsePreparedStackManagement1 = {
   /**
    * Permission profile that maps resources to permission sets
    *
    * @remarks
    * Key can be "*" for all resources or resource name for specific resource
    */
-  extend: { [k: string]: Array<DeploymentDetailResponseExtend | string> };
+  extend: {
+    [k: string]: Array<DeploymentDetailResponsePreparedStackExtend | string>;
+  };
 };
 
 /**
  * Management permissions configuration for stack management access
  */
-export type DeploymentDetailResponseManagementUnion =
-  | DeploymentDetailResponseManagement1
-  | DeploymentDetailResponseManagement2
-  | DeploymentDetailResponseManagementEnum;
+export type DeploymentDetailResponsePreparedStackManagementUnion =
+  | DeploymentDetailResponsePreparedStackManagement1
+  | DeploymentDetailResponsePreparedStackManagement2
+  | DeploymentDetailResponsePreparedStackManagementEnum;
 
 /**
  * AWS-specific binding specification
  */
-export type DeploymentDetailResponseProfileAwResource = {
+export type DeploymentDetailResponsePreparedStackProfileAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2710,7 +4372,7 @@ export type DeploymentDetailResponseProfileAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type DeploymentDetailResponseProfileAwStack = {
+export type DeploymentDetailResponsePreparedStackProfileAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2724,35 +4386,35 @@ export type DeploymentDetailResponseProfileAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseProfileAwBinding = {
+export type DeploymentDetailResponsePreparedStackProfileAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: DeploymentDetailResponseProfileAwResource | undefined;
+  resource?: DeploymentDetailResponsePreparedStackProfileAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?: DeploymentDetailResponseProfileAwStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackProfileAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const DeploymentDetailResponseProfileEffect = {
+export const DeploymentDetailResponsePreparedStackProfileEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type DeploymentDetailResponseProfileEffect = ClosedEnum<
-  typeof DeploymentDetailResponseProfileEffect
+export type DeploymentDetailResponsePreparedStackProfileEffect = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackProfileEffect
 >;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseProfileAwGrant = {
+export type DeploymentDetailResponsePreparedStackProfileAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2778,11 +4440,11 @@ export type DeploymentDetailResponseProfileAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type DeploymentDetailResponseProfileAw = {
+export type DeploymentDetailResponsePreparedStackProfileAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseProfileAwBinding;
+  binding: DeploymentDetailResponsePreparedStackProfileAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2790,11 +4452,11 @@ export type DeploymentDetailResponseProfileAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?: DeploymentDetailResponseProfileEffect | undefined;
+  effect?: DeploymentDetailResponsePreparedStackProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseProfileAwGrant;
+  grant: DeploymentDetailResponsePreparedStackProfileAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2804,7 +4466,7 @@ export type DeploymentDetailResponseProfileAw = {
 /**
  * Azure-specific binding specification
  */
-export type DeploymentDetailResponseProfileAzureResource = {
+export type DeploymentDetailResponsePreparedStackProfileAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2814,7 +4476,7 @@ export type DeploymentDetailResponseProfileAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type DeploymentDetailResponseProfileAzureStack = {
+export type DeploymentDetailResponsePreparedStackProfileAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2824,21 +4486,23 @@ export type DeploymentDetailResponseProfileAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseProfileAzureBinding = {
+export type DeploymentDetailResponsePreparedStackProfileAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: DeploymentDetailResponseProfileAzureResource | undefined;
+  resource?:
+    | DeploymentDetailResponsePreparedStackProfileAzureResource
+    | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?: DeploymentDetailResponseProfileAzureStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackProfileAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseProfileAzureGrant = {
+export type DeploymentDetailResponsePreparedStackProfileAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2864,11 +4528,11 @@ export type DeploymentDetailResponseProfileAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type DeploymentDetailResponseProfileAzure = {
+export type DeploymentDetailResponsePreparedStackProfileAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseProfileAzureBinding;
+  binding: DeploymentDetailResponsePreparedStackProfileAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2876,7 +4540,7 @@ export type DeploymentDetailResponseProfileAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseProfileAzureGrant;
+  grant: DeploymentDetailResponsePreparedStackProfileAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2886,21 +4550,21 @@ export type DeploymentDetailResponseProfileAzure = {
 /**
  * GCP IAM condition
  */
-export type DeploymentDetailResponseProfileConditionResource = {
+export type DeploymentDetailResponsePreparedStackProfileConditionResource = {
   expression: string;
   title: string;
 };
 
-export type DeploymentDetailResponseProfileResourceConditionUnion =
-  | DeploymentDetailResponseProfileConditionResource
+export type DeploymentDetailResponsePreparedStackProfileResourceConditionUnion =
+  | DeploymentDetailResponsePreparedStackProfileConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type DeploymentDetailResponseProfileGcpResource = {
+export type DeploymentDetailResponsePreparedStackProfileGcpResource = {
   condition?:
-    | DeploymentDetailResponseProfileConditionResource
+    | DeploymentDetailResponsePreparedStackProfileConditionResource
     | any
     | null
     | undefined;
@@ -2913,21 +4577,21 @@ export type DeploymentDetailResponseProfileGcpResource = {
 /**
  * GCP IAM condition
  */
-export type DeploymentDetailResponseProfileConditionStack = {
+export type DeploymentDetailResponsePreparedStackProfileConditionStack = {
   expression: string;
   title: string;
 };
 
-export type DeploymentDetailResponseProfileStackConditionUnion =
-  | DeploymentDetailResponseProfileConditionStack
+export type DeploymentDetailResponsePreparedStackProfileStackConditionUnion =
+  | DeploymentDetailResponsePreparedStackProfileConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type DeploymentDetailResponseProfileGcpStack = {
+export type DeploymentDetailResponsePreparedStackProfileGcpStack = {
   condition?:
-    | DeploymentDetailResponseProfileConditionStack
+    | DeploymentDetailResponsePreparedStackProfileConditionStack
     | any
     | null
     | undefined;
@@ -2940,21 +4604,23 @@ export type DeploymentDetailResponseProfileGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type DeploymentDetailResponseProfileGcpBinding = {
+export type DeploymentDetailResponsePreparedStackProfileGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: DeploymentDetailResponseProfileGcpResource | undefined;
+  resource?:
+    | DeploymentDetailResponsePreparedStackProfileGcpResource
+    | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?: DeploymentDetailResponseProfileGcpStack | undefined;
+  stack?: DeploymentDetailResponsePreparedStackProfileGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type DeploymentDetailResponseProfileGcpGrant = {
+export type DeploymentDetailResponsePreparedStackProfileGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2980,11 +4646,11 @@ export type DeploymentDetailResponseProfileGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type DeploymentDetailResponseProfileGcp = {
+export type DeploymentDetailResponsePreparedStackProfileGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: DeploymentDetailResponseProfileGcpBinding;
+  binding: DeploymentDetailResponsePreparedStackProfileGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2992,7 +4658,7 @@ export type DeploymentDetailResponseProfileGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: DeploymentDetailResponseProfileGcpGrant;
+  grant: DeploymentDetailResponsePreparedStackProfileGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -3002,25 +4668,34 @@ export type DeploymentDetailResponseProfileGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type DeploymentDetailResponseProfilePlatforms = {
+export type DeploymentDetailResponsePreparedStackProfilePlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?: Array<DeploymentDetailResponseProfileAw> | null | undefined;
+  aws?:
+    | Array<DeploymentDetailResponsePreparedStackProfileAw>
+    | null
+    | undefined;
   /**
    * Azure permission configurations
    */
-  azure?: Array<DeploymentDetailResponseProfileAzure> | null | undefined;
+  azure?:
+    | Array<DeploymentDetailResponsePreparedStackProfileAzure>
+    | null
+    | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?: Array<DeploymentDetailResponseProfileGcp> | null | undefined;
+  gcp?:
+    | Array<DeploymentDetailResponsePreparedStackProfileGcp>
+    | null
+    | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type DeploymentDetailResponseProfile = {
+export type DeploymentDetailResponsePreparedStackProfile = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -3032,27 +4707,27 @@ export type DeploymentDetailResponseProfile = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: DeploymentDetailResponseProfilePlatforms;
+  platforms: DeploymentDetailResponsePreparedStackProfilePlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type DeploymentDetailResponseProfileUnion =
-  | DeploymentDetailResponseProfile
+export type DeploymentDetailResponsePreparedStackProfileUnion =
+  | DeploymentDetailResponsePreparedStackProfile
   | string;
 
 /**
  * Combined permissions configuration that contains both profiles and management
  */
-export type DeploymentDetailResponsePermissions = {
+export type DeploymentDetailResponsePreparedStackPermissions = {
   /**
    * Management permissions configuration for stack management access
    */
   management?:
-    | DeploymentDetailResponseManagement1
-    | DeploymentDetailResponseManagement2
-    | DeploymentDetailResponseManagementEnum
+    | DeploymentDetailResponsePreparedStackManagement1
+    | DeploymentDetailResponsePreparedStackManagement2
+    | DeploymentDetailResponsePreparedStackManagementEnum
     | undefined;
   /**
    * Permission profiles that define access control for compute services
@@ -3062,7 +4737,7 @@ export type DeploymentDetailResponsePermissions = {
    */
   profiles: {
     [k: string]: {
-      [k: string]: Array<DeploymentDetailResponseProfile | string>;
+      [k: string]: Array<DeploymentDetailResponsePreparedStackProfile | string>;
     };
   };
 };
@@ -3120,6 +4795,17 @@ export type DeploymentDetailResponsePreparedStackResources = {
    */
   dependencies: Array<DeploymentDetailResponsePreparedStackDependency>;
   /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
   lifecycle: DeploymentDetailResponsePreparedStackLifecycle;
@@ -3136,7 +4822,7 @@ export type DeploymentDetailResponsePreparedStackResources = {
 /**
  * Represents the target cloud platform.
  */
-export const DeploymentDetailResponseSupportedPlatform = {
+export const DeploymentDetailResponsePreparedStackSupportedPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -3148,8 +4834,8 @@ export const DeploymentDetailResponseSupportedPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type DeploymentDetailResponseSupportedPlatform = ClosedEnum<
-  typeof DeploymentDetailResponseSupportedPlatform
+export type DeploymentDetailResponsePreparedStackSupportedPlatform = ClosedEnum<
+  typeof DeploymentDetailResponsePreparedStackSupportedPlatform
 >;
 
 /**
@@ -3163,11 +4849,11 @@ export type DeploymentDetailResponsePreparedStack = {
   /**
    * Input definitions required before setup or deployment can proceed.
    */
-  inputs?: Array<DeploymentDetailResponseInput> | undefined;
+  inputs?: Array<DeploymentDetailResponsePreparedStackInput> | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
-  permissions?: DeploymentDetailResponsePermissions | undefined;
+  permissions?: DeploymentDetailResponsePreparedStackPermissions | undefined;
   /**
    * Map of resource IDs to their configurations and lifecycle settings
    */
@@ -3176,13 +4862,51 @@ export type DeploymentDetailResponsePreparedStack = {
    * Which platforms this stack supports. When None, all platforms are supported.
    */
   supportedPlatforms?:
-    | Array<DeploymentDetailResponseSupportedPlatform>
+    | Array<DeploymentDetailResponsePreparedStackSupportedPlatform>
     | null
     | undefined;
 };
 
 export type DeploymentDetailResponsePreparedStackUnion =
   | DeploymentDetailResponsePreparedStack
+  | any;
+
+/**
+ * One-shot authority for a setup re-import to replace setup-owned resources.
+ */
+export type DeploymentDetailResponseSetupUpdateAuthorization = {
+  /**
+   * Frozen resource projection from the last successful deployment.
+   */
+  baselineFrozenDigest: string;
+  /**
+   * Unique revision used by persistence layers for compare-and-swap updates.
+   */
+  nonce: string;
+  /**
+   * Release whose stack was prepared by setup.
+   */
+  releaseId: string;
+  /**
+   * Exact setup artifact revision that authored this authority.
+   */
+  setupFingerprint: string;
+  /**
+   * Setup fingerprint contract version.
+   */
+  setupFingerprintVersion: number;
+  /**
+   * Stable setup target recorded on the imported deployment.
+   */
+  setupTarget: string;
+  /**
+   * Frozen resource projection prepared by the setup re-import.
+   */
+  targetFrozenDigest: string;
+};
+
+export type DeploymentDetailResponseSetupUpdateAuthorizationUnion =
+  | DeploymentDetailResponseSetupUpdateAuthorization
   | any;
 
 /**
@@ -3204,6 +4928,11 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    * touching unrelated values in the same vault.
    */
   lastSyncedSecretNames?: Array<string> | undefined;
+  pendingPreparedStack?:
+    | DeploymentDetailResponsePendingPreparedStack
+    | any
+    | null
+    | undefined;
   preparedStack?:
     | DeploymentDetailResponsePreparedStack
     | any
@@ -3218,6 +4947,11 @@ export type DeploymentDetailResponseRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
+  setupUpdateAuthorization?:
+    | DeploymentDetailResponseSetupUpdateAuthorization
+    | any
+    | null
+    | undefined;
 };
 
 /**
@@ -3722,14 +5456,72 @@ export function deploymentDetailResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseFailureDomains2$inboundSchema: z.ZodType<
+  DeploymentDetailResponseFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function deploymentDetailResponseFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseFailureDomains2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseFailureDomains2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseFailureDomainsUnion2$inboundSchema:
+  z.ZodType<DeploymentDetailResponseFailureDomainsUnion2, unknown> = z.union([
+    z.lazy(() => DeploymentDetailResponseFailureDomains2$inboundSchema),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponseFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseFailureDomainsUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseFailureDomainsUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponsePoolsAutoscale$inboundSchema: z.ZodType<
   DeploymentDetailResponsePoolsAutoscale,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseFailureDomains2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function deploymentDetailResponsePoolsAutoscaleFromJSON(
@@ -3744,13 +5536,71 @@ export function deploymentDetailResponsePoolsAutoscaleFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseFailureDomains1$inboundSchema: z.ZodType<
+  DeploymentDetailResponseFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function deploymentDetailResponseFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseFailureDomains1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseFailureDomains1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseFailureDomainsUnion1$inboundSchema:
+  z.ZodType<DeploymentDetailResponseFailureDomainsUnion1, unknown> = z.union([
+    z.lazy(() => DeploymentDetailResponseFailureDomains1$inboundSchema),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponseFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseFailureDomainsUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseFailureDomainsUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponsePoolsFixed$inboundSchema: z.ZodType<
   DeploymentDetailResponsePoolsFixed,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponseFailureDomains1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function deploymentDetailResponsePoolsFixedFromJSON(
@@ -6132,180 +7982,2760 @@ export function deploymentDetailResponseStackStateFromJSON(
 }
 
 /** @internal */
-export const DeploymentDetailResponseTypeStringList$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseTypeStringList
-> = z.enum(DeploymentDetailResponseTypeStringList);
+export const DeploymentDetailResponsePendingPreparedStackTypeStringList$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeStringList> =
+    z.enum(DeploymentDetailResponsePendingPreparedStackTypeStringList);
 
 /** @internal */
-export const DeploymentDetailResponseDefaultStringList$inboundSchema: z.ZodType<
-  DeploymentDetailResponseDefaultStringList,
-  unknown
-> = z.object({
-  type: DeploymentDetailResponseTypeStringList$inboundSchema,
-  value: z.array(z.string()),
-});
+export const DeploymentDetailResponsePendingPreparedStackDefaultStringList$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackDefaultStringList,
+    unknown
+  > = z.object({
+    type:
+      DeploymentDetailResponsePendingPreparedStackTypeStringList$inboundSchema,
+    value: z.array(z.string()),
+  });
 
-export function deploymentDetailResponseDefaultStringListFromJSON(
+export function deploymentDetailResponsePendingPreparedStackDefaultStringListFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentDetailResponseDefaultStringList,
+  DeploymentDetailResponsePendingPreparedStackDefaultStringList,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseDefaultStringList$inboundSchema.parse(
+      DeploymentDetailResponsePendingPreparedStackDefaultStringList$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackTypeBoolean$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeBoolean> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackTypeBoolean);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackDefaultBoolean$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackDefaultBoolean,
+    unknown
+  > = z.object({
+    type: DeploymentDetailResponsePendingPreparedStackTypeBoolean$inboundSchema,
+    value: z.boolean(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackDefaultBoolean,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackDefaultBoolean$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackTypeNumber$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeNumber> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackTypeNumber);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackDefaultNumber$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackDefaultNumber,
+    unknown
+  > = z.object({
+    type: DeploymentDetailResponsePendingPreparedStackTypeNumber$inboundSchema,
+    value: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackDefaultNumber,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackDefaultNumber$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackTypeString$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeString> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackTypeString);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackDefaultString$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackDefaultString,
+    unknown
+  > = z.object({
+    type: DeploymentDetailResponsePendingPreparedStackTypeString$inboundSchema,
+    value: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackDefaultString,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackDefaultString$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackDefaultUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackDefaultUnion, unknown> =
+    z.union([
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]);
+
+export function deploymentDetailResponsePendingPreparedStackDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackDefaultUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackDefaultUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackTypeEnvEnum$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackTypeEnvEnum> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackTypeEnvEnum);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackTypeUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackTypeUnion, unknown> = z
+    .union([
+      DeploymentDetailResponsePendingPreparedStackTypeEnvEnum$inboundSchema,
+      z.any(),
+    ]);
+
+export function deploymentDetailResponsePendingPreparedStackTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackTypeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackTypeUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentDetailResponseDefaultStringList' from JSON`,
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackTypeUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseTypeBoolean$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseTypeBoolean
-> = z.enum(DeploymentDetailResponseTypeBoolean);
+export const DeploymentDetailResponsePendingPreparedStackEnv$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackEnv, unknown> = z
+    .object({
+      name: z.string(),
+      targetResources: z.nullable(z.array(z.string())).optional(),
+      type: z.nullable(
+        z.union([
+          DeploymentDetailResponsePendingPreparedStackTypeEnvEnum$inboundSchema,
+          z.any(),
+        ]),
+      ).optional(),
+    });
 
-/** @internal */
-export const DeploymentDetailResponseDefaultBoolean$inboundSchema: z.ZodType<
-  DeploymentDetailResponseDefaultBoolean,
-  unknown
-> = z.object({
-  type: DeploymentDetailResponseTypeBoolean$inboundSchema,
-  value: z.boolean(),
-});
-
-export function deploymentDetailResponseDefaultBooleanFromJSON(
+export function deploymentDetailResponsePendingPreparedStackEnvFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponseDefaultBoolean, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackEnv,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseDefaultBoolean' from JSON`,
+      DeploymentDetailResponsePendingPreparedStackEnv$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackEnv' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseTypeNumber$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseTypeNumber
-> = z.enum(DeploymentDetailResponseTypeNumber);
+export const DeploymentDetailResponsePendingPreparedStackKind$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackKind> = z.enum(
+    DeploymentDetailResponsePendingPreparedStackKind,
+  );
 
 /** @internal */
-export const DeploymentDetailResponseDefaultNumber$inboundSchema: z.ZodType<
-  DeploymentDetailResponseDefaultNumber,
-  unknown
-> = z.object({
-  type: DeploymentDetailResponseTypeNumber$inboundSchema,
-  value: z.string(),
-});
+export const DeploymentDetailResponsePendingPreparedStackPlatform$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackPlatform> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackPlatform);
 
-export function deploymentDetailResponseDefaultNumberFromJSON(
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProvidedBy$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackProvidedBy> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackProvidedBy);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackValidation$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackValidation, unknown> = z
+    .object({
+      format: z.nullable(z.string()).optional(),
+      max: z.nullable(z.string()).optional(),
+      maxItems: z.nullable(z.int()).optional(),
+      maxLength: z.nullable(z.int()).optional(),
+      min: z.nullable(z.string()).optional(),
+      minItems: z.nullable(z.int()).optional(),
+      minLength: z.nullable(z.int()).optional(),
+      pattern: z.nullable(z.string()).optional(),
+      values: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackValidationFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponseDefaultNumber, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackValidation,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseDefaultNumber$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseDefaultNumber' from JSON`,
+      DeploymentDetailResponsePendingPreparedStackValidation$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackValidation' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseTypeString$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseTypeString
-> = z.enum(DeploymentDetailResponseTypeString);
+export const DeploymentDetailResponsePendingPreparedStackValidationUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackValidationUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackValidation$inboundSchema
+    ),
+    z.any(),
+  ]);
 
-/** @internal */
-export const DeploymentDetailResponseDefaultString$inboundSchema: z.ZodType<
-  DeploymentDetailResponseDefaultString,
-  unknown
-> = z.object({
-  type: DeploymentDetailResponseTypeString$inboundSchema,
-  value: z.string(),
-});
-
-export function deploymentDetailResponseDefaultStringFromJSON(
+export function deploymentDetailResponsePendingPreparedStackValidationUnionFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponseDefaultString, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackValidationUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseDefaultString$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseDefaultString' from JSON`,
+      DeploymentDetailResponsePendingPreparedStackValidationUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackValidationUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseDefaultUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseDefaultUnion,
-  unknown
-> = z.union([
-  z.lazy(() => DeploymentDetailResponseDefaultString$inboundSchema),
-  z.lazy(() => DeploymentDetailResponseDefaultNumber$inboundSchema),
-  z.lazy(() => DeploymentDetailResponseDefaultBoolean$inboundSchema),
-  z.lazy(() => DeploymentDetailResponseDefaultStringList$inboundSchema),
-  z.any(),
-]);
+export const DeploymentDetailResponsePendingPreparedStackInput$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackInput, unknown> = z
+    .object({
+      default: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackDefaultString$inboundSchema
+          ),
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackDefaultNumber$inboundSchema
+          ),
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackDefaultBoolean$inboundSchema
+          ),
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackDefaultStringList$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      description: z.string(),
+      env: z.array(
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackEnv$inboundSchema
+        ),
+      ).optional(),
+      id: z.string(),
+      kind: DeploymentDetailResponsePendingPreparedStackKind$inboundSchema,
+      label: z.string(),
+      placeholder: z.nullable(z.string()).optional(),
+      platforms: z.nullable(
+        z.array(
+          DeploymentDetailResponsePendingPreparedStackPlatform$inboundSchema,
+        ),
+      ).optional(),
+      providedBy: z.array(
+        DeploymentDetailResponsePendingPreparedStackProvidedBy$inboundSchema,
+      ),
+      required: z.boolean(),
+      validation: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackValidation$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+    });
 
-export function deploymentDetailResponseDefaultUnionFromJSON(
+export function deploymentDetailResponsePendingPreparedStackInputFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponseDefaultUnion, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackInput,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseDefaultUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseDefaultUnion' from JSON`,
+      DeploymentDetailResponsePendingPreparedStackInput$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackInput' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseTypeEnvEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseTypeEnvEnum
-> = z.enum(DeploymentDetailResponseTypeEnvEnum);
+export const DeploymentDetailResponsePendingPreparedStackManagementEnum$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackManagementEnum> =
+    z.enum(DeploymentDetailResponsePendingPreparedStackManagementEnum);
 
 /** @internal */
-export const DeploymentDetailResponseTypeUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseTypeUnion,
-  unknown
-> = z.union([DeploymentDetailResponseTypeEnvEnum$inboundSchema, z.any()]);
+export const DeploymentDetailResponsePendingPreparedStackOverrideAwResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAwResource,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
 
-export function deploymentDetailResponseTypeUnionFromJSON(
+export function deploymentDetailResponsePendingPreparedStackOverrideAwResourceFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponseTypeUnion, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAwResource,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DeploymentDetailResponseTypeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseTypeUnion' from JSON`,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAwResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAwResource' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseEnv$inboundSchema: z.ZodType<
-  DeploymentDetailResponseEnv,
+export const DeploymentDetailResponsePendingPreparedStackOverrideAwStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAwStack,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAwStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAwBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAwBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAwResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAwStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAwBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackOverrideEffect> =
+    z.enum(DeploymentDetailResponsePendingPreparedStackOverrideEffect);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAwGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAwGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAwGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAw$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackOverrideAw, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideAwBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      effect:
+        DeploymentDetailResponsePendingPreparedStackOverrideEffect$inboundSchema
+          .optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideAwGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAw$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAzureResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAzureResource,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAzureStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAzureStack,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideAzure$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideAzure,
+    unknown
+  > = z.object({
+    binding: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureBinding$inboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzureGrant$inboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideAzure$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideConditionResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideGcpResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideGcpResource,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackOverrideConditionResource$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideConditionStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackOverrideStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideGcpStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideGcpStack,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackOverrideConditionStack$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcpStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcpResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcpStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackOverrideGcp, unknown> =
+    z.object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideGcp$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverridePlatforms$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverridePlatforms,
+    unknown
+  > = z.object({
+    aws: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideAw$inboundSchema
+      )),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideAzure$inboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverrideGcp$inboundSchema
+      )),
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackOverridePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverridePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverridePlatforms$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverridePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverride$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackOverride, unknown> = z
+    .object({
+      description: z.string(),
+      id: z.string(),
+      platforms: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackOverridePlatforms$inboundSchema
+      ),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackOverrideFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverride,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverride$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverride' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackOverrideUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackOverrideUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackOverride$inboundSchema
+    ),
+    z.string(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackOverrideUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackOverrideUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackOverrideUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackOverrideUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackManagement2$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackManagement2, unknown> =
+    z.object({
+      override: z.record(
+        z.string(),
+        z.array(z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackOverride$inboundSchema
+          ),
+          z.string(),
+        ])),
+      ),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackManagement2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackManagement2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackManagement2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackManagement2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAwResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAwResource,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAwResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAwStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAwStack,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAwStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAwBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAwBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendAwResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendAwStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAwBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendEffect$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackExtendEffect> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackExtendEffect);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAwGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAwGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAwGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAw$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackExtendAw, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendAwBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      effect:
+        DeploymentDetailResponsePendingPreparedStackExtendEffect$inboundSchema
+          .optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendAwGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAzureResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAzureResource,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAzureStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAzureStack,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzureStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAzureBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAzureBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzureResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzureStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAzureGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendAzureGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzureGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendAzure$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackExtendAzure, unknown> =
+    z.object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackExtendAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendAzure$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendConditionResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackExtendResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendGcpResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendGcpResource,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackExtendConditionResource$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendConditionStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackExtendStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendGcpStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendGcpStack,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackExtendConditionStack$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcpStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendGcpBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendGcpBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcpResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcpStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcpBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendGcpGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendGcpGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcpGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackExtendGcp, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackExtendGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendPlatforms$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackExtendPlatforms,
+    unknown
+  > = z.object({
+    aws: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendAw$inboundSchema
+      )),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendAzure$inboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendGcp$inboundSchema
+      )),
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackExtendPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendPlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendPlatforms$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtend$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackExtend, unknown> = z
+    .object({
+      description: z.string(),
+      id: z.string(),
+      platforms: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtendPlatforms$inboundSchema
+      ),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackExtendFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtend,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtend$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtend' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackExtendUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackExtendUnion, unknown> =
+    z.union([
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackExtend$inboundSchema
+      ),
+      z.string(),
+    ]);
+
+export function deploymentDetailResponsePendingPreparedStackExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackExtendUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackExtendUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackManagement1$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackManagement1, unknown> =
+    z.object({
+      extend: z.record(
+        z.string(),
+        z.array(z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePendingPreparedStackExtend$inboundSchema
+          ),
+          z.string(),
+        ])),
+      ),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackManagement1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackManagement1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackManagement1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackManagement1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackManagementUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackManagementUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackManagement1$inboundSchema
+    ),
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackManagement2$inboundSchema
+    ),
+    DeploymentDetailResponsePendingPreparedStackManagementEnum$inboundSchema,
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackManagementUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackManagementUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackManagementUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackManagementUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAwResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAwResource,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAwResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAwStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAwStack,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAwStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAwBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAwBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileAwResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileAwStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAwBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackProfileEffect> =
+    z.enum(DeploymentDetailResponsePendingPreparedStackProfileEffect);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAwGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAwGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAwGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAw$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackProfileAw, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileAwBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      effect:
+        DeploymentDetailResponsePendingPreparedStackProfileEffect$inboundSchema
+          .optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileAwGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAzureResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAzureResource,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAzureStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAzureStack,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzureStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAzureBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAzureBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzureResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzureStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAzureGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileAzureGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzureGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileAzure$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackProfileAzure, unknown> =
+    z.object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackProfileAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileAzure$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileConditionResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackProfileResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileGcpResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileGcpResource,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackProfileConditionResource$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileConditionStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePendingPreparedStackProfileStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileGcpStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileGcpStack,
+    unknown
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackProfileConditionStack$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcpStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileGcpBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileGcpBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcpResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcpStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcpBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileGcpGrant$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfileGcpGrant,
+    unknown
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfileGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcpGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackProfileGcp, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackProfileGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileGcp$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfilePlatforms$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePendingPreparedStackProfilePlatforms,
+    unknown
+  > = z.object({
+    aws: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileAw$inboundSchema
+      )),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileAzure$inboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfileGcp$inboundSchema
+      )),
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackProfilePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfilePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfilePlatforms$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfilePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfile$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackProfile, unknown> = z
+    .object({
+      description: z.string(),
+      id: z.string(),
+      platforms: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfilePlatforms$inboundSchema
+      ),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackProfileFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfile,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfile$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfile' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackProfileUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackProfileUnion, unknown> =
+    z.union([
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackProfile$inboundSchema
+      ),
+      z.string(),
+    ]);
+
+export function deploymentDetailResponsePendingPreparedStackProfileUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackProfileUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackProfileUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackProfileUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackPermissions$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackPermissions, unknown> =
+    z.object({
+      management: z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackManagement1$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackManagement2$inboundSchema
+        ),
+        DeploymentDetailResponsePendingPreparedStackManagementEnum$inboundSchema,
+      ]).optional(),
+      profiles: z.record(
+        z.string(),
+        z.record(
+          z.string(),
+          z.array(
+            z.union([
+              z.lazy(() =>
+                DeploymentDetailResponsePendingPreparedStackProfile$inboundSchema
+              ),
+              z.string(),
+            ]),
+          ),
+        ),
+      ),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackPermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackPermissions,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackPermissions$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackPermissions' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackConfig$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackConfig, unknown> =
+    collectExtraKeys$(
+      z.object({
+        id: z.string(),
+        type: z.string(),
+      }).catchall(z.any()),
+      "additionalProperties",
+      true,
+    );
+
+export function deploymentDetailResponsePendingPreparedStackConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackConfig,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackConfig$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackDependency$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackDependency, unknown> = z
+    .object({
+      id: z.string(),
+      type: z.string(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackDependencyFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackDependency,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackDependency$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackDependency' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackLifecycle$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePendingPreparedStackLifecycle> = z
+    .enum(DeploymentDetailResponsePendingPreparedStackLifecycle);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackResources$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackResources, unknown> = z
+    .object({
+      config: z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackConfig$inboundSchema
+      ),
+      dependencies: z.array(
+        z.lazy(() =>
+          DeploymentDetailResponsePendingPreparedStackDependency$inboundSchema
+        ),
+      ),
+      enabledWhen: z.nullable(z.string()).optional(),
+      lifecycle:
+        DeploymentDetailResponsePendingPreparedStackLifecycle$inboundSchema,
+      remoteAccess: z.boolean().optional(),
+    });
+
+export function deploymentDetailResponsePendingPreparedStackResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackResources,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackResources$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackSupportedPlatform$inboundSchema:
+  z.ZodEnum<
+    typeof DeploymentDetailResponsePendingPreparedStackSupportedPlatform
+  > = z.enum(DeploymentDetailResponsePendingPreparedStackSupportedPlatform);
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStack, unknown> = z.object({
+    id: z.string(),
+    inputs: z.array(
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackInput$inboundSchema
+      ),
+    ).optional(),
+    permissions: z.lazy(() =>
+      DeploymentDetailResponsePendingPreparedStackPermissions$inboundSchema
+    ).optional(),
+    resources: z.record(
+      z.string(),
+      z.lazy(() =>
+        DeploymentDetailResponsePendingPreparedStackResources$inboundSchema
+      ),
+    ),
+    supportedPlatforms: z.nullable(
+      z.array(
+        DeploymentDetailResponsePendingPreparedStackSupportedPlatform$inboundSchema,
+      ),
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePendingPreparedStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePendingPreparedStackUnion, unknown> = z
+    .union([
+      z.lazy(() => DeploymentDetailResponsePendingPreparedStack$inboundSchema),
+      z.any(),
+    ]);
+
+export function deploymentDetailResponsePendingPreparedStackUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePendingPreparedStackUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePendingPreparedStackUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePendingPreparedStackUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackTypeStringList$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackTypeStringList> = z
+    .enum(DeploymentDetailResponsePreparedStackTypeStringList);
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackDefaultStringList$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackDefaultStringList, unknown> = z
+    .object({
+      type: DeploymentDetailResponsePreparedStackTypeStringList$inboundSchema,
+      value: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackDefaultStringList$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackTypeBoolean$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackTypeBoolean> = z.enum(
+    DeploymentDetailResponsePreparedStackTypeBoolean,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackDefaultBoolean$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackDefaultBoolean, unknown> = z
+    .object({
+      type: DeploymentDetailResponsePreparedStackTypeBoolean$inboundSchema,
+      value: z.boolean(),
+    });
+
+export function deploymentDetailResponsePreparedStackDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackDefaultBoolean,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackDefaultBoolean$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackTypeNumber$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackTypeNumber> = z.enum(
+    DeploymentDetailResponsePreparedStackTypeNumber,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackDefaultNumber$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackDefaultNumber, unknown> = z
+    .object({
+      type: DeploymentDetailResponsePreparedStackTypeNumber$inboundSchema,
+      value: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackDefaultNumber,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackDefaultNumber$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackTypeString$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackTypeString> = z.enum(
+    DeploymentDetailResponsePreparedStackTypeString,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackDefaultString$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackDefaultString, unknown> = z
+    .object({
+      type: DeploymentDetailResponsePreparedStackTypeString$inboundSchema,
+      value: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackDefaultString,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackDefaultString$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackDefaultUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackDefaultUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        DeploymentDetailResponsePreparedStackDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePreparedStackDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePreparedStackDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePreparedStackDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]);
+
+export function deploymentDetailResponsePreparedStackDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackDefaultUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackDefaultUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackTypeEnvEnum$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackTypeEnvEnum> = z.enum(
+    DeploymentDetailResponsePreparedStackTypeEnvEnum,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackTypeUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackTypeUnion, unknown> = z.union([
+    DeploymentDetailResponsePreparedStackTypeEnvEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackTypeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackTypeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackEnv$inboundSchema: z.ZodType<
+  DeploymentDetailResponsePreparedStackEnv,
   unknown
 > = z.object({
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
   type: z.nullable(
-    z.union([DeploymentDetailResponseTypeEnvEnum$inboundSchema, z.any()]),
+    z.union([
+      DeploymentDetailResponsePreparedStackTypeEnvEnum$inboundSchema,
+      z.any(),
+    ]),
   ).optional(),
 });
 
-export function deploymentDetailResponseEnvFromJSON(
+export function deploymentDetailResponsePreparedStackEnvFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponseEnv, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackEnv,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DeploymentDetailResponseEnv$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseEnv' from JSON`,
+    (x) =>
+      DeploymentDetailResponsePreparedStackEnv$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackEnv' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseKind$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseKind
-> = z.enum(DeploymentDetailResponseKind);
+export const DeploymentDetailResponsePreparedStackKind$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponsePreparedStackKind
+> = z.enum(DeploymentDetailResponsePreparedStackKind);
 
 /** @internal */
 export const DeploymentDetailResponsePreparedStackPlatform$inboundSchema:
@@ -6314,1899 +10744,2096 @@ export const DeploymentDetailResponsePreparedStackPlatform$inboundSchema:
   );
 
 /** @internal */
-export const DeploymentDetailResponseProvidedBy$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseProvidedBy
-> = z.enum(DeploymentDetailResponseProvidedBy);
-
-/** @internal */
-export const DeploymentDetailResponseValidation$inboundSchema: z.ZodType<
-  DeploymentDetailResponseValidation,
-  unknown
-> = z.object({
-  format: z.nullable(z.string()).optional(),
-  max: z.nullable(z.string()).optional(),
-  maxItems: z.nullable(z.int()).optional(),
-  maxLength: z.nullable(z.int()).optional(),
-  min: z.nullable(z.string()).optional(),
-  minItems: z.nullable(z.int()).optional(),
-  minLength: z.nullable(z.int()).optional(),
-  pattern: z.nullable(z.string()).optional(),
-  values: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseValidationFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseValidation, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseValidation$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseValidation' from JSON`,
+export const DeploymentDetailResponsePreparedStackProvidedBy$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackProvidedBy> = z.enum(
+    DeploymentDetailResponsePreparedStackProvidedBy,
   );
-}
 
 /** @internal */
-export const DeploymentDetailResponseValidationUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseValidationUnion,
-  unknown
-> = z.union([
-  z.lazy(() => DeploymentDetailResponseValidation$inboundSchema),
-  z.any(),
-]);
-
-export function deploymentDetailResponseValidationUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseValidationUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseValidationUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseValidationUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseInput$inboundSchema: z.ZodType<
-  DeploymentDetailResponseInput,
-  unknown
-> = z.object({
-  default: z.nullable(
-    z.union([
-      z.lazy(() => DeploymentDetailResponseDefaultString$inboundSchema),
-      z.lazy(() => DeploymentDetailResponseDefaultNumber$inboundSchema),
-      z.lazy(() => DeploymentDetailResponseDefaultBoolean$inboundSchema),
-      z.lazy(() => DeploymentDetailResponseDefaultStringList$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  description: z.string(),
-  env: z.array(z.lazy(() => DeploymentDetailResponseEnv$inboundSchema))
-    .optional(),
-  id: z.string(),
-  kind: DeploymentDetailResponseKind$inboundSchema,
-  label: z.string(),
-  placeholder: z.nullable(z.string()).optional(),
-  platforms: z.nullable(
-    z.array(DeploymentDetailResponsePreparedStackPlatform$inboundSchema),
-  ).optional(),
-  providedBy: z.array(DeploymentDetailResponseProvidedBy$inboundSchema),
-  required: z.boolean(),
-  validation: z.nullable(
-    z.union([
-      z.lazy(() => DeploymentDetailResponseValidation$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-});
-
-export function deploymentDetailResponseInputFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseInput, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseInput$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseInput' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseManagementEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseManagementEnum
-> = z.enum(DeploymentDetailResponseManagementEnum);
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAwResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideAwResource, unknown> = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function deploymentDetailResponseOverrideAwResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAwResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAwResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAwResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAwStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideAwStack,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function deploymentDetailResponseOverrideAwStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAwStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAwStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAwStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAwBinding$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideAwBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() =>
-    DeploymentDetailResponseOverrideAwResource$inboundSchema
-  ).optional(),
-  stack: z.lazy(() => DeploymentDetailResponseOverrideAwStack$inboundSchema)
-    .optional(),
-});
-
-export function deploymentDetailResponseOverrideAwBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAwBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAwBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAwBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideEffect$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseOverrideEffect
-> = z.enum(DeploymentDetailResponseOverrideEffect);
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAwGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideAwGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseOverrideAwGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAwGrant,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAwGrant$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAwGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAw$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideAw,
-  unknown
-> = z.object({
-  binding: z.lazy(() =>
-    DeploymentDetailResponseOverrideAwBinding$inboundSchema
-  ),
-  description: z.nullable(z.string()).optional(),
-  effect: DeploymentDetailResponseOverrideEffect$inboundSchema.optional(),
-  grant: z.lazy(() => DeploymentDetailResponseOverrideAwGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseOverrideAwFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseOverrideAw, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAw$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseOverrideAw' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAzureResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideAzureResource, unknown> = z.object({
-    scope: z.string(),
-  });
-
-export function deploymentDetailResponseOverrideAzureResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAzureResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAzureResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAzureResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAzureStack$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideAzureStack, unknown> = z.object({
-    scope: z.string(),
-  });
-
-export function deploymentDetailResponseOverrideAzureStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAzureStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAzureStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAzureStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAzureBinding$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideAzureBinding, unknown> = z.object({
-    resource: z.lazy(() =>
-      DeploymentDetailResponseOverrideAzureResource$inboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      DeploymentDetailResponseOverrideAzureStack$inboundSchema
-    ).optional(),
-  });
-
-export function deploymentDetailResponseOverrideAzureBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAzureBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAzureBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAzureBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAzureGrant$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideAzureGrant, unknown> = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function deploymentDetailResponseOverrideAzureGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideAzureGrant,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAzureGrant$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideAzureGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideAzure$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideAzure,
-  unknown
-> = z.object({
-  binding: z.lazy(() =>
-    DeploymentDetailResponseOverrideAzureBinding$inboundSchema
-  ),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => DeploymentDetailResponseOverrideAzureGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseOverrideAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseOverrideAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseOverrideAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideConditionResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideConditionResource, unknown> = z
+export const DeploymentDetailResponsePreparedStackValidation$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackValidation, unknown> = z
     .object({
-      expression: z.string(),
-      title: z.string(),
+      format: z.nullable(z.string()).optional(),
+      max: z.nullable(z.string()).optional(),
+      maxItems: z.nullable(z.int()).optional(),
+      maxLength: z.nullable(z.int()).optional(),
+      min: z.nullable(z.string()).optional(),
+      minItems: z.nullable(z.int()).optional(),
+      minLength: z.nullable(z.int()).optional(),
+      pattern: z.nullable(z.string()).optional(),
+      values: z.nullable(z.array(z.string())).optional(),
     });
 
-export function deploymentDetailResponseOverrideConditionResourceFromJSON(
+export function deploymentDetailResponsePreparedStackValidationFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentDetailResponseOverrideConditionResource,
+  DeploymentDetailResponsePreparedStackValidation,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseOverrideConditionResource$inboundSchema.parse(
+      DeploymentDetailResponsePreparedStackValidation$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentDetailResponseOverrideConditionResource' from JSON`,
+    `Failed to parse 'DeploymentDetailResponsePreparedStackValidation' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseOverrideResourceConditionUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideResourceConditionUnion, unknown> = z
+export const DeploymentDetailResponsePreparedStackValidationUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackValidationUnion, unknown> = z
     .union([
       z.lazy(() =>
-        DeploymentDetailResponseOverrideConditionResource$inboundSchema
+        DeploymentDetailResponsePreparedStackValidation$inboundSchema
       ),
       z.any(),
     ]);
 
-export function deploymentDetailResponseOverrideResourceConditionUnionFromJSON(
+export function deploymentDetailResponsePreparedStackValidationUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentDetailResponseOverrideResourceConditionUnion,
+  DeploymentDetailResponsePreparedStackValidationUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseOverrideResourceConditionUnion$inboundSchema
-        .parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseOverrideResourceConditionUnion' from JSON`,
+      DeploymentDetailResponsePreparedStackValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackValidationUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseOverrideGcpResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideGcpResource, unknown> = z.object({
-    condition: z.nullable(
+export const DeploymentDetailResponsePreparedStackInput$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackInput, unknown> = z.object({
+    default: z.nullable(
       z.union([
         z.lazy(() =>
-          DeploymentDetailResponseOverrideConditionResource$inboundSchema
+          DeploymentDetailResponsePreparedStackDefaultString$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackDefaultNumber$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackDefaultBoolean$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackDefaultStringList$inboundSchema
         ),
         z.any(),
       ]),
     ).optional(),
-    scope: z.string(),
+    description: z.string(),
+    env: z.array(
+      z.lazy(() => DeploymentDetailResponsePreparedStackEnv$inboundSchema),
+    ).optional(),
+    id: z.string(),
+    kind: DeploymentDetailResponsePreparedStackKind$inboundSchema,
+    label: z.string(),
+    placeholder: z.nullable(z.string()).optional(),
+    platforms: z.nullable(
+      z.array(DeploymentDetailResponsePreparedStackPlatform$inboundSchema),
+    ).optional(),
+    providedBy: z.array(
+      DeploymentDetailResponsePreparedStackProvidedBy$inboundSchema,
+    ),
+    required: z.boolean(),
+    validation: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackValidation$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
   });
 
-export function deploymentDetailResponseOverrideGcpResourceFromJSON(
+export function deploymentDetailResponsePreparedStackInputFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentDetailResponseOverrideGcpResource,
+  DeploymentDetailResponsePreparedStackInput,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseOverrideGcpResource$inboundSchema.parse(
+      DeploymentDetailResponsePreparedStackInput$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentDetailResponseOverrideGcpResource' from JSON`,
+    `Failed to parse 'DeploymentDetailResponsePreparedStackInput' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseOverrideConditionStack$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideConditionStack, unknown> = z.object(
+export const DeploymentDetailResponsePreparedStackManagementEnum$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackManagementEnum> = z
+    .enum(DeploymentDetailResponsePreparedStackManagementEnum);
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAwResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAwResource, unknown> =
+    z.object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAwResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAwStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAwStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAwBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAwBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideAwStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAwBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackOverrideEffect> = z
+    .enum(DeploymentDetailResponsePreparedStackOverrideEffect);
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAwGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAwGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAw$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAw, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideAwBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      effect: DeploymentDetailResponsePreparedStackOverrideEffect$inboundSchema
+        .optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideAwGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAzureResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackOverrideAzureResource,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackOverrideAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAzureStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAzureStack, unknown> =
+    z.object({
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAzureStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAzureBinding$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackOverrideAzureBinding,
+    unknown
+  > = z.object({
+    resource: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackOverrideAzureResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackOverrideAzureStack$inboundSchema
+    ).optional(),
+  });
+
+export function deploymentDetailResponsePreparedStackOverrideAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAzureGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAzureGrant, unknown> =
+    z.object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAzureGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideAzure$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideAzure, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideConditionResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackOverrideConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackOverrideConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackOverrideResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackOverrideConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackOverrideResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideGcpResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideGcpResource, unknown> =
+    z.object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackOverrideConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideConditionStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackOverrideConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackOverrideConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackOverrideStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackOverrideConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackOverrideStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideGcpStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackOverrideConditionStack$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideGcpBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideGcpBinding, unknown> =
+    z.object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideGcpBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideGcpGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideGcp, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackOverrideGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverrideGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverridePlatforms$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverridePlatforms, unknown> = z
+    .object({
+      aws: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackOverrideAw$inboundSchema
+        )),
+      ).optional(),
+      azure: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackOverrideAzure$inboundSchema
+        )),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackOverrideGcp$inboundSchema
+        )),
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackOverridePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverridePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverridePlatforms$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverridePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverride$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverride, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackOverridePlatforms$inboundSchema
+    ),
+  });
+
+export function deploymentDetailResponsePreparedStackOverrideFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverride,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverride$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverride' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackOverrideUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackOverrideUnion, unknown> = z
+    .union([
+      z.lazy(() => DeploymentDetailResponsePreparedStackOverride$inboundSchema),
+      z.string(),
+    ]);
+
+export function deploymentDetailResponsePreparedStackOverrideUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackOverrideUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackOverrideUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackOverrideUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackManagement2$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackManagement2, unknown> = z
+    .object({
+      override: z.record(
+        z.string(),
+        z.array(z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackOverride$inboundSchema
+          ),
+          z.string(),
+        ])),
+      ),
+    });
+
+export function deploymentDetailResponsePreparedStackManagement2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackManagement2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackManagement2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackManagement2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAwResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAwResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAwResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAwStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAwStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAwBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAwBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendAwStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendEffect$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackExtendEffect> = z.enum(
+    DeploymentDetailResponsePreparedStackExtendEffect,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAwGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAwGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAw$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAw, unknown> = z.object({
+    binding: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackExtendAwBinding$inboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    effect: DeploymentDetailResponsePreparedStackExtendEffect$inboundSchema
+      .optional(),
+    grant: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackExtendAwGrant$inboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function deploymentDetailResponsePreparedStackExtendAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAzureResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAzureResource, unknown> =
+    z.object({
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAzureStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAzureStack, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAzureStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAzureBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAzureBinding, unknown> =
+    z.object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAzureGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAzureGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAzureGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendAzure, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendConditionResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackExtendConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackExtendConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackExtendResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackExtendConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackExtendResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackExtendConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackExtendConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackExtendConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackExtendStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackExtendStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackExtendConditionStack$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcpGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendGcp, unknown> = z.object(
     {
-      expression: z.string(),
-      title: z.string(),
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackExtendGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
     },
   );
 
-export function deploymentDetailResponseOverrideConditionStackFromJSON(
+export function deploymentDetailResponsePreparedStackExtendGcpFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentDetailResponseOverrideConditionStack,
+  DeploymentDetailResponsePreparedStackExtendGcp,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseOverrideConditionStack$inboundSchema.parse(
+      DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentDetailResponseOverrideConditionStack' from JSON`,
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseOverrideStackConditionUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideStackConditionUnion, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentDetailResponseOverrideConditionStack$inboundSchema
-      ),
-      z.any(),
-    ]);
-
-export function deploymentDetailResponseOverrideStackConditionUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideStackConditionUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideStackConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideStackConditionUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideGcpStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideGcpStack,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() =>
-        DeploymentDetailResponseOverrideConditionStack$inboundSchema
-      ),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
-
-export function deploymentDetailResponseOverrideGcpStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideGcpStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideGcpStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideGcpStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideGcpBinding$inboundSchema:
-  z.ZodType<DeploymentDetailResponseOverrideGcpBinding, unknown> = z.object({
-    resource: z.lazy(() =>
-      DeploymentDetailResponseOverrideGcpResource$inboundSchema
-    ).optional(),
-    stack: z.lazy(() => DeploymentDetailResponseOverrideGcpStack$inboundSchema)
-      .optional(),
-  });
-
-export function deploymentDetailResponseOverrideGcpBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideGcpBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideGcpBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideGcpBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideGcpGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideGcpGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseOverrideGcpGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverrideGcpGrant,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideGcpGrant$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverrideGcpGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideGcp$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideGcp,
-  unknown
-> = z.object({
-  binding: z.lazy(() =>
-    DeploymentDetailResponseOverrideGcpBinding$inboundSchema
-  ),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => DeploymentDetailResponseOverrideGcpGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseOverrideGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseOverrideGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseOverrideGcp' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverridePlatforms$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverridePlatforms,
-  unknown
-> = z.object({
-  aws: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseOverrideAw$inboundSchema)),
-  ).optional(),
-  azure: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseOverrideAzure$inboundSchema)),
-  ).optional(),
-  gcp: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseOverrideGcp$inboundSchema)),
-  ).optional(),
-});
-
-export function deploymentDetailResponseOverridePlatformsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseOverridePlatforms,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverridePlatforms$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseOverridePlatforms' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverride$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverride,
-  unknown
-> = z.object({
-  description: z.string(),
-  id: z.string(),
-  platforms: z.lazy(() =>
-    DeploymentDetailResponseOverridePlatforms$inboundSchema
-  ),
-});
-
-export function deploymentDetailResponseOverrideFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseOverride, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseOverride$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseOverride' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseOverrideUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseOverrideUnion,
-  unknown
-> = z.union([
-  z.lazy(() => DeploymentDetailResponseOverride$inboundSchema),
-  z.string(),
-]);
-
-export function deploymentDetailResponseOverrideUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseOverrideUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseOverrideUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseOverrideUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseManagement2$inboundSchema: z.ZodType<
-  DeploymentDetailResponseManagement2,
-  unknown
-> = z.object({
-  override: z.record(
-    z.string(),
-    z.array(z.union([
-      z.lazy(() => DeploymentDetailResponseOverride$inboundSchema),
-      z.string(),
-    ])),
-  ),
-});
-
-export function deploymentDetailResponseManagement2FromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseManagement2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseManagement2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseManagement2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAwResource$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAwResource,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function deploymentDetailResponseExtendAwResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendAwResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAwResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendAwResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAwStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAwStack,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function deploymentDetailResponseExtendAwStackFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendAwStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAwStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendAwStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAwBinding$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAwBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => DeploymentDetailResponseExtendAwResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => DeploymentDetailResponseExtendAwStack$inboundSchema)
-    .optional(),
-});
-
-export function deploymentDetailResponseExtendAwBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendAwBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAwBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendAwBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendEffect$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseExtendEffect
-> = z.enum(DeploymentDetailResponseExtendEffect);
-
-/** @internal */
-export const DeploymentDetailResponseExtendAwGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAwGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseExtendAwGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendAwGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAwGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendAwGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAw$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAw,
-  unknown
-> = z.object({
-  binding: z.lazy(() => DeploymentDetailResponseExtendAwBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  effect: DeploymentDetailResponseExtendEffect$inboundSchema.optional(),
-  grant: z.lazy(() => DeploymentDetailResponseExtendAwGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseExtendAwFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendAw, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseExtendAw$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendAw' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAzureResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseExtendAzureResource, unknown> = z.object({
-    scope: z.string(),
-  });
-
-export function deploymentDetailResponseExtendAzureResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendAzureResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAzureResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendAzureResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAzureStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAzureStack,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function deploymentDetailResponseExtendAzureStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendAzureStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAzureStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendAzureStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAzureBinding$inboundSchema:
-  z.ZodType<DeploymentDetailResponseExtendAzureBinding, unknown> = z.object({
-    resource: z.lazy(() =>
-      DeploymentDetailResponseExtendAzureResource$inboundSchema
-    ).optional(),
-    stack: z.lazy(() => DeploymentDetailResponseExtendAzureStack$inboundSchema)
-      .optional(),
-  });
-
-export function deploymentDetailResponseExtendAzureBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendAzureBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAzureBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendAzureBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAzureGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAzureGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseExtendAzureGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendAzureGrant,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAzureGrant$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendAzureGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendAzure$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendAzure,
-  unknown
-> = z.object({
-  binding: z.lazy(() =>
-    DeploymentDetailResponseExtendAzureBinding$inboundSchema
-  ),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => DeploymentDetailResponseExtendAzureGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseExtendAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendConditionResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseExtendConditionResource, unknown> = z
+export const DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendPlatforms, unknown> = z
     .object({
-      expression: z.string(),
-      title: z.string(),
+      aws: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackExtendAw$inboundSchema
+        )),
+      ).optional(),
+      azure: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackExtendAzure$inboundSchema
+        )),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackExtendGcp$inboundSchema
+        )),
+      ).optional(),
     });
 
-export function deploymentDetailResponseExtendConditionResourceFromJSON(
+export function deploymentDetailResponsePreparedStackExtendPlatformsFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentDetailResponseExtendConditionResource,
+  DeploymentDetailResponsePreparedStackExtendPlatforms,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponseExtendConditionResource$inboundSchema.parse(
+      DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentDetailResponseExtendConditionResource' from JSON`,
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendPlatforms' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentDetailResponseExtendResourceConditionUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponseExtendResourceConditionUnion, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentDetailResponseExtendConditionResource$inboundSchema
-      ),
-      z.any(),
-    ]);
-
-export function deploymentDetailResponseExtendResourceConditionUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendResourceConditionUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendResourceConditionUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendGcpResource$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendGcpResource,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() =>
-        DeploymentDetailResponseExtendConditionResource$inboundSchema
-      ),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
-
-export function deploymentDetailResponseExtendGcpResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendGcpResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendGcpResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendGcpResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendConditionStack$inboundSchema:
-  z.ZodType<DeploymentDetailResponseExtendConditionStack, unknown> = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function deploymentDetailResponseExtendConditionStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendConditionStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendConditionStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendConditionStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendStackConditionUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponseExtendStackConditionUnion, unknown> = z
-    .union([
-      z.lazy(() => DeploymentDetailResponseExtendConditionStack$inboundSchema),
-      z.any(),
-    ]);
-
-export function deploymentDetailResponseExtendStackConditionUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendStackConditionUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendStackConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendStackConditionUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendGcpStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendGcpStack,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() => DeploymentDetailResponseExtendConditionStack$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
-
-export function deploymentDetailResponseExtendGcpStackFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendGcpStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendGcpStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendGcpStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendGcpBinding$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendGcpBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() =>
-    DeploymentDetailResponseExtendGcpResource$inboundSchema
-  ).optional(),
-  stack: z.lazy(() => DeploymentDetailResponseExtendGcpStack$inboundSchema)
-    .optional(),
-});
-
-export function deploymentDetailResponseExtendGcpBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendGcpBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendGcpBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendGcpBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendGcpGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendGcpGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseExtendGcpGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendGcpGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendGcpGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendGcpGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendGcp$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendGcp,
-  unknown
-> = z.object({
-  binding: z.lazy(() => DeploymentDetailResponseExtendGcpBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => DeploymentDetailResponseExtendGcpGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseExtendGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseExtendGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendGcp' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendPlatforms$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendPlatforms,
-  unknown
-> = z.object({
-  aws: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseExtendAw$inboundSchema)),
-  ).optional(),
-  azure: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseExtendAzure$inboundSchema)),
-  ).optional(),
-  gcp: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseExtendGcp$inboundSchema)),
-  ).optional(),
-});
-
-export function deploymentDetailResponseExtendPlatformsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseExtendPlatforms,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendPlatforms$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseExtendPlatforms' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtend$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtend,
-  unknown
-> = z.object({
-  description: z.string(),
-  id: z.string(),
-  platforms: z.lazy(() =>
-    DeploymentDetailResponseExtendPlatforms$inboundSchema
-  ),
-});
-
-export function deploymentDetailResponseExtendFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtend, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseExtend$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtend' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseExtendUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseExtendUnion,
-  unknown
-> = z.union([
-  z.lazy(() => DeploymentDetailResponseExtend$inboundSchema),
-  z.string(),
-]);
-
-export function deploymentDetailResponseExtendUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseExtendUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseExtendUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseExtendUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseManagement1$inboundSchema: z.ZodType<
-  DeploymentDetailResponseManagement1,
-  unknown
-> = z.object({
-  extend: z.record(
-    z.string(),
-    z.array(z.union([
-      z.lazy(() => DeploymentDetailResponseExtend$inboundSchema),
-      z.string(),
-    ])),
-  ),
-});
-
-export function deploymentDetailResponseManagement1FromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseManagement1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseManagement1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseManagement1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseManagementUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseManagementUnion,
-  unknown
-> = z.union([
-  z.lazy(() => DeploymentDetailResponseManagement1$inboundSchema),
-  z.lazy(() => DeploymentDetailResponseManagement2$inboundSchema),
-  DeploymentDetailResponseManagementEnum$inboundSchema,
-]);
-
-export function deploymentDetailResponseManagementUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseManagementUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseManagementUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseManagementUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAwResource$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAwResource,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function deploymentDetailResponseProfileAwResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileAwResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAwResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileAwResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAwStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAwStack,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function deploymentDetailResponseProfileAwStackFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfileAwStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAwStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfileAwStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAwBinding$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAwBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() =>
-    DeploymentDetailResponseProfileAwResource$inboundSchema
-  ).optional(),
-  stack: z.lazy(() => DeploymentDetailResponseProfileAwStack$inboundSchema)
-    .optional(),
-});
-
-export function deploymentDetailResponseProfileAwBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileAwBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAwBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileAwBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileEffect$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseProfileEffect
-> = z.enum(DeploymentDetailResponseProfileEffect);
-
-/** @internal */
-export const DeploymentDetailResponseProfileAwGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAwGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseProfileAwGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfileAwGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAwGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfileAwGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAw$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAw,
-  unknown
-> = z.object({
-  binding: z.lazy(() => DeploymentDetailResponseProfileAwBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  effect: DeploymentDetailResponseProfileEffect$inboundSchema.optional(),
-  grant: z.lazy(() => DeploymentDetailResponseProfileAwGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseProfileAwFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfileAw, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseProfileAw$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfileAw' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAzureResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileAzureResource, unknown> = z.object({
-    scope: z.string(),
-  });
-
-export function deploymentDetailResponseProfileAzureResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileAzureResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAzureResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileAzureResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAzureStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAzureStack,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function deploymentDetailResponseProfileAzureStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileAzureStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAzureStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileAzureStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAzureBinding$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileAzureBinding, unknown> = z.object({
-    resource: z.lazy(() =>
-      DeploymentDetailResponseProfileAzureResource$inboundSchema
-    ).optional(),
-    stack: z.lazy(() => DeploymentDetailResponseProfileAzureStack$inboundSchema)
-      .optional(),
-  });
-
-export function deploymentDetailResponseProfileAzureBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileAzureBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAzureBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileAzureBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAzureGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAzureGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseProfileAzureGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileAzureGrant,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAzureGrant$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileAzureGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileAzure$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileAzure,
-  unknown
-> = z.object({
-  binding: z.lazy(() =>
-    DeploymentDetailResponseProfileAzureBinding$inboundSchema
-  ),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => DeploymentDetailResponseProfileAzureGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseProfileAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfileAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfileAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileConditionResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileConditionResource, unknown> = z
-    .object({
-      expression: z.string(),
-      title: z.string(),
-    });
-
-export function deploymentDetailResponseProfileConditionResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileConditionResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileConditionResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileConditionResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileResourceConditionUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileResourceConditionUnion, unknown> = z
-    .union([
-      z.lazy(() =>
-        DeploymentDetailResponseProfileConditionResource$inboundSchema
-      ),
-      z.any(),
-    ]);
-
-export function deploymentDetailResponseProfileResourceConditionUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileResourceConditionUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileResourceConditionUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileGcpResource$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileGcpResource, unknown> = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          DeploymentDetailResponseProfileConditionResource$inboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function deploymentDetailResponseProfileGcpResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileGcpResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileGcpResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileGcpResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileConditionStack$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileConditionStack, unknown> = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function deploymentDetailResponseProfileConditionStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileConditionStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileConditionStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileConditionStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileStackConditionUnion$inboundSchema:
-  z.ZodType<DeploymentDetailResponseProfileStackConditionUnion, unknown> = z
-    .union([
-      z.lazy(() => DeploymentDetailResponseProfileConditionStack$inboundSchema),
-      z.any(),
-    ]);
-
-export function deploymentDetailResponseProfileStackConditionUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileStackConditionUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileStackConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileStackConditionUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileGcpStack$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileGcpStack,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() => DeploymentDetailResponseProfileConditionStack$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
-
-export function deploymentDetailResponseProfileGcpStackFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileGcpStack,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileGcpStack$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileGcpStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileGcpBinding$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileGcpBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() =>
-    DeploymentDetailResponseProfileGcpResource$inboundSchema
-  ).optional(),
-  stack: z.lazy(() => DeploymentDetailResponseProfileGcpStack$inboundSchema)
-    .optional(),
-});
-
-export function deploymentDetailResponseProfileGcpBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileGcpBinding,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileGcpBinding$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileGcpBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileGcpGrant$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileGcpGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function deploymentDetailResponseProfileGcpGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfileGcpGrant,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileGcpGrant$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfileGcpGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileGcp$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileGcp,
-  unknown
-> = z.object({
-  binding: z.lazy(() =>
-    DeploymentDetailResponseProfileGcpBinding$inboundSchema
-  ),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => DeploymentDetailResponseProfileGcpGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function deploymentDetailResponseProfileGcpFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfileGcp, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfileGcp' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfilePlatforms$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfilePlatforms,
-  unknown
-> = z.object({
-  aws: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseProfileAw$inboundSchema)),
-  ).optional(),
-  azure: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseProfileAzure$inboundSchema)),
-  ).optional(),
-  gcp: z.nullable(
-    z.array(z.lazy(() => DeploymentDetailResponseProfileGcp$inboundSchema)),
-  ).optional(),
-});
-
-export function deploymentDetailResponseProfilePlatformsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseProfilePlatforms,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfilePlatforms$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseProfilePlatforms' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfile$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfile,
-  unknown
-> = z.object({
-  description: z.string(),
-  id: z.string(),
-  platforms: z.lazy(() =>
-    DeploymentDetailResponseProfilePlatforms$inboundSchema
-  ),
-});
-
-export function deploymentDetailResponseProfileFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfile, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DeploymentDetailResponseProfile$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfile' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseProfileUnion$inboundSchema: z.ZodType<
-  DeploymentDetailResponseProfileUnion,
-  unknown
-> = z.union([
-  z.lazy(() => DeploymentDetailResponseProfile$inboundSchema),
-  z.string(),
-]);
-
-export function deploymentDetailResponseProfileUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<DeploymentDetailResponseProfileUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseProfileUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponseProfileUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponsePermissions$inboundSchema: z.ZodType<
-  DeploymentDetailResponsePermissions,
-  unknown
-> = z.object({
-  management: z.union([
-    z.lazy(() => DeploymentDetailResponseManagement1$inboundSchema),
-    z.lazy(() => DeploymentDetailResponseManagement2$inboundSchema),
-    DeploymentDetailResponseManagementEnum$inboundSchema,
-  ]).optional(),
-  profiles: z.record(
-    z.string(),
-    z.record(
-      z.string(),
-      z.array(
-        z.union([
-          z.lazy(() => DeploymentDetailResponseProfile$inboundSchema),
-          z.string(),
-        ]),
-      ),
+export const DeploymentDetailResponsePreparedStackExtend$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtend, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackExtendPlatforms$inboundSchema
     ),
-  ),
-});
+  });
 
-export function deploymentDetailResponsePermissionsFromJSON(
+export function deploymentDetailResponsePreparedStackExtendFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDetailResponsePermissions, SDKValidationError> {
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtend,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentDetailResponsePermissions$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDetailResponsePermissions' from JSON`,
+      DeploymentDetailResponsePreparedStackExtend$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtend' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackExtendUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackExtendUnion, unknown> = z
+    .union([
+      z.lazy(() => DeploymentDetailResponsePreparedStackExtend$inboundSchema),
+      z.string(),
+    ]);
+
+export function deploymentDetailResponsePreparedStackExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackExtendUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackExtendUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackManagement1$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackManagement1, unknown> = z
+    .object({
+      extend: z.record(
+        z.string(),
+        z.array(z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackExtend$inboundSchema
+          ),
+          z.string(),
+        ])),
+      ),
+    });
+
+export function deploymentDetailResponsePreparedStackManagement1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackManagement1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackManagement1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackManagement1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackManagementUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackManagementUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        DeploymentDetailResponsePreparedStackManagement1$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePreparedStackManagement2$inboundSchema
+      ),
+      DeploymentDetailResponsePreparedStackManagementEnum$inboundSchema,
+    ]);
+
+export function deploymentDetailResponsePreparedStackManagementUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackManagementUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackManagementUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackManagementUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAwResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAwResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAwResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAwStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAwStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAwBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAwBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAwStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackProfileEffect> = z.enum(
+    DeploymentDetailResponsePreparedStackProfileEffect,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAwGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAwGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAw$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAw, unknown> = z.object(
+    {
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAwBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      effect: DeploymentDetailResponsePreparedStackProfileEffect$inboundSchema
+        .optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAwGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    },
+  );
+
+export function deploymentDetailResponsePreparedStackProfileAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAzureResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackProfileAzureResource,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackProfileAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAzureStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAzureStack, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAzureStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAzureBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAzureBinding, unknown> =
+    z.object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAzureGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAzureGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAzureGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileAzure$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileAzure, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileConditionResource$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackProfileConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackProfileConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackProfileResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackProfileConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackProfileResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileGcpResource$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileGcpResource, unknown> =
+    z.object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackProfileConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileConditionStack$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackProfileConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function deploymentDetailResponsePreparedStackProfileConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileStackConditionUnion$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePreparedStackProfileStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentDetailResponsePreparedStackProfileConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentDetailResponsePreparedStackProfileStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileGcpStack$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            DeploymentDetailResponsePreparedStackProfileConditionStack$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileGcpBinding$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileGcpBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileGcpBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileGcpGrant$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileGcp$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileGcp, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        DeploymentDetailResponsePreparedStackProfileGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfileGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfilePlatforms$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfilePlatforms, unknown> = z
+    .object({
+      aws: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackProfileAw$inboundSchema
+        )),
+      ).optional(),
+      azure: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackProfileAzure$inboundSchema
+        )),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(z.lazy(() =>
+          DeploymentDetailResponsePreparedStackProfileGcp$inboundSchema
+        )),
+      ).optional(),
+    });
+
+export function deploymentDetailResponsePreparedStackProfilePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfilePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfilePlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfilePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfile$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfile, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      DeploymentDetailResponsePreparedStackProfilePlatforms$inboundSchema
+    ),
+  });
+
+export function deploymentDetailResponsePreparedStackProfileFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfile,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfile$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfile' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackProfileUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackProfileUnion, unknown> = z
+    .union([
+      z.lazy(() => DeploymentDetailResponsePreparedStackProfile$inboundSchema),
+      z.string(),
+    ]);
+
+export function deploymentDetailResponsePreparedStackProfileUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackProfileUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackProfileUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackProfileUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePreparedStackPermissions$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePreparedStackPermissions, unknown> = z
+    .object({
+      management: z.union([
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackManagement1$inboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentDetailResponsePreparedStackManagement2$inboundSchema
+        ),
+        DeploymentDetailResponsePreparedStackManagementEnum$inboundSchema,
+      ]).optional(),
+      profiles: z.record(
+        z.string(),
+        z.record(
+          z.string(),
+          z.array(
+            z.union([
+              z.lazy(() =>
+                DeploymentDetailResponsePreparedStackProfile$inboundSchema
+              ),
+              z.string(),
+            ]),
+          ),
+        ),
+      ),
+    });
+
+export function deploymentDetailResponsePreparedStackPermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePreparedStackPermissions,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePreparedStackPermissions$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePreparedStackPermissions' from JSON`,
   );
 }
 
@@ -8278,6 +12905,7 @@ export const DeploymentDetailResponsePreparedStackResources$inboundSchema:
       dependencies: z.array(z.lazy(() =>
         DeploymentDetailResponsePreparedStackDependency$inboundSchema
       )),
+      enabledWhen: z.nullable(z.string()).optional(),
       lifecycle: DeploymentDetailResponsePreparedStackLifecycle$inboundSchema,
       remoteAccess: z.boolean().optional(),
     },
@@ -8300,9 +12928,9 @@ export function deploymentDetailResponsePreparedStackResourcesFromJSON(
 }
 
 /** @internal */
-export const DeploymentDetailResponseSupportedPlatform$inboundSchema: z.ZodEnum<
-  typeof DeploymentDetailResponseSupportedPlatform
-> = z.enum(DeploymentDetailResponseSupportedPlatform);
+export const DeploymentDetailResponsePreparedStackSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponsePreparedStackSupportedPlatform> = z
+    .enum(DeploymentDetailResponsePreparedStackSupportedPlatform);
 
 /** @internal */
 export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
@@ -8310,16 +12938,20 @@ export const DeploymentDetailResponsePreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
-  inputs: z.array(z.lazy(() => DeploymentDetailResponseInput$inboundSchema))
-    .optional(),
-  permissions: z.lazy(() => DeploymentDetailResponsePermissions$inboundSchema)
-    .optional(),
+  inputs: z.array(
+    z.lazy(() => DeploymentDetailResponsePreparedStackInput$inboundSchema),
+  ).optional(),
+  permissions: z.lazy(() =>
+    DeploymentDetailResponsePreparedStackPermissions$inboundSchema
+  ).optional(),
   resources: z.record(
     z.string(),
     z.lazy(() => DeploymentDetailResponsePreparedStackResources$inboundSchema),
   ),
   supportedPlatforms: z.nullable(
-    z.array(DeploymentDetailResponseSupportedPlatform$inboundSchema),
+    z.array(
+      DeploymentDetailResponsePreparedStackSupportedPlatform$inboundSchema,
+    ),
   ).optional(),
 });
 
@@ -8358,12 +12990,73 @@ export function deploymentDetailResponsePreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema:
+  z.ZodType<DeploymentDetailResponseSetupUpdateAuthorization, unknown> = z
+    .object({
+      baselineFrozenDigest: z.string(),
+      nonce: z.string(),
+      releaseId: z.string(),
+      setupFingerprint: z.string(),
+      setupFingerprintVersion: z.int(),
+      setupTarget: z.string(),
+      targetFrozenDigest: z.string(),
+    });
+
+export function deploymentDetailResponseSetupUpdateAuthorizationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseSetupUpdateAuthorization,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseSetupUpdateAuthorization' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseSetupUpdateAuthorizationUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponseSetupUpdateAuthorizationUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema
+      ),
+      z.any(),
+    ]);
+
+export function deploymentDetailResponseSetupUpdateAuthorizationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponseSetupUpdateAuthorizationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponseSetupUpdateAuthorizationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponseSetupUpdateAuthorizationUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   lastSyncedSecretNames: z.array(z.string()).optional(),
+  pendingPreparedStack: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDetailResponsePendingPreparedStack$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponsePreparedStack$inboundSchema),
@@ -8371,6 +13064,14 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  setupUpdateAuthorization: z.nullable(
+    z.union([
+      z.lazy(() =>
+        DeploymentDetailResponseSetupUpdateAuthorization$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
 });
 
 export function deploymentDetailResponseRuntimeMetadataFromJSON(

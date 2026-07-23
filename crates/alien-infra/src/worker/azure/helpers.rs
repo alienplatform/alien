@@ -1,6 +1,69 @@
 use super::*;
 
 impl AzureWorkerController {
+    pub(super) fn wait_for_container_apps_environment_wake_retry(
+        &mut self,
+        worker_id: &str,
+        operation: &str,
+    ) -> Option<Duration> {
+        let retry_after = self.container_apps_environment_wake_retry_after_epoch_secs?;
+        if let Some(delay) = retry_after_delay(retry_after) {
+            debug!(
+                worker=%worker_id,
+                operation=%operation,
+                remaining_secs=retry_after.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting before retrying Azure Container Apps Environment operation"
+            );
+            Some(delay)
+        } else {
+            self.container_apps_environment_wake_retry_after_epoch_secs = None;
+            None
+        }
+    }
+
+    pub(super) fn record_container_apps_environment_wake_retry(
+        &mut self,
+        deadline_epoch_secs: u64,
+    ) -> Option<Duration> {
+        let delay = container_apps_environment_wake_delay(deadline_epoch_secs)?;
+        self.container_apps_environment_wake_retry_after_epoch_secs =
+            Some(current_unix_timestamp_secs().saturating_add(delay.as_secs()));
+        Some(delay)
+    }
+
+    pub(super) async fn wait_for_reconciled_dapr_component_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        handler_name: &'static str,
+        failure_message: &'static str,
+    ) -> Result<Option<Duration>> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        match poll_reconciled_operation(
+            ctx,
+            self.pending_operation_url.as_deref(),
+            self.pending_operation_retry_after,
+            AzureOperationPollRequest {
+                operation_name: "DeleteDaprComponent",
+                operation_target: &worker.id,
+                resource_id: &worker.id,
+                handler_name,
+                failure_message,
+            },
+        )
+        .await?
+        {
+            AzureOperationPoll::Complete | AzureOperationPoll::Missing => {
+                self.pending_operation_url = None;
+                self.pending_operation_retry_after = None;
+                Ok(None)
+            }
+            AzureOperationPoll::Pending(delay) => Ok(Some(delay)),
+        }
+    }
+}
+
+// ≡ Lifecycle implementation ===================================================
+impl AzureWorkerController {
     // ─────────────── HELPER METHODS ────────────────────────────
 
     /// Pre-create commands infrastructure (queue, Dapr component, role assignments)
@@ -12,7 +75,7 @@ impl AzureWorkerController {
         azure_config: &alien_azure_clients::AzureClientConfig,
         func_cfg: &alien_core::Worker,
         container_app_name: &str,
-    ) -> Result<DaprComponentOperation> {
+    ) -> Result<CommandsSetupOperation> {
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
         let env_resource_group_name = env_outputs.resource_group_name.clone();
         let environment_name = env_outputs.environment_name.clone();
@@ -36,95 +99,84 @@ impl AzureWorkerController {
         let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
 
         // Create commands queue
-        let queue_name = format!("{}-rq", container_app_name);
-        let mgmt = ctx
-            .service_provider
-            .get_azure_service_bus_management_client(azure_config)?;
+        let queue_name = commands_queue_name(container_app_name);
+        match self
+            .prepare_commands_target_for_setup(
+                ctx,
+                func_cfg,
+                &container_app_name,
+                &AzureCommandsQueueTarget {
+                    resource_group_name: service_bus_resource_group.clone(),
+                    namespace_name: namespace_name.clone(),
+                    queue_name: queue_name.clone(),
+                },
+            )
+            .await?
+        {
+            CommandsQueueTargetPreparation::Ready => {}
+            CommandsQueueTargetPreparation::Checkpoint => {
+                return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+            }
+            CommandsQueueTargetPreparation::LongRunning(delay) => {
+                return Ok(CommandsSetupOperation::Deleting(delay));
+            }
+        }
+        if !self.commands_queue_applied {
+            let mgmt = ctx
+                .service_provider
+                .get_azure_service_bus_management_client(azure_config)?;
 
-        info!(
-            worker=%func_cfg.id,
-            namespace=%namespace_name,
-            queue=%queue_name,
-            "Pre-creating commands Service Bus queue (before Container App)"
-        );
+            info!(
+                worker=%func_cfg.id,
+                namespace=%namespace_name,
+                queue=%queue_name,
+                "Pre-creating commands Service Bus queue (before Container App)"
+            );
 
-        mgmt.create_or_update_queue(
-            service_bus_resource_group.clone(),
-            namespace_name.clone(),
-            queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties::default(),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to create commands Service Bus queue '{}'",
-                queue_name
-            ),
-            resource_id: Some(func_cfg.id.clone()),
-        })?;
+            mgmt.create_or_update_queue(
+                service_bus_resource_group.clone(),
+                namespace_name.clone(),
+                queue_name.clone(),
+                alien_azure_clients::models::queue::SbQueueProperties::default(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create commands Service Bus queue '{}'",
+                    queue_name
+                ),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+            self.commands_queue_applied = true;
+            return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+        }
 
-        // Create Dapr component for commands queue
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
-
-        let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = format!("servicebus-{}-commands", container_app_name);
-
-        let mut metadata = vec![
-            DaprMetadata {
-                name: Some("namespaceName".into()),
-                value: Some(ns_fqdn),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("queueName".into()),
-                value: Some(queue_name.clone()),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("direction".into()),
-                value: Some("input".into()),
-                secret_ref: None,
-            },
-        ];
-
-        // Add client ID for user-assigned managed identity
+        let component_name = get_azure_internal_commands_dapr_component_name(&container_app_name);
         let service_account_id = format!("{}-sa", func_cfg.get_permissions());
         let service_account_ref = alien_core::ResourceRef::new(
             alien_core::ServiceAccount::RESOURCE_TYPE,
             service_account_id.to_string(),
         );
-        if let Ok(sa_state) = ctx
+        let service_account = ctx
             .require_dependency::<crate::service_account::AzureServiceAccountController>(
                 &service_account_ref,
-            )
-        {
-            if let Some(client_id) = &sa_state.identity_client_id {
-                metadata.push(DaprMetadata {
-                    name: Some("azureClientId".into()),
-                    value: Some(client_id.clone()),
-                    secret_ref: None,
-                });
-            }
-        }
-
-        let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
-                component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
-                init_timeout: None,
-                version: Some("v1".to_string()),
-                metadata,
-                scopes: vec![container_app_name.to_string()],
-                secret_store_component: None,
-                secrets: vec![],
-            }),
-            id: None,
-            system_data: None,
-            type_: None,
-        };
+            )?;
+        let client_id = service_account
+            .identity_client_id
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func_cfg.id.clone(),
+                    dependency_id: service_account_ref.id,
+                })
+            })?;
+        let dapr_component = service_bus_dapr_component(
+            component_name.clone(),
+            &container_app_name,
+            &namespace_name,
+            queue_name.clone(),
+            client_id,
+        );
 
         info!(
             worker=%func_cfg.id,
@@ -136,146 +188,69 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &env_resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create commands Dapr component '{}'",
-                    component_name
-                ),
-                resource_id: Some(func_cfg.id.clone()),
-            })? {
-            OperationResult::Completed(_) => {}
-            OperationResult::LongRunning(lro) => {
+        match delete_owned_legacy_dapr_components(
+            client.as_ref(),
+            &env_resource_group_name,
+            &environment_name,
+            container_app_name,
+            &component_name,
+            &get_legacy_azure_internal_commands_dapr_component_names(container_app_name),
+            &func_cfg.id,
+        )
+        .await?
+        {
+            LegacyDaprComponentCleanupStep::Complete => {}
+            LegacyDaprComponentCleanupStep::Mutated => {
+                return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+            }
+            LegacyDaprComponentCleanupStep::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
-                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
-                return Ok(DaprComponentOperation::LongRunning(
+                self.pending_operation_retry_after = lro.retry_after.map(|delay| delay.as_secs());
+                return Ok(CommandsSetupOperation::Deleting(
                     lro.retry_after.unwrap_or(Duration::from_secs(15)),
                 ));
             }
         }
 
+        match ensure_dapr_component(
+            client.as_ref(),
+            &env_resource_group_name,
+            &environment_name,
+            container_app_name,
+            &dapr_component,
+            &func_cfg.id,
+        )
+        .await?
+        {
+            DaprComponentEnsureOperation::Unchanged => {}
+            DaprComponentEnsureOperation::Completed => {
+                self.commands_dapr_component = Some(component_name);
+                return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+            }
+            DaprComponentEnsureOperation::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                return Ok(CommandsSetupOperation::Creating(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
+
+        self.commands_resource_group_name = Some(service_bus_resource_group.clone());
         self.commands_namespace_name = Some(namespace_name.clone());
         self.commands_queue_name = Some(queue_name);
         self.commands_dapr_component = Some(component_name);
 
-        // Command transport RBAC is setup-applied before live worker provisioning.
-        self.assign_commands_sender_role(
-            ctx,
-            azure_config,
-            &service_bus_resource_group,
-            &namespace_name,
-            func_cfg,
-        )
-        .await?;
+        if !matches!(
+            self.reconcile_commands_sender_role_assignment(ctx, func_cfg)
+                .await?,
+            CommandsSenderReconcileResult::Complete
+        ) {
+            return Ok(CommandsSetupOperation::Pending(Duration::from_secs(1)));
+        }
 
         info!(worker=%func_cfg.id, "Commands infrastructure pre-created successfully");
-        Ok(DaprComponentOperation::Completed)
-    }
-
-    /// Ensure command transport permissions are represented in the management profile.
-    ///
-    /// Azure command transport uses Service Bus data-plane roles. Those grants are
-    /// setup-owned because both Terraform setup and runtime setup know the stack
-    /// management and execution identities before live workers are created.
-    pub(super) async fn assign_commands_sender_role(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
-        resource_group_name: &str,
-        namespace_name: &str,
-        func_cfg: &alien_core::Worker,
-    ) -> Result<()> {
-        if !management_profile_dispatches_commands(ctx, &func_cfg.id) {
-            info!(
-                worker = %func_cfg.id,
-                "Skipping management command sender role because worker/dispatch-command is not granted"
-            );
-            return Ok(());
-        }
-
-        if AzurePermissionsHelper::get_management_uami_principal_id(ctx)?.is_none() {
-            if self.commands_sender_role_assignment_id.is_some() {
-                return Ok(());
-            }
-
-            let queue_name = self.commands_queue_name.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: func_cfg.id.clone(),
-                    dependency_id: "commands-queue".to_string(),
-                })
-            })?;
-            let authorization_client = ctx
-                .service_provider
-                .get_azure_authorization_client(azure_config)?;
-            let principal_id = ctx
-                .service_provider
-                .get_azure_caller_principal_id(azure_config)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to resolve Azure command sender principal".to_string(),
-                    resource_id: Some(func_cfg.id.clone()),
-                })?;
-            let queue_scope = alien_azure_clients::authorization::Scope::Resource {
-                resource_group_name: resource_group_name.to_string(),
-                resource_provider: "Microsoft.ServiceBus".to_string(),
-                parent_resource_path: Some(format!("namespaces/{namespace_name}")),
-                resource_type: "queues".to_string(),
-                resource_name: queue_name.clone(),
-            };
-            let role_assignment_id = uuid::Uuid::new_v5(
-                &uuid::Uuid::NAMESPACE_OID,
-                format!(
-                    "deployment:azure:commands-sender:{}:{}:{}:{}:{}",
-                    ctx.resource_prefix, func_cfg.id, principal_id, namespace_name, queue_name
-                )
-                .as_bytes(),
-            )
-            .to_string();
-            let full_assignment_id = authorization_client
-                .build_role_assignment_id(&queue_scope, role_assignment_id.clone());
-            let role_definition_id = format!(
-                "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
-                azure_config.subscription_id
-            );
-
-            AzurePermissionsHelper::create_role_assignment(
-                &authorization_client,
-                azure_config,
-                &queue_scope,
-                &role_assignment_id,
-                &principal_id,
-                &role_definition_id,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to grant Azure command sender role".to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
-            self.commands_sender_role_assignment_id = Some(full_assignment_id);
-            info!(
-                worker = %func_cfg.id,
-                principal_id = %principal_id,
-                namespace = %namespace_name,
-                queue = %queue_name,
-                "Granted direct-manager Azure Service Bus command sender role"
-            );
-            return Ok(());
-        }
-
-        info!(
-            worker = %func_cfg.id,
-            "Using setup-applied Azure Service Bus command permissions"
-        );
-
-        Ok(())
+        Ok(CommandsSetupOperation::Completed)
     }
 
     /// Resolve domain information for a public worker.
@@ -385,8 +360,40 @@ impl AzureWorkerController {
         self.container_app_url = None;
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
+        self.pending_dapr_component_deletion_name = None;
         self.dapr_components.clear();
+        self.fqdn = None;
+        self.certificate_id = None;
+        self.keyvault_cert_id = None;
+        self.container_apps_certificate_id = None;
+        self.uses_custom_domain = false;
+        self.certificate_issued_at = None;
+        self.commands_resource_group_name = None;
+        self.commands_namespace_name = None;
+        self.commands_queue_name = None;
+        self.commands_queue_applied = false;
+        self.commands_dapr_component = None;
+        self.commands_dapr_component_deletion_candidates.clear();
+        self.commands_sender_role_assignment_id = None;
+        self.commands_sender_role_assignment_intent = None;
+        self.commands_sender_role_assignment_discovery_complete = false;
+        self.commands_receiver_role_assignment_id = None;
+        self.commands_infrastructure_auth_wait_until_epoch_secs = None;
+        self.container_apps_environment_wake_wait_until_epoch_secs = None;
+        self.container_apps_environment_wake_retry_after_epoch_secs = None;
+        self.pre_container_app_rbac_wait_until_epoch_secs = None;
+        self.ready_rbac_wait_until_epoch_secs = None;
+        self.update_rbac_wait_required = false;
+        self.update_dapr_components_deleted = false;
+        self.dapr_component_naming_version = 0;
         self.storage_trigger_infrastructure.clear();
+        self.storage_trigger_teardown_progress = AzureStorageTriggerTeardownProgress::default();
+        self.dapr_component_deletion_candidates_initialized = false;
+        self.auxiliary_teardown_candidates_initialized = false;
+        self.commands_update_teardown_candidates_initialized = false;
+        self.trigger_update_teardown_candidates_initialized = false;
+        self.storage_delivery_update_reconciliation_initialized = false;
+        self._internal_stay_count = None;
     }
 
     /// Called whenever provisioning *succeeds* and we have the live resource.
@@ -487,20 +494,27 @@ impl AzureWorkerController {
             });
         }
 
-        // Add Azure-specific managed identity client ID
-        if let Ok(service_account_state) = ctx
+        // Add Azure-specific managed identity client ID. A missing identity must
+        // stop reconciliation; silently omitting it would detach the workload
+        // identity during an otherwise idempotent update.
+        let service_account_state = ctx
             .require_dependency::<crate::service_account::AzureServiceAccountController>(
                 &service_account_ref,
-            )
-        {
-            if let Some(client_id) = &service_account_state.identity_client_id {
-                env_vars.push(EnvironmentVar {
-                    name: Some(ENV_AZURE_CLIENT_ID.to_string()),
-                    value: Some(client_id.clone()),
-                    secret_ref: None,
-                });
-            }
-        }
+            )?;
+        let client_id = service_account_state
+            .identity_client_id
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func.id.clone(),
+                    dependency_id: service_account_ref.id.clone(),
+                })
+            })?;
+        env_vars.push(EnvironmentVar {
+            name: Some(ENV_AZURE_CLIENT_ID.to_string()),
+            value: Some(client_id.clone()),
+            secret_ref: None,
+        });
 
         Ok(env_vars)
     }
@@ -613,21 +627,26 @@ impl AzureWorkerController {
             service_account_id.to_string(),
         );
 
-        if let Ok(service_account_state) = ctx
+        let service_account_state = ctx
             .require_dependency::<crate::service_account::AzureServiceAccountController>(
                 &service_account_ref,
-            )
-        {
-            if let Some(identity_id) = &service_account_state.identity_resource_id {
-                identity_map.insert(
-                    identity_id.clone(),
-                    UserAssignedIdentity {
-                        client_id: None,
-                        principal_id: None,
-                    },
-                );
-            }
-        }
+            )?;
+        let identity_id = service_account_state
+            .identity_resource_id
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func.id.clone(),
+                    dependency_id: service_account_ref.id.clone(),
+                })
+            })?;
+        identity_map.insert(
+            identity_id.clone(),
+            UserAssignedIdentity {
+                client_id: None,
+                principal_id: None,
+            },
+        );
 
         // Add linked ServiceAccounts
         for link in &func.links {
@@ -781,10 +800,6 @@ impl AzureWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<DaprComponentOperation> {
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
-
         let azure_config = ctx.get_azure_config()?;
         // Dapr components live on the Container Apps Environment, which may be in a
         // different resource group than the deployment (shared/external environments).
@@ -801,10 +816,8 @@ impl AzureWorkerController {
                 dependency_id: queue_ref.id.clone(),
             })
         })?;
-        let ns_fqdn = format!("{}.servicebus.windows.net", namespace);
-
-        // Generate component name: servicebus-{containerAppName}-{queueId}
-        let component_name = format!("servicebus-{}-{}", container_app_name, queue_ref.id);
+        let component_name =
+            get_azure_queue_trigger_dapr_component_name(container_app_name, &queue_ref.id);
 
         // Use Dapr input binding — the manager/user code sends directly to Service Bus
         // via Azure SDK, not through Dapr pubsub. Input bindings auto-deliver from the
@@ -816,59 +829,31 @@ impl AzureWorkerController {
             })
         })?;
 
-        let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
-                component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
-                init_timeout: None,
-                version: Some("v1".to_string()),
-                metadata: {
-                    let mut metadata = vec![
-                        DaprMetadata {
-                            name: Some("namespaceName".into()),
-                            value: Some(ns_fqdn),
-                            secret_ref: None,
-                        },
-                        DaprMetadata {
-                            name: Some("queueName".into()),
-                            value: Some(queue_name.clone()),
-                            secret_ref: None,
-                        },
-                        DaprMetadata {
-                            name: Some("direction".into()),
-                            value: Some("input".into()),
-                            secret_ref: None,
-                        },
-                    ];
-
-                    // Add client ID for user-assigned managed identity
-                    let service_account_id = format!("{}-sa", worker_config.get_permissions());
-                    let service_account_ref = alien_core::ResourceRef::new(
-                        alien_core::ServiceAccount::RESOURCE_TYPE,
-                        service_account_id.to_string(),
-                    );
-
-                    if let Ok(service_account_state) = ctx.require_dependency::<crate::service_account::AzureServiceAccountController>(&service_account_ref) {
-                        if let Some(client_id) = &service_account_state.identity_client_id {
-                            metadata.push(DaprMetadata {
-                                name: Some("azureClientId".into()),
-                                value: Some(client_id.clone()),
-                                secret_ref: None
-                            });
-                        }
-                    }
-
-                    metadata
-                },
-                scopes: vec![container_app_name.to_string()],
-                secret_store_component: None,
-                secrets: vec![],
-            }),
-            id: None,
-            system_data: None,
-            type_: None,
-        };
+        let service_account_id = format!("{}-sa", worker_config.get_permissions());
+        let service_account_ref = alien_core::ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id,
+        );
+        let service_account = ctx
+            .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &service_account_ref,
+            )?;
+        let client_id = service_account
+            .identity_client_id
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker_config.id.clone(),
+                    dependency_id: service_account_ref.id,
+                })
+            })?;
+        let dapr_component = service_bus_dapr_component(
+            component_name.clone(),
+            container_app_name,
+            namespace,
+            queue_name.clone(),
+            client_id,
+        );
 
         info!(
             worker=%worker_config.id,
@@ -882,26 +867,45 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Dapr component '{}' for queue '{}'",
-                    component_name, queue_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })? {
-            OperationResult::Completed(_) => {}
-            OperationResult::LongRunning(lro) => {
+        match delete_owned_legacy_dapr_components(
+            client.as_ref(),
+            &resource_group_name,
+            &environment_name,
+            container_app_name,
+            &component_name,
+            &get_legacy_azure_queue_trigger_dapr_component_names(container_app_name, &queue_ref.id),
+            &worker_config.id,
+        )
+        .await?
+        {
+            LegacyDaprComponentCleanupStep::Complete => {}
+            LegacyDaprComponentCleanupStep::Mutated => {
+                return Ok(DaprComponentOperation::Pending(Duration::from_secs(1)));
+            }
+            LegacyDaprComponentCleanupStep::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|delay| delay.as_secs());
+                return Ok(DaprComponentOperation::Deleting(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
+
+        match ensure_dapr_component(
+            client.as_ref(),
+            &resource_group_name,
+            &environment_name,
+            container_app_name,
+            &dapr_component,
+            &worker_config.id,
+        )
+        .await?
+        {
+            DaprComponentEnsureOperation::Unchanged | DaprComponentEnsureOperation::Completed => {}
+            DaprComponentEnsureOperation::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
                 self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
-                return Ok(DaprComponentOperation::LongRunning(
+                return Ok(DaprComponentOperation::Creating(
                     lro.retry_after.unwrap_or(Duration::from_secs(15)),
                 ));
             }
@@ -930,261 +934,99 @@ impl AzureWorkerController {
         storage_ref: &alien_core::ResourceRef,
         events: &[String],
     ) -> Result<DaprComponentOperation> {
-        use alien_azure_clients::authorization::Scope;
-        use alien_azure_clients::models::managed_environments_dapr_components::{
-            DaprComponent, DaprComponentProperties, DaprMetadata,
-        };
-
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
         let environment_resource_group = env_outputs.resource_group_name.clone();
         let environment_name = env_outputs.environment_name.clone();
 
-        let storage_controller =
-            ctx.require_dependency::<crate::storage::azure::AzureStorageController>(storage_ref)?;
-        let storage_account_name = storage_controller
-            .storage_account_name
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: worker_config.id.clone(),
-                    dependency_id: storage_ref.id.clone(),
-                })
-            })?
-            .clone();
-        let container_name = storage_controller
-            .container_name
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: worker_config.id.clone(),
-                    dependency_id: storage_ref.id.clone(),
-                })
-            })?
-            .clone();
+        let desired_target = self
+            .desired_storage_trigger_target(ctx, worker_config, container_app_name, storage_ref)
+            .await?;
+        let desired_infrastructure = &desired_target.infrastructure;
+        let event_subscription_name = desired_infrastructure.event_subscription_name.clone();
+        let namespace_name = desired_infrastructure.namespace_name.clone();
+        let queue_name = desired_infrastructure.queue_name.clone();
 
-        let namespace_ref = ResourceRef::new(
-            alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
-            "default-service-bus-namespace",
-        );
-        let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
-        let namespace_name = namespace_controller
-            .namespace_name
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: worker_config.id.clone(),
-                    dependency_id: namespace_ref.id.clone(),
-                })
-            })?
-            .clone();
-        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
+        let component_name =
+            get_azure_blob_trigger_dapr_component_name(container_app_name, &storage_ref.id);
 
-        let service_account_id = format!("{}-sa", worker_config.get_permissions());
-        let service_account_ref = ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.clone(),
-        );
-        let service_account = ctx
-            .require_dependency::<crate::service_account::AzureServiceAccountController>(
-                &service_account_ref,
-            )?;
-        let execution_client_id = service_account
-            .identity_client_id
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: worker_config.id.clone(),
-                    dependency_id: service_account_id.clone(),
-                })
-            })?
-            .clone();
-        let execution_principal_id = service_account
-            .identity_principal_id
-            .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: worker_config.id.clone(),
-                    dependency_id: service_account_id,
-                })
-            })?
-            .clone();
-
-        let queue_name = format!("{}-storage-{}", container_app_name, storage_ref.id);
-        let component_name = format!("blobstorage-{}-{}", container_app_name, storage_ref.id);
-        let event_subscription_name =
-            get_azure_storage_event_subscription_name(&worker_config.id, &storage_ref.id);
-        let deployment_resource_group = get_resource_group_name(ctx.state)?;
-        let source_resource_id = format!(
-            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
-            azure_config.subscription_id, deployment_resource_group, storage_account_name
-        );
-        let queue_resource_id = format!(
-            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}",
-            azure_config.subscription_id,
-            service_bus_resource_group,
-            namespace_name,
-            queue_name
-        );
-
-        let mgmt = ctx
-            .service_provider
-            .get_azure_service_bus_management_client(azure_config)?;
-        mgmt.create_or_update_queue(
-            service_bus_resource_group.clone(),
-            namespace_name.clone(),
-            queue_name.clone(),
-            alien_azure_clients::models::queue::SbQueueProperties::default(),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to create storage-trigger Service Bus queue '{}'",
-                queue_name
-            ),
-            resource_id: Some(worker_config.id.clone()),
-        })?;
-
-        let tracker_index = self
-            .storage_trigger_infrastructure
-            .iter()
-            .position(|item| item.event_subscription_name == event_subscription_name);
-        let tracker_index = match tracker_index {
-            Some(index) => {
-                let tracker = &mut self.storage_trigger_infrastructure[index];
-                tracker.source_resource_id = source_resource_id.clone();
-                tracker.service_bus_resource_group = service_bus_resource_group.clone();
-                tracker.namespace_name = namespace_name.clone();
-                tracker.queue_name = queue_name.clone();
-                index
-            }
-            None => {
-                self.storage_trigger_infrastructure
-                    .push(AzureStorageTriggerInfrastructure {
-                        source_resource_id: source_resource_id.clone(),
-                        event_subscription_name: event_subscription_name.clone(),
-                        service_bus_resource_group: service_bus_resource_group.clone(),
-                        namespace_name: namespace_name.clone(),
-                        queue_name: queue_name.clone(),
-                        receiver_role_assignment_id: None,
-                    });
-                self.storage_trigger_infrastructure.len() - 1
-            }
-        };
-
-        if self.storage_trigger_infrastructure[tracker_index]
-            .receiver_role_assignment_id
-            .is_none()
+        if matches!(
+            self.prepare_storage_trigger_target(ctx, desired_infrastructure)
+                .await?,
+            StorageTargetPreparation::Pending
+        ) {
+            return Ok(DaprComponentOperation::Pending(Duration::from_secs(1)));
+        }
+        match self
+            .ensure_storage_delivery_infrastructure(
+                ctx,
+                worker_config,
+                storage_ref,
+                events,
+                &desired_target,
+            )
+            .await?
         {
-            let queue_scope = Scope::Resource {
-                resource_group_name: service_bus_resource_group.clone(),
-                resource_provider: "Microsoft.ServiceBus".to_string(),
-                parent_resource_path: Some(format!("namespaces/{namespace_name}")),
-                resource_type: "queues".to_string(),
-                resource_name: queue_name.clone(),
-            };
-            let role_assignment_id = uuid::Uuid::new_v5(
-                &uuid::Uuid::NAMESPACE_OID,
-                format!(
-                    "deployment:azure:storage-trigger-receiver:{}:{}:{}:{}",
-                    ctx.resource_prefix, worker_config.id, storage_ref.id, execution_principal_id
-                )
-                .as_bytes(),
-            )
-            .to_string();
-            let authorization_client = ctx
-                .service_provider
-                .get_azure_authorization_client(azure_config)?;
-            let full_assignment_id = authorization_client
-                .build_role_assignment_id(&queue_scope, role_assignment_id.clone());
-            let role_definition_id = format!(
-                "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0",
-                azure_config.subscription_id
-            );
-            AzurePermissionsHelper::create_role_assignment(
-                &authorization_client,
-                azure_config,
-                &queue_scope,
-                &role_assignment_id,
-                &execution_principal_id,
-                &role_definition_id,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to grant the worker access to storage-trigger queue '{}'",
-                    queue_name
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
-            self.storage_trigger_infrastructure[tracker_index].receiver_role_assignment_id =
-                Some(full_assignment_id);
+            StorageDeliveryReconcileResult::Complete => {}
+            StorageDeliveryReconcileResult::Pending(delay) => {
+                return Ok(DaprComponentOperation::Pending(delay));
+            }
         }
 
-        let metadata = vec![
-            DaprMetadata {
-                name: Some("namespaceName".into()),
-                value: Some(format!("{}.servicebus.windows.net", namespace_name)),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("queueName".into()),
-                value: Some(queue_name.clone()),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("direction".into()),
-                value: Some("input".into()),
-                secret_ref: None,
-            },
-            DaprMetadata {
-                name: Some("azureClientId".into()),
-                value: Some(execution_client_id),
-                secret_ref: None,
-            },
-        ];
-
-        let dapr_component = DaprComponent {
-            name: Some(component_name.clone()),
-            properties: Some(DaprComponentProperties {
-                component_type: Some("bindings.azure.servicebusqueues".to_string()),
-                ignore_errors: false,
-                init_timeout: None,
-                version: Some("v1".to_string()),
-                metadata,
-                scopes: vec![container_app_name.to_string()],
-                secret_store_component: None,
-                secrets: vec![],
-            }),
-            id: None,
-            system_data: None,
-            type_: None,
-        };
+        let dapr_component = service_bus_dapr_component(
+            component_name.clone(),
+            container_app_name,
+            &namespace_name,
+            queue_name.clone(),
+            &desired_target.execution_client_id,
+        );
 
         let container_apps_client = ctx
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        match container_apps_client
-            .create_or_update_dapr_component(
-                &environment_resource_group,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Dapr component '{}' for storage trigger '{}'",
-                    component_name, storage_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })? {
-            OperationResult::Completed(_) => {}
-            OperationResult::LongRunning(lro) => {
+        match delete_owned_legacy_dapr_components(
+            container_apps_client.as_ref(),
+            &environment_resource_group,
+            &environment_name,
+            container_app_name,
+            &component_name,
+            &get_legacy_azure_blob_trigger_dapr_component_names(
+                container_app_name,
+                &storage_ref.id,
+            ),
+            &worker_config.id,
+        )
+        .await?
+        {
+            LegacyDaprComponentCleanupStep::Complete => {}
+            LegacyDaprComponentCleanupStep::Mutated => {
+                return Ok(DaprComponentOperation::Pending(Duration::from_secs(1)));
+            }
+            LegacyDaprComponentCleanupStep::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|delay| delay.as_secs());
+                return Ok(DaprComponentOperation::Deleting(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
+
+        match ensure_dapr_component(
+            container_apps_client.as_ref(),
+            &environment_resource_group,
+            &environment_name,
+            container_app_name,
+            &dapr_component,
+            &worker_config.id,
+        )
+        .await?
+        {
+            DaprComponentEnsureOperation::Unchanged | DaprComponentEnsureOperation::Completed => {}
+            DaprComponentEnsureOperation::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
                 self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
-                return Ok(DaprComponentOperation::LongRunning(
+                return Ok(DaprComponentOperation::Creating(
                     lro.retry_after.unwrap_or(Duration::from_secs(15)),
                 ));
             }
@@ -1192,80 +1034,6 @@ impl AzureWorkerController {
 
         if !self.dapr_components.contains(&component_name) {
             self.dapr_components.push(component_name.clone());
-        }
-
-        let event_grid_client = ctx
-            .service_provider
-            .get_azure_event_grid_client(azure_config)?;
-        let event_subscription = match event_grid_client
-            .get_event_subscription(source_resource_id.clone(), event_subscription_name.clone())
-            .await
-        {
-            Ok(event_subscription) => event_subscription,
-            Err(error)
-                if matches!(
-                    error.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                let included_event_types = azure_storage_event_types(events, &worker_config.id)?;
-                event_grid_client
-                    .create_or_update_event_subscription(
-                        source_resource_id,
-                        event_subscription_name.clone(),
-                        EventSubscriptionRequest {
-                            properties: EventSubscriptionRequestProperties {
-                                destination: ServiceBusQueueDestination {
-                                    endpoint_type: "ServiceBusQueue".to_string(),
-                                    properties: ServiceBusQueueDestinationProperties {
-                                        resource_id: queue_resource_id,
-                                    },
-                                },
-                                filter: EventSubscriptionFilter {
-                                    included_event_types,
-                                    subject_begins_with: format!(
-                                        "/blobServices/default/containers/{}/blobs/",
-                                        container_name
-                                    ),
-                                    is_subject_case_sensitive: false,
-                                },
-                                event_delivery_schema: "CloudEventSchemaV1_0".to_string(),
-                            },
-                        },
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create Event Grid subscription '{}' for storage '{}'",
-                            event_subscription_name, storage_ref.id
-                        ),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?
-            }
-            Err(error) => {
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to inspect Event Grid subscription '{}' for storage '{}'",
-                        event_subscription_name, storage_ref.id
-                    ),
-                    resource_id: Some(worker_config.id.clone()),
-                }));
-            }
-        };
-
-        if let Some(provisioning_state) = event_subscription
-            .properties
-            .and_then(|properties| properties.provisioning_state)
-        {
-            if !provisioning_state.eq_ignore_ascii_case("Succeeded") {
-                info!(
-                    worker=%worker_config.id,
-                    subscription=%event_subscription_name,
-                    state=%provisioning_state,
-                    "Waiting for Event Grid storage subscription"
-                );
-                return Ok(DaprComponentOperation::Pending(Duration::from_secs(5)));
-            }
         }
 
         info!(
@@ -1296,7 +1064,8 @@ impl AzureWorkerController {
         let resource_group_name = env_outputs.resource_group_name.clone();
         let environment_name = env_outputs.environment_name.clone();
 
-        let component_name = format!("cron-{}-{}", container_app_name, index);
+        let component_name =
+            get_azure_dapr_component_name(&format!("cron-{container_app_name}-{index}"));
 
         let dapr_component = DaprComponent {
             name: Some(component_name.clone()),
@@ -1330,26 +1099,21 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        match client
-            .create_or_update_dapr_component(
-                &resource_group_name,
-                &environment_name,
-                &component_name,
-                &dapr_component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Dapr cron component '{}' with schedule '{}'",
-                    component_name, cron
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })? {
-            OperationResult::Completed(_) => {}
-            OperationResult::LongRunning(lro) => {
+        match ensure_dapr_component(
+            client.as_ref(),
+            &resource_group_name,
+            &environment_name,
+            container_app_name,
+            &dapr_component,
+            &worker_config.id,
+        )
+        .await?
+        {
+            DaprComponentEnsureOperation::Unchanged | DaprComponentEnsureOperation::Completed => {}
+            DaprComponentEnsureOperation::LongRunning(lro) => {
                 self.pending_operation_url = Some(lro.url.clone());
                 self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
-                return Ok(DaprComponentOperation::LongRunning(
+                return Ok(DaprComponentOperation::Creating(
                     lro.retry_after.unwrap_or(Duration::from_secs(15)),
                 ));
             }
@@ -1369,177 +1133,39 @@ impl AzureWorkerController {
         Ok(DaprComponentOperation::Completed)
     }
 
-    pub(super) async fn delete_storage_trigger_infrastructure(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<()> {
-        if self.storage_trigger_infrastructure.is_empty() {
-            return Ok(());
-        }
-
-        let azure_config = ctx.get_azure_config()?;
-        let event_grid_client = ctx
-            .service_provider
-            .get_azure_event_grid_client(azure_config)?;
-        let authorization_client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
-        let service_bus_client = ctx
-            .service_provider
-            .get_azure_service_bus_management_client(azure_config)?;
-
-        for infrastructure in self.storage_trigger_infrastructure.clone() {
-            match event_grid_client
-                .delete_event_subscription(
-                    infrastructure.source_resource_id.clone(),
-                    infrastructure.event_subscription_name.clone(),
-                )
-                .await
-            {
-                Ok(()) => info!(
-                    subscription=%infrastructure.event_subscription_name,
-                    "Deleted Event Grid storage subscription"
-                ),
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete Event Grid storage subscription '{}'",
-                            infrastructure.event_subscription_name
-                        ),
-                        resource_id: Some(ctx.desired_config.id().to_string()),
-                    }));
-                }
-            }
-
-            if let Some(assignment_id) = infrastructure.receiver_role_assignment_id {
-                match authorization_client
-                    .delete_role_assignment_by_id(assignment_id.clone())
-                    .await
-                {
-                    Ok(_) => info!(
-                        assignment_id=%assignment_id,
-                        "Deleted storage-trigger receiver role assignment"
-                    ),
-                    Err(error)
-                        if matches!(
-                            error.error,
-                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                        ) =>
-                    {
-                        info!(
-                            assignment_id=%assignment_id,
-                            "Storage-trigger receiver role assignment was already deleted"
-                        );
-                    }
-                    Err(error) => {
-                        return Err(error.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to delete storage-trigger receiver role assignment '{}'",
-                                assignment_id
-                            ),
-                            resource_id: Some(ctx.desired_config.id().to_string()),
-                        }));
-                    }
-                }
-            }
-
-            match service_bus_client
-                .delete_queue(
-                    infrastructure.service_bus_resource_group,
-                    infrastructure.namespace_name,
-                    infrastructure.queue_name.clone(),
-                )
-                .await
-            {
-                Ok(()) => info!(
-                    queue=%infrastructure.queue_name,
-                    "Deleted storage-trigger Service Bus queue"
-                ),
-                Err(error)
-                    if matches!(
-                        error.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(
-                        queue=%infrastructure.queue_name,
-                        "Storage-trigger Service Bus queue was already deleted"
-                    );
-                }
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete storage-trigger Service Bus queue '{}'",
-                            infrastructure.queue_name
-                        ),
-                        resource_id: Some(ctx.desired_config.id().to_string()),
-                    }));
-                }
-            }
-        }
-
-        self.storage_trigger_infrastructure.clear();
-        Ok(())
-    }
-
-    /// Deletes all Dapr components using best-effort approach
+    /// Deletes tracked trigger components without touching a foreign component
+    /// that happens to share a historical name.
     pub(super) async fn delete_all_dapr_components(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<()> {
-        if self.dapr_components.is_empty() {
-            return Ok(());
-        }
-
-        let azure_config = ctx.get_azure_config()?;
-        // Dapr components live on the Container Apps Environment, which may be in a
-        // different resource group than the deployment (shared/external environments).
-        let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
-        let resource_group_name = env_outputs.resource_group_name.clone();
-        let environment_name = env_outputs.environment_name.clone();
+    ) -> Result<TrackedDaprComponentDeleteStep> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: worker_config.id.clone(),
+                message: "Container app name not set in state".to_string(),
+            })
+        })?;
 
-        let client = ctx
-            .service_provider
-            .get_azure_container_apps_client(&azure_config)?;
-
-        for component_name in &self.dapr_components.clone() {
-            match client
-                .delete_dapr_component(&resource_group_name, &environment_name, component_name)
-                .await
+        let Some(component_name) = self.dapr_components.first().cloned() else {
+            return Ok(TrackedDaprComponentDeleteStep::Complete);
+        };
+        let step = self
+            .delete_tracked_dapr_component(
+                ctx,
+                &container_app_name,
+                &worker_config.id,
+                &component_name,
+            )
+            .await?;
+        if matches!(step, TrackedDaprComponentDeleteStep::Mutated) {
+            self.dapr_components.retain(|name| name != &component_name);
+            if self.pending_dapr_component_deletion_name.as_deref() == Some(component_name.as_str())
             {
-                Ok(_) => {
-                    info!(
-                        worker=%worker_config.id,
-                        component=%component_name,
-                        "Dapr component delete requested"
-                    );
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(
-                        worker=%worker_config.id,
-                        component=%component_name,
-                        "Dapr component was already deleted or doesn't exist"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        worker=%worker_config.id,
-                        component=%component_name,
-                        error=%e,
-                        "Failed to delete Dapr component during deletion"
-                    );
-                }
+                self.pending_dapr_component_deletion_name = None;
             }
         }
-
-        self.dapr_components.clear();
-        Ok(())
+        Ok(step)
     }
 
     /// Creates a controller in a ready state with mock values for testing purposes.
@@ -1558,16 +1184,22 @@ impl AzureWorkerController {
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
             storage_trigger_infrastructure: Vec::new(),
+            storage_trigger_teardown_progress: AzureStorageTriggerTeardownProgress::default(),
             fqdn: None,
             certificate_id: None,
             keyvault_cert_id: None,
             container_apps_certificate_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
+            commands_resource_group_name: None,
             commands_namespace_name: None,
             commands_queue_name: None,
+            commands_queue_applied: false,
             commands_dapr_component: None,
+            commands_dapr_component_deletion_candidates: Vec::new(),
             commands_sender_role_assignment_id: None,
+            commands_sender_role_assignment_intent: None,
+            commands_sender_role_assignment_discovery_complete: false,
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
             container_apps_environment_wake_wait_until_epoch_secs: None,
@@ -1576,6 +1208,13 @@ impl AzureWorkerController {
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
             update_dapr_components_deleted: false,
+            dapr_component_naming_version: CURRENT_DAPR_COMPONENT_NAMING_VERSION,
+            pending_dapr_component_deletion_name: None,
+            dapr_component_deletion_candidates_initialized: false,
+            auxiliary_teardown_candidates_initialized: false,
+            commands_update_teardown_candidates_initialized: false,
+            trigger_update_teardown_candidates_initialized: false,
+            storage_delivery_update_reconciliation_initialized: false,
             _internal_stay_count: None,
         }
     }

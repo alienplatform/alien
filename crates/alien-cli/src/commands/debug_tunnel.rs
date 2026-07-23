@@ -46,9 +46,8 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
-/// Wire frames mirror `alien-managerx`'s `TunnelRequestFrame` /
-/// `TunnelResponseFrame`. We re-declare them locally so the OSS CLI doesn't
-/// depend on the platform crate.
+/// Wire frames mirror the debug-tunnel protocol's request and response frames.
+/// They are declared locally so the CLI remains self-contained.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TunnelRequestFrame {
@@ -202,72 +201,41 @@ pub async fn spawn_push_tunnel(
 
     Ok((
         env,
-        PushTunnelGuard {
-            writer: writer_handle,
-            reader: reader_handle,
-            server: server_handle,
-        },
+        PushTunnelGuard::new([writer_handle, reader_handle, server_handle]),
     ))
 }
 
 /// RAII handle that owns the WS + local server tasks. Dropping aborts them.
 pub struct PushTunnelGuard {
-    writer: tokio::task::JoinHandle<()>,
-    reader: tokio::task::JoinHandle<()>,
-    server: tokio::task::JoinHandle<()>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for PushTunnelGuard {
     fn drop(&mut self) {
-        self.writer.abort();
-        self.reader.abort();
-        self.server.abort();
+        for task in &self.tasks {
+            task.abort();
+        }
     }
 }
 
 impl PushTunnelGuard {
+    fn new(tasks: impl IntoIterator<Item = tokio::task::JoinHandle<()>>) -> Self {
+        Self {
+            tasks: tasks.into_iter().collect(),
+        }
+    }
+
     /// Combine several guards into one so the caller can keep a single
     /// handle alive for the child process's run. Useful when a single
     /// `alien debug` session spawns multiple loopbacks (e.g. AWS + GCP +
     /// Azure all enabled for a pull-mode K8s deployment).
     pub fn merge(guards: Vec<PushTunnelGuard>) -> PushTunnelGuard {
-        // We don't have a "fan-out" abort primitive; collect every task
-        // handle into a parent guard whose three slots are themselves
-        // tokio tasks that await + propagate.
-        let handles: Vec<tokio::task::JoinHandle<()>> = guards
-            .into_iter()
-            .flat_map(|mut g| {
-                // Replace each field with a no-op handle so the `Drop` on
-                // the moved-from guard doesn't double-abort the same task.
-                let writer = std::mem::replace(&mut g.writer, tokio::spawn(async {}));
-                let reader = std::mem::replace(&mut g.reader, tokio::spawn(async {}));
-                let server = std::mem::replace(&mut g.server, tokio::spawn(async {}));
-                std::mem::forget(g); // skip the no-op aborts in Drop
-                [writer, reader, server]
-            })
-            .collect();
-        let abort_handles: Vec<tokio::task::AbortHandle> =
-            handles.iter().map(|h| h.abort_handle()).collect();
-        // Spawn a "supervisor" task that just owns the handles; aborting it
-        // doesn't free the children, so install a custom abort flow via the
-        // three slot tasks each holding an `AbortOnDrop` of the underlying
-        // join handles.
-        let abort_clone1 = abort_handles.clone();
-        let writer = tokio::spawn(async move {
-            // park forever; aborted on drop
-            let _abort_clone1 = abort_clone1;
-            std::future::pending::<()>().await
-        });
-        let reader = tokio::spawn(async move { std::future::pending::<()>().await });
-        let server = tokio::spawn(async move {
-            let _abort_handles = abort_handles;
-            std::future::pending::<()>().await
-        });
-        PushTunnelGuard {
-            writer,
-            reader,
-            server,
+        let task_count = guards.iter().map(|guard| guard.tasks.len()).sum();
+        let mut tasks = Vec::with_capacity(task_count);
+        for mut guard in guards {
+            tasks.append(&mut guard.tasks);
         }
+        PushTunnelGuard { tasks }
     }
 }
 
@@ -413,17 +381,9 @@ pub async fn spawn_pull_aws_loopback(
         "ALIEN_DEBUG_PLACEHOLDER".to_string(),
     );
 
-    // We don't have a WS for the pull-AWS path — the proxy forwards via
-    // HTTP. Reuse PushTunnelGuard's structure but with no writer/reader
-    // tasks; just the server lifetime matters.
-    Ok((
-        env,
-        PushTunnelGuard {
-            writer: tokio::spawn(async {}),
-            reader: tokio::spawn(async {}),
-            server: server_handle,
-        },
-    ))
+    // The pull-AWS path forwards over HTTP, so only the server task belongs
+    // to this guard.
+    Ok((env, PushTunnelGuard::new([server_handle])))
 }
 
 /// Crude service-name → default host map for use when the AWS CLI doesn't
@@ -731,14 +691,7 @@ async fn spawn_generic_cloud_loopback(
         let _ = axum::serve(listener, app).await;
     });
 
-    Ok((
-        endpoint_url,
-        PushTunnelGuard {
-            writer: tokio::spawn(async {}),
-            reader: tokio::spawn(async {}),
-            server: server_handle,
-        },
-    ))
+    Ok((endpoint_url, PushTunnelGuard::new([server_handle])))
 }
 
 fn build_provider_env(provider: &str, endpoint_url: &str) -> BTreeMap<String, String> {
@@ -1001,3 +954,7 @@ fn urlencoding(input: &str) -> String {
 // through their methods.
 #[allow(dead_code)]
 fn _trait_markers(_h: HeaderMap, _b: Bytes, _m: Method) {}
+
+#[cfg(test)]
+#[path = "debug_tunnel_tests.rs"]
+mod tests;

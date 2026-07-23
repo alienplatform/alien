@@ -19,9 +19,17 @@ export type Arc = {
   deploymentId: string;
 };
 
+export const Protocol = {
+  Http: "http",
+  Tcp: "tcp",
+} as const;
+export type Protocol = ClosedEnum<typeof Protocol>;
+
 export type PublicEndpoints = {
   url: string;
-  host?: string | undefined;
+  protocol: Protocol;
+  host: string;
+  port: number;
   wildcardHost?: string | undefined;
 };
 
@@ -115,12 +123,19 @@ export function arcFromJSON(
 }
 
 /** @internal */
+export const Protocol$inboundSchema: z.ZodEnum<typeof Protocol> = z.enum(
+  Protocol,
+);
+
+/** @internal */
 export const PublicEndpoints$inboundSchema: z.ZodType<
   PublicEndpoints,
   unknown
 > = z.object({
   url: z.string(),
-  host: z.string().optional(),
+  protocol: Protocol$inboundSchema,
+  host: z.string(),
+  port: z.int(),
   wildcardHost: z.string().optional(),
 });
 

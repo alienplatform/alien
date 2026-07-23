@@ -7,7 +7,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.listMemberships();
+  const result = await alien.getWorkspaceInvitationPreview({
+    token: "<value>",
+  });
 
   console.log(result);
 }

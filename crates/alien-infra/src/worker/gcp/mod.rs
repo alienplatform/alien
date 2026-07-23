@@ -3405,6 +3405,16 @@ impl GcpWorkerController {
                 {
                     info!(name=%neg_name, "Serverless NEG was already deleted");
                 }
+                Err(e) if is_gcp_resource_in_use(&e) => {
+                    info!(
+                        name=%neg_name,
+                        "Serverless NEG is still referenced by another GCP resource; retrying deletion"
+                    );
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(30),
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    });
+                }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete serverless NEG '{}'", neg_name),
