@@ -211,15 +211,17 @@ describe("Ai.getAvailableModels", () => {
 
   it("fetches the gateway's curated catalog for an ambient binding", async () => {
     vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
-    const fetchMock = stubFetch({ data: [{ id: "gpt-oss-20b" }] })
+    const fetchMock = stubFetch({
+      data: [{ id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" }],
+    })
     const models = await ai("llm").getAvailableModels()
     expect(callUrl(fetchMock)).toBe(`${GATEWAY_URL}/llm/v1/models`)
-    expect(models).toEqual([{ id: "gpt-oss-20b" }])
+    expect(models).toEqual([{ id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" }])
   })
 
   it("retries a transient gateway-start failure on a retained instance", async () => {
     vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
-    stubFetch({ data: [{ id: "gpt-oss-20b" }] })
+    stubFetch({ data: [{ id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" }] })
     const start = vi
       .fn()
       .mockRejectedValueOnce(new Error("ambient credential unavailable"))
@@ -228,7 +230,9 @@ describe("Ai.getAvailableModels", () => {
 
     await expect(llm.getAvailableModels()).rejects.toThrow()
     // A cached rejection would leave this instance permanently broken; it must retry.
-    expect(await llm.getAvailableModels()).toEqual([{ id: "gpt-oss-20b" }])
+    expect(await llm.getAvailableModels()).toEqual([
+      { id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" },
+    ])
     expect(start).toHaveBeenCalledTimes(2)
   })
 })

@@ -14,7 +14,7 @@ const queue = new alien.Queue("alien-queue").build()
 // race that consumer. This queue has exactly one consumer: the queue trigger.
 const eventsQueue = new alien.Queue("alien-events-queue").build()
 const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
-const ai = new alien.Ai("test-ai").build()
+const ai = new alien.AI("test-ai").build()
 
 let workerBuilder = new alien.Worker("alien-ts-worker")
   .code({
