@@ -1,13 +1,13 @@
-use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
+use alien_azure_clients::long_running_operation::LongRunningOperation;
 use alien_azure_clients::models::managed_environments_dapr_components::DaprComponent;
 use alien_core::{ResourceRef, Worker};
-use alien_error::{AlienError, Context};
+use alien_error::AlienError;
 
 use super::azure::AzureWorkerController;
 use super::azure_dapr_components::{
-    dapr_component_matches, delete_dapr_component_if_owned, get_dapr_component_ownership,
-    service_bus_dapr_component, DaprComponentDeleteOperation, DaprComponentOwnership,
-    TrackedDaprComponentDeleteStep,
+    delete_dapr_component_if_owned, ensure_dapr_component, get_dapr_component_ownership,
+    service_bus_dapr_component, DaprComponentDeleteOperation, DaprComponentEnsureOperation,
+    DaprComponentOwnership, TrackedDaprComponentDeleteStep,
 };
 use super::azure_names::{
     get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
@@ -52,6 +52,24 @@ fn push_unique(names: &mut Vec<String>, name: String) {
     if !names.contains(&name) {
         names.push(name);
     }
+}
+
+fn commands_component_removal_names(
+    container_app_name: &str,
+    tracked_component_name: Option<&str>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(component_name) = tracked_component_name {
+        push_unique(&mut names, component_name.to_string());
+    }
+    push_unique(
+        &mut names,
+        get_azure_internal_commands_dapr_component_name(container_app_name),
+    );
+    for legacy_name in get_legacy_azure_internal_commands_dapr_component_names(container_app_name) {
+        push_unique(&mut names, legacy_name);
+    }
+    names
 }
 
 fn dapr_component_deletion_candidates(
@@ -113,13 +131,6 @@ fn dapr_component_deletion_candidates(
     }
 
     names
-}
-
-fn foreign_desired_component_error(worker: &Worker, component_name: &str) -> AlienError<ErrorData> {
-    AlienError::new(ErrorData::ResourceDrift {
-        resource_id: worker.id.clone(),
-        message: format!("Dapr component '{component_name}' is owned by another Container App"),
-    })
 }
 
 impl AzureWorkerController {
@@ -204,6 +215,15 @@ impl AzureWorkerController {
         let default_namespace = needs_default_namespace
             .then(|| Self::default_service_bus_namespace_name(ctx, &worker.id))
             .transpose()?;
+        let resolved_worker_execution_client_id = || {
+            azure_client_id.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Dapr migration plan requires a worker execution identity".to_string(),
+                    operation: Some("build_dapr_component_migration_plan".to_string()),
+                    resource_id: Some(worker.id.clone()),
+                })
+            })
+        };
         let mut plan = Vec::new();
 
         if worker.commands_enabled {
@@ -226,20 +246,15 @@ impl AzureWorkerController {
                     container_app_name,
                     namespace_name,
                     format!("{container_app_name}-rq"),
-                    azure_client_id.as_deref().expect("identity was resolved"),
+                    resolved_worker_execution_client_id()?,
                 ),
                 legacy_names,
             });
         } else {
-            let mut names = Vec::new();
-            if let Some(persisted_name) = &self.commands_dapr_component {
-                push_unique(&mut names, persisted_name.clone());
-            }
-            for legacy_name in
-                get_legacy_azure_internal_commands_dapr_component_names(container_app_name)
-            {
-                push_unique(&mut names, legacy_name);
-            }
+            let names = commands_component_removal_names(
+                container_app_name,
+                self.commands_dapr_component.as_deref(),
+            );
             plan.push(MigrationAction::RemoveCommands { names });
         }
 
@@ -269,7 +284,7 @@ impl AzureWorkerController {
                             container_app_name,
                             namespace_name,
                             queue_name,
-                            azure_client_id.as_deref().expect("identity was resolved"),
+                            resolved_worker_execution_client_id()?,
                         ),
                         legacy_names: get_legacy_azure_queue_trigger_dapr_component_names(
                             container_app_name,
@@ -292,7 +307,7 @@ impl AzureWorkerController {
                             container_app_name,
                             namespace_name,
                             format!("{container_app_name}-storage-{}", storage.id),
-                            azure_client_id.as_deref().expect("identity was resolved"),
+                            resolved_worker_execution_client_id()?,
                         ),
                         legacy_names: get_legacy_azure_blob_trigger_dapr_component_names(
                             container_app_name,
@@ -334,23 +349,25 @@ impl AzureWorkerController {
                 message: "Dapr migration component has no name".to_string(),
             })
         })?;
-        let desired_component = match get_dapr_component_ownership(
-            client.as_ref(),
-            &env_outputs.resource_group_name,
-            &env_outputs.environment_name,
-            container_app_name,
-            desired_name,
-            &worker.id,
-        )
-        .await?
-        {
-            DaprComponentOwnership::Owned(existing) => Some(existing),
-            DaprComponentOwnership::Foreign => {
-                return Err(foreign_desired_component_error(worker, desired_name));
-            }
-            DaprComponentOwnership::NotFound => None,
-        };
-
+        if matches!(
+            get_dapr_component_ownership(
+                client.as_ref(),
+                &env_outputs.resource_group_name,
+                &env_outputs.environment_name,
+                container_app_name,
+                desired_name,
+                &worker.id,
+            )
+            .await?,
+            DaprComponentOwnership::Foreign
+        ) {
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: worker.id.clone(),
+                message: format!(
+                    "Dapr component '{desired_name}' is owned by another Container App"
+                ),
+            }));
+        }
         for legacy_name in legacy_names {
             if legacy_name == desired_name {
                 continue;
@@ -378,27 +395,19 @@ impl AzureWorkerController {
             }
         }
 
-        if desired_component
-            .as_ref()
-            .is_some_and(|existing| dapr_component_matches(existing, component))
+        match ensure_dapr_component(
+            client.as_ref(),
+            &env_outputs.resource_group_name,
+            &env_outputs.environment_name,
+            container_app_name,
+            component,
+            &worker.id,
+        )
+        .await?
         {
-            return Ok(DaprComponentMigrationStep::Complete);
-        }
-
-        match client
-            .create_or_update_dapr_component(
-                &env_outputs.resource_group_name,
-                &env_outputs.environment_name,
-                desired_name,
-                component,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create migrated Dapr component '{desired_name}'"),
-                resource_id: Some(worker.id.clone()),
-            })? {
-            OperationResult::Completed(_) => Ok(DaprComponentMigrationStep::Mutated),
-            OperationResult::LongRunning(operation) => {
+            DaprComponentEnsureOperation::Unchanged => Ok(DaprComponentMigrationStep::Complete),
+            DaprComponentEnsureOperation::Completed => Ok(DaprComponentMigrationStep::Mutated),
+            DaprComponentEnsureOperation::LongRunning(operation) => {
                 Ok(DaprComponentMigrationStep::LongRunning {
                     operation,
                     deleted_component: None,

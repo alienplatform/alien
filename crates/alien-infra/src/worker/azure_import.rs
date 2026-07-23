@@ -60,6 +60,8 @@ impl ResourceImporter for AzureWorkerImporter {
             dapr_component_naming_version: 0,
             pending_dapr_component_deletion_name: None,
             dapr_component_deletion_candidates_initialized: false,
+            auxiliary_teardown_candidates_initialized: false,
+            commands_update_teardown_candidates_initialized: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

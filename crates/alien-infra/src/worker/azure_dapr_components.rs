@@ -4,7 +4,7 @@ use alien_azure_clients::models::managed_environments_dapr_components::{
     DaprComponent, DaprComponentProperties, DaprMetadata, Secret,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_error::{AlienError, ContextError};
+use alien_error::{AlienError, Context, ContextError};
 use tracing::{info, warn};
 
 use crate::error::{ErrorData, Result};
@@ -12,6 +12,13 @@ use crate::error::{ErrorData, Result};
 pub(super) enum DaprComponentDeleteOperation {
     NotFound,
     Foreign,
+    Completed,
+    LongRunning(LongRunningOperation),
+}
+
+#[derive(Debug)]
+pub(super) enum DaprComponentEnsureOperation {
+    Unchanged,
     Completed,
     LongRunning(LongRunningOperation),
 }
@@ -176,32 +183,83 @@ pub(super) async fn delete_dapr_component_if_owned(
     }
 }
 
-pub(super) async fn validate_dapr_component_write_ownership(
+async fn dapr_component_needs_write(
     client: &dyn ContainerAppsApi,
     resource_group_name: &str,
     environment_name: &str,
     container_app_name: &str,
-    component_name: &str,
+    desired: &DaprComponent,
     worker_id: &str,
-) -> Result<()> {
-    if matches!(
-        get_dapr_component_ownership(
-            client,
-            resource_group_name,
-            environment_name,
-            container_app_name,
-            component_name,
-            worker_id,
-        )
-        .await?,
-        DaprComponentOwnership::Foreign
-    ) {
-        return Err(AlienError::new(ErrorData::ResourceDrift {
+) -> Result<bool> {
+    let component_name = desired.name.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: worker_id.to_string(),
+            message: "Desired Dapr component has no name".to_string(),
+        })
+    })?;
+    match get_dapr_component_ownership(
+        client,
+        resource_group_name,
+        environment_name,
+        container_app_name,
+        component_name,
+        worker_id,
+    )
+    .await?
+    {
+        DaprComponentOwnership::NotFound => Ok(true),
+        DaprComponentOwnership::Owned(existing) => Ok(!dapr_component_matches(&existing, desired)),
+        DaprComponentOwnership::Foreign => Err(AlienError::new(ErrorData::ResourceDrift {
             resource_id: worker_id.to_string(),
             message: format!("Dapr component '{component_name}' is owned by another Container App"),
-        }));
+        })),
     }
-    Ok(())
+}
+
+pub(super) async fn ensure_dapr_component(
+    client: &dyn ContainerAppsApi,
+    resource_group_name: &str,
+    environment_name: &str,
+    container_app_name: &str,
+    desired: &DaprComponent,
+    worker_id: &str,
+) -> Result<DaprComponentEnsureOperation> {
+    let component_name = desired.name.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: worker_id.to_string(),
+            message: "Desired Dapr component has no name".to_string(),
+        })
+    })?;
+    if !dapr_component_needs_write(
+        client,
+        resource_group_name,
+        environment_name,
+        container_app_name,
+        desired,
+        worker_id,
+    )
+    .await?
+    {
+        return Ok(DaprComponentEnsureOperation::Unchanged);
+    }
+
+    match client
+        .create_or_update_dapr_component(
+            resource_group_name,
+            environment_name,
+            component_name,
+            desired,
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create or update Dapr component '{component_name}'"),
+            resource_id: Some(worker_id.to_string()),
+        })? {
+        OperationResult::Completed(_) => Ok(DaprComponentEnsureOperation::Completed),
+        OperationResult::LongRunning(operation) => {
+            Ok(DaprComponentEnsureOperation::LongRunning(operation))
+        }
+    }
 }
 
 pub(super) async fn delete_owned_legacy_dapr_components(

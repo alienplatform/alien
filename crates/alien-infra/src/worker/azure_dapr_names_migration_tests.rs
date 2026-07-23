@@ -10,8 +10,8 @@ use alien_error::AlienError;
 use super::*;
 use crate::worker::azure_dapr_components::{
     dapr_component_matches, delete_dapr_component_if_owned, delete_owned_legacy_dapr_components,
-    service_bus_dapr_component, validate_dapr_component_write_ownership,
-    DaprComponentDeleteOperation, LegacyDaprComponentCleanupStep,
+    ensure_dapr_component, service_bus_dapr_component, DaprComponentDeleteOperation,
+    DaprComponentEnsureOperation, LegacyDaprComponentCleanupStep,
 };
 use crate::worker::azure_names::{
     get_azure_blob_trigger_dapr_component_name, get_azure_dapr_component_name,
@@ -20,6 +20,23 @@ use crate::worker::azure_names::{
     get_legacy_azure_queue_trigger_dapr_component_names,
 };
 use crate::worker::AzureWorkerController;
+
+#[test]
+fn disabled_imported_worker_removes_current_structured_commands_component() {
+    let current_name = get_azure_internal_commands_dapr_component_name("worker-app");
+
+    let imported_names = commands_component_removal_names("worker-app", None);
+    assert!(imported_names.contains(&current_name));
+
+    let tracked_names = commands_component_removal_names("worker-app", Some(&current_name));
+    assert_eq!(
+        tracked_names
+            .iter()
+            .filter(|component_name| *component_name == &current_name)
+            .count(),
+        1
+    );
+}
 
 #[test]
 fn deletion_plan_covers_queue_storage_and_cron_without_touching_cron_naming() {
@@ -220,18 +237,56 @@ async fn foreign_desired_name_is_rejected_before_write() {
         .expect_get_dapr_component()
         .returning(|_, _, _| Ok(component_with_scopes(&["other-worker-app"])));
 
-    let error = validate_dapr_component_write_ownership(
+    let desired = service_bus_dapr_component(
+        "structured-component".to_string(),
+        "worker-app",
+        "namespace",
+        "queue".to_string(),
+        "client-id",
+    );
+    let error = ensure_dapr_component(
         &client,
         "environment-rg",
         "environment",
         "worker-app",
-        "structured-component",
+        &desired,
         "worker",
     )
     .await
     .unwrap_err();
 
     assert!(matches!(error.error, Some(ErrorData::ResourceDrift { .. })));
+}
+
+#[tokio::test]
+async fn matching_owned_component_converges_without_another_put() {
+    let desired = service_bus_dapr_component(
+        "structured-component".to_string(),
+        "worker-app",
+        "namespace",
+        "queue".to_string(),
+        "client-id",
+    );
+    let existing = desired.clone();
+    let mut client = MockContainerAppsApi::new();
+    client
+        .expect_get_dapr_component()
+        .times(1)
+        .return_once(move |_, _, _| Ok(existing));
+    client.expect_create_or_update_dapr_component().times(0);
+
+    let operation = ensure_dapr_component(
+        &client,
+        "environment-rg",
+        "environment",
+        "worker-app",
+        &desired,
+        "worker",
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(operation, DaprComponentEnsureOperation::Unchanged));
 }
 
 #[tokio::test]
