@@ -67,6 +67,7 @@ impl ResourceImporter for AzureWorkerImporter {
             auxiliary_teardown_candidates_initialized: false,
             commands_update_teardown_candidates_initialized: false,
             trigger_update_teardown_candidates_initialized: false,
+            storage_delivery_update_reconciliation_initialized: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

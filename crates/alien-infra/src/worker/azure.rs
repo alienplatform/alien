@@ -2,10 +2,6 @@ use alien_azure_clients::container_apps::{
     ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
     ManagedEnvironmentCertificateProperties,
 };
-use alien_azure_clients::event_grid::{
-    EventSubscriptionFilter, EventSubscriptionRequest, EventSubscriptionRequestProperties,
-    ServiceBusQueueDestination, ServiceBusQueueDestinationProperties,
-};
 use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
@@ -31,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
-use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
+use crate::core::{ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
@@ -50,7 +46,7 @@ use crate::worker::azure_names::{
     get_azure_internal_commands_dapr_component_name, get_azure_queue_trigger_dapr_component_name,
     get_azure_storage_event_subscription_name, get_legacy_azure_blob_trigger_dapr_component_names,
     get_legacy_azure_internal_commands_dapr_component_names,
-    get_legacy_azure_queue_trigger_dapr_component_names, service_bus_queue_scope,
+    get_legacy_azure_queue_trigger_dapr_component_names,
 };
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
@@ -69,37 +65,13 @@ use operations::{
 };
 #[path = "azure_role_assignments.rs"]
 mod role_assignments;
-use role_assignments::discover_proven_role_assignments;
 #[path = "azure_trigger_targets.rs"]
 mod trigger_targets;
-use trigger_targets::{storage_trigger_receiver_role_definition_id, AzureStorageTriggerTarget};
+use trigger_targets::{StorageDeliveryReconcileResult, StorageTargetPreparation};
 
 /// Generates a deterministic Azure Container Apps name for a worker.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
-}
-
-fn azure_storage_event_types(events: &[String], worker_id: &str) -> Result<Vec<String>> {
-    events
-        .iter()
-        .map(|event| {
-            let event_type = match event.as_str() {
-                "created" => "Microsoft.Storage.BlobCreated",
-                "deleted" => "Microsoft.Storage.BlobDeleted",
-                "tierChanged" => "Microsoft.Storage.BlobTierChanged",
-                _ => {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "Azure storage trigger event '{}' is not supported; expected one of: created, deleted, tierChanged",
-                            event
-                        ),
-                        resource_id: Some(worker_id.to_string()),
-                    }));
-                }
-            };
-            Ok(event_type.to_string())
-        })
-        .collect()
 }
 
 #[cfg(not(test))]
@@ -250,16 +222,6 @@ enum CommandsSetupOperation {
     Completed,
     Creating(Duration),
     Deleting(Duration),
-    Pending(Duration),
-}
-
-enum StorageTargetPreparation {
-    Ready,
-    Pending,
-}
-
-enum StorageDeliveryReconcileResult {
-    Complete,
     Pending(Duration),
 }
 
@@ -554,6 +516,9 @@ pub struct AzureWorkerController {
     /// Whether trigger update teardown has reconstructed candidates from the previous config.
     #[serde(default)]
     pub(crate) trigger_update_teardown_candidates_initialized: bool,
+    /// Whether this update durably invalidated storage delivery verification latches.
+    #[serde(default)]
+    pub(crate) storage_delivery_update_reconciliation_initialized: bool,
 }
 
 impl AzureWorkerController {
@@ -2572,13 +2537,46 @@ impl AzureWorkerController {
         self.trigger_update_teardown_candidates_initialized = false;
 
         let azure_cfg = ctx.get_azure_config()?;
-        let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
+        let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "container_app_name missing prior to update_start".to_string(),
                 operation: Some("update_start".to_string()),
                 resource_id: Some(func_cfg.id.clone()),
             })
         })?;
+        if !self.storage_delivery_update_reconciliation_initialized {
+            let mut desired_storage_targets = Vec::new();
+            for trigger in &func_cfg.triggers {
+                let alien_core::WorkerTrigger::Storage { storage, .. } = trigger else {
+                    continue;
+                };
+                desired_storage_targets.push(
+                    self.desired_storage_trigger_target(
+                        ctx,
+                        func_cfg,
+                        &container_app_name,
+                        storage,
+                    )
+                    .await?
+                    .infrastructure,
+                );
+            }
+            for desired in desired_storage_targets {
+                if let Some(tracked) = self
+                    .storage_trigger_infrastructure
+                    .iter_mut()
+                    .find(|tracked| tracked.matches_target(&desired))
+                {
+                    tracked.queue_applied = false;
+                    tracked.delivery_reconciled = false;
+                }
+            }
+            self.storage_delivery_update_reconciliation_initialized = true;
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: None,
+            });
+        }
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         let client = ctx
@@ -2591,7 +2589,7 @@ impl AzureWorkerController {
             .build_container_app(
                 func_cfg,
                 &environment_name,
-                container_app_name,
+                &container_app_name,
                 azure_cfg,
                 ctx,
             )
@@ -2603,7 +2601,7 @@ impl AzureWorkerController {
 
         // Issue UPDATE
         let op_result = client
-            .update_container_app(&resource_group_name, container_app_name, &desired_app)
+            .update_container_app(&resource_group_name, &container_app_name, &desired_app)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to initiate container app update".to_string(),
@@ -3244,6 +3242,7 @@ impl AzureWorkerController {
         // Re‑use the same readiness‑probe helper.
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
         if func_cfg.readiness_probe.is_none() || func_cfg.public_endpoints.is_empty() {
+            self.storage_delivery_update_reconciliation_initialized = false;
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: None,
@@ -3262,10 +3261,13 @@ impl AzureWorkerController {
             .clone();
 
         match run_readiness_probe(ctx, &url).await {
-            Ok(()) => Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            }),
+            Ok(()) => {
+                self.storage_delivery_update_reconciliation_initialized = false;
+                Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: None,
+                })
+            }
             Err(_) => {
                 // Probe failed, let the framework handle retries
                 Ok(HandlerAction::Stay {
@@ -4167,7 +4169,7 @@ impl AzureWorkerController {
             .prepare_commands_target_for_setup(
                 ctx,
                 func_cfg,
-                container_app_name,
+                &container_app_name,
                 &AzureCommandsQueueTarget {
                     resource_group_name: service_bus_resource_group.clone(),
                     namespace_name: namespace_name.clone(),
@@ -4446,6 +4448,7 @@ impl AzureWorkerController {
         self.auxiliary_teardown_candidates_initialized = false;
         self.commands_update_teardown_candidates_initialized = false;
         self.trigger_update_teardown_candidates_initialized = false;
+        self.storage_delivery_update_reconciliation_initialized = false;
         self._internal_stay_count = None;
     }
 
@@ -4977,270 +4980,6 @@ impl AzureWorkerController {
         Ok(DaprComponentOperation::Completed)
     }
 
-    async fn prepare_storage_trigger_target(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-        desired: &AzureStorageTriggerInfrastructure,
-    ) -> Result<StorageTargetPreparation> {
-        let tracker_index = self
-            .storage_trigger_infrastructure
-            .iter()
-            .position(|item| item.event_subscription_name == desired.event_subscription_name);
-        match tracker_index {
-            Some(index) if !self.storage_trigger_infrastructure[index].matches_target(desired) => {
-                // A dependency may rotate after the old exact target was
-                // checkpointed but before its first remote mutation. Finish
-                // teardown from that durable cursor, then checkpoint the
-                // newly resolved target on a later controller step.
-                if self.storage_trigger_teardown_progress
-                    == AzureStorageTriggerTeardownProgress::EventSubscription
-                    && index != 0
-                {
-                    self.storage_trigger_infrastructure.swap(0, index);
-                    return Ok(StorageTargetPreparation::Pending);
-                }
-                let _ = self.delete_storage_trigger_infrastructure(ctx).await?;
-                Ok(StorageTargetPreparation::Pending)
-            }
-            Some(_) => Ok(StorageTargetPreparation::Ready),
-            None => {
-                self.storage_trigger_infrastructure.push(desired.clone());
-                Ok(StorageTargetPreparation::Pending)
-            }
-        }
-    }
-
-    async fn ensure_storage_delivery_infrastructure(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-        worker: &Worker,
-        storage_ref: &ResourceRef,
-        events: &[String],
-        desired: &AzureStorageTriggerTarget,
-    ) -> Result<StorageDeliveryReconcileResult> {
-        let azure_config = ctx.get_azure_config()?;
-        let desired_infrastructure = &desired.infrastructure;
-        let tracker_index = self
-            .storage_trigger_infrastructure
-            .iter()
-            .position(|item| {
-                item.event_subscription_name == desired_infrastructure.event_subscription_name
-            })
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: worker.id.clone(),
-                    message: format!(
-                        "Storage-trigger target '{}' was not checkpointed",
-                        desired_infrastructure.event_subscription_name
-                    ),
-                })
-            })?;
-        if !self.storage_trigger_infrastructure[tracker_index]
-            .matches_target(desired_infrastructure)
-        {
-            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: worker.id.clone(),
-                message: format!(
-                    "Storage-trigger target '{}' changed during delivery reconciliation",
-                    desired_infrastructure.event_subscription_name
-                ),
-            }));
-        }
-        if self.storage_trigger_infrastructure[tracker_index].delivery_reconciled {
-            return Ok(StorageDeliveryReconcileResult::Complete);
-        }
-
-        let resource_group_name = &desired_infrastructure.service_bus_resource_group;
-        let namespace_name = &desired_infrastructure.namespace_name;
-        let queue_name = &desired_infrastructure.queue_name;
-        if !self.storage_trigger_infrastructure[tracker_index].queue_applied {
-            let service_bus_client = ctx
-                .service_provider
-                .get_azure_service_bus_management_client(azure_config)?;
-            service_bus_client
-                .create_or_update_queue(
-                    resource_group_name.clone(),
-                    namespace_name.clone(),
-                    queue_name.clone(),
-                    alien_azure_clients::models::queue::SbQueueProperties::default(),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create storage-trigger Service Bus queue '{queue_name}'"
-                    ),
-                    resource_id: Some(worker.id.clone()),
-                })?;
-            self.storage_trigger_infrastructure[tracker_index].queue_applied = true;
-            return Ok(StorageDeliveryReconcileResult::Pending(
-                Duration::from_secs(1),
-            ));
-        }
-
-        let storage_id = desired_infrastructure
-            .storage_id
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: worker.id.clone(),
-                    message: format!(
-                        "Storage-trigger target '{}' has no storage ID",
-                        desired_infrastructure.event_subscription_name
-                    ),
-                })
-            })?;
-        let queue_scope = service_bus_queue_scope(resource_group_name, namespace_name, queue_name);
-        let role_definition_id =
-            storage_trigger_receiver_role_definition_id(&azure_config.subscription_id);
-        let proven_assignments = discover_proven_role_assignments(
-            ctx,
-            &queue_scope,
-            &role_definition_id,
-            &worker.id,
-            "storage receiver",
-            |principal_id| {
-                crate::worker::azure_names::storage_trigger_receiver_role_assignment_name(
-                    ctx.resource_prefix,
-                    &worker.id,
-                    storage_id,
-                    principal_id,
-                )
-            },
-        )
-        .await?;
-        let desired_assignment_id = desired_infrastructure
-            .receiver_role_assignment_id
-            .as_deref()
-            .expect("desired storage target includes a receiver role assignment");
-        let mut desired_assignment_found = false;
-        let authorization_client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
-        for assignment in proven_assignments {
-            if assignment.id.eq_ignore_ascii_case(desired_assignment_id) {
-                desired_assignment_found = true;
-                continue;
-            }
-            match authorization_client
-                .delete_role_assignment_by_id(assignment.id.clone())
-                .await
-            {
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) => {}
-                Err(error) => {
-                    return Err(error.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete stale storage receiver role assignment '{}'",
-                            assignment.id
-                        ),
-                        resource_id: Some(worker.id.clone()),
-                    }));
-                }
-            }
-            return Ok(StorageDeliveryReconcileResult::Pending(
-                Duration::from_secs(1),
-            ));
-        }
-        if !desired_assignment_found {
-            AzurePermissionsHelper::create_role_assignment(
-                &authorization_client,
-                azure_config,
-                &queue_scope,
-                &desired.receiver_role_assignment_name,
-                &desired.execution_principal_id,
-                &role_definition_id,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to grant the worker access to storage-trigger queue '{queue_name}'"
-                ),
-                resource_id: Some(worker.id.clone()),
-            })?;
-            return Ok(StorageDeliveryReconcileResult::Pending(
-                Duration::from_secs(1),
-            ));
-        }
-
-        let container_name = desired_infrastructure
-            .source_container_name
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: worker.id.clone(),
-                    message: format!(
-                        "Storage-trigger target '{}' has no source container",
-                        desired_infrastructure.event_subscription_name
-                    ),
-                })
-            })?;
-        let queue_resource_id = format!(
-            "/subscriptions/{}/resourceGroups/{resource_group_name}/providers/Microsoft.ServiceBus/namespaces/{namespace_name}/queues/{queue_name}",
-            azure_config.subscription_id
-        );
-        let included_event_types = azure_storage_event_types(events, &worker.id)?;
-        let event_grid_client = ctx
-            .service_provider
-            .get_azure_event_grid_client(azure_config)?;
-        let event_subscription = event_grid_client
-            .create_or_update_event_subscription(
-                desired_infrastructure.source_resource_id.clone(),
-                desired_infrastructure.event_subscription_name.clone(),
-                EventSubscriptionRequest {
-                    properties: EventSubscriptionRequestProperties {
-                        destination: ServiceBusQueueDestination {
-                            endpoint_type: "ServiceBusQueue".to_string(),
-                            properties: ServiceBusQueueDestinationProperties {
-                                resource_id: queue_resource_id,
-                            },
-                        },
-                        filter: EventSubscriptionFilter {
-                            included_event_types,
-                            subject_begins_with: format!(
-                                "/blobServices/default/containers/{container_name}/blobs/"
-                            ),
-                            is_subject_case_sensitive: false,
-                        },
-                        event_delivery_schema: "CloudEventSchemaV1_0".to_string(),
-                    },
-                },
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to reconcile Event Grid subscription '{}' for storage '{}'",
-                    desired_infrastructure.event_subscription_name, storage_ref.id
-                ),
-                resource_id: Some(worker.id.clone()),
-            })?;
-        let provisioning_state = event_subscription
-            .properties
-            .and_then(|properties| properties.provisioning_state);
-        if provisioning_state
-            .as_deref()
-            .is_none_or(|state| !state.eq_ignore_ascii_case("Succeeded"))
-        {
-            info!(
-                worker=%worker.id,
-                subscription=%desired_infrastructure.event_subscription_name,
-                state=?provisioning_state,
-                "Waiting for exact Event Grid storage subscription"
-            );
-            return Ok(StorageDeliveryReconcileResult::Pending(
-                Duration::from_secs(5),
-            ));
-        }
-
-        self.storage_trigger_infrastructure[tracker_index].delivery_reconciled = true;
-        Ok(StorageDeliveryReconcileResult::Pending(
-            Duration::from_secs(1),
-        ))
-    }
-
     /// Creates supported Azure storage-trigger delivery:
     /// Event Grid -> dedicated Service Bus queue -> Dapr Service Bus input binding.
     async fn create_azure_storage_trigger(
@@ -5530,6 +5269,7 @@ impl AzureWorkerController {
             auxiliary_teardown_candidates_initialized: false,
             commands_update_teardown_candidates_initialized: false,
             trigger_update_teardown_candidates_initialized: false,
+            storage_delivery_update_reconciliation_initialized: false,
             _internal_stay_count: None,
         }
     }
@@ -5554,6 +5294,7 @@ mod tests {
     mod storage_target_tests {
         use super::*;
         include!("azure_storage_target_tests.rs");
+        include!("azure_storage_delivery_update_tests.rs");
     }
 
     mod state_persistence_tests {
@@ -5592,10 +5333,9 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        azure_storage_event_types, commands_queue_name, current_unix_timestamp_secs,
-        dns_name_from_url, get_azure_internal_commands_dapr_component_name,
-        AzureCommandsSenderRoleAssignmentIntent, AzureStorageTriggerTeardownProgress,
-        AZURE_RBAC_WAIT_POLL_SECS,
+        commands_queue_name, current_unix_timestamp_secs, dns_name_from_url,
+        get_azure_internal_commands_dapr_component_name, AzureCommandsSenderRoleAssignmentIntent,
+        AzureStorageTriggerTeardownProgress, AZURE_RBAC_WAIT_POLL_SECS,
     };
     use crate::core::{
         controller_test::{test_storage_1, SingleControllerExecutor},
@@ -5603,6 +5343,7 @@ mod tests {
     };
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
+    use crate::worker::azure::trigger_targets::azure_storage_event_types;
     use crate::worker::azure_dapr_components::service_bus_dapr_component;
     use crate::worker::azure_dapr_names_migration::CURRENT_DAPR_COMPONENT_NAMING_VERSION;
     use crate::worker::{
@@ -7585,6 +7326,7 @@ mod tests {
             auxiliary_teardown_candidates_initialized: false,
             commands_update_teardown_candidates_initialized: false,
             trigger_update_teardown_candidates_initialized: false,
+            storage_delivery_update_reconciliation_initialized: false,
             _internal_stay_count: None,
         };
 

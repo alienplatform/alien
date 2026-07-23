@@ -1,106 +1,6 @@
 include!("azure_storage_target_test_support.rs");
 
-fn storage_target(
-    worker_id: &str,
-    storage_id: &str,
-    storage_account_name: &str,
-    source_container_name: &str,
-    service_bus_resource_group: &str,
-    namespace: &str,
-    execution_principal_id: &str,
-) -> StorageTarget {
-    let queue = storage_trigger_queue_name("test-storage-target-worker", storage_id);
-    let assignment_name = storage_trigger_receiver_role_assignment_name(
-        "test",
-        worker_id,
-        storage_id,
-        execution_principal_id,
-    );
-    StorageTarget {
-        storage_id: storage_id.to_string(),
-        source_resource_id: format!(
-            "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/default-resource-group/providers/Microsoft.Storage/storageAccounts/{storage_account_name}"
-        ),
-        source_container_name: source_container_name.to_string(),
-        event_subscription_name: get_azure_storage_event_subscription_name(worker_id, storage_id),
-        resource_group: service_bus_resource_group.to_string(),
-        namespace: namespace.to_string(),
-        queue: queue.clone(),
-        receiver_assignment_id: format!(
-            "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{service_bus_resource_group}/providers/Microsoft.ServiceBus/namespaces/{namespace}/queues/{queue}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}"
-        ),
-        execution_principal_id: execution_principal_id.to_string(),
-    }
-}
-
-fn storage_trigger_worker(storage: &alien_core::Storage) -> Worker {
-    let mut worker = basic_function();
-    worker.id = "storage-target-worker".to_string();
-    worker
-        .triggers
-        .push(WorkerTrigger::storage(storage, vec!["created".to_string()]));
-    worker
-}
-
-fn storage_components(
-    app_name: &str,
-    storage_id: &str,
-    namespace: &str,
-    queue: &str,
-    execution_client_id: &str,
-) -> Vec<DaprComponent> {
-    let current_name = get_azure_blob_trigger_dapr_component_name(app_name, storage_id);
-    let mut names = vec![current_name];
-    for legacy_name in get_legacy_azure_blob_trigger_dapr_component_names(app_name, storage_id) {
-        if !names.contains(&legacy_name) {
-            names.push(legacy_name);
-        }
-    }
-    names
-        .into_iter()
-        .map(|name| {
-            service_bus_dapr_component(
-                name,
-                app_name,
-                namespace,
-                queue.to_string(),
-                execution_client_id,
-            )
-        })
-        .collect()
-}
-
-fn storage_controller(
-    storage_id: &str,
-    storage_account_name: &str,
-    container_name: &str,
-) -> AzureStorageController {
-    let mut controller = AzureStorageController::mock_ready(storage_id);
-    controller.storage_account_name = Some(storage_account_name.to_string());
-    controller.container_name = Some(container_name.to_string());
-    controller
-}
-
-fn rotated_service_account(
-    identity_resource_id: &str,
-    client_id: &str,
-    principal_id: &str,
-) -> AzureServiceAccountController {
-    let mut controller = AzureServiceAccountController::mock_ready("default-profile-sa");
-    controller.identity_resource_id = Some(identity_resource_id.to_string());
-    controller.identity_client_id = Some(client_id.to_string());
-    controller.identity_principal_id = Some(principal_id.to_string());
-    controller
-}
-
-fn namespace_controller(
-    namespace_name: &str,
-    resource_group_name: &str,
-) -> AzureServiceBusNamespaceController {
-    let mut controller = AzureServiceBusNamespaceController::mock_ready(namespace_name);
-    controller.resource_group_name = Some(resource_group_name.to_string());
-    controller
-}
+use crate::core::controller_test::test_storage_2;
 
 async fn run_until_storage_subscription_created(
     executor: &mut SingleControllerExecutor,
@@ -543,6 +443,248 @@ fn storage_checkpoint_provider() -> Arc<MockPlatformServiceProvider> {
         .expect_get_azure_authorization_client()
         .returning(move |_| Ok(authorization.clone()));
     Arc::new(provider)
+}
+
+fn imported_ready_storage_provider(
+    stale: StorageTarget,
+    desired: StorageTarget,
+    actions: Arc<Mutex<Vec<String>>>,
+) -> Arc<MockPlatformServiceProvider> {
+    let mut service_bus = MockServiceBusManagementApi::new();
+    let desired_queue = desired.clone();
+    let queue_actions = actions.clone();
+    service_bus
+        .expect_create_or_update_queue()
+        .times(1)
+        .returning(move |resource_group, namespace, queue, _| {
+            assert_eq!(resource_group, desired_queue.resource_group);
+            assert_eq!(namespace, desired_queue.namespace);
+            assert_eq!(queue, desired_queue.queue);
+            record(&queue_actions, format!("create-queue:{queue}"));
+            Ok(alien_azure_clients::models::queue::SbQueue::default())
+        });
+    let service_bus = Arc::new(service_bus);
+
+    let role_definition_id = format!(
+        "/subscriptions/{SUBSCRIPTION_ID}/providers/Microsoft.Authorization/roleDefinitions/4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0"
+    );
+    let list_responses = Arc::new(Mutex::new(std::collections::VecDeque::from([
+        vec![receiver_role_assignment(&stale, &role_definition_id)],
+        Vec::new(),
+        vec![receiver_role_assignment(&desired, &role_definition_id)],
+    ])));
+    let mut authorization = MockAuthorizationApi::new();
+    authorization
+        .expect_build_role_assignment_id()
+        .returning(|scope, name| {
+            format!(
+                "/{}/providers/Microsoft.Authorization/roleAssignments/{name}",
+                scope.to_scope_string(&alien_azure_clients::AzureClientConfig::mock())
+            )
+        });
+    let desired_scope = desired
+        .receiver_assignment_id
+        .split("/providers/Microsoft.Authorization")
+        .next()
+        .expect("desired assignment scope")
+        .to_string();
+    let role_definition_for_list = role_definition_id.clone();
+    authorization
+        .expect_list_role_assignments()
+        .times(3)
+        .returning(move |scope, requested_role_definition| {
+            assert_eq!(
+                requested_role_definition.as_deref(),
+                Some(role_definition_for_list.as_str())
+            );
+            let scope = format!(
+                "/{}",
+                scope
+                    .to_scope_string(&alien_azure_clients::AzureClientConfig::mock())
+                    .trim_start_matches('/')
+            );
+            assert_eq!(scope, desired_scope);
+            Ok(list_responses
+                .lock()
+                .expect("list responses")
+                .pop_front()
+                .expect("expected receiver discovery response"))
+        });
+    let stale_assignment_id = stale.receiver_assignment_id.clone();
+    let delete_actions = actions.clone();
+    authorization
+        .expect_delete_role_assignment_by_id()
+        .times(1)
+        .returning(move |assignment_id| {
+            assert_eq!(assignment_id, stale_assignment_id);
+            record(&delete_actions, format!("delete-rbac:{assignment_id}"));
+            Ok(None)
+        });
+    let desired_assignment_id = desired.receiver_assignment_id.clone();
+    let desired_principal_id = desired.execution_principal_id.clone();
+    let put_actions = actions.clone();
+    authorization
+        .expect_create_or_update_role_assignment_by_id()
+        .times(1)
+        .returning(move |assignment_id, assignment| {
+            assert_eq!(assignment_id, desired_assignment_id);
+            assert_eq!(
+                assignment
+                    .properties
+                    .as_ref()
+                    .expect("role assignment properties")
+                    .principal_id,
+                desired_principal_id
+            );
+            record(&put_actions, format!("put-rbac:{assignment_id}"));
+            Ok(assignment.clone())
+        });
+    let authorization = Arc::new(authorization);
+
+    let mut event_grid = MockEventGridApi::new();
+    let desired_event = desired;
+    let event_actions = actions;
+    event_grid
+        .expect_create_or_update_event_subscription()
+        .times(1)
+        .returning(move |source_resource_id, subscription_name, request| {
+            assert_eq!(source_resource_id, desired_event.source_resource_id);
+            assert_eq!(subscription_name, desired_event.event_subscription_name);
+            assert_eq!(
+                request.properties.filter.subject_begins_with,
+                format!(
+                    "/blobServices/default/containers/{}/blobs/",
+                    desired_event.source_container_name
+                )
+            );
+            record(&event_actions, format!("put-event:{subscription_name}"));
+            Ok(EventSubscription {
+                id: None,
+                name: Some(subscription_name),
+                properties: Some(EventSubscriptionProperties {
+                    provisioning_state: Some("Succeeded".to_string()),
+                }),
+            })
+        });
+    let event_grid = Arc::new(event_grid);
+
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_azure_authorization_client()
+        .returning(move |_| Ok(authorization.clone()));
+    provider
+        .expect_get_azure_service_bus_management_client()
+        .returning(move |_| Ok(service_bus.clone()));
+    provider
+        .expect_get_azure_event_grid_client()
+        .returning(move |_| Ok(event_grid.clone()));
+    Arc::new(provider)
+}
+
+#[tokio::test]
+async fn imported_ready_worker_checkpoints_then_repairs_storage_delivery() {
+    let app_name = "test-storage-target-worker";
+    let storage = test_storage_1();
+    let worker = storage_trigger_worker(&storage);
+    let stale = storage_target(
+        &worker.id,
+        &storage.id,
+        "storage-account",
+        "storage-container",
+        "service-bus-rg",
+        "service-bus-namespace",
+        "stale-principal",
+    );
+    let desired = storage_target(
+        &worker.id,
+        &storage.id,
+        "storage-account",
+        "storage-container",
+        "service-bus-rg",
+        "service-bus-namespace",
+        "desired-principal",
+    );
+    let actions = Arc::new(Mutex::new(Vec::new()));
+    let provider = imported_ready_storage_provider(stale.clone(), desired.clone(), actions.clone());
+    let service_account = ServiceAccount::new("default-profile-sa".to_string()).build();
+    let mut controller = AzureWorkerController::mock_ready(app_name);
+    controller.resource_id = None;
+    controller.storage_trigger_infrastructure.clear();
+    controller.auxiliary_teardown_candidates_initialized = false;
+    let mut executor = SingleControllerExecutor::builder()
+        .resource(worker)
+        .controller(controller)
+        .platform(Platform::Azure)
+        .service_provider(provider)
+        .with_test_dependencies()
+        .with_dependency(
+            storage.clone(),
+            storage_controller(&storage.id, "storage-account", "storage-container"),
+        )
+        .with_dependency(
+            test_azure_service_bus_namespace(),
+            namespace_controller("service-bus-namespace", "service-bus-rg"),
+        )
+        .with_dependency(
+            service_account,
+            rotated_service_account("desired-identity", "desired-client", "desired-principal"),
+        )
+        .build()
+        .await
+        .expect("executor should build");
+
+    executor.step().await.expect("checkpoint imported target");
+    assert!(
+        actions.lock().expect("action log lock").is_empty(),
+        "the first Ready pass must not mutate remote delivery resources"
+    );
+    let checkpoint = executor
+        .internal_state::<AzureWorkerController>()
+        .expect("Azure worker controller");
+    assert_eq!(checkpoint.storage_trigger_infrastructure.len(), 1);
+    assert_eq!(
+        checkpoint.storage_trigger_infrastructure[0]
+            .receiver_role_assignment_id
+            .as_deref(),
+        Some(desired.receiver_assignment_id.as_str())
+    );
+    assert!(!checkpoint.storage_trigger_infrastructure[0].delivery_reconciled);
+
+    for step in 0..12 {
+        let before = actions.lock().expect("action log lock").len();
+        executor
+            .step()
+            .await
+            .unwrap_or_else(|error| panic!("Ready repair failed at step {step}: {error}"));
+        let after = actions.lock().expect("action log lock").len();
+        assert!(after <= before + 1, "at most one durable mutation per step");
+        if executor
+            .internal_state::<AzureWorkerController>()
+            .expect("Azure worker controller")
+            .storage_trigger_infrastructure[0]
+            .delivery_reconciled
+        {
+            break;
+        }
+    }
+
+    assert!(
+        executor
+            .internal_state::<AzureWorkerController>()
+            .expect("Azure worker controller")
+            .storage_trigger_infrastructure[0]
+            .delivery_reconciled,
+        "Ready repair must reach a proven receiver grant and exact Event Grid subscription"
+    );
+    assert_eq!(
+        actions.lock().expect("action log lock").as_slice(),
+        [
+            format!("create-queue:{}", desired.queue),
+            format!("delete-rbac:{}", stale.receiver_assignment_id),
+            format!("put-rbac:{}", desired.receiver_assignment_id),
+            format!("put-event:{}", desired.event_subscription_name),
+        ]
+    );
 }
 
 #[tokio::test]

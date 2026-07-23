@@ -18,7 +18,7 @@ use alien_core::{Platform, ServiceAccount, Worker, WorkerTrigger};
 use alien_error::AlienError;
 
 use crate::core::controller_test::{
-    test_azure_service_bus_namespace, test_storage_1, test_storage_2, SingleControllerExecutor,
+    test_azure_service_bus_namespace, test_storage_1, SingleControllerExecutor,
 };
 use crate::core::MockPlatformServiceProvider;
 use crate::infra_requirements::AzureServiceBusNamespaceController;
@@ -105,6 +105,108 @@ struct StorageProviderExpectations {
     expected_container_identity_id: Option<String>,
     expect_container_app_update: bool,
     deletes_are_missing: bool,
+}
+
+fn storage_target(
+    worker_id: &str,
+    storage_id: &str,
+    storage_account_name: &str,
+    source_container_name: &str,
+    service_bus_resource_group: &str,
+    namespace: &str,
+    execution_principal_id: &str,
+) -> StorageTarget {
+    let queue = storage_trigger_queue_name("test-storage-target-worker", storage_id);
+    let assignment_name = storage_trigger_receiver_role_assignment_name(
+        "test",
+        worker_id,
+        storage_id,
+        execution_principal_id,
+    );
+    StorageTarget {
+        storage_id: storage_id.to_string(),
+        source_resource_id: format!(
+            "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/default-resource-group/providers/Microsoft.Storage/storageAccounts/{storage_account_name}"
+        ),
+        source_container_name: source_container_name.to_string(),
+        event_subscription_name: get_azure_storage_event_subscription_name(worker_id, storage_id),
+        resource_group: service_bus_resource_group.to_string(),
+        namespace: namespace.to_string(),
+        queue: queue.clone(),
+        receiver_assignment_id: format!(
+            "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{service_bus_resource_group}/providers/Microsoft.ServiceBus/namespaces/{namespace}/queues/{queue}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}"
+        ),
+        execution_principal_id: execution_principal_id.to_string(),
+    }
+}
+
+fn storage_trigger_worker(storage: &alien_core::Storage) -> Worker {
+    let mut worker = basic_function();
+    worker.id = "storage-target-worker".to_string();
+    worker
+        .triggers
+        .push(WorkerTrigger::storage(storage, vec!["created".to_string()]));
+    worker
+}
+
+fn storage_components(
+    app_name: &str,
+    storage_id: &str,
+    namespace: &str,
+    queue: &str,
+    execution_client_id: &str,
+) -> Vec<DaprComponent> {
+    let current_name = get_azure_blob_trigger_dapr_component_name(app_name, storage_id);
+    let mut names = vec![current_name];
+    for legacy_name in get_legacy_azure_blob_trigger_dapr_component_names(app_name, storage_id) {
+        if !names.contains(&legacy_name) {
+            names.push(legacy_name);
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| {
+            service_bus_dapr_component(
+                name,
+                app_name,
+                namespace,
+                queue.to_string(),
+                execution_client_id,
+            )
+        })
+        .collect()
+}
+
+fn storage_controller(
+    storage_id: &str,
+    storage_account_name: &str,
+    container_name: &str,
+) -> AzureStorageController {
+    let mut controller = AzureStorageController::mock_ready(storage_id);
+    controller.storage_account_name = Some(storage_account_name.to_string());
+    controller.container_name = Some(container_name.to_string());
+    controller
+}
+
+fn rotated_service_account(
+    identity_resource_id: &str,
+    client_id: &str,
+    principal_id: &str,
+) -> AzureServiceAccountController {
+    let mut controller = AzureServiceAccountController::mock_ready("default-profile-sa");
+    controller.identity_resource_id = Some(identity_resource_id.to_string());
+    controller.identity_client_id = Some(client_id.to_string());
+    controller.identity_principal_id = Some(principal_id.to_string());
+    controller
+}
+
+fn namespace_controller(
+    namespace_name: &str,
+    resource_group_name: &str,
+) -> AzureServiceBusNamespaceController {
+    let mut controller = AzureServiceBusNamespaceController::mock_ready(namespace_name);
+    controller.resource_group_name = Some(resource_group_name.to_string());
+    controller
 }
 
 fn assert_container_app_identity(
