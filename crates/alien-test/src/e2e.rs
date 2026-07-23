@@ -148,6 +148,11 @@ pub enum TestApp {
     /// TypeScript SOURCE Container + Rust SOURCE Daemon sharing a direct KV
     /// binding and registering the same target-scoped command.
     RuntimeLessMixed,
+    /// Worker plus a matched on/off pair of every gated resource type (KV,
+    /// storage, queue, vault) behind `.enabled(input)`, for verifying that a
+    /// declined resource and its grant never reach the cloud
+    /// (`tests/e2e/test-apps/enabled-demo`).
+    EnabledDemo,
 }
 
 impl std::fmt::Display for TestApp {
@@ -159,6 +164,7 @@ impl std::fmt::Display for TestApp {
             TestApp::CommandRoutingTs => write!(f, "command-routing-ts"),
             TestApp::ContainerRust => write!(f, "container-rust"),
             TestApp::RuntimeLessMixed => write!(f, "runtime-less-mixed"),
+            TestApp::EnabledDemo => write!(f, "enabled-demo"),
         }
     }
 }
@@ -363,6 +369,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::CommandRoutingTs => "../../examples/command-routing-ts",
         TestApp::ContainerRust => "test-apps/container-rust",
         TestApp::RuntimeLessMixed => "test-apps/runtime-less-mixed",
+        TestApp::EnabledDemo => "test-apps/enabled-demo",
     }
 }
 
@@ -379,7 +386,8 @@ fn deployment_environment_variables(
         | TestApp::ComprehensiveTs
         | TestApp::CommandRoutingTs
         | TestApp::ContainerRust
-        | TestApp::RuntimeLessMixed => None,
+        | TestApp::RuntimeLessMixed
+        | TestApp::EnabledDemo => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
                 name: "APP_SECRET".to_string(),
