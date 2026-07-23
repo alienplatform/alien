@@ -91,7 +91,7 @@ fn aws_open_search_renders_collection_group_capacity_limits() {
             AwsOpenSearch::new("articles".to_string())
                 .capacity(AwsOpenSearchCapacity {
                     indexing: Some(AwsOpenSearchCapacityRange {
-                        min_ocu: Some(1),
+                        min_ocu: Some(2),
                         max_ocu: Some(16),
                     }),
                     search: Some(AwsOpenSearchCapacityRange {
@@ -113,7 +113,7 @@ fn aws_open_search_renders_collection_group_capacity_limits() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
     let limits = &template["Resources"]["ArticlesGroup"]["Properties"]["CapacityLimits"];
-    assert_eq!(limits["MinIndexingCapacityInOcu"], 1);
+    assert_eq!(limits["MinIndexingCapacityInOcu"], 2);
     assert_eq!(limits["MaxIndexingCapacityInOcu"], 16);
     assert_eq!(limits["MinSearchCapacityInOcu"], 2);
     assert_eq!(limits["MaxSearchCapacityInOcu"], 32);
