@@ -19,7 +19,6 @@
   },
   "scripts": {
     "build": "tsdown && tsc --emitDeclarationOnly",
-    "prepare": "npm run build",
     "test": "vitest run --passWithNoTests",
     "test:ts": "tsc --noEmit",
     "generate": "./scripts/generate-proto.sh",
