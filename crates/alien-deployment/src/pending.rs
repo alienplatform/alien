@@ -161,8 +161,11 @@ pub fn strip_declined_resources(
         // grants straight from the profile (the GCP service-account controller
         // applies resource grants as project-level bindings, since Vertex can't
         // scope IAM to a sub-resource) would re-grant it — the runtime twin of
-        // the setup emitter's enabled_when gate. The "*" wildcard is not
-        // resource-scoped, so it is left alone.
+        // the setup emitter's enabled_when gate. Removing the exact key suffices
+        // because `ResourceEnabledValidCheck` (alien-preflights) already rejects a
+        // `*`-scoped or sibling-namespace grant that could still cover a gated
+        // resource; the "*" wildcard here is not resource-scoped, so it is left
+        // alone.
         for profile in stack.permissions.profiles.values_mut() {
             profile.0.shift_remove(resource_id.as_str());
         }
@@ -323,14 +326,19 @@ mod tests {
         assert!(stripped.resources.contains_key("execution-sa"));
     }
 
-    /// A declined gated resource must also lose its resource-scoped grant from
-    /// every permission profile (see `strip_declined_resources` for why), while
-    /// the `"*"` wildcard survives.
+    /// A declined gated resource loses its resource-scoped grant from every
+    /// permission profile (see `strip_declined_resources` for why). The removal
+    /// is exact-key, so a kept resource's own grant and the `"*"` wildcard both
+    /// survive — the strip must not sweep a sibling.
     #[test]
     fn a_declined_resource_loses_its_permission_profile_grant() {
         let stack = Stack::new("gated-stack".to_string())
             .add(
                 ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Kv::new("events".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
             .add_enabled_when(
@@ -342,16 +350,26 @@ mod tests {
                 "execution",
                 PermissionProfile::new()
                     .resource("analytics", ["kv/write"])
+                    .resource("events", ["kv/read"])
                     .resource("*", ["worker/invoke"]),
             )
             .build();
 
-        // The import delivered the service account but not the gated store, so
-        // the store is the deployer's declined resource.
-        let state = imported_state_with(
+        // The import delivered the service account and the ungated `events`
+        // store but not the gated `analytics` store, so `analytics` is the
+        // deployer's declined resource.
+        let mut state = imported_state_with(
             "execution-sa",
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
+        let mut events = StackResourceState::new_pending(
+            "kv".to_string(),
+            Resource::new(Kv::new("events".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        events.status = ResourceStatus::Running;
+        state.resources.insert("events".to_string(), events);
 
         let stripped = strip_declined_resources(stack, &state, &Default::default())
             .expect("frozen rules never error");
@@ -368,6 +386,10 @@ mod tests {
         assert!(
             !profile.0.contains_key("analytics"),
             "the declined resource's grant leaves the profile so no runtime consumer re-applies it"
+        );
+        assert!(
+            profile.0.contains_key("events"),
+            "a kept resource's own grant survives: the strip is exact-key, not a prefix sweep"
         );
         assert!(
             profile.0.contains_key("*"),

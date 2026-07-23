@@ -115,16 +115,13 @@ impl TfEmitter for GcpVaultEmitter {
         ]))
     }
 
-    /// The vault has no Terraform block of its own — it is a Secret Manager
-    /// name prefix — and its import data is built entirely from `local` and
-    /// `var` values. So nothing here needs an index: the role bindings are
-    /// project-scoped with a name-prefix condition, never a resource address.
-    ///
-    /// They still take the gate. `roles/secretmanager.secretAccessor` reads
-    /// secret payloads, and the condition matches on a prefix: resource ids may
-    /// contain hyphens, so a declined vault `app` leaves a grant over secrets
-    /// starting `<prefix>-app-`, which covers a live sibling vault named
-    /// `app-config`. Only the bindings are gated — see `gate_bindings`.
+    /// The role bindings are project-scoped with a name-prefix condition, never
+    /// a resource address, so nothing here needs an index.
+    /// `roles/secretmanager.secretAccessor` reads secret payloads and the
+    /// condition matches on a prefix: resource ids may contain hyphens, so a
+    /// declined vault `app` leaves a grant over secrets starting `<prefix>-app-`,
+    /// which covers a live sibling vault named `app-config`. Only the bindings
+    /// are gated — see `gate_bindings`.
     fn supports_enabled_when(&self) -> bool {
         true
     }

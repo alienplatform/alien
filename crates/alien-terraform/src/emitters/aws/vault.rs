@@ -113,14 +113,9 @@ impl TfEmitter for AwsVaultEmitter {
         ]))
     }
 
-    /// The vault has no Terraform block of its own — it is a Parameter Store
-    /// name prefix — and its import data is built entirely from `local` and
-    /// `data` values. So nothing here needs an index: the IAM policies grant
-    /// against a static `${local.resource_prefix}-<id>-*` pattern, never against
-    /// a resource address.
-    ///
-    /// They still take the gate. `ssm:GetParameter` is a data-plane read, and
-    /// the pattern is a prefix wildcard: resource ids may contain hyphens, so a
+    /// The IAM policies grant against a static `${local.resource_prefix}-<id>-*`
+    /// pattern, never a resource address, so nothing here needs an index. The
+    /// pattern is a prefix wildcard and resource ids may contain hyphens: a
     /// declined vault `app` leaves a grant over `<prefix>-app-*`, which matches
     /// every parameter in a live sibling vault named `app-config`. Declining a
     /// vault has to withdraw the permission, not just the registration entry.

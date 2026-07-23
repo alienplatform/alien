@@ -437,16 +437,12 @@ fn assert_no_ungated_grant_over(main: &str, namespace: &str, gate: &str) {
     );
 }
 
-/// On AWS and GCP the vault owns no block of its own — it is a name prefix, and
-/// its import data is built from `local` / `var` / `data` values. So there is
-/// nothing to index, and the prefix it reports must not change.
-///
-/// Its access policy is a different matter. The grant is a data-plane read
-/// (`ssm:GetParameter`, `roles/secretmanager.secretAccessor`) over a prefix
-/// wildcard, and resource ids may contain hyphens — so a declined vault `app`
-/// left holding `<prefix>-app-*` can read a live sibling vault `app-config`.
-/// Declining a vault has to withdraw the permission, not just the registration
-/// entry, which is also what the CloudFormation generator does.
+/// The vault's access policy is a data-plane read (`ssm:GetParameter`,
+/// `roles/secretmanager.secretAccessor`) over a prefix wildcard, and resource
+/// ids may contain hyphens — so a declined vault `app` left holding
+/// `<prefix>-app-*` can read a live sibling vault `app-config`. Declining it has
+/// to withdraw the permission, not just the registration entry (the same as the
+/// CloudFormation generator).
 #[test]
 fn a_gated_prefix_only_vault_gates_the_access_policy_it_owns() {
     for (target, name, grant_block) in [

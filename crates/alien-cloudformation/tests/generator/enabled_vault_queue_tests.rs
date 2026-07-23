@@ -233,9 +233,8 @@ fn a_gated_vault_gates_the_iam_policies_that_are_its_only_resources() {
     );
 }
 
-/// The invariant that matters most: registration runs the typed importer over
-/// every entry it receives, so a declined resource has to be absent rather than
-/// present-and-null.
+/// Registration runs the typed importer over every entry it receives, so a
+/// declined resource has to be absent rather than present-and-null.
 #[test]
 fn declined_resources_leave_no_registration_entry() {
     let template = render(&stack(true), "gated queue and vault");
