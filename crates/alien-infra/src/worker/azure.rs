@@ -2535,6 +2535,7 @@ impl AzureWorkerController {
         self.update_dapr_components_deleted = false;
         self.commands_update_teardown_candidates_initialized = false;
         self.trigger_update_teardown_candidates_initialized = false;
+        self.commands_sender_role_assignment_discovery_complete = false;
 
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.clone().ok_or_else(|| {
@@ -2810,27 +2811,18 @@ impl AzureWorkerController {
                     });
                 }
             }
-        } else if commands_changed
-            || self.commands_dapr_component.is_some()
-            || self.commands_sender_role_assignment_id.is_some()
-            || self.commands_sender_role_assignment_intent.is_some()
-            || self.commands_resource_group_name.is_some()
-            || self.commands_namespace_name.is_some()
-            || self.commands_queue_name.is_some()
+        } else if !self.commands_update_teardown_candidates_initialized
+            && (commands_changed
+                || self.commands_dapr_component.is_some()
+                || self.commands_sender_role_assignment_id.is_some()
+                || self.commands_sender_role_assignment_intent.is_some()
+                || self.commands_resource_group_name.is_some()
+                || self.commands_namespace_name.is_some()
+                || self.commands_queue_name.is_some())
         {
-            if !self.commands_update_teardown_candidates_initialized {
-                self.initialize_commands_teardown_candidates(
-                    ctx,
-                    previous_config,
-                    &container_app_name,
-                )
+            self.initialize_commands_teardown_candidates(ctx, previous_config, &container_app_name)
                 .await?;
-                self.commands_update_teardown_candidates_initialized = true;
-                return Ok(HandlerAction::Continue {
-                    state: UpdateDeletingCommandsInfrastructure,
-                    suggested_delay: None,
-                });
-            }
+            self.commands_update_teardown_candidates_initialized = true;
             return Ok(HandlerAction::Continue {
                 state: UpdateDeletingCommandsInfrastructure,
                 suggested_delay: None,
@@ -3611,13 +3603,12 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         match self.delete_commands_infrastructure_step(ctx).await? {
-            CommandsTeardownResult::Complete => {
-                self.commands_update_teardown_candidates_initialized = false;
-                Ok(HandlerAction::Continue {
-                    state: UpdateDaprComponents,
-                    suggested_delay: None,
-                })
-            }
+            // Keep the checkpoint latched until the next UpdateStart. `commands_changed` remains
+            // true for this whole update, so clearing it here would restart teardown forever.
+            CommandsTeardownResult::Complete => Ok(HandlerAction::Continue {
+                state: UpdateDaprComponents,
+                suggested_delay: None,
+            }),
             CommandsTeardownResult::Mutated => Ok(HandlerAction::Continue {
                 state: UpdateDeletingCommandsInfrastructure,
                 suggested_delay: None,
@@ -5313,6 +5304,9 @@ mod tests {
     };
     use std::time::Duration;
 
+    use alien_azure_clients::models::authorization_role_assignments::{
+        RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
+    };
     use alien_azure_clients::models::container_apps::{
         Configuration, ConfigurationActiveRevisionsMode, ContainerApp, ContainerAppProperties,
         ContainerAppPropertiesProvisioningState, TrafficWeight,
@@ -5400,6 +5394,12 @@ mod tests {
             .build()
             .await
             .unwrap();
+
+        executor.step().await.unwrap();
+
+        let controller = executor.internal_state::<AzureWorkerController>().unwrap();
+        assert_eq!(controller.state, AzureWorkerState::Ready);
+        assert!(controller.auxiliary_teardown_candidates_initialized);
 
         executor.step().await.unwrap();
 
@@ -5536,8 +5536,26 @@ mod tests {
     #[tokio::test]
     async fn imported_storage_teardown_orders_event_role_queue_before_dapr() {
         let order = Arc::new(AtomicUsize::new(0));
+        let dapr_checked = Arc::new(AtomicBool::new(false));
+        let storage = test_storage_1();
+        let mut worker = basic_function();
+        worker.commands_enabled = false;
+        worker.triggers.push(WorkerTrigger::storage(
+            &storage,
+            vec!["created".to_string()],
+        ));
+        let execution_principal_id = "87654321-4321-4321-4321-210987654321";
+        let receiver_assignment_name =
+            crate::worker::azure_names::storage_trigger_receiver_role_assignment_name(
+                "test",
+                &worker.id,
+                &storage.id,
+                execution_principal_id,
+            );
+        let receiver_assignment_id = format!("/roleAssignments/{receiver_assignment_name}");
 
         let order_for_dapr = order.clone();
+        let dapr_checked_by_get = dapr_checked.clone();
         let mut container_apps = MockContainerAppsApi::new();
         container_apps
             .expect_get_dapr_component()
@@ -5548,6 +5566,7 @@ mod tests {
                     3,
                     "storage delivery infrastructure must be removed before Dapr"
                 );
+                dapr_checked_by_get.store(true, Ordering::SeqCst);
                 Err(AlienError::new(
                     CloudClientErrorData::RemoteResourceNotFound {
                         resource_type: "Dapr component".to_string(),
@@ -5570,12 +5589,49 @@ mod tests {
         let mut authorization = MockAuthorizationApi::new();
         authorization
             .expect_build_role_assignment_id()
-            .times(1)
+            .times(2)
             .returning(|_, name| format!("/roleAssignments/{name}"));
+        let receiver_assignment_id_for_list = receiver_assignment_id.clone();
+        let receiver_assignment_name_for_list = receiver_assignment_name.clone();
+        let order_for_list = order.clone();
+        authorization
+            .expect_list_role_assignments()
+            .times(2)
+            .returning(move |_, role_definition_id| {
+                let current_order = order_for_list.load(Ordering::SeqCst);
+                if current_order == 2 {
+                    return Ok(Vec::new());
+                }
+                assert_eq!(
+                    current_order, 1,
+                    "receiver role discovery must follow Event Grid deletion"
+                );
+                Ok(vec![RoleAssignment {
+                    id: Some(receiver_assignment_id_for_list.clone()),
+                    name: Some(receiver_assignment_name_for_list.clone()),
+                    properties: Some(RoleAssignmentProperties {
+                        principal_id: execution_principal_id.to_string(),
+                        role_definition_id: role_definition_id
+                            .expect("storage receiver role definition filter"),
+                        scope: None,
+                        principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                        condition: None,
+                        condition_version: None,
+                        delegated_managed_identity_resource_id: None,
+                        description: None,
+                        created_by: None,
+                        created_on: None,
+                        updated_by: None,
+                        updated_on: None,
+                    }),
+                    type_: None,
+                }])
+            });
         authorization
             .expect_delete_role_assignment_by_id()
             .times(1)
-            .returning(move |_| {
+            .returning(move |assignment_id| {
+                assert_eq!(assignment_id, receiver_assignment_id);
                 assert_eq!(order_for_role.fetch_add(1, Ordering::SeqCst), 1);
                 Ok(None)
             });
@@ -5608,12 +5664,6 @@ mod tests {
             .expect_get_azure_service_bus_management_client()
             .returning(move |_| Ok(service_bus.clone()));
 
-        let storage = test_storage_1();
-        let mut worker = basic_function();
-        worker.triggers.push(WorkerTrigger::storage(
-            &storage,
-            vec!["created".to_string()],
-        ));
         let mut executor = SingleControllerExecutor::builder()
             .resource(worker)
             .controller(AzureWorkerController::mock_ready("worker-app"))
@@ -5625,11 +5675,18 @@ mod tests {
             .unwrap();
 
         executor.delete().unwrap();
-        for _ in 0..7 {
+        for _ in 0..12 {
             executor.step().await.unwrap();
+            if dapr_checked.load(Ordering::SeqCst) {
+                break;
+            }
         }
 
         assert_eq!(order.load(Ordering::SeqCst), 3);
+        assert!(
+            dapr_checked.load(Ordering::SeqCst),
+            "Dapr cleanup must run after storage delivery teardown"
+        );
     }
 
     #[tokio::test]
@@ -5812,9 +5869,12 @@ mod tests {
         let mut controller = AzureWorkerController::mock_ready(app_name);
         controller.container_app_url = None;
         controller.url = Some("https://test-imported-worker.abc123.dev.vpc.direct".to_string());
+        controller.commands_sender_role_assignment_discovery_complete = true;
 
+        let mut worker = basic_function();
+        worker.commands_enabled = false;
         let mut executor = SingleControllerExecutor::builder()
-            .resource(basic_function())
+            .resource(worker)
             .controller(controller)
             .platform(Platform::Azure)
             .service_provider(mock_provider)
@@ -6243,6 +6303,9 @@ mod tests {
                     .returning(|_, name| {
                         format!("/test/providers/Microsoft.Authorization/roleAssignments/{name}")
                     });
+                authorization
+                    .expect_list_role_assignments()
+                    .returning(|_, _| Ok(Vec::new()));
                 let role_assignment_created = role_assignment_created.clone();
                 authorization
                     .expect_create_or_update_role_assignment_by_id()

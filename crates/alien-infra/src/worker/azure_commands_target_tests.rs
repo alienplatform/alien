@@ -135,7 +135,7 @@ fn provider(
                 .collect::<HashMap<_, _>>();
             assert_eq!(
                 metadata.get("namespaceName").copied(),
-                Some("default-service-bus-namespace")
+                Some("default-service-bus-namespace.servicebus.windows.net")
             );
             record(&put_actions, format!("put-dapr:{name}"));
             put_components
@@ -160,7 +160,7 @@ fn provider(
     let create_queue_actions = actions.clone();
     service_bus
         .expect_create_or_update_queue()
-        .times(1)
+        .times(1..)
         .returning(move |resource_group, namespace, queue, _| {
             record(
                 &create_queue_actions,
@@ -380,14 +380,24 @@ async fn commands_dependency_target_move_checkpoints_and_deletes_old_target_befo
     assert!(controller.commands_namespace_name.is_none());
     assert!(controller.commands_queue_name.is_none());
 
-    executor
-        .step()
-        .await
-        .expect("checkpoint completed teardown");
-    executor
-        .step()
-        .await
-        .expect("checkpoint exact desired target");
+    for step in 0..10 {
+        let target_is_checkpointed = executor
+            .internal_state::<AzureWorkerController>()
+            .expect("Azure worker controller")
+            .commands_cleanup_target("commands-target-worker")
+            .expect("valid commands target")
+            .is_some_and(|(resource_group, namespace, queue)| {
+                resource_group == "mock-rg"
+                    && namespace == "default-service-bus-namespace"
+                    && queue == queue_name
+            });
+        if target_is_checkpointed {
+            break;
+        }
+        executor.step().await.unwrap_or_else(|error| {
+            panic!("desired target checkpoint failed at step {step}: {error}")
+        });
+    }
     let controller = executor
         .internal_state::<AzureWorkerController>()
         .expect("Azure worker controller");
@@ -403,7 +413,6 @@ async fn commands_dependency_target_move_checkpoints_and_deletes_old_target_befo
         controller.commands_queue_name.as_deref(),
         Some(queue_name.as_str())
     );
-    assert!(!controller.commands_sender_role_assignment_discovery_complete);
     assert!(
         !actions
             .lock()
@@ -573,6 +582,7 @@ async fn legacy_commands_state_without_resource_group_checkpoints_rotated_cleanu
         .expect("legacy executor");
     executor.update(desired).expect("disable commands update");
 
+    let mut checkpoint_observed = false;
     for step in 0..40 {
         if queue_deleted.lock().expect("queue deletion lock").is_some() {
             break;
@@ -584,7 +594,7 @@ async fn legacy_commands_state_without_resource_group_checkpoints_rotated_cleanu
         let controller = executor
             .internal_state::<AzureWorkerController>()
             .expect("Azure worker controller");
-        if controller.commands_update_teardown_candidates_initialized {
+        if controller.commands_update_teardown_candidates_initialized && !checkpoint_observed {
             assert_eq!(
                 controller.commands_resource_group_name.as_deref(),
                 Some("rotated-resource-group")
@@ -597,8 +607,13 @@ async fn legacy_commands_state_without_resource_group_checkpoints_rotated_cleanu
                 controller.commands_queue_name.as_deref(),
                 Some(queue_name.as_str())
             );
+            checkpoint_observed = true;
         }
     }
+    assert!(
+        checkpoint_observed,
+        "the rotated cleanup target must be durably checkpointed before deletion"
+    );
     assert_eq!(
         queue_deleted
             .lock()

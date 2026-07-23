@@ -16,7 +16,7 @@ use crate::worker::fixtures::basic_function;
 use crate::worker::{AzureWorkerController, AzureWorkerState};
 
 const SUBSCRIPTION_ID: &str = "12345678-1234-1234-1234-123456789012";
-const RESOURCE_GROUP: &str = "default-resource-group";
+const RESOURCE_GROUP: &str = "mock-rg";
 const NAMESPACE: &str = "default-service-bus-namespace";
 const QUEUE: &str = "test-sender-worker-rq";
 const WORKER_ID: &str = "sender-worker";
@@ -296,6 +296,65 @@ async fn missing_applied_grant_is_recreated_only_after_discovery_checkpoint() {
     assert_eq!(actions.len(), 1);
     assert!(actions[0].starts_with("put:"));
     assert!(actions[0].ends_with(":principal-b"));
+}
+
+#[tokio::test]
+async fn equal_update_revalidates_missing_and_stale_sender_grants() {
+    let actions = Arc::new(Mutex::new(Vec::new()));
+    let desired = direct_assignment("principal-b");
+    let stale = direct_assignment("principal-a");
+    let mut controller = AzureWorkerController::mock_ready("test-sender-worker");
+    controller.commands_sender_role_assignment_id = desired.id.clone();
+    controller.commands_sender_role_assignment_discovery_complete = true;
+    let mut checkpoint_executor = build_executor(
+        worker(true),
+        controller,
+        Arc::new(MockPlatformServiceProvider::new()),
+    )
+    .await;
+    checkpoint_executor
+        .update(worker(true))
+        .expect("equal update should start");
+    checkpoint_executor
+        .step()
+        .await
+        .expect("enter equal update");
+    checkpoint_executor
+        .step()
+        .await
+        .expect("equal update discovery checkpoint");
+    let mut checkpointed = checkpoint_executor
+        .internal_state::<AzureWorkerController>()
+        .expect("checkpointed controller")
+        .clone();
+    assert_eq!(checkpointed.state, AzureWorkerState::UpdateStart);
+    assert!(!checkpointed.commands_sender_role_assignment_discovery_complete);
+
+    checkpointed.state = AzureWorkerState::Ready;
+    let provider = provider(
+        "principal-b",
+        vec![vec![stale.clone()], vec![]],
+        actions.clone(),
+    );
+    let mut executor = build_executor(worker(true), checkpointed, provider).await;
+    for _ in 0..4 {
+        executor
+            .step()
+            .await
+            .expect("checkpointed sender drift reconciliation");
+    }
+
+    let actions = actions.lock().expect("action lock");
+    assert_eq!(actions.len(), 2);
+    assert_eq!(
+        actions[0],
+        format!(
+            "delete:{}",
+            stale.id.as_deref().expect("stale assignment ID")
+        )
+    );
+    assert!(actions[1].starts_with("put:"));
+    assert!(actions[1].ends_with(":principal-b"));
 }
 
 #[tokio::test]

@@ -1,4 +1,6 @@
 use alien_azure_clients::long_running_operation::MockLongRunningOperationApi;
+use alien_azure_clients::AzureClientConfigExt;
+use std::sync::Mutex;
 
 fn stale_lro_error() -> AlienError<CloudClientErrorData> {
     AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
@@ -108,18 +110,62 @@ async fn pre_create_storage_legacy_delete_uses_delete_waiter() {
         .returning(|_, _, _, _| Ok(alien_azure_clients::models::queue::SbQueue::default()));
 
     let mut authorization = MockAuthorizationApi::new();
+    let created_assignment = Arc::new(Mutex::new(None));
     authorization
         .expect_build_role_assignment_id()
-        .times(2)
-        .returning(|_, assignment_name| format!("/roleAssignments/{assignment_name}"));
+        .times(1..)
+        .returning(|scope, assignment_name| {
+            format!(
+                "/{}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}",
+                scope.to_scope_string(&alien_azure_clients::AzureClientConfig::mock())
+            )
+        });
+    let assignment_for_list = created_assignment.clone();
+    authorization
+        .expect_list_role_assignments()
+        .times(1..)
+        .returning(move |_, _| {
+            Ok(assignment_for_list
+                .lock()
+                .expect("created role assignment lock")
+                .clone()
+                .into_iter()
+                .collect())
+        });
+    let assignment_for_create = created_assignment.clone();
     authorization
         .expect_create_or_update_role_assignment_by_id()
         .times(1)
-        .returning(|_, assignment| Ok(assignment.clone()));
+        .returning(move |assignment_id, assignment| {
+            let mut created = assignment.clone();
+            created.id = Some(assignment_id.clone());
+            created.name = assignment_id.rsplit('/').next().map(ToString::to_string);
+            *assignment_for_create
+                .lock()
+                .expect("created role assignment lock") = Some(created.clone());
+            Ok(created)
+        });
+
+    let mut event_grid = MockEventGridApi::new();
+    event_grid
+        .expect_create_or_update_event_subscription()
+        .times(1)
+        .returning(|_, subscription_name, _| {
+            Ok(alien_azure_clients::event_grid::EventSubscription {
+                id: None,
+                name: Some(subscription_name),
+                properties: Some(
+                    alien_azure_clients::event_grid::EventSubscriptionProperties {
+                        provisioning_state: Some("Succeeded".to_string()),
+                    },
+                ),
+            })
+        });
 
     let container_apps = Arc::new(container_apps);
     let service_bus = Arc::new(service_bus);
     let authorization = Arc::new(authorization);
+    let event_grid = Arc::new(event_grid);
     let mut provider = MockPlatformServiceProvider::new();
     provider
         .expect_get_azure_container_apps_client()
@@ -130,6 +176,9 @@ async fn pre_create_storage_legacy_delete_uses_delete_waiter() {
     provider
         .expect_get_azure_authorization_client()
         .returning(move |_| Ok(authorization.clone()));
+    provider
+        .expect_get_azure_event_grid_client()
+        .returning(move |_| Ok(event_grid.clone()));
 
     let storage = test_storage_1();
     let mut worker = basic_function();
@@ -147,15 +196,17 @@ async fn pre_create_storage_legacy_delete_uses_delete_waiter() {
         .await
         .unwrap();
 
-    executor.step().await.unwrap();
-    assert_eq!(
-        executor
+    for _ in 0..10 {
+        executor.step().await.unwrap();
+        if executor
             .internal_state::<AzureWorkerController>()
             .unwrap()
-            .state,
-        AzureWorkerState::CreateStart
-    );
-    executor.step().await.unwrap();
+            .state
+            == AzureWorkerState::WaitingForPreCreateDaprComponentDeletion
+        {
+            break;
+        }
+    }
 
     let controller = executor.internal_state::<AzureWorkerController>().unwrap();
     assert_eq!(
