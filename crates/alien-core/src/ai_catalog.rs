@@ -24,6 +24,18 @@ pub enum Protocol {
     Anthropic,
 }
 
+/// The one-time action, if any, a customer must take in the cloud provider before
+/// the gateway can invoke a model. Static per (provider, cloud), surfaced in docs
+/// and the example README. Distinct from runtime availability, which
+/// `getAvailableModels` probes live per deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// Enabled by default; nothing for the customer to do (quota still applies).
+    OutOfBox,
+    /// Needs a one-time customer action first; the string says what.
+    RequiresOneTimeStep(&'static str),
+}
+
 /// One curated model: the public id an app requests, the cloud that serves it,
 /// the upstream id the gateway forwards (for Azure this is the deployment name),
 /// and the protocol of its native endpoint.
@@ -33,6 +45,121 @@ pub struct CatalogModel {
     pub cloud: Platform,
     pub upstream_id: &'static str,
     pub protocol: Protocol,
+}
+
+impl CatalogModel {
+    /// The model's publisher, for grouping in a picker. Derived from the public id,
+    /// so the same public id reports the same provider on every cloud.
+    pub fn provider(&self) -> &'static str {
+        let id = self.public_id;
+        if id.starts_with("claude") {
+            "anthropic"
+        } else if id.starts_with("gpt") || id == "model-router" {
+            "openai"
+        } else if id.starts_with("gemini") || id.starts_with("gemma") {
+            "google"
+        } else if id.starts_with("qwen") {
+            "qwen"
+        } else if id.starts_with("deepseek") {
+            "deepseek"
+        } else if id.starts_with("mistral")
+            || id.starts_with("devstral")
+            || id.starts_with("magistral")
+            || id.starts_with("ministral")
+        {
+            "mistral"
+        } else if id.starts_with("minimax") {
+            "minimax"
+        } else if id.starts_with("kimi") {
+            "moonshotai"
+        } else if id.starts_with("nemotron") {
+            "nvidia"
+        } else if id.starts_with("glm") {
+            "zai"
+        } else if id.starts_with("palmyra") {
+            "writer"
+        } else {
+            "unknown"
+        }
+    }
+
+    /// A human label for a model picker. Curated per id rather than derived so the
+    /// acronyms (GPT, OSS, GLM, VL) and versions read correctly.
+    pub fn display_name(&self) -> &'static str {
+        match self.public_id {
+            "gpt-oss-20b" => "GPT-OSS 20B",
+            "gpt-oss-120b" => "GPT-OSS 120B",
+            "gpt-oss-safeguard-20b" => "GPT-OSS Safeguard 20B",
+            "gpt-oss-safeguard-120b" => "GPT-OSS Safeguard 120B",
+            "deepseek-v3.2" => "DeepSeek V3.2",
+            "qwen3-32b" => "Qwen3 32B",
+            "qwen3-coder-30b" => "Qwen3 Coder 30B",
+            "qwen3-coder-next" => "Qwen3 Coder Next",
+            "qwen3-next-80b" => "Qwen3 Next 80B",
+            "qwen3-vl-235b" => "Qwen3 VL 235B",
+            "mistral-large-3" => "Mistral Large 3",
+            "devstral-2" => "Devstral 2",
+            "magistral-small" => "Magistral Small",
+            "ministral-3-14b" => "Ministral 3 14B",
+            "ministral-3-8b" => "Ministral 3 8B",
+            "ministral-3-3b" => "Ministral 3 3B",
+            "minimax-m2" => "MiniMax M2",
+            "minimax-m2.1" => "MiniMax M2.1",
+            "minimax-m2.5" => "MiniMax M2.5",
+            "kimi-k2.5" => "Kimi K2.5",
+            "nemotron-nano-9b" => "Nemotron Nano 9B",
+            "nemotron-nano-12b" => "Nemotron Nano 12B",
+            "nemotron-nano-3-30b" => "Nemotron Nano 3 30B",
+            "nemotron-super-3-120b" => "Nemotron Super 3 120B",
+            "gemma-3-4b" => "Gemma 3 4B",
+            "gemma-3-12b" => "Gemma 3 12B",
+            "gemma-3-27b" => "Gemma 3 27B",
+            "glm-4.7" => "GLM 4.7",
+            "glm-4.7-flash" => "GLM 4.7 Flash",
+            "glm-5" => "GLM 5",
+            "palmyra-vision-7b" => "Palmyra Vision 7B",
+            "claude-sonnet-5" => "Claude Sonnet 5",
+            "claude-opus-4.8" => "Claude Opus 4.8",
+            "claude-opus-4.7" => "Claude Opus 4.7",
+            "claude-opus-4.6" => "Claude Opus 4.6",
+            "claude-opus-4.5" => "Claude Opus 4.5",
+            "claude-opus-4.1" => "Claude Opus 4.1",
+            "claude-sonnet-4.6" => "Claude Sonnet 4.6",
+            "claude-sonnet-4.5" => "Claude Sonnet 4.5",
+            "claude-haiku-4.5" => "Claude Haiku 4.5",
+            "claude-fable-5" => "Claude Fable 5",
+            "claude-mythos-5" => "Claude Mythos 5",
+            "gemini-2.5-pro" => "Gemini 2.5 Pro",
+            "gemini-2.5-flash" => "Gemini 2.5 Flash",
+            "gemini-2.5-flash-lite" => "Gemini 2.5 Flash Lite",
+            "gemini-3.5-flash" => "Gemini 3.5 Flash",
+            "gemini-3.1-flash-lite" => "Gemini 3.1 Flash Lite",
+            "gpt-4.1" => "GPT-4.1",
+            "gpt-4o-mini" => "GPT-4o mini",
+            "model-router" => "Model Router",
+            other => other,
+        }
+    }
+
+    /// The one-time enablement step for this model on its cloud, if any. Only Claude
+    /// needs one today, and the step differs per cloud.
+    pub fn activation(&self) -> Activation {
+        if !self.public_id.starts_with("claude") {
+            return Activation::OutOfBox;
+        }
+        match self.cloud {
+            Platform::Aws => Activation::RequiresOneTimeStep(
+                "Submit the one-time Anthropic use-case form in the Bedrock console.",
+            ),
+            Platform::Gcp => Activation::RequiresOneTimeStep(
+                "Enable Claude in Vertex AI Model Garden and accept Anthropic's terms of service, one-time, in the Google Cloud console.",
+            ),
+            Platform::Azure => Activation::RequiresOneTimeStep(
+                "Accept the Marketplace terms and create the Claude deployment in the Microsoft Foundry portal (one-time).",
+            ),
+            _ => Activation::OutOfBox,
+        }
+    }
 }
 
 static CATALOG: &[CatalogModel] = &[
@@ -117,10 +244,10 @@ static CATALOG: &[CatalogModel] = &[
     // Foundry deployment name (defaults to the model id). Unlike the OpenAI list,
     // these are not in AZURE_DEPLOYMENTS: a first Claude deployment requires
     // accepting Azure Marketplace terms, a portal step the controller cannot
-    // perform, so Claude deployments are created in the Foundry portal. Until
-    // that portal step runs, /v1/models advertises these while Foundry answers
-    // "deployment not found" — a deliberate tradeoff so the deployment-name
-    // contract is discoverable; the upstream 404 passes through attributably.
+    // perform, so Claude deployments are created in the Foundry portal. These stay
+    // in the catalog as the deployment-name contract, but the gateway's /v1/models
+    // availability probe drops any that the portal step has not created, so the
+    // list omits any Claude that Foundry would 404.
     CatalogModel { public_id: "claude-sonnet-5", cloud: Platform::Azure, upstream_id: "claude-sonnet-5", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-opus-4.8", cloud: Platform::Azure, upstream_id: "claude-opus-4-8", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-opus-4.7", cloud: Platform::Azure, upstream_id: "claude-opus-4-7", protocol: Protocol::Anthropic },
@@ -377,5 +504,29 @@ mod tests {
     fn protocol_serializes_lowercase() {
         assert_eq!(serde_json::to_string(&Protocol::OpenAi).unwrap(), "\"openai\"");
         assert_eq!(serde_json::to_string(&Protocol::Anthropic).unwrap(), "\"anthropic\"");
+    }
+
+    #[test]
+    fn every_model_has_provider_display_name_and_activation() {
+        for m in CATALOG {
+            assert_ne!(m.provider(), "unknown", "no provider mapping for '{}'", m.public_id);
+            assert_ne!(
+                m.display_name(),
+                m.public_id,
+                "no curated display_name for '{}'",
+                m.public_id
+            );
+            // Only Claude needs a one-time step; everything else is out of the box.
+            let is_claude = m.public_id.starts_with("claude");
+            match m.activation() {
+                Activation::OutOfBox => {
+                    assert!(!is_claude, "'{}' (Claude) must require a one-time step", m.public_id)
+                }
+                Activation::RequiresOneTimeStep(summary) => {
+                    assert!(is_claude, "'{}' must be out of the box", m.public_id);
+                    assert!(!summary.is_empty(), "'{}' step summary is empty", m.public_id);
+                }
+            }
+        }
     }
 }
