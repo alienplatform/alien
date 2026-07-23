@@ -1,16 +1,24 @@
 /**
  * Pin the per-platform prebuild packages as exact-version `optionalDependencies`
  * of the `@alienplatform/ai-gateway` wrapper, so a published wrapper can only
- * resolve the matching-version platform addon.
+ * resolve the matching-version launcher binary.
  *
- * The release pipeline runs this after rewriting the wrapper's version and before
- * publishing. Preferred over `napi prepublish`, which regenerates more than the pin.
+ * The release pipeline runs this after `generate-prebuilds.mjs` has written the
+ * per-platform manifests and before publishing the wrapper. An explicit, exact
+ * pin is deterministic and reviewable.
  */
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
-const TRIPLES = ["darwin-arm64", "darwin-x64", "linux-x64-gnu", "linux-arm64-gnu"]
+const TRIPLES = [
+  "darwin-arm64",
+  "darwin-x64",
+  "linux-x64-gnu",
+  "linux-x64-musl",
+  "linux-arm64-gnu",
+  "linux-arm64-musl",
+]
 
 const wrapperManifest = fileURLToPath(new URL("../package.json", import.meta.url))
 const pkg = JSON.parse(readFileSync(wrapperManifest, "utf8"))
@@ -23,7 +31,7 @@ if (typeof version !== "string" || version === "" || version === "0.0.0") {
   throw new Error(`refusing to inject optionalDependencies: package version is '${version}'`)
 }
 
-// TRIPLES must mirror the per-platform packages on disk (PACKAGE_LAYOUT.md pins them).
+// TRIPLES must mirror the per-platform packages generate-prebuilds.mjs wrote.
 const onDisk = readdirSync(fileURLToPath(new URL("../npm", import.meta.url)), {
   withFileTypes: true,
 })
