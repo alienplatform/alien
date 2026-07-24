@@ -43,7 +43,7 @@ pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Maximum acquire/process batches before yielding back to the interval sleep.
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
-const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 5_000;
 /// Google documents IAM policy changes as typically propagating within two
 /// minutes, but potentially taking seven minutes or longer. Keep the first
 /// target-side token exchange retryable for a bounded window after setup hands

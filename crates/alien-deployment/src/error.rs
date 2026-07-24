@@ -118,6 +118,24 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// The deployment lease could not be renewed or was lost.
+    #[error(
+        code = "DEPLOYMENT_LEASE_LOST",
+        message = "Deployment lease lost: {message}",
+        retryable = "inherit",
+        internal = "inherit"
+    )]
+    DeploymentLeaseLost { message: String },
+
+    /// A deployment state checkpoint could not be persisted.
+    #[error(
+        code = "DEPLOYMENT_CHECKPOINT_FAILED",
+        message = "Deployment checkpoint failed: {message}",
+        retryable = "inherit",
+        internal = "inherit"
+    )]
+    DeploymentCheckpointFailed { message: String },
+
     /// Secret sync to vault failed.
     #[error(
         code = "SECRET_SYNC_FAILED",

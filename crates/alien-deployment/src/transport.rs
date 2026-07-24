@@ -42,6 +42,18 @@ pub struct StepReconcileResult {
 /// env var injection, etc.).
 #[async_trait]
 pub trait DeploymentLoopTransport: Send + Sync {
+    /// Renew the caller's deployment lease while a cloud operation is still in
+    /// flight. Transports without distributed locking may keep the default
+    /// no-op implementation.
+    async fn renew_lease(
+        &self,
+        _deployment_id: &str,
+        _state: &DeploymentState,
+        _config: &DeploymentConfig,
+    ) -> Result<(), AlienError> {
+        Ok(())
+    }
+
     /// Persist deployment state after a step and optionally return updates.
     ///
     /// # Arguments

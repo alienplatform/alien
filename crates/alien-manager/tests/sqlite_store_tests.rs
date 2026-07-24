@@ -1121,6 +1121,37 @@ async fn reconcile_refreshes_owned_lock_lease() {
 }
 
 #[tokio::test]
+async fn renew_lease_requires_the_active_session() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let deployment = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    store
+        .acquire(
+            &test_subject(),
+            "session-A",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("deployment should be acquired");
+    let state = test_deployment_state(DeploymentStatus::InitialSetup, None);
+
+    store
+        .renew_lease(&test_subject(), &deployment.id, "session-A", &state)
+        .await
+        .expect("the active session should renew its lease");
+
+    let error = store
+        .renew_lease(&test_subject(), &deployment.id, "session-B", &state)
+        .await
+        .expect_err("a different session must not renew the lease");
+    assert_eq!(error.code, "DEPLOYMENT_LOCKED");
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
 async fn delete_deployment() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);

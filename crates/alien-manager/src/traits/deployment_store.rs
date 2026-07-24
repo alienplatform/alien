@@ -394,6 +394,17 @@ pub trait DeploymentStore: Send + Sync {
         data: ReconcileData,
     ) -> Result<DeploymentRecord, AlienError>;
 
+    /// Renew an acquired deployment lease without changing deployment state.
+    /// Implementations must compare the active session atomically and return a
+    /// non-retryable error when the session no longer owns the deployment.
+    async fn renew_lease(
+        &self,
+        caller: &crate::auth::Subject,
+        deployment_id: &str,
+        session: &str,
+        state: &DeploymentState,
+    ) -> Result<(), AlienError>;
+
     /// Release lock on a deployment.
     async fn release(
         &self,
