@@ -11,7 +11,6 @@ use crate::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
         iam_policy_name_sanitize, required_label, resource_prefix_template, tags,
     },
-    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -31,85 +30,56 @@ impl TfEmitter for AwsStorageEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let storage = downcast::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
-        let enabled_when = ctx.resource.enabled_when.as_deref();
         let mut fragment = TfFragment::default();
 
-        // The bucket's configuration siblings only describe a bucket that
-        // exists, so they carry the same gate rather than outliving it.
+        fragment.resource_blocks.push(bucket(label, ctx, storage));
+        fragment.resource_blocks.push(encryption(label));
+        fragment.resource_blocks.push(ownership_controls(label));
         fragment
             .resource_blocks
-            .push(bucket(label, ctx, storage, enabled_when)?);
+            .push(public_access_block(label, !storage.public_read));
         fragment
             .resource_blocks
-            .push(encryption(label, enabled_when)?);
-        fragment
-            .resource_blocks
-            .push(ownership_controls(label, enabled_when)?);
-        fragment.resource_blocks.push(public_access_block(
-            label,
-            !storage.public_read,
-            enabled_when,
-        )?);
-        fragment
-            .resource_blocks
-            .push(bucket_policy(label, storage, enabled_when)?);
+            .push(bucket_policy(label, storage));
 
         if storage.versioning {
-            fragment
-                .resource_blocks
-                .push(versioning(label, enabled_when)?);
+            fragment.resource_blocks.push(versioning(label));
         }
         if !storage.lifecycle_rules.is_empty() {
-            fragment.resource_blocks.push(lifecycle(
-                label,
-                &storage.lifecycle_rules,
-                enabled_when,
-            )?);
+            fragment
+                .resource_blocks
+                .push(lifecycle(label, &storage.lifecycle_rules));
         }
-        emit_storage_iam(ctx, &mut fragment, label, enabled_when)?;
+        emit_storage_iam(ctx, &mut fragment, label)?;
 
         Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             (
                 "bucketName",
-                enabled::attribute(enabled_when, "aws_s3_bucket", label, "bucket"),
+                expr::traversal(["aws_s3_bucket", label, "bucket"]),
             ),
-            (
-                "bucketArn",
-                enabled::attribute(enabled_when, "aws_s3_bucket", label, "arn"),
-            ),
+            ("bucketArn", expr::traversal(["aws_s3_bucket", label, "arn"])),
         ]))
-    }
-
-    fn supports_enabled_when(&self) -> bool {
-        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
-        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(Some(expr::object([
             ("service", Expression::String("s3".to_string())),
             (
                 "bucketName",
-                enabled::attribute(enabled_when, "aws_s3_bucket", label, "bucket"),
+                expr::traversal(["aws_s3_bucket", label, "bucket"]),
             ),
         ])))
     }
 }
 
-fn bucket(
-    label: &str,
-    ctx: &EmitContext<'_>,
-    storage: &Storage,
-    enabled_when: Option<&str>,
-) -> Result<Block> {
-    let mut bucket = resource_block(
+fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
+    resource_block(
         "aws_s3_bucket",
         label,
         [
@@ -117,12 +87,10 @@ fn bucket(
             attr("force_destroy", Expression::Bool(true)),
             attr("tags", tags(ctx, "storage")),
         ],
-    );
-    enabled::gate(&mut bucket, enabled_when)?;
-    Ok(bucket)
+    )
 }
 
-fn encryption(label: &str, enabled_when: Option<&str>) -> Result<Block> {
+fn encryption(label: &str) -> Block {
     let inner = block(
         "apply_server_side_encryption_by_default",
         [attr(
@@ -131,16 +99,14 @@ fn encryption(label: &str, enabled_when: Option<&str>) -> Result<Block> {
         )],
     );
     let rule = block("rule", [nested(inner)]);
-    let mut encryption = resource_block(
+    resource_block(
         "aws_s3_bucket_server_side_encryption_configuration",
         label,
-        [attr("bucket", bucket_id(label, enabled_when)), nested(rule)],
-    );
-    enabled::gate(&mut encryption, enabled_when)?;
-    Ok(encryption)
+        [attr("bucket", bucket_id(label)), nested(rule)],
+    )
 }
 
-fn ownership_controls(label: &str, enabled_when: Option<&str>) -> Result<Block> {
+fn ownership_controls(label: &str) -> Block {
     let rule = block(
         "rule",
         [attr(
@@ -148,43 +114,30 @@ fn ownership_controls(label: &str, enabled_when: Option<&str>) -> Result<Block> 
             Expression::String("BucketOwnerEnforced".to_string()),
         )],
     );
-    let mut controls = resource_block(
+    resource_block(
         "aws_s3_bucket_ownership_controls",
         label,
-        [attr("bucket", bucket_id(label, enabled_when)), nested(rule)],
-    );
-    enabled::gate(&mut controls, enabled_when)?;
-    Ok(controls)
+        [attr("bucket", bucket_id(label)), nested(rule)],
+    )
 }
 
-fn public_access_block(
-    label: &str,
-    block_public: bool,
-    enabled_when: Option<&str>,
-) -> Result<Block> {
+fn public_access_block(label: &str, block_public: bool) -> Block {
     let value = Expression::Bool(block_public);
-    let mut access_block = resource_block(
+    resource_block(
         "aws_s3_bucket_public_access_block",
         label,
         [
-            attr("bucket", bucket_id(label, enabled_when)),
+            attr("bucket", bucket_id(label)),
             attr("block_public_acls", value.clone()),
             attr("block_public_policy", value.clone()),
             attr("ignore_public_acls", value.clone()),
             attr("restrict_public_buckets", value),
         ],
-    );
-    enabled::gate(&mut access_block, enabled_when)?;
-    Ok(access_block)
+    )
 }
 
-fn bucket_policy(label: &str, storage: &Storage, enabled_when: Option<&str>) -> Result<Block> {
-    let objects_arn = || {
-        expr::raw(format!(
-            "\"${{{}}}/*\"",
-            bucket_path(label, "arn", enabled_when)
-        ))
-    };
+fn bucket_policy(label: &str, storage: &Storage) -> Block {
+    let objects_arn = || expr::raw(format!("\"${{{}}}/*\"", bucket_path(label, "arn")));
 
     let mut statements = vec![expr::object([
         (
@@ -197,7 +150,7 @@ fn bucket_policy(label: &str, storage: &Storage, enabled_when: Option<&str>) -> 
         (
             "Resource",
             Expression::Array(vec![
-                enabled::attribute(enabled_when, "aws_s3_bucket", label, "arn"),
+                expr::traversal(["aws_s3_bucket", label, "arn"]),
                 objects_arn(),
             ]),
         ),
@@ -228,37 +181,30 @@ fn bucket_policy(label: &str, storage: &Storage, enabled_when: Option<&str>) -> 
         ("Statement", Expression::Array(statements)),
     ]);
 
-    let mut bucket_policy = resource_block(
+    resource_block(
         "aws_s3_bucket_policy",
         label,
         [
-            attr("bucket", bucket_id(label, enabled_when)),
+            attr("bucket", bucket_id(label)),
             attr("policy", crate::emitters::aws::helpers::jsonencode(policy)),
         ],
-    );
-    enabled::gate(&mut bucket_policy, enabled_when)?;
-    Ok(bucket_policy)
+    )
 }
 
-fn versioning(label: &str, enabled_when: Option<&str>) -> Result<Block> {
+fn versioning(label: &str) -> Block {
     let inner = block(
         "versioning_configuration",
         [attr("status", Expression::String("Enabled".to_string()))],
     );
-    let mut versioning = resource_block(
+    resource_block(
         "aws_s3_bucket_versioning",
         label,
-        [
-            attr("bucket", bucket_id(label, enabled_when)),
-            nested(inner),
-        ],
-    );
-    enabled::gate(&mut versioning, enabled_when)?;
-    Ok(versioning)
+        [attr("bucket", bucket_id(label)), nested(inner)],
+    )
 }
 
-fn lifecycle(label: &str, rules: &[LifecycleRule], enabled_when: Option<&str>) -> Result<Block> {
-    let mut body: Vec<Structure> = vec![attr("bucket", bucket_id(label, enabled_when))];
+fn lifecycle(label: &str, rules: &[LifecycleRule]) -> Block {
+    let mut body: Vec<Structure> = vec![attr("bucket", bucket_id(label))];
     for (index, rule) in rules.iter().enumerate() {
         let prefix = rule.prefix.clone().unwrap_or_default();
         let filter = block("filter", [attr("prefix", Expression::String(prefix))]);
@@ -280,35 +226,23 @@ fn lifecycle(label: &str, rules: &[LifecycleRule], enabled_when: Option<&str>) -
         );
         body.push(nested(rule_block));
     }
-    let mut lifecycle = resource_block("aws_s3_bucket_lifecycle_configuration", label, body);
-    enabled::gate(&mut lifecycle, enabled_when)?;
-    Ok(lifecycle)
+    resource_block("aws_s3_bucket_lifecycle_configuration", label, body)
 }
 
-fn bucket_id(label: &str, enabled_when: Option<&str>) -> Expression {
-    enabled::attribute(enabled_when, "aws_s3_bucket", label, "id")
+fn bucket_id(label: &str) -> Expression {
+    expr::traversal(["aws_s3_bucket", label, "id"])
 }
 
 /// Reference path to one of the bucket's own attributes, for the places that
 /// interpolate it into a string rather than emitting an expression.
-fn bucket_path(label: &str, attribute: &str, enabled_when: Option<&str>) -> String {
-    match enabled_when {
-        Some(_) => format!("aws_s3_bucket.{label}[0].{attribute}"),
-        None => format!("aws_s3_bucket.{label}.{attribute}"),
-    }
+fn bucket_path(label: &str, attribute: &str) -> String {
+    format!("aws_s3_bucket.{label}.{attribute}")
 }
 
-fn emit_storage_iam(
-    ctx: &EmitContext<'_>,
-    fragment: &mut TfFragment,
-    label: &str,
-    enabled_when: Option<&str>,
-) -> Result<()> {
+fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
     for (owner_label, permission_refs) in storage_permission_owners(ctx) {
-        let context = aws_terraform_permission_context().with_resource_name(format!(
-            "${{{}}}",
-            bucket_path(label, "bucket", enabled_when)
-        ));
+        let context = aws_terraform_permission_context()
+            .with_resource_name(format!("${{{}}}", bucket_path(label, "bucket")));
 
         for (idx, permission_ref) in permission_refs.iter().enumerate() {
             let Some(permission_set) =
@@ -329,11 +263,6 @@ fn emit_storage_iam(
                 ctx.resource_id, permission_set.id
             ));
 
-            // The policy document names the bucket, so it cannot outlive it.
-            // The shared emitter is used by ungated resources too, so the gate
-            // goes on the blocks it just appended rather than into its
-            // signature.
-            let appended_from = fragment.resource_blocks.len();
             emit_iam_role_policy_for_target_with_label(
                 fragment,
                 &owner_label,
@@ -343,9 +272,6 @@ fn emit_storage_iam(
                 &context,
                 BindingTarget::Resource,
             )?;
-            for block in &mut fragment.resource_blocks[appended_from..] {
-                enabled::gate(block, enabled_when)?;
-            }
         }
     }
 

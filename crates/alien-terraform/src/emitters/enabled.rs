@@ -81,20 +81,6 @@ pub fn gate(block: &mut Block, enabled_when: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Reference to an attribute of a resource that may be gated, indexing into the
-/// count when it is.
-pub fn attribute(
-    enabled_when: Option<&str>,
-    resource_type: &str,
-    label: &str,
-    attribute: &str,
-) -> Expression {
-    match enabled_when {
-        Some(_) => expr::traversal_indexed(resource_type, label, attribute),
-        None => expr::traversal([resource_type, label, attribute]),
-    }
-}
-
 /// The registration list the manager consumes, one entry per resource.
 ///
 /// A resource the deployer declined contributes no entry at all. It does not
@@ -165,26 +151,4 @@ mod tests {
 
         assert_eq!(block, before);
     }
-}
-
-/// [`gate`] reading the resource's own gate off the emit context, so an
-/// emitter's own blocks structurally cannot miss it. The `Option<&str>` form
-/// stays for callers gating blocks on a *different* resource's gate.
-pub fn gate_own(ctx: &alien_core::import::EmitContext<'_>, block: &mut Block) -> Result<()> {
-    gate(block, ctx.resource.enabled_when.as_deref())
-}
-
-/// [`attribute`] reading the resource's own gate off the emit context.
-pub fn self_attribute(
-    ctx: &alien_core::import::EmitContext<'_>,
-    resource_type: &str,
-    label: &str,
-    attr_name: &str,
-) -> Expression {
-    attribute(
-        ctx.resource.enabled_when.as_deref(),
-        resource_type,
-        label,
-        attr_name,
-    )
 }
