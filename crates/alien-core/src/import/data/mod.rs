@@ -62,6 +62,7 @@ mod schema_snapshots {
     #[test]
     fn import_data_schema_snapshot() {
         let schemas = IndexMap::from([
+            ("aws_ai", schema::<AwsAiImportData>()),
             (
                 "aws_artifact_registry",
                 schema::<AwsArtifactRegistryImportData>(),
@@ -88,6 +89,7 @@ mod schema_snapshots {
             ),
             ("aws_storage", schema::<AwsStorageImportData>()),
             ("aws_vault", schema::<AwsVaultImportData>()),
+            ("azure_ai", schema::<AzureAiImportData>()),
             (
                 "azure_artifact_registry",
                 schema::<AzureArtifactRegistryImportData>(),
@@ -135,6 +137,7 @@ mod schema_snapshots {
                 schema::<AzureStorageAccountImportData>(),
             ),
             ("azure_vault", schema::<AzureVaultImportData>()),
+            ("gcp_ai", schema::<GcpAiImportData>()),
             (
                 "gcp_artifact_registry",
                 schema::<GcpArtifactRegistryImportData>(),
