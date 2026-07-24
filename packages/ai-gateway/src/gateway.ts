@@ -12,6 +12,7 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process"
+import type { Readable } from "node:stream"
 import { AlienError } from "@alienplatform/core"
 
 import { GatewayBinaryUnavailableError, GatewayStartFailedError } from "./errors.js"
@@ -204,11 +205,24 @@ function trackChild(child: ChildProcess): void {
 }
 
 /**
+ * Unref a child stdio stream's underlying handle. `stdout`/`stderr` are typed `Readable` but are
+ * `net.Socket` at runtime and carry `.unref()`; the guard makes a non-socket or absent stream a
+ * no-op instead of a crash.
+ */
+function unrefStream(stream: Readable | null): void {
+  const s = stream as (Readable & { unref?: () => void }) | null
+  if (s && typeof s.unref === "function") s.unref()
+}
+
+/**
  * Once the child is serving, hold it for the app's lifetime: drain its stdio so the
- * pipes never fill and block it, and `unref` so it never keeps the event loop alive
- * on its own. On a later exit/error, forget the memoized handle so the next call
- * respawns rather than reusing a dead URL (`trackChild` already installed the reaper
- * and stream guards at spawn time).
+ * pipes never fill and block it, then unref both the stdio sockets and the child so it
+ * never keeps the event loop alive on its own. `resume()` keeps the pipe sockets
+ * referenced, so unref-ing the child alone leaves a one-shot host (a CLI/batch/test
+ * process that calls `ai()` once) unable to exit — the sockets must be unref'd too. On a
+ * later exit/error, forget the memoized handle so the next call respawns rather than
+ * reusing a dead URL (`trackChild` already installed the reaper and stream guards at
+ * spawn time).
  */
 function keepChildAlive(child: ChildProcess, onGatewayLost: () => void): void {
   const onGone = () => {
@@ -219,5 +233,7 @@ function keepChildAlive(child: ChildProcess, onGatewayLost: () => void): void {
   child.on("exit", onGone)
   child.stdout?.resume()
   child.stderr?.resume()
+  unrefStream(child.stdout)
+  unrefStream(child.stderr)
   child.unref()
 }
