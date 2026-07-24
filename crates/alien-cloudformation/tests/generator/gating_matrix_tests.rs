@@ -185,3 +185,36 @@ fn a_gate_on_a_policy_refused_type_fails_at_render() {
     assert!(error.message.contains("email"), "{}", error.message);
     assert!(error.message.contains("mailer"), "{}", error.message);
 }
+
+/// Distinct ids can sanitize to the same CloudFormation parameter logical id;
+/// a silent overwrite would make both inputs read one parameter, so
+/// generation must refuse.
+#[test]
+fn inputs_colliding_after_normalization_are_refused() {
+    let stack = Stack::new("matrix-stack".to_string())
+        .inputs(vec![
+            gate_input("fooBar", "Input a", "First input."),
+            gate_input("foo_bar", "Input b", "Second input."),
+        ])
+        .add(
+            Kv::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let error = try_render_built_ins(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "colliding inputs",
+    )
+    .expect_err("colliding parameter names must refuse to render");
+    assert!(error.message.contains("InputFooBar"), "{}", error.message);
+    assert!(
+        !error.message.contains("  "),
+        "the message should render without space runs: {}",
+        error.message
+    );
+}

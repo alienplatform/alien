@@ -1,4 +1,4 @@
-use super::helpers::{assert_terraform_valid, render};
+use super::helpers::{assert_terraform_valid, render, try_render};
 use alien_core::{
     ResourceLifecycle, Stack, StackInputDefinition, StackInputEnvironmentMapping, StackInputKind,
     StackInputProvider, StackInputValidation, StackSettings, Storage,
@@ -100,4 +100,44 @@ fn terraform_rejects_deployer_secret_inputs_until_provider_state_safety_exists()
     assert!(err
         .message
         .contains("Terraform deployer-provided secret stack inputs are not enabled"));
+}
+
+/// Distinct ids can normalize to the same Terraform variable; a silent shadow
+/// would make both inputs read one variable, so generation must refuse.
+#[test]
+fn inputs_colliding_after_normalization_are_refused() {
+    fn boolean_input(id: &str) -> StackInputDefinition {
+        StackInputDefinition {
+            id: id.to_string(),
+            kind: StackInputKind::Boolean,
+            provided_by: vec![StackInputProvider::Deployer],
+            required: true,
+            label: format!("Input {id}"),
+            description: format!("Test input {id}."),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            env: Vec::new(),
+        }
+    }
+
+    let stack = Stack::new("input-stack".to_string())
+        .inputs(vec![boolean_input("fooBar"), boolean_input("foo_bar")])
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let error = try_render(&stack, TerraformTarget::Aws, StackSettings::default())
+        .expect_err("colliding variable names must refuse to render");
+    assert!(error.message.contains("fooBar"), "{}", error.message);
+    assert!(error.message.contains("foo_bar"), "{}", error.message);
+    assert!(error.message.contains("input_foo_bar"), "{}", error.message);
+    assert!(
+        !error.message.contains("  "),
+        "the message should render without space runs: {}",
+        error.message
+    );
 }
