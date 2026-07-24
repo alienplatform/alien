@@ -3,6 +3,7 @@
 use crate::{ObservedInventoryBatch, Platform, ResourceHeartbeat, StackState};
 use alien_error::AlienError;
 use bon::Builder;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
@@ -51,6 +52,16 @@ pub struct RuntimeMetadata {
     /// Used for compatibility checks during updates to compare mutated stacks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepared_stack: Option<crate::Stack>,
+
+    /// Canonical resolved answers for inputs that gate Frozen resources,
+    /// keyed by input id, recorded when the deployment is created (or derived
+    /// from the settled stack state on the first update of an older state).
+    ///
+    /// A frozen gate's answer is fixed for the deployment's lifetime: the
+    /// update path refuses input values that conflict with these, and a Live
+    /// resource sharing such an input resolves the persisted answer forever.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub persisted_gate_answers: GateAnswers,
 
     /// Prepared target for an update that has not reached Running yet. Keeping
     /// it separate preserves the last successful baseline across retries.
@@ -170,12 +181,21 @@ pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Answers for inputs gating Frozen resources, keyed by input id.
+pub type GateAnswers = IndexMap<String, bool>;
+
 /// Oldest deployment protocol version this binary can read.
 pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
 /// Deployment protocol version this binary writes.
 /// Bump when making incompatible changes to DeploymentState semantics.
-pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
+///
+/// Version 2 added the frozen-gate fixity contract (`persisted_gate_answers`
+/// on the runtime metadata): an actor unaware of it would skip the fixity
+/// check and could resurrect or delete a setup-created resource against the
+/// deployer's recorded answer, so older actors must refuse v2 states rather
+/// than step them.
+pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 2;
 
 /// Backwards-compatible alias for older call sites.
 pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = CURRENT_DEPLOYMENT_PROTOCOL_VERSION;

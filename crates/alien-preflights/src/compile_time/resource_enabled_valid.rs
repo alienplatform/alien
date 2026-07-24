@@ -301,6 +301,67 @@ mod tests {
         assert!(errors_for(stack).await.is_empty());
     }
 
+    /// Pausing the sole consumer is the point of gating compute: the worker
+    /// is the dependent of the ungated queue, so nothing dangles — producers
+    /// keep enqueuing and the queue's retention policy governs the backlog
+    /// until the deployer accepts the worker again.
+    #[tokio::test]
+    async fn accepts_a_gated_worker_consuming_an_ungated_queue() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let worker = Worker::new("consumer".to_string())
+            .permissions("consumer".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/consumer:latest".to_string(),
+            })
+            .trigger(alien_core::WorkerTrigger::Queue {
+                queue: alien_core::ResourceRef {
+                    resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
+                    id: "jobs".to_string(),
+                },
+            })
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add(queue, ResourceLifecycle::Frozen)
+            .add_enabled_when(worker, ResourceLifecycle::Live, "storeEnabled")
+            .build();
+
+        assert!(errors_for(stack).await.is_empty());
+    }
+
+    /// The reverse stays closed: an ungated worker consuming a gated queue
+    /// would resolve a binding for a queue that may never exist.
+    #[tokio::test]
+    async fn rejects_an_ungated_worker_consuming_a_gated_queue() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let worker = Worker::new("consumer".to_string())
+            .permissions("consumer".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/consumer:latest".to_string(),
+            })
+            .trigger(alien_core::WorkerTrigger::Queue {
+                queue: alien_core::ResourceRef {
+                    resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
+                    id: "jobs".to_string(),
+                },
+            })
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(queue, ResourceLifecycle::Frozen, "storeEnabled")
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let errors = errors_for(stack).await;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("depends on 'jobs'"),
+            "{errors:?}"
+        );
+    }
+
     #[tokio::test]
     async fn rejects_an_undeclared_input() {
         let mut input = boolean_input();

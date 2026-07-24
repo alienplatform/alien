@@ -39,11 +39,15 @@ pub async fn handle_pending(
         collect_deployment_environment_info(current.platform, config.base_platform, &client_config)
             .await?;
 
-    // Step 2.5: Drop gated setup resources the deployer declined, BEFORE the
-    // mutations: a declined frozen resource never existed, and leaving it in
-    // would derive grants and profile entries for it — or make InitialSetup
-    // read it as missing-and-pending and create the very resource the
-    // deployer declined.
+    // Step 2.5: Record the frozen-gate answers, then drop gated setup
+    // resources the deployer declined, BEFORE the mutations: a declined
+    // frozen resource never existed, and leaving it in would derive grants
+    // and profile entries for it — or make InitialSetup read it as
+    // missing-and-pending and create the very resource the deployer declined.
+    // The recorded answers are what the update path holds every later input
+    // value against: a frozen gate is answered once.
+    let persisted_gate_answers =
+        resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let target_stack =
         strip_declined_frozen_resources(target_stack, &stack_state, &config.input_values)?;
 
@@ -73,6 +77,7 @@ pub async fn handle_pending(
     // Step 4: Store prepared stack and inject environment variables
     let mut runtime_metadata = alien_core::RuntimeMetadata::default();
     runtime_metadata.prepared_stack = Some(mutated_stack.clone());
+    runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Inject environment variables into the prepared stack for validation
     let mut mutated_stack_with_env = mutated_stack;
@@ -99,6 +104,7 @@ pub async fn handle_pending(
     next.error = None;
     next.environment_info = environment_info;
     next.runtime_metadata = Some(runtime_metadata);
+    next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     // Error handled in DeploymentStepResult
 
     Ok(DeploymentStepResult {
@@ -190,6 +196,155 @@ pub fn strip_declined_live_resources(
     }
     remove_declined(&mut stack, &declined);
     Ok(stack)
+}
+
+/// The canonical resolved answers for every input that gates a Frozen
+/// resource in `stack`, from the same sources the frozen strip reads: the
+/// import when one seeded the state (per-resource presence, which must agree
+/// across resources sharing one input), else the initial input values.
+///
+/// Recorded on the deployment at creation; the update path refuses input
+/// values that conflict with them for the deployment's lifetime.
+pub fn resolve_frozen_gate_answers(
+    stack: &Stack,
+    stack_state: &StackState,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<alien_core::GateAnswers> {
+    let mut answers = alien_core::GateAnswers::new();
+    for (resource_id, entry) in stack.resources() {
+        let Some(input_id) = entry.enabled_when.as_deref() else {
+            continue;
+        };
+        let setup_created = alien_core::ownership_policy_for_resource_type(
+            entry.config.resource_type().as_ref(),
+        )
+        .should_emit_in_setup(entry.lifecycle);
+        if !setup_created {
+            continue;
+        }
+
+        let answer = if stack_state.resources.is_empty() {
+            gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
+        } else {
+            stack_state.resources.contains_key(resource_id.as_str())
+        };
+        if let Some(previous) = answers.insert(input_id.to_string(), answer) {
+            if previous != answer {
+                return Err(AlienError::new(
+                    crate::error::ErrorData::FrozenGateAnswerUnderivable {
+                        input_id: input_id.to_string(),
+                        reason: format!(
+                            "resources sharing this gate disagree — '{resource_id}' resolves \
+                             {answer} while a sibling resolved {previous}; the template renders \
+                             them behind one input, so a consistent import cannot produce this"
+                        ),
+                    },
+                )
+                .into());
+            }
+        }
+    }
+    Ok(answers)
+}
+
+/// Refuse an update whose input values conflict with a persisted frozen-gate
+/// answer. Inputs the update does not mention keep their recorded answer.
+pub fn enforce_frozen_gate_fixity(
+    persisted: &alien_core::GateAnswers,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    for (input_id, persisted_answer) in persisted {
+        let Some(value) = input_values.get(input_id) else {
+            continue;
+        };
+        let Some(requested) = value.as_bool() else {
+            return Err(AlienError::new(ErrorData::MissingConfiguration {
+                message: format!(
+                    "Input '{input_id}' gates a setup-created resource but its value is not a \
+                     boolean: {value}"
+                ),
+            }));
+        };
+        if requested != *persisted_answer {
+            return Err(AlienError::new(
+                crate::error::ErrorData::FrozenGateAnswerChanged {
+                    input_id: input_id.clone(),
+                    persisted: *persisted_answer,
+                    requested,
+                },
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Audit the gate-driven transitions this update requests: a live decline
+/// that will delete an existing resource (data included) and a live
+/// acceptance that will recreate a previously declined one.
+///
+/// The operation id derives from what makes the transition itself — resource,
+/// input, answer, release — so a retried step logs the same id (correlate,
+/// don't double-count) while a later flip in another release gets a fresh
+/// one. Completion and failure are the executor's per-resource status
+/// transitions, correlated by resource id; both flow through the ordinary
+/// tracing pipeline and the deployment-state sync.
+pub fn audit_live_gate_transitions(
+    stack: &Stack,
+    stack_state: &StackState,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+    release_id: Option<&str>,
+) {
+    for (resource_id, entry) in stack.resources() {
+        let Some(input_id) = entry.enabled_when.as_deref() else {
+            continue;
+        };
+        let setup_created = alien_core::ownership_policy_for_resource_type(
+            entry.config.resource_type().as_ref(),
+        )
+        .should_emit_in_setup(entry.lifecycle);
+        if setup_created {
+            continue;
+        }
+        let Ok(accepted) = gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)
+        else {
+            // The strip right after this reports the unresolvable gate as the
+            // step's error; nothing to audit for a step that will not run.
+            continue;
+        };
+        let exists = stack_state.resources.contains_key(resource_id.as_str());
+        let (transition, value_source) = match (accepted, exists) {
+            (false, true) => ("delete", source_of(input_values, input_id)),
+            (true, false) => ("create", source_of(input_values, input_id)),
+            _ => continue,
+        };
+        let release = release_id.unwrap_or("unversioned");
+        let operation_id = format!("gate:{resource_id}:{input_id}:{accepted}:{release}");
+        info!(
+            audit = "live-gate",
+            phase = "requested",
+            operation_id = %operation_id,
+            resource_id = %resource_id,
+            input_id = %input_id,
+            resolved_value = accepted,
+            value_source = value_source,
+            lifecycle = "live",
+            transition = transition,
+            "A live gate transition was requested; the executor's status \
+             transitions for this resource complete or fail it"
+        );
+    }
+}
+
+fn source_of(
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+    input_id: &str,
+) -> &'static str {
+    if input_values.contains_key(input_id) {
+        "provided"
+    } else {
+        "default"
+    }
 }
 
 fn remove_declined(stack: &mut Stack, declined: &[String]) {
@@ -473,6 +628,90 @@ mod tests {
         let error = strip_declined_live_resources(live_gated_stack(None), &Default::default())
             .expect_err("no value and no default cannot resolve");
         assert!(error.message.contains("cacheEnabled"), "{}", error.message);
+    }
+
+    /// Answers derive from import presence when a state exists, from the
+    /// initial input values on a direct deploy, and refuse to guess when
+    /// resources sharing one gate disagree.
+    #[test]
+    fn frozen_gate_answers_resolve_from_their_provenance() {
+        let imported = imported_state_with(
+            "analytics",
+            Resource::new(Kv::new("analytics".to_string()).build()),
+        );
+        let answers =
+            resolve_frozen_gate_answers(&gated_stack(), &imported, &Default::default())
+                .expect("presence resolves");
+        assert_eq!(answers.get("analyticsEnabled"), Some(&true));
+
+        let declined = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+        let answers =
+            resolve_frozen_gate_answers(&gated_stack(), &declined, &Default::default())
+                .expect("absence resolves");
+        assert_eq!(answers.get("analyticsEnabled"), Some(&false));
+
+        let direct = resolve_frozen_gate_answers(
+            &gated_stack_with_default(Some(false)),
+            &StackState::new(Platform::Aws),
+            &Default::default(),
+        )
+        .expect("the declared default resolves");
+        assert_eq!(direct.get("analyticsEnabled"), Some(&false));
+    }
+
+    #[test]
+    fn a_shared_gate_with_disagreeing_imports_is_refused() {
+        let mut stack = gated_stack();
+        stack.resources.insert(
+            "metrics".to_string(),
+            alien_core::ResourceEntry {
+                config: Resource::new(Kv::new("metrics".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: Some("analyticsEnabled".to_string()),
+            },
+        );
+        // The import delivered one of the two resources behind the gate.
+        let state = imported_state_with(
+            "analytics",
+            Resource::new(Kv::new("analytics".to_string()).build()),
+        );
+
+        let error = resolve_frozen_gate_answers(&stack, &state, &Default::default())
+            .expect_err("a half-delivered shared gate cannot resolve");
+        assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
+    }
+
+    /// A persisted answer wins over any later input value; inputs the update
+    /// does not mention keep their recorded answer silently.
+    #[test]
+    fn fixity_refuses_conflicting_answers_only() {
+        let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+
+        enforce_frozen_gate_fixity(&persisted, &Default::default())
+            .expect("an unmentioned input keeps its answer");
+        enforce_frozen_gate_fixity(
+            &persisted,
+            &std::collections::HashMap::from([(
+                "analyticsEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
+        )
+        .expect("a matching answer passes");
+
+        let error = enforce_frozen_gate_fixity(
+            &persisted,
+            &std::collections::HashMap::from([(
+                "analyticsEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
+        )
+        .expect_err("a flipped answer is refused");
+        assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
     }
 
     /// Input values are coerced to their declared kinds before they reach
