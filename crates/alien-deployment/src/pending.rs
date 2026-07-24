@@ -104,7 +104,6 @@ pub async fn handle_pending(
     next.error = None;
     next.environment_info = environment_info;
     next.runtime_metadata = Some(runtime_metadata);
-    next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     // Error handled in DeploymentStepResult
 
     Ok(DeploymentStepResult {
