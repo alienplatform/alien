@@ -40,6 +40,7 @@
     "@kubb/plugin-oas": "^4.35.1",
     "@kubb/plugin-zod": "^4.35.1",
     "@types/node": "^24.0.15",
+    "prettier": "2.8.8",
     "tsdown": "^0.13.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.7"
