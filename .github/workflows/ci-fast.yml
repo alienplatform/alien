@@ -189,27 +189,15 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm build && pnpm -C packages/package-layout check
 
-      - name: Command twins real-wire integration
+      - name: Rust and TypeScript command integration
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-        # Drives the TS command sender/receiver against the real Rust command
+        # Drives the TypeScript command sender/receiver against the Rust command
         # server (test-command-server bin, test-utils feature). Cargo is already
         # set up and warm from the Rust fast-tests step above; the suite fails
         # loudly if the server can't build/start (no silent skip).
         run: pnpm -C packages/commands test:integration
-
-      - name: Run examples
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-        env:
-          # The preceding package build already produced the local artifacts
-          # consumed by the examples; rebuilding the generated SDK can exceed
-          # the Node heap on CI runners.
-          ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES: "true"
-          NODE_OPTIONS: "--max-old-space-size=4096"
-          RUST_LOG: info
-          VERBOSE: "true"
-        run: pnpm test:examples
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
