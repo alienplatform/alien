@@ -1,0 +1,3 @@
+{
+  "ignorePatterns": "**/Cargo.lock\n**/pnpm-lock.yaml\n**/package-lock.json\n**/bun.lock\n**/.terraform.lock.hcl\ncrates/alien-manager/openapi.json\nclient-sdks/**/openapi*.json\nclient-sdks/*/typescript/**\npackages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**\ncrates/alien-azure-clients/openapi/**\ncrates/alien-azure-clients/src/azure/models/mod.rs"
+}
