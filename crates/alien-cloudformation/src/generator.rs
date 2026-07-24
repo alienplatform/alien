@@ -299,14 +299,17 @@ pub fn generate_cloudformation_template(
 
         let enabled_when = resource.enabled_when.as_deref();
         let declared_condition = if let Some(input_id) = enabled_when {
-            if !emitter.supports_enabled_when() {
+            // The same policy the compile-time check enforces, re-checked at
+            // render time so a caller that skips preflights cannot gate what
+            // the policy refuses.
+            if let Some(refusal) =
+                alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
+            {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("enabled() on resource type '{resource_type}'"),
-                    reason: format!(
-                        "the CloudFormation emitter for '{resource_type}' does not render \
-                         conditionally yet, so resource '{resource_id}' would be created \
-                         regardless of the deployer's answer"
+                    operation: format!(
+                        "enabled() on resource '{resource_id}' of type '{resource_type}'"
                     ),
+                    reason: refusal.reason().to_string(),
                 }));
             }
             Some(declare_enabled_condition(
@@ -329,8 +332,9 @@ pub fn generate_cloudformation_template(
                 // and create the resource the deployer declined.
                 //
                 // No shipped emitter reaches this: the ones that set conditions
-                // (aws/network.rs, aws/kubernetes_cluster.rs) return false from
-                // `supports_enabled_when`, so they fail the check above first.
+                // (aws/network.rs, aws/kubernetes_cluster.rs) belong to types
+                // the gateability policy refuses, so they fail the check above
+                // first.
                 if let Some(existing) = &emitted.condition {
                     return Err(AlienError::new(ErrorData::OperationNotSupported {
                         operation: format!("enabled() on resource type '{resource_type}'"),
