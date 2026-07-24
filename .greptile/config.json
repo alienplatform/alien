@@ -1,3 +1,4 @@
 {
-  "ignorePatterns": "crates/alien-manager/openapi.json\nclient-sdks/**/openapi*.json\nclient-sdks/*/typescript/**\npackages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**\ncrates/alien-azure-clients/openapi/**\ncrates/alien-azure-clients/src/azure/models/mod.rs"
+  "triggerOnUpdates": true,
+  "ignorePatterns": "packages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**"
 }
