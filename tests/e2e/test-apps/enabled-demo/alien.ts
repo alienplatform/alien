@@ -63,6 +63,20 @@ const io = alien.inputs({
     label: "Enable the off secret store",
     description: "Answered false by the e2e; its grant must be absent.",
   }),
+  workerOn: alien.boolean({
+    providedBy: "deployer",
+    required: false,
+    default: false,
+    label: "Enable the on worker",
+    description: "Answered true by the e2e; its function must exist.",
+  }),
+  workerOff: alien.boolean({
+    providedBy: "deployer",
+    required: false,
+    default: false,
+    label: "Enable the off worker",
+    description: "Answered false by the e2e; its function must be absent.",
+  }),
 })
 
 // Ungated positive control: proves setup actually provisioned resources, so an
@@ -89,6 +103,22 @@ const agent = new alien.Worker("agent")
   .permissions("execution")
   .build()
 
+// A compute gate is a live gate: the declined worker's function must never be
+// provisioned while its profile-derived service account still exists — the
+// baseline that lets a later acceptance recreate the function. Each gated
+// worker gets a dedicated profile so that baseline is exercised without an
+// ungated peer, and neither links any resource, so no grant depends on them.
+const workerOn = new alien.Worker("optional-worker-on")
+  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+  .permissions("optional-on")
+  .enabled(io.workerOn)
+  .build()
+const workerOff = new alien.Worker("optional-worker-off")
+  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+  .permissions("optional-off")
+  .enabled(io.workerOff)
+  .build()
+
 export default new alien.Stack("enabled-demo")
   .inputs(io)
   .add(state, "frozen")
@@ -101,6 +131,8 @@ export default new alien.Stack("enabled-demo")
   .add(vaultOn, "frozen")
   .add(vaultOff, "frozen")
   .add(agent, "live")
+  .add(workerOn, "live")
+  .add(workerOff, "live")
   .permissions({
     profiles: {
       // Each gated resource carries its own resource-scoped grant so the e2e can
@@ -119,6 +151,8 @@ export default new alien.Stack("enabled-demo")
         "optional-vault-on": ["vault/data-read"],
         "optional-vault-off": ["vault/data-read"],
       },
+      "optional-on": {},
+      "optional-off": {},
     },
   })
   .build()

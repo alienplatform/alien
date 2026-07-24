@@ -104,6 +104,7 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         "optional-storage-on",
         "optional-queue-on",
         "optional-vault-on",
+        "optional-worker-on",
     ] {
         anyhow::ensure!(
             present.contains(id),
@@ -115,6 +116,7 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         "optional-storage-off",
         "optional-queue-off",
         "optional-vault-off",
+        "optional-worker-off",
     ] {
         anyhow::ensure!(
             !present.contains(id),
@@ -152,6 +154,32 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         &["sqs", "list-queues", "--output", "json"],
         "optional-queue-on",
         "optional-queue-off",
+    )
+    .await?;
+    // A compute gate rides the live strip: the declined worker's function is
+    // never provisioned, the accepted one is.
+    assert_cloud_gate_pair(
+        &env,
+        &["lambda", "list-functions", "--output", "json"],
+        "optional-worker-on",
+        "optional-worker-off",
+    )
+    .await?;
+    // The declined worker's provisioning baseline persists: both dedicated
+    // profiles' service accounts exist, so a later acceptance can recreate
+    // the function without a setup change.
+    assert_cloud_gate_pair(
+        &env,
+        &["iam", "list-roles", "--output", "json"],
+        "optional-on-sa",
+        "never-a-role-with-this-name",
+    )
+    .await?;
+    assert_cloud_gate_pair(
+        &env,
+        &["iam", "list-roles", "--output", "json"],
+        "optional-off-sa",
+        "never-a-role-with-this-name",
     )
     .await?;
 

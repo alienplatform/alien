@@ -3225,6 +3225,8 @@ fn enabled_demo_gate_answers(app: TestApp) -> &'static [(&'static str, bool)] {
             ("input_queue_off", false),
             ("input_vault_on", true),
             ("input_vault_off", false),
+            ("input_worker_on", true),
+            ("input_worker_off", false),
         ],
         _ => &[],
     }
