@@ -643,6 +643,27 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             (resource_id.clone(), addresses)
         })
         .collect();
+    // Remote Storage grants refer back to the management identity. For the
+    // management -> storage bootstrap edge, wait for the physical storage
+    // resources but not the grants that cannot exist until management does.
+    let remote_storage_prerequisite_addresses: IndexMap<String, Vec<Expression>> = per_resource
+        .iter()
+        .filter(|(resource_id, _)| {
+            stack
+                .resources
+                .get(*resource_id)
+                .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage)
+        })
+        .map(|(resource_id, fragment)| {
+            let addresses = fragment
+                .resource_blocks
+                .iter()
+                .filter(|resource| !is_remote_storage_permission_support_resource(resource))
+                .filter_map(resource_address)
+                .collect();
+            (resource_id.clone(), addresses)
+        })
+        .collect();
 
     for (resource_id, entry) in stack.resources() {
         let Some(fragment) = per_resource.get_mut(resource_id) else {
@@ -654,7 +675,15 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             if dependency.id() == resource_id {
                 continue;
             }
-            if let Some(addresses) = dependency_addresses.get(dependency.id()) {
+            let addresses = if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+            {
+                remote_storage_prerequisite_addresses
+                    .get(dependency.id())
+                    .or_else(|| dependency_addresses.get(dependency.id()))
+            } else {
+                dependency_addresses.get(dependency.id())
+            };
+            if let Some(addresses) = addresses {
                 for address in addresses {
                     if !depends_on.contains(address) {
                         depends_on.push(address.clone());
@@ -739,6 +768,16 @@ fn stack_has_resource_type(stack: &Stack, resource_type: alien_core::ResourceTyp
 
 fn resource_inherits_stack_resource_dependencies(resource: &Block) -> bool {
     !is_gcp_iam_support_resource(resource)
+}
+
+fn is_remote_storage_permission_support_resource(resource: &Block) -> bool {
+    let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+        return false;
+    };
+
+    provider_type == "aws_iam_role_policy"
+        || provider_type == "google_storage_bucket_iam_member"
+        || provider_type == "azurerm_role_assignment"
 }
 
 fn is_gcp_iam_support_resource(resource: &Block) -> bool {

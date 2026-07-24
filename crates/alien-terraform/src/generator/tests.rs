@@ -7,7 +7,7 @@ use crate::{
     expr,
     target::TerraformTarget,
 };
-use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack};
+use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack, Storage};
 use hcl::{
     expr::Expression,
     structure::{Block, Body, Structure},
@@ -146,4 +146,94 @@ fn stack_dependencies_skip_gcp_iam_support_resources() {
 
     assert!(!block_has_depends_on(custom_role));
     assert!(block_has_depends_on(topic));
+}
+
+#[test]
+fn remote_management_waits_for_storage_but_not_its_back_referencing_grant() {
+    let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "files");
+    let stack = Stack::new("test".to_string())
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![storage_ref.clone()],
+        )
+        .add_with_dependencies(
+            Queue::new("queue".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![storage_ref],
+        )
+        .build();
+
+    let mut per_resource = IndexMap::new();
+    per_resource.insert(
+        "files".to_string(),
+        TfFragment {
+            resource_blocks: vec![
+                resource_block(
+                    "aws_s3_bucket",
+                    "files",
+                    [attr("bucket", Expression::String("files".to_string()))],
+                ),
+                resource_block(
+                    "aws_iam_role_policy",
+                    "files_management_storage",
+                    [attr(
+                        "role",
+                        expr::traversal(["aws_iam_role", "management", "id"]),
+                    )],
+                ),
+            ],
+            ..TfFragment::default()
+        },
+    );
+    per_resource.insert(
+        "management".to_string(),
+        TfFragment {
+            resource_blocks: vec![resource_block(
+                "aws_iam_role",
+                "management",
+                [attr("name", Expression::String("management".to_string()))],
+            )],
+            ..TfFragment::default()
+        },
+    );
+    per_resource.insert(
+        "queue".to_string(),
+        TfFragment {
+            resource_blocks: vec![resource_block(
+                "aws_sqs_queue",
+                "queue",
+                [attr("name", Expression::String("queue".to_string()))],
+            )],
+            ..TfFragment::default()
+        },
+    );
+
+    apply_resource_dependencies(&stack, &mut per_resource);
+
+    let management = render_body(Body::from(vec![Structure::Block(
+        per_resource
+            .get("management")
+            .expect("management fragment")
+            .resource_blocks[0]
+            .clone(),
+    )]))
+    .expect("management renders");
+    assert!(management.contains("aws_s3_bucket.files"));
+    assert!(!management.contains("aws_iam_role_policy.files_management_storage"));
+
+    let queue = render_body(Body::from(vec![Structure::Block(
+        per_resource
+            .get("queue")
+            .expect("queue fragment")
+            .resource_blocks[0]
+            .clone(),
+    )]))
+    .expect("queue renders");
+    assert!(queue.contains("aws_s3_bucket.files"));
+    assert!(queue.contains("aws_iam_role_policy.files_management_storage"));
 }

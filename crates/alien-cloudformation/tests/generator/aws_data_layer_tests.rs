@@ -1,10 +1,11 @@
 //! AWS data-layer scenarios — storage / kv / queue / vault.
 
-use super::helpers::render_built_ins;
+use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    Kv, LifecycleRule, ManagementPermissions, PermissionProfile, Queue, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -66,6 +67,71 @@ fn aws_storage_minimal_uses_safe_defaults() {
         "aws storage minimal",
     );
     insta::assert_snapshot!("aws_storage_minimal", yaml);
+}
+
+#[test]
+fn remote_storage_management_dependencies_are_acyclic() {
+    let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "files");
+    let stack = Stack::new("remote-storage".to_string())
+        .management(ManagementPermissions::override_(
+            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
+        ))
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![storage_ref.clone()],
+        )
+        .add_with_dependencies(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![storage_ref],
+        )
+        .build();
+
+    let (template, _) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "remote storage management dependencies",
+    );
+
+    let management_role = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::IAM::Role")
+        .expect("management role");
+    let storage_bucket = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::S3::Bucket")
+        .expect("storage bucket");
+    let storage_grant = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::IAM::Policy")
+        .expect("storage management grant");
+    let queue = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::SQS::Queue")
+        .expect("unrelated storage dependent");
+
+    assert!(management_role
+        .depends_on
+        .contains(&storage_bucket.logical_id));
+    assert!(!management_role
+        .depends_on
+        .contains(&storage_grant.logical_id));
+    assert!(storage_grant
+        .depends_on
+        .contains(&management_role.logical_id));
+    assert!(queue.depends_on.contains(&storage_grant.logical_id));
 }
 
 #[test]
