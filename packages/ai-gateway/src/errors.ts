@@ -50,6 +50,24 @@ export const AiTransportError = defineError({
 })
 
 /**
+ * Error thrown when a BYO-key binding names a provider the client has no base URL for.
+ * External (the developer set a bad `provider` tag) and not retryable — failing closed
+ * here stops the projected BYO key from being shipped to the wrong provider's endpoint.
+ */
+export const UnsupportedProviderError = defineError({
+  code: "AI_UNSUPPORTED_PROVIDER",
+  context: z.object({
+    provider: z.string(),
+    supported: z.array(z.string()),
+  }),
+  message: ({ provider, supported }) =>
+    `Unknown AI provider '${provider}'. Supported providers are ${supported.join(", ")}. For any other OpenAI-compatible provider, set ALIEN_AI_LOCAL_BASE_URL to its base URL.`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/**
  * Error thrown when this platform/architecture has no prebuilt gateway binary.
  */
 export const UnsupportedPlatformError = defineError({

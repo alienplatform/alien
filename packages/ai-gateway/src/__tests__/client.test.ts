@@ -104,6 +104,36 @@ describe("getAiConnection", () => {
     expect((await getAiConnection("llm")).baseURL).toBe("http://localhost:11434/v1")
   })
 
+  it("resolves a BYO anthropic provider to the Anthropic API", async () => {
+    vi.stubEnv(
+      "ALIEN_LLM_BINDING",
+      JSON.stringify({ service: "external", provider: "anthropic", apiKey: "sk-ant" }),
+    )
+    expect((await getAiConnection("llm")).baseURL).toBe("https://api.anthropic.com/v1")
+  })
+
+  it("fails closed on an unknown BYO provider rather than shipping the key to OpenAI", async () => {
+    // The projected key is attached as a bearer token, so an unlisted provider must error
+    // instead of defaulting to OpenAI's endpoint.
+    vi.stubEnv(
+      "ALIEN_LLM_BINDING",
+      JSON.stringify({ service: "external", provider: "google", apiKey: "sk-test" }),
+    )
+    await expect(getAiConnection("llm")).rejects.toMatchObject({
+      code: "AI_UNSUPPORTED_PROVIDER",
+      httpStatusCode: 400,
+    })
+  })
+
+  it("lets ALIEN_AI_LOCAL_BASE_URL override an otherwise-unknown provider", async () => {
+    vi.stubEnv(
+      "ALIEN_LLM_BINDING",
+      JSON.stringify({ service: "external", provider: "google", apiKey: "sk-test" }),
+    )
+    vi.stubEnv("ALIEN_AI_LOCAL_BASE_URL", "http://localhost:8080")
+    expect((await getAiConnection("llm")).baseURL).toBe("http://localhost:8080/v1")
+  })
+
   it("throws BINDING_NOT_FOUND when the binding env var is missing", async () => {
     await expect(getAiConnection("unlinked")).rejects.toMatchObject({
       code: "BINDING_NOT_FOUND",
