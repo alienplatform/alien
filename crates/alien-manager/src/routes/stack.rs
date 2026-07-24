@@ -190,7 +190,10 @@ pub async fn stack_import(
     // declined entry in would make the runner create the very resource the
     // deployer said no to. A live gated resource follows the request's input
     // values here for the same reason.
-    let prepared_stack = match alien_deployment::strip_declined_resources(
+    // No mutations run between the two strips on the import path: the
+    // registered stack is the already-mutated release render, so both
+    // families resolve here, back to back.
+    let prepared_stack = match alien_deployment::strip_declined_frozen_resources(
         prepared_stack,
         &stack_state,
         &req.input_values,
@@ -198,6 +201,11 @@ pub async fn stack_import(
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
+    let prepared_stack =
+        match alien_deployment::strip_declined_live_resources(prepared_stack, &req.input_values) {
+            Ok(stack) => stack,
+            Err(e) => return e.into_response(),
+        };
     let environment_info = infer_import_environment_info(&req);
     match state
         .deployment_store

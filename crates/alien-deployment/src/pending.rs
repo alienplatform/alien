@@ -39,6 +39,14 @@ pub async fn handle_pending(
         collect_deployment_environment_info(current.platform, config.base_platform, &client_config)
             .await?;
 
+    // Step 2.5: Drop gated setup resources the deployer declined, BEFORE the
+    // mutations: a declined frozen resource never existed, and leaving it in
+    // would derive grants and profile entries for it — or make InitialSetup
+    // read it as missing-and-pending and create the very resource the
+    // deployer declined.
+    let target_stack =
+        strip_declined_frozen_resources(target_stack, &stack_state, &config.input_values)?;
+
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
     let runner = alien_preflights::runner::PreflightRunner::new();
@@ -56,18 +64,11 @@ pub async fn handle_pending(
 
     info!("Deployment-time preflight checks completed successfully");
 
-    // Step 3.5: Drop gated setup resources the import did not deliver.
-    //
-    // A gated resource renders behind its input in the setup template, so for
-    // a deployment whose frozen resources arrived through a setup import, its
-    // absence from the imported state IS the deployer's answer. Leaving the
-    // entry in the prepared stack would make InitialSetup read it as
-    // missing-and-pending and create the very resource the deployer declined.
-    // A non-empty state at Pending can only come from a setup import: Pending
-    // runs once, before this runner has created anything, and a direct deploy
-    // enters it with an empty state.
-    let mutated_stack =
-        strip_declined_resources(mutated_stack, &stack_state, &config.input_values)?;
+    // Step 3.5: Drop gated live resources whose input says no. Frozen
+    // declines were stripped before the mutations above; live declines apply
+    // here, after them, so a declined workload's provisioning baseline stays
+    // derived and acceptance can return later.
+    let mutated_stack = strip_declined_live_resources(mutated_stack, &config.input_values)?;
 
     // Step 4: Store prepared stack and inject environment variables
     let mut runtime_metadata = alien_core::RuntimeMetadata::default();
@@ -109,22 +110,21 @@ pub async fn handle_pending(
     })
 }
 
-/// Remove gated resources the deployer declined.
+/// Remove gated setup-created resources the deployer declined. Runs BEFORE
+/// the mutations on both deployment paths: a declined frozen resource never
+/// existed, so nothing may be derived from it — no service-account grants, no
+/// profile entries, no capacity contribution.
 ///
-/// Two rules, one per lifecycle family:
-/// - a gated setup-created resource is declined when a setup import seeded
-///   the state and the resource is absent from it — the template rendered it
-///   behind the input, so absence IS the answer;
-/// - a gated live resource is declined when its input resolves false: the
-///   provided value when present, else the input's declared boolean default.
-///   Dropping it from the desired stack is what deprovisions it — the
-///   executor deletes state resources absent from the desired stack, so a
-///   toggle-off removes the resource AND its data by design.
+/// The answer's source is the import when one seeded the state — the template
+/// rendered the resource behind its input, so absence IS the answer — and the
+/// initial input values on a direct deployment, where no template ever asked.
+/// A non-empty state at Pending can only come from a setup import: Pending
+/// runs once, before this runner has created anything, and a direct deploy
+/// enters it with an empty state.
 ///
 /// An ungated resource missing from an import stays, so real drift still
-/// surfaces as a failure; an unresolvable live gate is an error, never a
-/// silent keep-or-drop.
-pub fn strip_declined_resources(
+/// surfaces as a failure.
+pub fn strip_declined_frozen_resources(
     mut stack: Stack,
     stack_state: &StackState,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
@@ -138,27 +138,68 @@ pub fn strip_declined_resources(
             entry.config.resource_type().as_ref(),
         )
         .should_emit_in_setup(entry.lifecycle);
+        if !setup_created {
+            continue;
+        }
 
-        let is_declined = if setup_created {
-            !stack_state.resources.is_empty()
-                && !stack_state.resources.contains_key(resource_id.as_str())
-        } else {
+        let is_declined = if stack_state.resources.is_empty() {
             !gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
+        } else {
+            !stack_state.resources.contains_key(resource_id.as_str())
         };
         if is_declined {
             declined.push(resource_id.clone());
         }
     }
+    remove_declined(&mut stack, &declined);
+    Ok(stack)
+}
 
-    for resource_id in &declined {
+/// Remove gated live resources whose input resolves false. Runs AFTER the
+/// mutations on both deployment paths, at the boundary where the executor's
+/// desired set is built: the mutations must keep seeing a declined live
+/// resource so its provisioning baseline — service account, profile grants,
+/// capacity contribution — stays stable and acceptance can return without a
+/// frozen-compatibility violation.
+///
+/// The answer is the provided value when present, else the input's declared
+/// boolean default; anything else is an error, never a silent keep-or-drop.
+/// Dropping the resource from the desired stack is what deprovisions it — the
+/// executor deletes state resources absent from the desired stack, so a
+/// decline removes the resource AND its data by design.
+pub fn strip_declined_live_resources(
+    mut stack: Stack,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<Stack> {
+    let mut declined: Vec<String> = Vec::new();
+    for (resource_id, entry) in stack.resources() {
+        let Some(input_id) = entry.enabled_when.as_deref() else {
+            continue;
+        };
+        let setup_created = alien_core::ownership_policy_for_resource_type(
+            entry.config.resource_type().as_ref(),
+        )
+        .should_emit_in_setup(entry.lifecycle);
+        if setup_created {
+            continue;
+        }
+
+        if !gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)? {
+            declined.push(resource_id.clone());
+        }
+    }
+    remove_declined(&mut stack, &declined);
+    Ok(stack)
+}
+
+fn remove_declined(stack: &mut Stack, declined: &[String]) {
+    for resource_id in declined {
         info!(
             resource_id = %resource_id,
             "The deployer declined this gated resource; it leaves the desired stack"
         );
         stack.resources.shift_remove(resource_id);
     }
-
-    Ok(stack)
 }
 
 /// The deployer's answer for a live gate: the provided value, else the
@@ -267,7 +308,18 @@ mod tests {
     }
 
     fn gated_stack() -> Stack {
+        gated_stack_with_default(Some(true))
+    }
+
+    fn gated_stack_with_default(default: Option<bool>) -> Stack {
+        let input = StackInputDefinition::deployer_boolean(
+            "analyticsEnabled",
+            "Enable analytics",
+            "Whether to create the analytics store.",
+            default,
+        );
         Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
             .add(
                 ServiceAccount::new("execution-sa".to_string()).build(),
                 ResourceLifecycle::Frozen,
@@ -306,25 +358,46 @@ mod tests {
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
 
-        let stripped = strip_declined_resources(gated_stack(), &state, &Default::default())
-            .expect("frozen rules never error");
+        let stripped =
+            strip_declined_frozen_resources(gated_stack(), &state, &Default::default())
+                .expect("an imported answer resolves without error");
 
         assert!(!stripped.resources.contains_key("analytics"));
         assert!(stripped.resources.contains_key("execution-sa"));
     }
 
     /// An empty state means this runner creates the frozen resources itself
-    /// (a direct deploy), so absence carries no answer and nothing is dropped.
+    /// (a direct deploy), so no template ever asked the deployer: the initial
+    /// input values answer instead — provided value, else the declared
+    /// default, and never a guess.
     #[test]
-    fn nothing_is_stripped_before_anything_was_imported() {
-        let stripped = strip_declined_resources(
-            gated_stack(),
+    fn a_direct_deploy_frozen_gate_follows_the_input() {
+        let kept = strip_declined_frozen_resources(
+            gated_stack_with_default(Some(true)),
             &StackState::new(Platform::Aws),
             &Default::default(),
         )
-        .expect("frozen rules never error");
+        .expect("default resolves");
+        assert!(kept.resources.contains_key("analytics"));
 
-        assert!(stripped.resources.contains_key("analytics"));
+        let dropped = strip_declined_frozen_resources(
+            gated_stack_with_default(Some(true)),
+            &StackState::new(Platform::Aws),
+            &std::collections::HashMap::from([(
+                "analyticsEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
+        )
+        .expect("provided answer resolves");
+        assert!(!dropped.resources.contains_key("analytics"));
+
+        let error = strip_declined_frozen_resources(
+            gated_stack_with_default(None),
+            &StackState::new(Platform::Aws),
+            &Default::default(),
+        )
+        .expect_err("no value and no default cannot resolve");
+        assert!(error.message.contains("analyticsEnabled"), "{}", error.message);
     }
 
     /// A gated resource the import delivered was accepted; it stays.
@@ -335,8 +408,9 @@ mod tests {
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
 
-        let stripped = strip_declined_resources(gated_stack(), &state, &Default::default())
-            .expect("frozen rules never error");
+        let stripped =
+            strip_declined_frozen_resources(gated_stack(), &state, &Default::default())
+                .expect("an imported answer resolves without error");
 
         assert!(stripped.resources.contains_key("analytics"));
     }
@@ -350,8 +424,9 @@ mod tests {
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
 
-        let stripped = strip_declined_resources(gated_stack(), &state, &Default::default())
-            .expect("frozen rules never error");
+        let stripped =
+            strip_declined_frozen_resources(gated_stack(), &state, &Default::default())
+                .expect("an imported answer resolves without error");
 
         assert!(stripped.resources.contains_key("execution-sa"));
     }
@@ -361,9 +436,8 @@ mod tests {
     /// whether or not the resource already exists.
     #[test]
     fn a_live_gate_answered_false_drops_the_resource() {
-        let stripped = strip_declined_resources(
+        let stripped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &StackState::new(Platform::Aws),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
         )
         .expect("resolvable gate");
@@ -372,9 +446,8 @@ mod tests {
 
     #[test]
     fn a_live_gate_answered_true_keeps_the_resource() {
-        let stripped = strip_declined_resources(
+        let stripped = strip_declined_live_resources(
             live_gated_stack(Some(false)),
-            &StackState::new(Platform::Aws),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
         )
         .expect("resolvable gate");
@@ -384,32 +457,21 @@ mod tests {
     /// No answer given (a direct deploy): the declared default decides.
     #[test]
     fn an_unanswered_live_gate_follows_its_default() {
-        let kept = strip_declined_resources(
-            live_gated_stack(Some(true)),
-            &StackState::new(Platform::Aws),
-            &Default::default(),
-        )
-        .expect("default resolves");
+        let kept = strip_declined_live_resources(live_gated_stack(Some(true)), &Default::default())
+            .expect("default resolves");
         assert!(kept.resources.contains_key("cache"));
 
-        let dropped = strip_declined_resources(
-            live_gated_stack(Some(false)),
-            &StackState::new(Platform::Aws),
-            &Default::default(),
-        )
-        .expect("default resolves");
+        let dropped =
+            strip_declined_live_resources(live_gated_stack(Some(false)), &Default::default())
+                .expect("default resolves");
         assert!(!dropped.resources.contains_key("cache"));
     }
 
     /// An unresolvable gate is a fault, never a silent keep-or-drop.
     #[test]
     fn an_unresolvable_live_gate_fails_fast() {
-        let error = strip_declined_resources(
-            live_gated_stack(None),
-            &StackState::new(Platform::Aws),
-            &Default::default(),
-        )
-        .expect_err("no value and no default cannot resolve");
+        let error = strip_declined_live_resources(live_gated_stack(None), &Default::default())
+            .expect_err("no value and no default cannot resolve");
         assert!(error.message.contains("cacheEnabled"), "{}", error.message);
     }
 
@@ -417,9 +479,8 @@ mod tests {
     /// this layer; a non-boolean here is corrupt input and must fail loudly.
     #[test]
     fn a_non_boolean_gate_value_fails_fast() {
-        let error = strip_declined_resources(
+        let error = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &StackState::new(Platform::Aws),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
         )
         .expect_err("string values are not answers");
