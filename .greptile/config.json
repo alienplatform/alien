@@ -1,3 +1,4 @@
 {
+  "triggerOnUpdates": true,
   "ignorePatterns": "packages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**"
 }
