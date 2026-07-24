@@ -370,6 +370,14 @@ pub enum AzureCredentials {
         /// Alien bindings.
         tokens: HashMap<String, String>,
     },
+    /// A short-lived Azure Storage shared access signature.
+    ///
+    /// Query parameter values are kept decoded. Azure clients must encode them
+    /// when attaching them to a request URL.
+    SasToken {
+        /// Exact SAS query parameters, including the signature and expiry.
+        query_parameters: HashMap<String, String>,
+    },
     /// Azure VM IMDS managed identity.
     VmManagedIdentity {
         /// The client ID of the user-assigned managed identity
@@ -416,6 +424,14 @@ impl std::fmt::Debug for AzureCredentials {
                 .debug_struct("AzureCredentials::ScopedAccessTokens")
                 .field("scopes", &tokens.keys().collect::<Vec<_>>())
                 .field("tokens", &"[REDACTED]")
+                .finish(),
+            AzureCredentials::SasToken { query_parameters } => f
+                .debug_struct("AzureCredentials::SasToken")
+                .field(
+                    "parameter_names",
+                    &query_parameters.keys().collect::<Vec<_>>(),
+                )
+                .field("query_parameters", &"[REDACTED]")
                 .finish(),
             AzureCredentials::VmManagedIdentity {
                 client_id,
@@ -731,6 +747,49 @@ mod tests {
         AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig,
         GcpClientConfig, GcpCredentials, KubernetesClientConfig,
     };
+
+    #[test]
+    fn aws_credentials_wire_format_matches_manager_api_contract() {
+        let cases = [
+            (
+                AwsCredentials::AccessKeys {
+                    access_key_id: "access-key".to_string(),
+                    secret_access_key: "secret-key".to_string(),
+                    session_token: Some("session-token".to_string()),
+                },
+                serde_json::json!({
+                    "type": "accessKeys",
+                    "access_key_id": "access-key",
+                    "secret_access_key": "secret-key",
+                    "session_token": "session-token",
+                }),
+            ),
+            (
+                AwsCredentials::SessionCredentials {
+                    access_key_id: "access-key".to_string(),
+                    secret_access_key: "secret-key".to_string(),
+                    session_token: "session-token".to_string(),
+                    expires_at: "2099-01-01T00:00:00Z".to_string(),
+                },
+                serde_json::json!({
+                    "type": "sessionCredentials",
+                    "access_key_id": "access-key",
+                    "secret_access_key": "secret-key",
+                    "session_token": "session-token",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                }),
+            ),
+        ];
+
+        for (credentials, expected) in cases {
+            let serialized = serde_json::to_value(&credentials).unwrap();
+            assert_eq!(serialized, expected);
+            assert_eq!(
+                serde_json::from_value::<AwsCredentials>(serialized).unwrap(),
+                credentials
+            );
+        }
+    }
 
     #[test]
     fn kubernetes_cloud_exposes_nested_aws_config() {

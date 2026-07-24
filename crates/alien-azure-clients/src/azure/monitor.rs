@@ -1,6 +1,7 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
+use crate::azure::error::{safe_http_response_context, sanitized_diagnostic_url};
 use crate::azure::token_cache::AzureTokenCache;
-use alien_client_core::{ErrorData, Result};
+use alien_client_core::Result;
 use alien_error::{Context, IntoAlienError};
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
@@ -58,29 +59,26 @@ impl MonitorApi for AzureMonitorClient {
             .base
             .execute_request(signed_req, "monitor_list_metrics", &request.resource_uri)
             .await?;
-        let status = response.status().as_u16();
-        let response_body =
-            response
-                .text()
-                .await
-                .into_alien_error()
-                .context(ErrorData::HttpResponseError {
-                    message: "Failed to read Azure Monitor metrics response body".to_string(),
-                    url: url.clone(),
-                    http_status: status,
-                    http_request_text: None,
-                    http_response_text: None,
-                })?;
+        let status = response.status();
+        let diagnostic_url = sanitized_diagnostic_url(&url);
+        let response_body = response
+            .text()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .into_alien_error()
+            .context(safe_http_response_context(
+                "Failed to read Azure Monitor metrics response body",
+                diagnostic_url.clone(),
+                status,
+            ))?;
 
         serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(ErrorData::HttpResponseError {
-                message: "Failed to deserialize Azure Monitor metrics response".to_string(),
-                url,
-                http_status: status,
-                http_request_text: None,
-                http_response_text: Some(response_body),
-            })
+            .context(safe_http_response_context(
+                "Failed to deserialize Azure Monitor metrics response",
+                diagnostic_url,
+                status,
+            ))
     }
 }
 
@@ -276,5 +274,23 @@ mod tests {
                 .and_then(|point| point.total),
             Some(42.0)
         );
+    }
+
+    #[test]
+    fn monitor_diagnostic_url_redacts_query_and_userinfo() {
+        const USER: &str = "MONITOR_USER_SECRET_0123456789";
+        const PASSWORD: &str = "MONITOR_PASSWORD_SECRET_0123456789";
+        const FILTER: &str = "MONITOR_FILTER_SECRET_0123456789";
+        let diagnostic_url = sanitized_diagnostic_url(&format!(
+            "https://{USER}:{PASSWORD}@management.azure.com/resource/providers/Microsoft.Insights/metrics?api-version=2023-10-01&$filter={FILTER}"
+        ));
+
+        assert_eq!(
+            diagnostic_url,
+            "https://management.azure.com/resource/providers/Microsoft.Insights/metrics"
+        );
+        assert!(!diagnostic_url.contains(USER));
+        assert!(!diagnostic_url.contains(PASSWORD));
+        assert!(!diagnostic_url.contains(FILTER));
     }
 }

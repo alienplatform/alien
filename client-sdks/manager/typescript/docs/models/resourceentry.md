@@ -12,7 +12,8 @@ let value: ResourceEntry = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `publicUrl`        | *string*           | :heavy_minus_sign: | N/A                |
-| `resourceType`     | *string*           | :heavy_check_mark: | N/A                |
+| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `publicEndpoints`                                                                | Record<string, [models.PublicEndpointOutput](../models/publicendpointoutput.md)> | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `publicUrl`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `resourceType`                                                                   | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |

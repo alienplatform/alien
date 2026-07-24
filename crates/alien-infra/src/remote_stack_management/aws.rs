@@ -1,15 +1,15 @@
 use std::{collections::HashSet, time::Duration};
 use tracing::{info, warn};
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
-    KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Worker,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -21,11 +21,18 @@ use alien_permissions::{
 };
 use chrono::Utc;
 
-/// Generates the AWS IAM role name for RemoteStackManagement.
-fn get_aws_management_role_name(prefix: &str) -> String {
-    format!("{}-management", prefix)
-}
+use super::aws_remote_storage::{
+    append_resource_scoped_management_statements, desired_remote_storage_bucket_names,
+};
 
+mod controller_helpers;
+mod ownership;
+use controller_helpers::*;
+
+#[cfg(test)]
+mod ownership_tests;
+
+/// Generates the AWS IAM role name for RemoteStackManagement.
 const LEGACY_INLINE_POLICY_NAME: &str = "alien-management-policy";
 const MANAGED_POLICY_BASE_NAME: &str = "deployment-management";
 const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
@@ -33,12 +40,20 @@ const IAM_POLICY_NAME_MAX_LEN: usize = 128;
 
 #[controller]
 pub struct AwsRemoteStackManagementController {
+    /// Whether setup owns the role and its IAM grants.
+    ///
+    /// `None` is a legacy checkpoint from before ownership was persisted.
+    #[serde(default)]
+    pub(crate) setup_managed: Option<bool>,
     /// The ARN of the created IAM role.
     pub(crate) role_arn: Option<String>,
     /// The name of the created IAM role.
     pub(crate) role_name: Option<String>,
     /// Whether management permissions have been applied
     pub(crate) management_permissions_applied: bool,
+    /// Fingerprint of the management grant plan last applied to the role.
+    #[serde(default)]
+    pub(crate) applied_management_grant_fingerprint: Option<String>,
 }
 
 #[controller]
@@ -55,6 +70,10 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // Persist ownership before the first cloud mutation. A failed direct
+        // create must never be mistaken for a setup-owned import.
+        self.setup_managed = Some(false);
+
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -168,6 +187,11 @@ impl AwsRemoteStackManagementController {
         }
 
         self.management_permissions_applied = true;
+        self.applied_management_grant_fingerprint =
+            Some(super::desired_management_grant_fingerprint(
+                ctx,
+                &desired_remote_storage_bucket_names(ctx)?,
+            )?);
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -230,6 +254,18 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        if self.setup_managed_resources() {
+            info!(
+                config_id = %config.id,
+                "Skipping runtime mutation of setup-managed AWS role and grants"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -259,6 +295,13 @@ impl AwsRemoteStackManagementController {
                 .await?;
         }
 
+        self.management_permissions_applied = true;
+        self.applied_management_grant_fingerprint =
+            Some(super::desired_management_grant_fingerprint(
+                ctx,
+                &desired_remote_storage_bucket_names(ctx)?,
+            )?);
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -274,6 +317,18 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Deleting,
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        if self.setup_managed_resources() {
+            info!(
+                config_id = %config.id,
+                "Leaving setup-managed AWS role and grants for setup teardown"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
+
         let role_name = match &self.role_name {
             Some(name) => name,
             None => {
@@ -491,42 +546,18 @@ impl AwsRemoteStackManagementController {
             None
         }
     }
-}
 
-fn emit_aws_remote_stack_management_heartbeat(
-    ctx: &ResourceControllerContext<'_>,
-    controller: &AwsRemoteStackManagementController,
-) -> Result<()> {
-    let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.setup_managed_resources() {
+            return Ok(false);
+        }
 
-    ctx.emit_heartbeat(ResourceHeartbeat {
-        deployment_id: None,
-        resource_id: config.id.clone(),
-        resource_type: RemoteStackManagement::RESOURCE_TYPE,
-        controller_platform: Platform::Aws,
-        backend: HeartbeatBackend::Aws,
-        observed_at: Utc::now(),
-        data: ResourceHeartbeatData::RemoteStackManagement(
-            RemoteStackManagementHeartbeatData::AwsIamRole(AwsRemoteStackManagementHeartbeatData {
-                status: RemoteStackManagementHeartbeatStatus {
-                    health: ObservedHealth::Healthy,
-                    lifecycle: ProviderLifecycleState::Running,
-                    message: controller.role_name.as_ref().map(|role_name| {
-                        format!("AWS management role '{}' is reachable", role_name)
-                    }),
-                    stale: false,
-                    partial: false,
-                    collection_issues: vec![],
-                },
-                role_name: controller.role_name.clone(),
-                role_arn: controller.role_arn.clone(),
-                management_permissions_applied: controller.management_permissions_applied,
-            }),
-        ),
-        raw: vec![],
-    });
-
-    Ok(())
+        let desired = super::desired_management_grant_fingerprint(
+            ctx,
+            &desired_remote_storage_bucket_names(ctx)?,
+        )?;
+        Ok(self.applied_management_grant_fingerprint.as_ref() != Some(&desired))
+    }
 }
 
 // Separate impl block for helper methods
@@ -626,7 +657,7 @@ impl AwsRemoteStackManagementController {
             }
         }
 
-        self.append_resource_scoped_management_statements(
+        append_resource_scoped_management_statements(
             ctx,
             management_profile,
             &permission_context,
@@ -654,93 +685,6 @@ impl AwsRemoteStackManagementController {
 
         ensure_unique_statement_sids(&mut all_statements);
         self.chunk_management_policy_documents(all_statements)
-    }
-
-    fn append_resource_scoped_management_statements(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        management_profile: &alien_core::permissions::PermissionProfile,
-        base_permission_context: &PermissionContext,
-        generator: &AwsRuntimePermissionsGenerator,
-        all_statements: &mut Vec<AwsIamStatement>,
-    ) -> Result<()> {
-        let mut seen = HashSet::new();
-        for (resource_id, permission_set_refs) in management_profile
-            .0
-            .iter()
-            .filter(|(scope, _)| *scope != "*")
-        {
-            let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
-                continue;
-            };
-            if resource_entry.lifecycle != ResourceLifecycle::Live {
-                continue;
-            }
-            let permission_context = Self::resource_scoped_management_permission_context(
-                ctx,
-                base_permission_context,
-                resource_id,
-                resource_entry,
-            )?;
-
-            for permission_set_ref in permission_set_refs {
-                if !seen.insert((resource_id.clone(), permission_set_ref.id().to_string())) {
-                    continue;
-                }
-                if permission_set_ref.id().ends_with("/provision") {
-                    continue;
-                }
-                let Some(permission_set) =
-                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-                else {
-                    continue;
-                };
-                if permission_set.platforms.aws.is_none() {
-                    continue;
-                }
-
-                let policy = generator
-                    .generate_policy(&permission_set, BindingTarget::Resource, &permission_context)
-                    .context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "Failed to generate resource-scoped IAM policy for management permission set '{}'",
-                            permission_set.id
-                        ),
-                        operation: Some("generate_management_policy_document".to_string()),
-                        resource_id: Some(resource_id.clone()),
-                    })?;
-                all_statements.extend(policy.statement);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn resource_scoped_management_permission_context(
-        ctx: &ResourceControllerContext<'_>,
-        base_permission_context: &PermissionContext,
-        resource_id: &str,
-        resource_entry: &alien_core::ResourceEntry,
-    ) -> Result<PermissionContext> {
-        if let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() {
-            return ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(
-                ctx, cluster,
-            )
-            .map(|context| context.with_resource_id(resource_id.to_string()));
-        }
-
-        let mut context = base_permission_context
-            .clone()
-            .with_resource_id(resource_id.to_string());
-        context.resource_name = None;
-
-        if resource_entry.config.downcast_ref::<Worker>().is_some() {
-            return Ok(
-                context.with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id))
-            );
-        }
-
-        Ok(context)
     }
 
     fn chunk_management_policy_documents(
@@ -1083,38 +1027,13 @@ impl AwsRemoteStackManagementController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(role_name: &str) -> Self {
         Self {
+            setup_managed: Some(false),
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
+            applied_management_grant_fingerprint: None,
             _internal_stay_count: None,
         }
     }
-}
-
-fn sanitize_iam_policy_name(input: &str) -> String {
-    input
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '=' | ',' | '.' | '@' | '-') {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-fn is_remote_conflict(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
-    matches!(
-        error.error,
-        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
-    )
-}
-
-fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
-    matches!(
-        error.error,
-        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-    )
 }

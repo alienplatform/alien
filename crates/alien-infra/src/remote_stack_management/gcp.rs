@@ -23,6 +23,8 @@ use alien_permissions::{
 };
 use chrono::Utc;
 
+mod ownership;
+
 /// Generates the GCP service account ID for RemoteStackManagement.
 fn get_gcp_management_service_account_id(prefix: &str) -> String {
     format!("{}-management", prefix)
@@ -30,6 +32,12 @@ fn get_gcp_management_service_account_id(prefix: &str) -> String {
 
 #[controller]
 pub struct GcpRemoteStackManagementController {
+    /// Whether setup owns the service account and its IAM grants.
+    ///
+    /// `None` is a legacy checkpoint; ownership is then inferred from the
+    /// service-account name used by the pre-existing create and import paths.
+    #[serde(default)]
+    pub(crate) setup_managed: Option<bool>,
     /// The email of the created management service account.
     pub(crate) service_account_email: Option<String>,
     /// The unique ID of the created management service account.
@@ -38,6 +46,12 @@ pub struct GcpRemoteStackManagementController {
     pub(crate) role_bound: bool,
     /// Whether impersonation permissions have been granted
     pub(crate) impersonation_granted: bool,
+    /// Fingerprint of the management grant plan last applied to the service account.
+    #[serde(default)]
+    pub(crate) applied_management_grant_fingerprint: Option<String>,
+    /// Bucket IAM grant scopes tracked by this controller for reconciliation.
+    #[serde(default)]
+    pub(crate) remote_storage_bucket_names: Vec<String>,
 }
 
 #[controller]
@@ -54,6 +68,10 @@ impl GcpRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // Persist ownership before the first cloud mutation. A failed direct
+        // create must never be mistaken for a setup-owned Terraform import.
+        self.setup_managed = Some(false);
+
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
@@ -150,7 +168,7 @@ impl GcpRemoteStackManagementController {
     async fn binding_role(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        let service_account_email = self.service_account_email.as_ref().ok_or_else(|| {
+        let service_account_email = self.service_account_email.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Management service account email not available for role binding"
                     .to_string(),
@@ -179,7 +197,7 @@ impl GcpRemoteStackManagementController {
         let service_account_id = service_account_email
             .split('@')
             .next()
-            .unwrap_or(service_account_email);
+            .unwrap_or(&service_account_email);
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
@@ -234,6 +252,9 @@ impl GcpRemoteStackManagementController {
         }
 
         let mut owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
+        let remote_storage_grant_plans =
+            super::gcp_remote_storage::build_grant_plans(ctx, &generator, service_account_id)
+                .await?;
         Self::append_resource_scoped_management_bindings(
             ctx,
             &generator,
@@ -298,7 +319,23 @@ impl GcpRemoteStackManagementController {
             );
         }
 
+        let mut previously_owned_buckets = self.remote_storage_bucket_names.clone();
+        previously_owned_buckets.extend(super::gcp_remote_storage::observed_bucket_names(ctx)?);
+        previously_owned_buckets.sort_unstable();
+        previously_owned_buckets.dedup();
+        let desired_remote_storage_bucket_names = super::gcp_remote_storage::reconcile_grants(
+            ctx,
+            &service_account_email,
+            remote_storage_grant_plans,
+            &previously_owned_buckets,
+        )
+        .await?;
+
         self.role_bound = true;
+        self.remote_storage_bucket_names = desired_remote_storage_bucket_names;
+        self.applied_management_grant_fingerprint = Some(
+            super::desired_management_grant_fingerprint(ctx, &self.remote_storage_bucket_names)?,
+        );
 
         Ok(HandlerAction::Continue {
             state: GrantingImpersonation,
@@ -472,6 +509,17 @@ impl GcpRemoteStackManagementController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
+        if self.setup_managed_resources(ctx.resource_prefix) {
+            info!(
+                config_id = %config.id,
+                "Skipping runtime mutation of setup-managed GCP identity and grants"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         info!(
             config_id = %config.id,
             "Updating GCP management service account permissions"
@@ -490,6 +538,17 @@ impl GcpRemoteStackManagementController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+
+        if self.setup_managed_resources(ctx.resource_prefix) {
+            info!(
+                config_id = %config.id,
+                "Leaving setup-managed GCP identity and grants for setup teardown"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
 
         // Remove all IAM bindings where our service account is a member
         if !self.role_bound {
@@ -621,6 +680,10 @@ impl GcpRemoteStackManagementController {
         self.service_account_unique_id = None;
         self.role_bound = false;
         self.impersonation_granted = false;
+        // Bucket IAM members are setup-owned and are removed with their
+        // setup-owned buckets. Deleting this service account revokes its
+        // effective access without requiring it to administer bucket IAM.
+        self.remote_storage_bucket_names.clear();
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -651,6 +714,16 @@ impl GcpRemoteStackManagementController {
         } else {
             None
         }
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.setup_managed_resources(ctx.resource_prefix) {
+            return Ok(false);
+        }
+
+        let desired_bucket_names = super::gcp_remote_storage::desired_bucket_names(ctx)?;
+        let desired = super::desired_management_grant_fingerprint(ctx, &desired_bucket_names)?;
+        Ok(self.applied_management_grant_fingerprint.as_ref() != Some(&desired))
     }
 }
 
@@ -841,6 +914,7 @@ impl GcpRemoteStackManagementController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(service_account_name: &str) -> Self {
         Self {
+            setup_managed: Some(false),
             state: GcpRemoteStackManagementState::Ready,
             service_account_email: Some(format!(
                 "{}@mock-project.iam.gserviceaccount.com",
@@ -849,10 +923,20 @@ impl GcpRemoteStackManagementController {
             service_account_unique_id: Some("123456789012345678901".to_string()),
             role_bound: true,
             impersonation_granted: true,
+            applied_management_grant_fingerprint: None,
+            remote_storage_bucket_names: Vec::new(),
             _internal_stay_count: None,
         }
     }
 }
+
+#[cfg(test)]
+#[path = "gcp_teardown_tests.rs"]
+mod gcp_teardown_tests;
+
+#[cfg(test)]
+#[path = "gcp/ownership_tests.rs"]
+mod ownership_tests;
 
 #[cfg(test)]
 mod tests {

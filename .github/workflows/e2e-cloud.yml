@@ -129,11 +129,11 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
 
-# Every run currently shares ALIEN_E2E_SLOT 03. Serialize the complete workflow
-# so a newer run cannot reuse resources while an older run is still testing or
+# Every run shares ALIEN_E2E_SLOT 10. Serialize the complete workflow so a
+# newer run cannot reuse resources while an older run is still testing or
 # cleaning them up.
 concurrency:
-  group: e2e-tests-slot-03
+  group: e2e-tests-slot-10
   cancel-in-progress: false
 
 permissions:
@@ -142,7 +142,7 @@ permissions:
   packages: write
 
 env:
-  ALIEN_E2E_SLOT: "03"
+  ALIEN_E2E_SLOT: "10"
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"

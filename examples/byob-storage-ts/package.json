@@ -1,0 +1,19 @@
+{
+  "name": "byob-storage-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc",
+    "run:vendor": "pnpm run build && node dist/src/vendor.js"
+  },
+  "dependencies": {
+    "@alienplatform/bindings": "^3.0.0",
+    "@alienplatform/core": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.15",
+    "typescript": "^5.8.3"
+  }
+}

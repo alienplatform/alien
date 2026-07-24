@@ -3,7 +3,7 @@ use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::{AwsClientConfig, AwsCredentials};
-use alien_client_core::{ErrorData, Result};
+use alien_client_core::{redact_request_body, ErrorData, RequestBuilderExt, Result};
 use alien_error::ContextError;
 use bon::Builder;
 use form_urlencoded;
@@ -39,10 +39,8 @@ impl StsClient {
         Self { client, config }
     }
 
-    async fn sign_config(&self, operation_name: &str) -> Result<AwsSignConfig> {
-        let config = if operation_name == "AssumeRoleWithWebIdentity" {
-            self.config.clone()
-        } else if matches!(self.config.credentials, AwsCredentials::WebIdentity { .. }) {
+    async fn sign_config(&self) -> Result<AwsSignConfig> {
+        let config = if matches!(self.config.credentials, AwsCredentials::WebIdentity { .. }) {
             self.config.get_web_identity_credentials().await?
         } else {
             self.config.clone()
@@ -98,8 +96,22 @@ impl StsClient {
             .content_type_form()
             .body(body.clone());
 
-        let sign_config = self.sign_config(operation_name).await?;
-        let result = crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await;
+        // AssumeRoleWithWebIdentity is authenticated by its OIDC token and
+        // explicitly does not require AWS credentials. Signing it with dummy
+        // credentials makes the otherwise valid exchange fail at AWS.
+        let result = if operation_name == "AssumeRoleWithWebIdentity" {
+            builder.with_retry().send_xml::<T>().await
+        } else {
+            let sign_config = self.sign_config().await?;
+            crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await
+        };
+        // Web-identity request bodies contain the projected identity token.
+        // Strip it from every error-chain layer before adding STS context.
+        let result = if operation_name == "AssumeRoleWithWebIdentity" {
+            redact_request_body(result)
+        } else {
+            result
+        };
 
         match result {
             Ok(v) => Ok(v),
@@ -112,9 +124,13 @@ impl StsClient {
                 {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    if let Some(mapped) =
-                        Self::map_sts_error(status, text, operation_name, resource_name, &body)
-                    {
+                    if let Some(mapped) = Self::map_sts_error(
+                        status,
+                        text,
+                        operation_name,
+                        resource_name,
+                        (operation_name != "AssumeRoleWithWebIdentity").then_some(body.as_str()),
+                    ) {
                         Err(e.context(mapped))
                     } else {
                         // Couldn't parse STS error, use original error
@@ -132,7 +148,7 @@ impl StsClient {
         error_body: &str,
         operation: &str,
         resource_name: &str,
-        request_body: &str,
+        request_body: Option<&str>,
     ) -> Option<ErrorData> {
         // Attempt to parse the canonical AWS error XML.
         let parsed_error: std::result::Result<StsErrorResponse, _> =
@@ -232,7 +248,7 @@ impl StsClient {
                     url: "sts.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),
-                    http_request_text: Some(request_body.into()),
+                    http_request_text: request_body.map(str::to_string),
                 },
             },
         })
@@ -470,6 +486,17 @@ pub struct Credentials {
     pub expiration: String,
 }
 
+impl From<Credentials> for AwsCredentials {
+    fn from(credentials: Credentials) -> Self {
+        Self::SessionCredentials {
+            access_key_id: credentials.access_key_id,
+            secret_access_key: credentials.secret_access_key,
+            session_token: credentials.session_token,
+            expires_at: credentials.expiration,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetCallerIdentityResponse {
@@ -533,12 +560,147 @@ mod tests {
         assert!(observed[0]
             .body
             .contains("Action=AssumeRoleWithWebIdentity"));
+        assert!(
+            observed[0].authorization.is_empty(),
+            "AssumeRoleWithWebIdentity must not be SigV4 signed"
+        );
         assert!(observed[1].body.contains("Action=GetCallerIdentity"));
         assert!(
             observed[1].authorization.contains("ASIATESTACCESS"),
             "GetCallerIdentity must be signed with credentials returned by AssumeRoleWithWebIdentity, got: {}",
             observed[1].authorization
         );
+    }
+
+    #[tokio::test]
+    async fn assume_role_sends_the_exact_inline_session_policy() {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test STS server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
+        let server_observed = observed.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept STS request");
+            let (headers, body) = read_http_request(&mut stream);
+            server_observed
+                .lock()
+                .expect("observed requests lock")
+                .push(ObservedRequest {
+                    body,
+                    authorization: headers,
+                });
+            write_xml_response(&mut stream, assume_role_response());
+        });
+        let policy = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket"],
+                "Resource": ["arn:aws:s3:::requested-bucket"]
+            }]
+        })
+        .to_string();
+        let config = AwsClientConfig {
+            account_id: "111122223333".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIATESTACCESS".to_string(),
+                secret_access_key: "test-secret".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), endpoint)]),
+            }),
+        };
+
+        StsClient::new(Client::new(), config)
+            .assume_role(
+                AssumeRoleRequest::builder()
+                    .role_arn("arn:aws:iam::123456789012:role/remote-management".to_string())
+                    .role_session_name("remote-storage-session".to_string())
+                    .duration_seconds(3600)
+                    .policy(policy.clone())
+                    .build(),
+            )
+            .await
+            .expect("AssumeRole should succeed");
+        server.join().expect("server thread should finish");
+
+        let observed = observed.lock().expect("observed requests lock");
+        let form = form_urlencoded::parse(observed[0].body.as_bytes())
+            .into_owned()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(form.get("Action").map(String::as_str), Some("AssumeRole"));
+        assert_eq!(form.get("Policy"), Some(&policy));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(form.get("Policy").unwrap()).unwrap(),
+            serde_json::json!({
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": ["arn:aws:s3:::requested-bucket"]
+                }]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn web_identity_errors_never_retain_the_request_token() {
+        const SENTINEL: &str = "secret-web-identity-sentinel";
+        const POLICY: &str = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::requested-bucket/*"]}]}"#;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test STS server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept STS request");
+            let (headers, body) = read_http_request(&mut stream);
+            assert!(body.contains(SENTINEL), "server should receive the token");
+            let form = form_urlencoded::parse(body.as_bytes())
+                .into_owned()
+                .collect::<HashMap<_, _>>();
+            assert_eq!(form.get("Policy").map(String::as_str), Some(POLICY));
+            assert!(
+                !headers
+                    .lines()
+                    .any(|line| line.to_ascii_lowercase().starts_with("authorization:")),
+                "AssumeRoleWithWebIdentity must not be SigV4 signed"
+            );
+            let response_body = "upstream failure";
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write error response");
+        });
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "UNSIGNED".to_string(),
+                secret_access_key: "UNSIGNED".to_string(),
+                session_token: None,
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), endpoint)]),
+            }),
+        };
+        let error = StsClient::new(Client::new(), config)
+            .assume_role_with_web_identity(
+                AssumeRoleWithWebIdentityRequest::builder()
+                    .role_arn("arn:aws:iam::123456789012:role/test".to_string())
+                    .role_session_name("test".to_string())
+                    .web_identity_token(SENTINEL.to_string())
+                    .policy(POLICY.to_string())
+                    .build(),
+            )
+            .await
+            .expect_err("upstream error should propagate");
+        server.join().expect("server thread should finish");
+        let serialized = serde_json::to_string(&error).expect("serialize error chain");
+        assert!(!serialized.contains(SENTINEL));
+        assert!(!serialized.contains("WebIdentityToken"));
     }
 
     #[derive(Debug)]
@@ -665,6 +827,25 @@ mod tests {
   </AssumeRoleWithWebIdentityResult>
   <ResponseMetadata><RequestId>request-1</RequestId></ResponseMetadata>
 </AssumeRoleWithWebIdentityResponse>"#
+            .to_string()
+    }
+
+    fn assume_role_response() -> String {
+        r#"<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <AssumedRoleUser>
+      <Arn>arn:aws:sts::123456789012:assumed-role/remote-management/remote-storage-session</Arn>
+      <AssumedRoleId>AROA:remote-storage-session</AssumedRoleId>
+    </AssumedRoleUser>
+    <Credentials>
+      <AccessKeyId>ASIAREMOTEACCESS</AccessKeyId>
+      <SecretAccessKey>remote-secret</SecretAccessKey>
+      <SessionToken>remote-session-token</SessionToken>
+      <Expiration>2030-01-01T01:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+  <ResponseMetadata><RequestId>request-assume-role</RequestId></ResponseMetadata>
+</AssumeRoleResponse>"#
             .to_string()
     }
 

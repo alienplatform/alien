@@ -8,7 +8,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
+    Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -55,6 +56,63 @@ fn gcp_storage_public_read_allows_object_viewer() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_storage_public_read", &module);
     assert_terraform_valid(&module, "gcp_storage_public_read");
+}
+
+#[test]
+fn gcp_storage_remote_access_grants_exact_role_to_management_identity() {
+    let stack = Stack::new("acme-remote-storage".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("uploads", ["storage/remote-data-write"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("uploads".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_storage_remote_access", &module);
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered
+        .contains("google_project_iam_custom_role\" \"gcp_role_storage_remote_data_write\""));
+    assert!(rendered.contains(
+        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_management_storage_0\""
+    ));
+    assert!(rendered.contains("google_service_account.management.email"));
+    assert!(rendered.contains("\"storage.objects.get\""));
+    assert!(rendered.contains("\"storage.objects.list\""));
+    assert!(rendered.contains("\"storage.objects.create\""));
+    assert!(rendered.contains("\"storage.objects.delete\""));
+    assert!(!rendered.contains("\"iam.serviceAccounts.signBlob\""));
+    assert_terraform_valid(&module, "gcp_storage_remote_access");
+}
+
+#[test]
+fn gcp_remote_storage_management_dependencies_are_acyclic() {
+    let stack = Stack::new("acme-remote-storage".to_string())
+        .management(ManagementPermissions::override_(
+            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
+        ))
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    assert_terraform_valid(&module, "gcp_remote_storage_management_dependencies");
 }
 
 #[test]

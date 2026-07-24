@@ -2,11 +2,10 @@
 //! and calls the appropriate check function for each supported binding.
 
 use alien_core::Platform;
-use alien_test::{Binding, DeploymentModel, TestApp, TestDeployment};
+use alien_test::{e2e, Binding, DeploymentModel, TestApp, TestDeployment};
 use tracing::{info, warn};
 
-use super::{bindings, events};
-use alien_test::e2e;
+use super::{bindings, events, remote_bindings};
 
 /// Run all binding checks that are supported for the given platform and model.
 ///
@@ -50,7 +49,14 @@ pub async fn check_all_bindings(
             Binding::QueueEvent => events::check_queue_event_delivery(deployment).await?,
             Binding::StorageEvent => events::check_storage_event_delivery(deployment).await?,
             Binding::CronEvent => events::check_cron_event_delivery(deployment).await?,
-            Binding::Storage => bindings::check_storage(deployment).await?,
+            Binding::Storage => {
+                bindings::check_storage(deployment).await?;
+                if model == DeploymentModel::Push
+                    && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+                {
+                    remote_bindings::check_remote_storage(deployment, platform).await?;
+                }
+            }
             Binding::Kv => bindings::check_kv(deployment).await?,
             Binding::Vault => bindings::check_vault(deployment).await?,
             Binding::Postgres => bindings::check_postgres(deployment).await?,

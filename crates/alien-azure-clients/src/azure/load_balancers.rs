@@ -182,7 +182,7 @@ impl LoadBalancerApi for AzureLoadBalancerClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;

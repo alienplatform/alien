@@ -28,8 +28,9 @@ use alien_core::import::{
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
         AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
-        GcpBuildImportData, GcpKvImportData, GcpNetworkImportData, GcpServiceActivationImportData,
-        GcpStorageImportData, KubernetesClusterImportData,
+        GcpBuildImportData, GcpKvImportData, GcpNetworkImportData,
+        GcpRemoteStackManagementImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        KubernetesClusterImportData,
     },
     ImportContext,
 };
@@ -48,6 +49,9 @@ use alien_infra::ImporterRegistry;
 use serde_json::json;
 use std::collections::HashMap;
 
+#[path = "importers/remote_stack_management.rs"]
+mod remote_stack_management;
+
 /// Build a `ResourceEntry` whose `config` is `T`. The importer reads
 /// `ctx.resource.config` to derive the resource_type written into the
 /// returned `StackResourceState`.
@@ -57,6 +61,16 @@ fn entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         lifecycle: ResourceLifecycle::Live,
         dependencies: vec![],
         remote_access: false,
+        enabled_when: None,
+    }
+}
+
+fn remote_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
+    ResourceEntry {
+        config: Resource::new(resource),
+        lifecycle: ResourceLifecycle::Live,
+        dependencies: vec![],
+        remote_access: true,
         enabled_when: None,
     }
 }
@@ -271,25 +285,6 @@ fn aws_service_account_round_trip() {
     assert_eq!(internal["stackPermissionsApplied"], true);
 }
 
-#[test]
-fn aws_remote_stack_management_round_trip() {
-    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
-    let data = AwsRemoteStackManagementImportData {
-        role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
-        role_name: "alien-stack-mgmt".to_string(),
-        management_permissions_applied: true,
-    };
-    let state = run_through_registry(
-        &RemoteStackManagement::RESOURCE_TYPE,
-        Platform::Aws,
-        serde_json::to_value(&data).unwrap(),
-        &entry,
-        "us-east-1",
-        &aws_management_config(),
-    );
-    assert_running_with_internal_state(&state);
-}
-
 /// A fully wired email resource (seed domain + inbound) imports as Running
 /// with typed [`EmailOutputs`] carrying exactly what the setup stack handed
 /// over: DKIM CNAME records per domain, the configuration set, and the
@@ -350,15 +345,11 @@ fn aws_email_round_trip() {
     assert_eq!(domain.dkim_tokens[0].name, "t1._domainkey.mail.example.com");
     assert_eq!(domain.dkim_tokens[0].value, "t1.dkim.amazonses.com");
 
-    // Manager-provisioned workers receive the mail binding from the imported
-    // controller state, mirroring the CloudFormation emitter's binding ref.
+    // Imported resources must not publish binding material unless the entry
+    // explicitly opts into remote access.
     assert_eq!(
-        state.remote_binding_params,
-        Some(json!({
-            "service": "ses",
-            "configurationSet": "alien-stack-mailer",
-            "region": "us-east-1",
-        }))
+        state.remote_binding_params, None,
+        "an imported resource without remote access must not publish its binding params"
     );
 }
 
@@ -467,16 +458,11 @@ fn aws_open_search_round_trip() {
         "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
     );
 
-    // Manager-provisioned workers receive the collection binding from the
-    // imported controller state, mirroring the CloudFormation emitter's
-    // binding ref (SigV4 HTTP with service name `aoss`).
+    // Imported resources must not publish binding material unless the entry
+    // explicitly opts into remote access.
     assert_eq!(
-        state.remote_binding_params,
-        Some(json!({
-            "service": "aoss",
-            "endpoint": "https://abc123def456.aoss.us-east-1.on.aws",
-            "collectionName": "search-a2591da2",
-        }))
+        state.remote_binding_params, None,
+        "an imported resource without remote access must not publish its binding params"
     );
 }
 
@@ -538,11 +524,45 @@ fn gcp_storage_round_trip() {
         internal_state(&state)["bucketName"],
         "alien-stack-my-bucket"
     );
+    assert_eq!(
+        state.remote_binding_params, None,
+        "an imported resource without remote access must not publish its binding params"
+    );
 }
 
 #[test]
-fn gcp_kv_round_trip() {
-    let entry = entry(Kv::new("settings".to_string()).build());
+fn gcp_storage_remote_access_round_trip() {
+    let entry = remote_entry(Storage::new("my-bucket".to_string()).build());
+    let data = GcpStorageImportData {
+        project_id: "my-project".to_string(),
+        bucket_name: "alien-stack-my-bucket".to_string(),
+        bucket_self_link: "https://www.googleapis.com/storage/v1/b/alien-stack-my-bucket"
+            .to_string(),
+        location: "us-central1".to_string(),
+    };
+    let state = run_through_registry(
+        &Storage::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-central1",
+        &gcp_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "gcs",
+            "bucketName": "alien-stack-my-bucket",
+        })),
+        "an imported resource with remote access must publish its binding params"
+    );
+}
+
+#[test]
+fn gcp_kv_remote_access_round_trip() {
+    let entry = remote_entry(Kv::new("settings".to_string()).build());
     let data = GcpKvImportData {
         project_id: "my-project".to_string(),
         database_id: "alien-stack-settings".to_string(),
@@ -570,8 +590,8 @@ fn gcp_kv_round_trip() {
 }
 
 #[test]
-fn gcp_build_round_trip() {
-    let entry = entry(
+fn gcp_build_remote_access_round_trip() {
+    let entry = remote_entry(
         Build::new("builder".to_string())
             .permissions("build-execution".to_string())
             .environment(HashMap::from([(
@@ -823,47 +843,6 @@ fn azure_service_account_import_waits_for_stack_permission_propagation() {
     );
     assert_provisioning_with_internal_state(&state);
     assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
-}
-
-#[test]
-fn azure_remote_stack_management_round_trip_includes_access_outputs() {
-    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
-    let data = AzureRemoteStackManagementImportData {
-        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
-        resource_group: "rg-alien".to_string(),
-        identity_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-management".to_string(),
-        client_id: "11111111-1111-1111-1111-111111111111".to_string(),
-        principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
-        tenant_id: "33333333-3333-3333-3333-333333333333".to_string(),
-        management_permissions_applied: true,
-    };
-    let state = run_through_registry(
-        &RemoteStackManagement::RESOURCE_TYPE,
-        Platform::Azure,
-        serde_json::to_value(&data).unwrap(),
-        &entry,
-        "eastus",
-        &azure_management_config(),
-    );
-    assert_provisioning_with_internal_state(&state);
-    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
-
-    let outputs = state
-        .outputs
-        .as_ref()
-        .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
-        .expect("Azure remote-stack-management import must produce outputs");
-    assert_eq!(outputs.management_resource_id, data.identity_id);
-
-    let access_config: serde_json::Value =
-        serde_json::from_str(&outputs.access_configuration).unwrap();
-    assert_eq!(
-        access_config,
-        json!({
-            "uamiClientId": data.client_id,
-            "tenantId": data.tenant_id,
-        })
-    );
 }
 
 #[test]

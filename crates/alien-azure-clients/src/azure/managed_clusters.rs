@@ -169,7 +169,7 @@ impl ManagedClustersApi for AzureManagedClustersClient {
                 url: self.managed_cluster_url(resource_group_name, managed_cluster_name),
                 http_status: status,
                 http_request_text: None,
-                http_response_text: Some(body),
+                http_response_text: None,
             })
     }
 
@@ -270,7 +270,7 @@ impl AzureManagedClustersClient {
                 url,
                 http_status: status,
                 http_request_text: None,
-                http_response_text: Some(body),
+                http_response_text: None,
             })
     }
 }

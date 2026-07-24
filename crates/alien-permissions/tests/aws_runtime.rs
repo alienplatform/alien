@@ -24,6 +24,36 @@ fn test_aws_storage_data_read_policy_generation(#[case] binding_target: BindingT
 }
 
 #[test]
+fn remote_storage_data_write_generates_only_v0_object_operations() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("storage/remote-data-write").expect("permission set exists");
+    let context = create_test_context();
+
+    let policy = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("remote Storage policy should generate");
+
+    assert_eq!(policy.statement.len(), 1);
+    assert_eq!(
+        policy.statement[0].action,
+        [
+            "s3:ListBucket",
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+        ]
+    );
+    assert_eq!(
+        policy.statement[0].resource,
+        [
+            "arn:aws:s3:::my-stack-payments-data",
+            "arn:aws:s3:::my-stack-payments-data/*",
+        ]
+    );
+}
+
+#[test]
 fn test_aws_policy_with_conditions() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set = create_aws_storage_data_read_permission_set_with_condition();
@@ -609,10 +639,24 @@ fn test_worker_provision_uses_resource_name_for_arn_and_resource_id_for_tags() {
         })
         .expect("worker provision should allow creating the physical Lambda function");
 
+    assert_eq!(
+        create_function_statement.action,
+        ["lambda:CreateFunction", "lambda:TagResource"]
+    );
+    assert!(condition_equals(
+        create_function_statement,
+        "aws:RequestTag/deployment",
+        "my-stack"
+    ));
     assert!(condition_equals(
         create_function_statement,
         "aws:RequestTag/resource",
         "job"
+    ));
+    assert!(condition_equals(
+        create_function_statement,
+        "aws:RequestTag/managed-by",
+        "runtime"
     ));
 }
 

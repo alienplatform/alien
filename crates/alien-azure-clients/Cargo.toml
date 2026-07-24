@@ -26,6 +26,7 @@ base64 = { workspace = true }
 urlencoding = { workspace = true }
 sha2 = { workspace = true }
 hmac = "0.12"
+quick-xml = { version = "0.37.0", features = ["serialize"] }
 backon = { workspace = true }
 url = { workspace = true }
 serde-aux = "4"

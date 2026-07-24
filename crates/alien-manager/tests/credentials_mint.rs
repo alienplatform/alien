@@ -16,6 +16,7 @@
 //!     deliberately rejected.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -36,10 +37,11 @@ use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig, Container,
-    ContainerCode, GcpClientConfig, GcpCredentials, PermissionProfile, Platform, ResourceLifecycle,
-    ResourceSpec, RuntimeMetadata, ServiceAccount as ServiceAccountResource, Stack, StackSettings,
-    StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    AwsClientConfig, AwsCredentials, AwsServiceOverrides, AzureClientConfig, AzureCredentials,
+    ClientConfig, Container, ContainerCode, GcpClientConfig, GcpCredentials, PermissionProfile,
+    Platform, Resource, ResourceLifecycle, ResourceSpec, ResourceStatus, RuntimeMetadata,
+    ServiceAccount as ServiceAccountResource, Stack, StackResourceState, StackSettings, StackState,
+    Storage, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
 use alien_manager::auth::{Authz, Subject};
@@ -55,7 +57,8 @@ use alien_manager::stores::sqlite::{
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
     CreateReleaseParams, CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
-    ReleaseStore, TelemetryBackend, TokenStore, TokenType,
+    ReleaseStore, RemoteStorageCredentialSource, TelemetryBackend, TokenStore, TokenType,
+    UpdateImportedDeploymentParams,
 };
 
 // ---------------------------------------------------------------------------
@@ -247,6 +250,21 @@ impl BindingsProviderApi for FakeServiceAccountProvider {
 /// Credential resolver that always returns a preset config (the local path).
 struct StaticCredentialResolver {
     config: ClientConfig,
+}
+
+/// Resolver spy used by remote-binding route tests. It proves the handler does
+/// not touch credential resolution before authorization and stack-state checks.
+struct CountingCredentialResolver {
+    config: ClientConfig,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl CredentialResolver for CountingCredentialResolver {
+    async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.config.clone())
+    }
 }
 
 #[async_trait]
@@ -504,6 +522,15 @@ fn mint_test_stack(platform: Platform) -> Stack {
             ServiceAccountResource::new(BINDING_NAME.to_string()).build(),
             ResourceLifecycle::Live,
         )
+        .add_with_remote_access(
+            Storage {
+                id: "files".to_string(),
+                public_read: false,
+                versioning: false,
+                lifecycle_rules: Vec::new(),
+            },
+            ResourceLifecycle::Frozen,
+        )
         .add(container, ResourceLifecycle::Live)
         .build()
 }
@@ -595,6 +622,15 @@ async fn post_mint(
     bearer: Option<&str>,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
+    let (status, _, json) = post_mint_with_headers(fixture, bearer, body).await;
+    (status, json)
+}
+
+async fn post_mint_with_headers(
+    fixture: &Fixture,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
     let router = alien_manager::routes::credentials::router().with_state(fixture.state.clone());
 
     let mut req = Request::builder()
@@ -611,13 +647,14 @@ async fn post_mint(
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let json = if bytes.is_empty() {
         serde_json::Value::Null
     } else {
         serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
     };
-    (status, json)
+    (status, headers, json)
 }
 
 fn mint_body(deployment_id: &str) -> serde_json::Value {
@@ -628,6 +665,9 @@ fn mint_body(deployment_id: &str) -> serde_json::Value {
     })
 }
 
+#[path = "credentials_mint/bindings_resolve.rs"]
+mod bindings_resolve;
+
 // ---------------------------------------------------------------------------
 // Auth matrix
 // ---------------------------------------------------------------------------
@@ -635,7 +675,7 @@ fn mint_body(deployment_id: &str) -> serde_json::Value {
 #[tokio::test]
 async fn deployment_token_for_its_deployment_mints_200() {
     let fixture = impersonation_fixture().await;
-    let (status, json) = post_mint(
+    let (status, headers, json) = post_mint_with_headers(
         &fixture,
         Some(&fixture.token_a),
         mint_body(&fixture.deployment_a),
@@ -643,6 +683,8 @@ async fn deployment_token_for_its_deployment_mints_200() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(headers.get(header::PRAGMA).unwrap(), "no-cache");
     // Response shape.
     assert!(json["clientConfig"].is_object(), "clientConfig present");
     assert_eq!(
@@ -668,10 +710,57 @@ async fn deployment_token_for_other_deployment_is_forbidden() {
 }
 
 #[tokio::test]
+async fn deployment_viewer_cannot_mint_credentials() {
+    let fixture = impersonation_fixture().await;
+    let viewer_token = mint_token(
+        &fixture.state.token_store,
+        TokenType::Deployment,
+        "ax_deploy_",
+        None,
+        None,
+    )
+    .await;
+
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&viewer_token),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
+}
+
+#[tokio::test]
 async fn missing_bearer_is_unauthorized() {
     let fixture = impersonation_fixture().await;
     let (status, _) = post_mint(&fixture, None, mint_body(&fixture.deployment_a)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn legacy_unscoped_credential_resolution_route_is_not_mounted() {
+    let fixture = impersonation_fixture().await;
+    let router = alien_manager::routes::credentials::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/resolve-credentials")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", fixture.admin_token),
+        )
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "deploymentId": fixture.deployment_a,
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        router.oneshot(request).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
@@ -688,10 +777,8 @@ async fn garbage_bearer_is_unauthorized() {
 
 #[tokio::test]
 async fn deployment_group_token_can_mint_for_deployment_in_its_group() {
-    // Documents the inherited grant: a deployment-group-scoped (`ax_dg_`)
-    // token is not pinned to one deployment id like a deployment token is —
-    // `can_act_on_deployment` (== `can_read_deployment`) passes for any
-    // deployment whose deployment_group_id matches the token's scope.
+    // A deployment-group deployer has write authority for deployments in its
+    // own group, so it may mint for those deployments.
     let fixture = impersonation_fixture().await;
     let (status, json) = post_mint(
         &fixture,

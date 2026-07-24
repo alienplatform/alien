@@ -665,6 +665,7 @@ Resources:
         Statement:
         - Action:
           - lambda:CreateFunction
+          - lambda:TagResource
           Condition:
             StringEquals:
               aws:RequestTag/deployment:
@@ -696,7 +697,6 @@ Resources:
           - lambda:PutFunctionConcurrency
           - lambda:PutFunctionEventInvokeConfig
           - lambda:RemovePermission
-          - lambda:TagResource
           - lambda:UpdateAlias
           - lambda:UpdateCodeSigningConfig
           - lambda:UpdateFunctionCode

@@ -1,5 +1,7 @@
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
+use base64::Engine;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -17,6 +19,7 @@ pub mod compute;
 pub mod container_apps;
 pub mod containerregistry;
 pub mod disks;
+pub(crate) mod error;
 pub mod event_grid;
 pub mod flexible_server;
 pub mod keyvault;
@@ -35,6 +38,9 @@ pub mod service_bus;
 pub mod storage_accounts;
 pub mod tables;
 pub mod token_cache;
+mod user_delegation_sas;
+
+pub use user_delegation_sas::AzureContainerSas;
 
 const AZURE_IMDS_ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
 
@@ -101,15 +107,11 @@ async fn get_workload_identity_token(
             message: "Failed to request Azure access token using workload identity".to_string(),
         })?;
 
-    if !response.status().is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
+    let status = response.status();
+    if !status.is_success() {
         return Err(AlienError::new(ErrorData::AuthenticationError {
             message: format!(
-                "Failed to get workload identity access token: {}",
-                error_text
+                "Failed to get workload identity access token: Azure returned HTTP {status}"
             ),
         }));
     }
@@ -145,7 +147,9 @@ async fn get_impersonated_token(
     // with the specified scope and client context.
 
     match &config.credentials {
-        AzureCredentials::AccessToken { .. } | AzureCredentials::ScopedAccessTokens { .. } => {
+        AzureCredentials::AccessToken { .. }
+        | AzureCredentials::ScopedAccessTokens { .. }
+        | AzureCredentials::SasToken { .. } => {
             // If we already have an access token, we can't directly impersonate
             // In practice, you'd need to use Azure AD's on-behalf-of flow
             Err(AlienError::new(ErrorData::InvalidInput {
@@ -202,15 +206,11 @@ async fn get_impersonated_token(
                     message: "Failed to exchange OIDC token for impersonation".to_string(),
                 })?;
 
-            if !response.status().is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
+            let status = response.status();
+            if !status.is_success() {
                 return Err(AlienError::new(ErrorData::AuthenticationError {
                     message: format!(
-                        "OIDC token exchange for impersonation failed: {}",
-                        error_text
+                        "OIDC token exchange for impersonation failed: Azure returned HTTP {status}"
                     ),
                 }));
             }
@@ -277,13 +277,12 @@ async fn get_impersonated_token(
                     message: "Failed to request Azure access token for impersonation".to_string(),
                 })?;
 
-            if !response.status().is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
+            let status = response.status();
+            if !status.is_success() {
                 return Err(AlienError::new(ErrorData::AuthenticationError {
-                    message: format!("Failed to get impersonated access token: {}", error_text),
+                    message: format!(
+                        "Failed to get impersonated access token: Azure returned HTTP {status}"
+                    ),
                 }));
             }
 
@@ -306,11 +305,13 @@ async fn get_impersonated_token(
     }
 }
 
-/// Extract the caller's object ID (oid) from an Azure JWT access token.
-/// Azure access tokens are JWTs — we decode the payload to read the `oid` claim.
-pub fn extract_oid_from_token(token: &str) -> Result<String> {
-    use base64::Engine;
+#[derive(Deserialize)]
+struct AzureAccessTokenClaims {
+    oid: Option<String>,
+    exp: Option<i64>,
+}
 
+fn decode_access_token_claims(token: &str) -> Result<AzureAccessTokenClaims> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err(AlienError::new(ErrorData::InvalidInput {
@@ -328,17 +329,18 @@ pub fn extract_oid_from_token(token: &str) -> Result<String> {
             })
         })?;
 
-    #[derive(Deserialize)]
-    struct JwtClaims {
-        oid: Option<String>,
-    }
-
-    let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
+    serde_json::from_slice(&payload_bytes).map_err(|error| {
         AlienError::new(ErrorData::InvalidInput {
-            message: format!("Failed to parse Azure JWT payload: {}", e),
+            message: format!("Failed to parse Azure JWT payload: {error}"),
             field_name: None,
         })
-    })?;
+    })
+}
+
+/// Extract the caller's object ID (oid) from an Azure JWT access token.
+/// Azure access tokens are JWTs — we decode the payload to read the `oid` claim.
+pub fn extract_oid_from_token(token: &str) -> Result<String> {
+    let claims = decode_access_token_claims(token)?;
 
     claims.oid.ok_or_else(|| {
         AlienError::new(ErrorData::InvalidInput {
@@ -346,6 +348,38 @@ pub fn extract_oid_from_token(token: &str) -> Result<String> {
             field_name: None,
         })
     })
+}
+
+fn extract_expiry_from_token(token: &str) -> Result<DateTime<Utc>> {
+    let claims = decode_access_token_claims(token)?;
+    let expires_at = claims.exp.ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: "Azure JWT does not contain 'exp' claim".to_string(),
+            field_name: None,
+        })
+    })?;
+
+    DateTime::from_timestamp(expires_at, 0).ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: "Azure JWT contains an invalid 'exp' claim".to_string(),
+            field_name: None,
+        })
+    })
+}
+
+/// A bearer token paired with the authoritative expiry from its JWT claims.
+pub struct ExpiringAccessToken {
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for ExpiringAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExpiringAccessToken")
+            .field("token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Trait for Azure platform configuration operations
@@ -367,6 +401,18 @@ pub trait AzureClientConfigExt {
 
     /// Gets a bearer token for Azure API authentication with a specific scope
     async fn get_bearer_token_with_scope(&self, scope: &str) -> Result<String>;
+
+    /// Gets a scoped bearer token together with its authoritative JWT expiry.
+    async fn get_bearer_token_with_expiry(&self, scope: &str) -> Result<ExpiringAccessToken>;
+
+    /// Creates a short-lived user-delegation SAS confined to one Blob container.
+    async fn create_container_user_delegation_sas(
+        &self,
+        account_name: &str,
+        container_name: &str,
+        permissions: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<AzureContainerSas>;
 
     /// Gets the Azure resource management endpoint URL
     fn management_endpoint(&self) -> &str;
@@ -537,7 +583,8 @@ impl AzureClientConfigExt for AzureClientConfig {
             },
             AzureCredentials::ServicePrincipal { .. }
             | AzureCredentials::AccessToken { .. }
-            | AzureCredentials::ScopedAccessTokens { .. } => {
+            | AzureCredentials::ScopedAccessTokens { .. }
+            | AzureCredentials::SasToken { .. } => {
                 let token = get_impersonated_token(self, &config).await?;
                 AzureCredentials::AccessToken { token }
             }
@@ -564,6 +611,12 @@ impl AzureClientConfigExt for AzureClientConfig {
     /// Gets a bearer token for Azure API authentication with a specific scope
     async fn get_bearer_token_with_scope(&self, scope: &str) -> Result<String> {
         match &self.credentials {
+            AzureCredentials::SasToken { .. } => {
+                Err(AlienError::new(ErrorData::AuthenticationError {
+                    message: "An Azure Storage SAS cannot be used as an OAuth bearer token"
+                        .to_string(),
+                }))
+            }
             AzureCredentials::AccessToken { token } => Ok(token.clone()),
             AzureCredentials::ScopedAccessTokens { tokens } => tokens
                 .get(scope)
@@ -639,8 +692,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                 if !status.is_success() {
                     return Err(AlienError::new(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to get Azure service principal token for scope '{}': HTTP {}: {}",
-                            scope, status, response_text
+                            "Failed to get Azure service principal token for scope '{scope}': \
+                             HTTP {status}"
                         ),
                     }));
                 }
@@ -649,8 +702,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .into_alien_error()
                     .context(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to parse Azure service principal token response for scope '{}': {}",
-                            scope, response_text
+                            "Failed to parse Azure service principal token response for scope \
+                             '{scope}'"
                         ),
                     })?;
 
@@ -743,8 +796,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                 if !status.is_success() {
                     return Err(AlienError::new(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to get Azure VM managed identity token for resource '{}': HTTP {}: {}",
-                            resource, status, response_text
+                            "Failed to get Azure VM managed identity token for resource \
+                             '{resource}': HTTP {status}"
                         ),
                     }));
                 }
@@ -753,14 +806,37 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .into_alien_error()
                     .context(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to parse Azure VM managed identity token response for resource '{}': {}",
-                            resource, response_text
+                            "Failed to parse Azure VM managed identity token response for resource \
+                             '{resource}'"
                         ),
                     })?;
 
                 Ok(token_response.access_token)
             }
         }
+    }
+
+    async fn get_bearer_token_with_expiry(&self, scope: &str) -> Result<ExpiringAccessToken> {
+        let token = self.get_bearer_token_with_scope(scope).await?;
+        let expires_at = extract_expiry_from_token(&token)?;
+        Ok(ExpiringAccessToken { token, expires_at })
+    }
+
+    async fn create_container_user_delegation_sas(
+        &self,
+        account_name: &str,
+        container_name: &str,
+        permissions: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<AzureContainerSas> {
+        user_delegation_sas::create_container_user_delegation_sas(
+            self,
+            account_name,
+            container_name,
+            permissions,
+            expires_at,
+        )
+        .await
     }
 
     /// Gets the Azure resource management endpoint URL
@@ -831,6 +907,8 @@ impl AzureClientConfigExt for AzureClientConfig {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+
     use super::*;
 
     fn scoped_config() -> AzureClientConfig {
@@ -864,5 +942,19 @@ mod tests {
             .await
             .expect_err("a token for another audience must not be reused");
         assert_eq!(error.code, "AUTHENTICATION_ERROR");
+    }
+
+    #[test]
+    fn azure_access_token_expiry_comes_from_the_jwt_claim() {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::json!({ "exp": 1_893_456_000 }).to_string());
+        let token = format!("e30.{payload}.signature");
+
+        assert_eq!(
+            extract_expiry_from_token(&token)
+                .expect("valid exp claim")
+                .timestamp(),
+            1_893_456_000
+        );
     }
 }

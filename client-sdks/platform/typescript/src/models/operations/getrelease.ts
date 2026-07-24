@@ -7,6 +7,7 @@ import { ClosedEnum } from "../../types/enums.js";
 
 export const GetReleaseInclude = {
   Project: "project",
+  Rollout: "rollout",
 } as const;
 export type GetReleaseInclude = ClosedEnum<typeof GetReleaseInclude>;
 
@@ -20,7 +21,7 @@ export type GetReleaseRequest = {
    */
   workspace?: string | undefined;
   /**
-   * Optional fields to include: project
+   * Optional fields to include: project, rollout
    */
   include?: Array<GetReleaseInclude> | undefined;
 };

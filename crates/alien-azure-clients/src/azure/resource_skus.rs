@@ -235,7 +235,7 @@ impl ResourceSkusApi for AzureResourceSkusClient {
                     message: format!("Azure ListResourceSkus: JSON parse error for {location}"),
                     url,
                     http_status: status,
-                    http_response_text: Some(body),
+                    http_response_text: None,
                     http_request_text: None,
                 },
             )?;

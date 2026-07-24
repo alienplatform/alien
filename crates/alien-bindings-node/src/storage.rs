@@ -38,7 +38,7 @@ pub struct PresignedRequestJs {
 }
 
 /// Translate an `object_store::ObjectMeta` into its JS shape.
-fn object_meta_to_js(meta: &ObjectMeta) -> ObjectMetaJs {
+pub(crate) fn object_meta_to_js(meta: &ObjectMeta) -> ObjectMetaJs {
     ObjectMetaJs {
         location: meta.location.to_string(),
         size: meta.size as f64,

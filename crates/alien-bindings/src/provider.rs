@@ -341,124 +341,6 @@ impl BindingsProvider {
 
         Self::new(client_config, bindings)
     }
-
-    /// Pattern 2: Creates a BindingsProvider for remote deployment access.
-    ///
-    /// Fetches credentials remotely using deployment ID and auth token, then creates the provider.
-    ///
-    /// **When to use:** You have a deployment ID and auth token, but no credentials yet.
-    ///
-    /// **Example use cases:**
-    /// - CLI commands (e.g., `alien secrets set`)
-    /// - External applications connecting to deployment
-    /// - Local development tools
-    ///
-    /// **What it does internally:**
-    /// 1. GET /api/deployments/{id} - Returns deployment info (stackState, platform, managerId)
-    /// 2. GET /api/managers/{managerId} - Returns manager URL
-    /// 3. POST {managerUrl}/v1/deployment/resolve-credentials - Resolves credentials
-    /// 4. Creates BindingsProvider using from_stack_state()
-    #[cfg(feature = "platform-sdk")]
-    pub async fn for_remote_deployment(
-        deployment_id: &str,
-        token: &str,
-        api_base_url: Option<&str>,
-    ) -> Result<Self> {
-        let base_url = api_base_url.unwrap_or("https://api.alien.dev");
-
-        // Build an authenticated SDK client so deployment/manager lookups are
-        // scoped to the caller's permissions.
-        let auth_value = format!("Bearer {}", token);
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(&auth_value)
-                .into_alien_error()
-                .context(ErrorData::RemoteAccessFailed {
-                    operation: "build Platform API client with token".to_string(),
-                })?,
-        );
-
-        let authed_http_client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "build Platform API HTTP client".to_string(),
-            })?;
-
-        let sdk_client = alien_platform_api::Client::new_with_client(base_url, authed_http_client);
-
-        // 1. Get deployment info (caller-scoped)
-        let deployment_response = sdk_client
-            .get_deployment()
-            .id(deployment_id)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "fetch deployment from Platform API".to_string(),
-            })?
-            .into_inner();
-
-        // 2. Get manager URL (caller-scoped)
-        let manager_id = deployment_response.manager_id;
-
-        let manager_response = sdk_client
-            .get_manager()
-            .id(&manager_id.to_string())
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "fetch manager from Platform API".to_string(),
-            })?
-            .into_inner();
-
-        // 3. Convert SDK stack state to alien-core StackState (used locally to extract
-        // binding configuration; the manager re-fetches the canonical stack state itself
-        // when resolving credentials).
-        let stack_state = deployment_response.stack_state.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: "Deployment has no stack state (not deployed yet)".to_string(),
-            })
-        })?;
-
-        let alien_stack_state = conversions::convert_stack_state(stack_state)?;
-
-        // 4. Resolve client config from manager. We send only the deploymentId; the
-        // manager fetches stackState/platform from Platform API using our forwarded
-        // bearer token so an attacker cannot direct it at an arbitrary cloud identity.
-        let manager_url = manager_response.url.ok_or_else(|| {
-            AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: "fetch manager URL from Platform API".to_string(),
-            })
-        })?;
-
-        let http_client = reqwest::Client::new();
-        let client_config = http_client
-            .post(format!("{}/v1/deployment/resolve-credentials", manager_url))
-            .bearer_auth(token)
-            .json(&serde_json::json!({
-                "deploymentId": deployment_id,
-            }))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "resolve credentials from manager".to_string(),
-            })?
-            .json::<ResolveCredentialsResponse>()
-            .await
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "parse credentials response".to_string(),
-            })?
-            .client_config;
-
-        // 5. Create provider using from_stack_state (which extracts bindings from stack_state)
-        Self::from_stack_state(&alien_stack_state, client_config)
-    }
 }
 
 impl LazyEnvBindingsProvider {
@@ -597,13 +479,6 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
             .load_service_account(binding_name)
             .await
     }
-}
-
-#[cfg(feature = "platform-sdk")]
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResolveCredentialsResponse {
-    client_config: ClientConfig,
 }
 
 #[async_trait]
@@ -2183,33 +2058,5 @@ mod tests {
 
             assert_eq!(error.code, "CLIENT_CONFIG_INVALID");
         }
-    }
-}
-
-/// Conversion functions between SDK types and alien-core types
-#[cfg(feature = "platform-sdk")]
-mod conversions {
-    use super::*;
-    use serde::Serialize;
-
-    /// Convert SDK AgentStackState to alien-core StackState
-    /// Generic over any serializable type since we convert via JSON
-    pub fn convert_stack_state<T: Serialize>(sdk_stack_state: &T) -> Result<StackState> {
-        // Convert via JSON serialization/deserialization (same pattern as deploy.rs)
-        let stack_state: StackState = serde_json::from_value(
-            serde_json::to_value(sdk_stack_state)
-                .into_alien_error()
-                .context(ErrorData::config_invalid(
-                    "stack_state",
-                    "Failed to serialize SDK stack state",
-                ))?,
-        )
-        .into_alien_error()
-        .context(ErrorData::config_invalid(
-            "stack_state",
-            "Failed to parse stack state",
-        ))?;
-
-        Ok(stack_state)
     }
 }

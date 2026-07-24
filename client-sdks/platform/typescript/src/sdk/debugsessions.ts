@@ -5,6 +5,7 @@
 import { debugSessionsCreate } from "../funcs/debugSessionsCreate.js";
 import { debugSessionsGet } from "../funcs/debugSessionsGet.js";
 import { debugSessionsList } from "../funcs/debugSessionsList.js";
+import { debugSessionsListActiveForManager } from "../funcs/debugSessionsListActiveForManager.js";
 import { debugSessionsUpdate } from "../funcs/debugSessionsUpdate.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -27,7 +28,7 @@ export class DebugSessions extends ClientSDK {
   }
 
   /**
-   * Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+   * Create a debug-session audit row. The assigned manager attests the original actor in owner; workspace, project, and initial pending state are derived by the server.
    */
   async create(
     request?: operations.CreateDebugSessionRequest | undefined,
@@ -41,7 +42,21 @@ export class DebugSessions extends ClientSDK {
   }
 
   /**
-   * Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+   * List active debug sessions created by the calling manager so runtime reconciliation can resume after restart.
+   */
+  async listActiveForManager(
+    request?: operations.ListActiveManagerDebugSessionsRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.ManagerActiveDebugSessionListResponse> {
+    return unwrapAsync(debugSessionsListActiveForManager(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Update debug-session state. Called by the immutable creating manager on tunnel attach, close, or deadline expiry.
    */
   async update(
     request: operations.UpdateDebugSessionRequest,

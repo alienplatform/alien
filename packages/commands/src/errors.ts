@@ -150,8 +150,9 @@ export const InvalidEnvelopeError = defineError({
 
 /**
  * Error thrown when the pull receiver's environment configuration is missing or
- * invalid. Fails fast (synchronously, from `createCommandReceiver`) and names
- * the offending variable in `context.envVar`.
+ * invalid. Construction-time validation fails synchronously; token-file and
+ * HTTP(S) validation can reject `run` asynchronously. Both paths name the
+ * offending variable in `context.envVar`.
  *
  * The Rust twin (`alien_commands::Receiver::from_env`) raises the identical code
  * (`COMMAND_RECEIVER_CONFIG_INVALID`) for the same identity, token-source, and

@@ -35,6 +35,7 @@
 pub mod auth;
 pub mod commands;
 pub mod config;
+mod credential_materialization;
 pub mod error;
 pub(crate) mod ids;
 pub mod registry;

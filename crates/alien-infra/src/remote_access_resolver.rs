@@ -75,6 +75,7 @@ impl RemoteAccessResolver {
                     base_config,
                     &remote_mgmt_outputs,
                     target_environment,
+                    true,
                 )
                 .await
             }
@@ -94,6 +95,24 @@ impl RemoteAccessResolver {
                 field_name: Some("platform".to_string()),
             })),
         }
+    }
+
+    /// Resolve a GCP remote identity for an immediate Credential Access Boundary exchange.
+    ///
+    /// Unlike [`Self::resolve`], this does not eagerly mint a target access token. The
+    /// caller must immediately materialize the returned config while exchanging it for
+    /// a downscoped token. Deferring that validation prevents the same two-hop
+    /// impersonation chain from being executed twice for one credential lease.
+    #[cfg(feature = "gcp")]
+    pub async fn resolve_gcp_for_access_boundary(
+        &self,
+        base_config: ClientConfig,
+        stack_state: &StackState,
+        target_environment: Option<&EnvironmentInfo>,
+    ) -> Result<ClientConfig> {
+        let remote_mgmt_outputs = self.find_remote_stack_management_outputs(stack_state)?;
+        self.resolve_gcp_impersonation(base_config, &remote_mgmt_outputs, target_environment, false)
+            .await
     }
 
     /// Find RemoteStackManagement outputs in the stack state
@@ -164,6 +183,7 @@ impl RemoteAccessResolver {
         base_config: ClientConfig,
         outputs: &RemoteStackManagementOutputs,
         target_environment: Option<&EnvironmentInfo>,
+        materialize_credentials: bool,
     ) -> Result<ClientConfig> {
         let service_account_email = &outputs.access_configuration;
         info!(
@@ -206,20 +226,22 @@ impl RemoteAccessResolver {
             }));
         };
 
-        // GCP impersonation configs are refreshable and lazy: constructing one
-        // does not call IAMCredentials. Materialize the token at the credential
-        // handoff boundary so propagation failures are reported to the caller
-        // before any deployment operation starts.
-        gcp_config
-            .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
-            .await
-            .context(ErrorData::AuthenticationFailed {
-                message: format!(
-                    "Failed to materialize GCP service account credentials: {}",
-                    service_account_email
-                ),
-                method: Some("service_account_impersonation".to_string()),
-            })?;
+        if materialize_credentials {
+            // GCP impersonation configs are refreshable and lazy: constructing one
+            // does not call IAMCredentials. Materialize the token at the credential
+            // handoff boundary so propagation failures are reported to the caller
+            // before any deployment operation starts.
+            gcp_config
+                .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
+                .await
+                .context(ErrorData::AuthenticationFailed {
+                    message: format!(
+                        "Failed to materialize GCP service account credentials: {}",
+                        service_account_email
+                    ),
+                    method: Some("service_account_impersonation".to_string()),
+                })?;
+        }
 
         Ok(ClientConfig::Gcp(gcp_config))
     }

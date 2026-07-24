@@ -5,8 +5,9 @@
 ### Available Operations
 
 * [list](#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
-* [create](#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
-* [update](#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+* [create](#create) - Create a debug-session audit row. The assigned manager attests the original actor in owner; workspace, project, and initial pending state are derived by the server.
+* [listActiveForManager](#listactiveformanager) - List active debug sessions created by the calling manager so runtime reconciliation can resume after restart.
+* [update](#update) - Update debug-session state. Called by the immutable creating manager on tunnel attach, close, or deadline expiry.
 * [get](#get) - Retrieve a debug session by ID.
 
 ## list
@@ -89,7 +90,7 @@ run();
 
 ## create
 
-Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+Create a debug-session audit row. The assigned manager attests the original actor in owner; workspace, project, and initial pending state are derived by the server.
 
 ### Example Usage
 
@@ -107,6 +108,7 @@ async function run() {
     createDebugSessionRequest: {
       id: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+      owner: "<value>",
       expiresAt: new Date("2024-12-05T00:22:32.720Z"),
     },
   });
@@ -137,6 +139,7 @@ async function run() {
     createDebugSessionRequest: {
       id: "dbg_HOXmkmT9UPYlsnxqSNlEGoXL",
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+      owner: "<value>",
       expiresAt: new Date("2024-12-05T00:22:32.720Z"),
     },
   });
@@ -168,13 +171,84 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 403, 404, 422            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## listActiveForManager
+
+List active debug sessions created by the calling manager so runtime reconciliation can resume after restart.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="listActiveManagerDebugSessions" method="get" path="/v1/debug-sessions/internal/manager-active" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.debugSessions.listActiveForManager({});
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { debugSessionsListActiveForManager } from "@alienplatform/platform-api/funcs/debugSessionsListActiveForManager.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await debugSessionsListActiveForManager(alien, {});
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("debugSessionsListActiveForManager failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ListActiveManagerDebugSessionsRequest](../../models/operations/listactivemanagerdebugsessionsrequest.md)                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ManagerActiveDebugSessionListResponse](../../models/manageractivedebugsessionlistresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## update
 
-Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+Update debug-session state. Called by the immutable creating manager on tunnel attach, close, or deadline expiry.
 
 ### Example Usage
 
@@ -245,7 +319,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 403, 404, 409, 422       | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 

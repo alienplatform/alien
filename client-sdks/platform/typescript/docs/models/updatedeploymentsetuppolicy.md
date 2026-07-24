@@ -10,7 +10,9 @@ import { UpdateDeploymentSetupPolicy } from "@alienplatform/platform-api/models"
 let value: UpdateDeploymentSetupPolicy = {
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [],
+    allowedSetupMethods: [
+      "google-oauth",
+    ],
   },
 };
 ```

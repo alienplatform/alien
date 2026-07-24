@@ -300,7 +300,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
                 message: format!("Azure GetVmss: JSON parse error for {}", vmss_name),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;
@@ -388,7 +388,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
                     message: format!("Azure ListVmssVms: JSON parse error for {}", vmss_name),
                     url,
                     http_status: 200,
-                    http_response_text: Some(body.clone()),
+                    http_response_text: None,
                     http_request_text: None,
                 })?;
 
@@ -451,7 +451,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             },
         )?;
@@ -766,7 +766,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
                 ),
                 url,
                 http_status: 200,
-                http_response_text: Some(body.clone()),
+                http_response_text: None,
                 http_request_text: None,
             })?;
 
@@ -866,7 +866,7 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
                 message: format!("Failed to parse rolling upgrade status for {}", vmss_name),
                 url,
                 http_status: 200,
-                http_response_text: Some(body),
+                http_response_text: None,
                 http_request_text: None,
             })
     }

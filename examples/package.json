@@ -4,16 +4,6 @@
   "packageManager": "pnpm@10.11.0",
   "scripts": {
     "test": "pnpm run test:projects",
-    "test:projects": "pnpm -C basic-worker-ts test && pnpm -C remote-worker-ts test && pnpm -C data-connector-ts test && pnpm -C event-pipeline-ts test && pnpm -C command-routing-ts test:ts"
-  },
-  "pnpm": {
-    "overrides": {
-      "@alienplatform/platform-api": "file:../client-sdks/platform/typescript",
-      "@alienplatform/core": "file:../packages/core",
-      "@alienplatform/sdk": "file:../packages/sdk",
-      "@alienplatform/testing": "file:../packages/testing",
-      "@alienplatform/commands": "file:../packages/commands",
-      "@alienplatform/bindings": "file:../packages/bindings"
-    }
+    "test:projects": "pnpm -C byob-storage-ts check && pnpm -C basic-worker-ts test && pnpm -C remote-worker-ts test && pnpm -C data-connector-ts test && pnpm -C event-pipeline-ts test && pnpm -C command-routing-ts test:ts"
   }
 }

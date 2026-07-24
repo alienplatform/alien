@@ -37,18 +37,26 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             )
         };
         let controller = AzureRemoteStackManagementController {
+            // Terraform owns the UAMI, FIC, custom roles, and exact-scope
+            // management grants. The runtime observes the imported identity;
+            // it must not require a broadly privileged bootstrap principal to
+            // mutate setup-owned RBAC after handoff.
+            setup_managed: Some(true),
             state,
             uami_resource_id: Some(data.identity_id),
             uami_client_id: Some(data.client_id),
             uami_principal_id: Some(data.principal_id),
             tenant_id: Some(data.tenant_id),
-            // FIC name and role-assignment IDs are reconstructed by the
-            // heartbeat path from `ctx.management_config` and the FIC template
-            // emitter.
+            // Setup owns the FIC and role assignments, so runtime teardown must
+            // not claim their names or IDs.
             fic_name: None,
             role_definition_id: None,
+            resource_role_definition_ids: Default::default(),
             role_assignment_ids: Vec::new(),
             role_assignment_wait_until_epoch_secs: None,
+            // Setup owns the effective grants. Runtime-created controllers use
+            // this fingerprint to detect grant changes; imported ones do not.
+            applied_management_grant_fingerprint: None,
             _internal_stay_count: None,
         };
         make_imported_state_with_status(controller, ctx, status)

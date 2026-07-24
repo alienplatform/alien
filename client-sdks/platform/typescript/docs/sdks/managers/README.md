@@ -17,7 +17,9 @@
 * [provision](#provision) - Enqueue provisioning for a manager by ID.
 * [update](#update) - Update a manager to a specific release ID or active release.
 * [listEvents](#listevents) - Retrieve all events of a manager.
-* [generateManagerToken](#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+* [generateManagerToken](#generatemanagertoken) - Generate a project-scoped, short-lived JWT for querying manager logs without routing sensitive data through the platform API.
+* [generateManagerBindingToken](#generatemanagerbindingtoken) - Generate a deployment-scoped, short-lived JWT that can only resolve remote bindings through the deployment's currently assigned manager.
+* [generateManagerCommandToken](#generatemanagercommandtoken) - Generate a command-scoped, short-lived JWT for fetching one encrypted command payload without routing it through the platform API.
 * [resolveGcpOAuthProvider](#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 * [reportHeartbeat](#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
@@ -1034,7 +1036,7 @@ run();
 
 ## generateManagerToken
 
-Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+Generate a project-scoped, short-lived JWT for querying manager logs without routing sensitive data through the platform API.
 
 ### Example Usage
 
@@ -1050,6 +1052,9 @@ async function run() {
   const result = await alien.managers.generateManagerToken({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspace: "my-workspace",
+    generateManagerTokenRequest: {
+      project: "<value>",
+    },
   });
 
   console.log(result);
@@ -1076,6 +1081,9 @@ async function run() {
   const res = await managersGenerateManagerToken(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
     workspace: "my-workspace",
+    generateManagerTokenRequest: {
+      project: "<value>",
+    },
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1105,8 +1113,174 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 403, 404, 422            | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## generateManagerBindingToken
+
+Generate a deployment-scoped, short-lived JWT that can only resolve remote bindings through the deployment's currently assigned manager.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="generateManagerBindingToken" method="post" path="/v1/managers/{id}/binding-token" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.managers.generateManagerBindingToken({
+    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspace: "my-workspace",
+    generateManagerBindingTokenRequest: {
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { managersGenerateManagerBindingToken } from "@alienplatform/platform-api/funcs/managersGenerateManagerBindingToken.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await managersGenerateManagerBindingToken(alien, {
+    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspace: "my-workspace",
+    generateManagerBindingTokenRequest: {
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("managersGenerateManagerBindingToken failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GenerateManagerBindingTokenRequest](../../models/operations/generatemanagerbindingtokenrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.GenerateManagerTokenResponse](../../models/generatemanagertokenresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 422            | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## generateManagerCommandToken
+
+Generate a command-scoped, short-lived JWT for fetching one encrypted command payload without routing it through the platform API.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="generateManagerCommandToken" method="post" path="/v1/managers/{id}/command-token" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.managers.generateManagerCommandToken({
+    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspace: "my-workspace",
+    generateManagerCommandTokenRequest: {
+      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { managersGenerateManagerCommandToken } from "@alienplatform/platform-api/funcs/managersGenerateManagerCommandToken.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await managersGenerateManagerCommandToken(alien, {
+    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspace: "my-workspace",
+    generateManagerCommandTokenRequest: {
+      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("managersGenerateManagerCommandToken failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GenerateManagerCommandTokenRequest](../../models/operations/generatemanagercommandtokenrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.GenerateManagerTokenResponse](../../models/generatemanagertokenresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404, 422            | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## resolveGcpOAuthProvider

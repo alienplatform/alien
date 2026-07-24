@@ -29,6 +29,81 @@
         }
       }
     },
+    "/v1/bindings/resolve": {
+      "post": {
+        "tags": [
+          "bindings"
+        ],
+        "operationId": "resolve_binding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Remote binding resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBindingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The deployment, release, or binding is not eligible for remote access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller cannot resolve bindings for this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The deployment, release, or binding was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/commands": {
       "post": {
         "tags": [
@@ -1087,41 +1162,6 @@
           },
           "404": {
             "description": "Release not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/resolve-credentials": {
-      "post": {
-        "tags": [
-          "credentials"
-        ],
-        "operationId": "resolve_credentials",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResolveCredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Credentials resolved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResolveCredentialsResponse"
-                }
-              }
-            }
           }
         },
         "security": [
@@ -3541,6 +3581,29 @@
           },
           {
             "type": "object",
+            "description": "A short-lived Azure Storage shared access signature.\n\nQuery parameter values are kept decoded. Azure clients must encode them\nwhen attaching them to a request URL.",
+            "required": [
+              "query_parameters",
+              "type"
+            ],
+            "properties": {
+              "query_parameters": {
+                "type": "object",
+                "description": "Exact SAS query parameters, including the signature and expiry.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sasToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Azure VM IMDS managed identity.",
             "required": [
               "client_id",
@@ -5460,6 +5523,11 @@
               "mode"
             ],
             "properties": {
+              "failure_domains": {
+                "$ref": "#/components/schemas/FailureDomainSelection",
+                "description": "Optional failure-domain policy. Absence preserves the existing aggregate layout.",
+                "nullable": true
+              },
               "machine": {
                 "type": "string",
                 "description": "Provider machine type selected for this deployment.",
@@ -5488,6 +5556,11 @@
               "mode"
             ],
             "properties": {
+              "failure_domains": {
+                "$ref": "#/components/schemas/FailureDomainSelection",
+                "description": "Optional failure-domain policy. Absence preserves the existing aggregate layout.",
+                "nullable": true
+              },
               "machine": {
                 "type": "string",
                 "description": "Provider machine type selected for this deployment.",
@@ -6279,6 +6352,28 @@
           "http",
           "tcp"
         ]
+      },
+      "FailureDomainSelection": {
+        "type": "object",
+        "description": "Failure-domain policy selected for a compute pool.",
+        "required": [
+          "spread"
+        ],
+        "properties": {
+          "selectedFailureDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Concrete provider domains selected during setup.\nEmpty delegates deterministic selection to the provider setup implementation."
+          },
+          "spread": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of distinct failure domains across which new stateful replicas may be spread.",
+            "minimum": 0
+          }
+        }
       },
       "GcpArtifactRegistryHeartbeatData": {
         "type": "object",
@@ -11626,6 +11721,309 @@
           }
         }
       },
+      "RemoteAwsClientConfig": {
+        "type": "object",
+        "description": "Response-safe AWS client configuration. The public contract deliberately\nhas no static, profile, metadata, or web-identity credential variants.",
+        "required": [
+          "accountId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "AWS account containing the bucket."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteAwsCredentials",
+            "description": "Expiring AWS session credentials."
+          },
+          "region": {
+            "type": "string",
+            "description": "AWS region containing the bucket."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAwsCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Temporary AWS session credentials with an authoritative expiry.",
+            "required": [
+              "accessKeyId",
+              "secretAccessKey",
+              "sessionToken",
+              "expiresAt",
+              "type"
+            ],
+            "properties": {
+              "accessKeyId": {
+                "type": "string",
+                "description": "AWS access key id."
+              },
+              "expiresAt": {
+                "type": "string",
+                "description": "Provider-reported credential expiry."
+              },
+              "secretAccessKey": {
+                "type": "string",
+                "description": "AWS secret access key."
+              },
+              "sessionToken": {
+                "type": "string",
+                "description": "AWS session token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sessionCredentials"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only AWS credential form remote binding resolution can return."
+      },
+      "RemoteAzureClientConfig": {
+        "type": "object",
+        "description": "Response-safe Azure client configuration. It contains one container-bound\nuser-delegation SAS and no OAuth or refreshable identity source.",
+        "required": [
+          "subscriptionId",
+          "tenantId",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteAzureCredentials",
+            "description": "A short-lived SAS bound to the requested Blob container."
+          },
+          "region": {
+            "type": "string",
+            "description": "Azure region configured for the deployment.",
+            "nullable": true
+          },
+          "subscriptionId": {
+            "type": "string",
+            "description": "Azure subscription containing the storage account."
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Azure tenant owning the identity."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAzureContainerSas": {
+        "type": "object",
+        "description": "Explicit fields of an Azure user-delegation SAS. Keeping the fields typed\nlets clients independently validate container scope, permissions, protocol,\nand expiry before constructing query parameters.",
+        "required": [
+          "accountName",
+          "containerName",
+          "permissions",
+          "startsAt",
+          "expiresAt",
+          "signedObjectId",
+          "signedTenantId",
+          "signedKeyStart",
+          "signedKeyExpiry",
+          "signedKeyService",
+          "signedKeyVersion",
+          "protocol",
+          "serviceVersion",
+          "signedResource",
+          "signature"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string",
+            "description": "Storage account named by the signed canonical resource."
+          },
+          "containerName": {
+            "type": "string",
+            "description": "Blob container named by the signed canonical resource."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "SAS validity end (`se`)."
+          },
+          "permissions": {
+            "type": "string",
+            "description": "Canonically ordered SAS permissions (`sp`)."
+          },
+          "protocol": {
+            "type": "string",
+            "description": "Required transport protocol (`spr`)."
+          },
+          "serviceVersion": {
+            "type": "string",
+            "description": "Storage authorization version (`sv`)."
+          },
+          "signature": {
+            "type": "string",
+            "description": "HMAC-SHA256 signature (`sig`)."
+          },
+          "signedKeyExpiry": {
+            "type": "string",
+            "description": "Delegation-key validity end (`ske`)."
+          },
+          "signedKeyService": {
+            "type": "string",
+            "description": "Delegation-key service (`sks`)."
+          },
+          "signedKeyStart": {
+            "type": "string",
+            "description": "Delegation-key validity start (`skt`)."
+          },
+          "signedKeyVersion": {
+            "type": "string",
+            "description": "Delegation-key version (`skv`)."
+          },
+          "signedObjectId": {
+            "type": "string",
+            "description": "Object ID that requested the delegation key (`skoid`)."
+          },
+          "signedResource": {
+            "type": "string",
+            "description": "Signed resource kind (`sr`)."
+          },
+          "signedTenantId": {
+            "type": "string",
+            "description": "Tenant ID that issued the delegation key (`sktid`)."
+          },
+          "startsAt": {
+            "type": "string",
+            "description": "SAS validity start (`st`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAzureCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "User-delegation SAS signed for exactly one container.",
+            "required": [
+              "sas",
+              "type"
+            ],
+            "properties": {
+              "sas": {
+                "$ref": "#/components/schemas/RemoteAzureContainerSas",
+                "description": "Explicit signed fields required to reconstruct the SAS query."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "containerSas"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only Azure credential form remote binding resolution can return."
+      },
+      "RemoteBlobStorageBinding": {
+        "type": "object",
+        "description": "Concrete Azure Blob Storage topology returned to remote clients.",
+        "required": [
+          "accountName",
+          "containerName"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string",
+            "description": "Storage account containing the authorized container."
+          },
+          "containerName": {
+            "type": "string",
+            "description": "Blob container authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpClientConfig": {
+        "type": "object",
+        "description": "Response-safe GCP client configuration. Refreshable source credentials and\nservice endpoint overrides cannot be represented by this type.",
+        "required": [
+          "projectId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteGcpCredentials",
+            "description": "Already-minted OAuth access token."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "GCP project containing the bucket."
+          },
+          "projectNumber": {
+            "type": "string",
+            "description": "Numeric GCP project id, when known.",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "description": "GCP region configured for the deployment."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Short-lived OAuth access token. Its expiry is the response `expiresAt`.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "OAuth bearer token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only GCP credential form remote binding resolution can return."
+      },
+      "RemoteGcsStorageBinding": {
+        "type": "object",
+        "description": "Concrete Google Cloud Storage topology returned to remote clients.",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "type": "string",
+            "description": "GCS bucket name authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteS3StorageBinding": {
+        "type": "object",
+        "description": "Concrete S3 topology returned to remote clients.",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "type": "string",
+            "description": "S3 bucket name authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteStackManagementHeartbeatData": {
         "oneOf": [
           {
@@ -11727,27 +12125,110 @@
           }
         }
       },
-      "ResolveCredentialsRequest": {
+      "ResolveBindingRequest": {
         "type": "object",
+        "description": "Request body for `POST /v1/bindings/resolve`.",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "resourceId"
         ],
         "properties": {
           "deploymentId": {
-            "type": "string"
+            "type": "string",
+            "description": "Deployment containing the remote-enabled resource."
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "Logical Storage resource id in the deployment's stack state."
           }
-        }
+        },
+        "additionalProperties": false
       },
-      "ResolveCredentialsResponse": {
-        "type": "object",
-        "required": [
-          "clientConfig"
-        ],
-        "properties": {
-          "clientConfig": {
-            "$ref": "#/components/schemas/ClientConfig"
+      "ResolveBindingResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "AWS S3 and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteS3StorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "s3"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Blob Storage and an exact container-scoped SAS.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteBlobStorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "blob"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Google Cloud Storage and a bucket-downscoped access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteGcsStorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "gcs"
+                ]
+              }
+            }
           }
-        }
+        ],
+        "description": "One approved remote Storage binding paired with credentials for the same\nprovider. The discriminant makes cross-provider combinations impossible."
       },
       "ResourceEntry": {
         "type": "object",
@@ -13348,6 +13829,12 @@
           }
         }
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     }
   },
   "tags": [
@@ -13382,6 +13869,10 @@
     {
       "name": "credentials",
       "description": "Credential resolution for deployments"
+    },
+    {
+      "name": "bindings",
+      "description": "Remote resource binding resolution"
     },
     {
       "name": "telemetry",

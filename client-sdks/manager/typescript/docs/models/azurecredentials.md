@@ -37,6 +37,15 @@ const value: models.AzureCredentialsScopedAccessTokens = {
 };
 ```
 
+### `models.AzureCredentialsSasToken`
+
+```typescript
+const value: models.AzureCredentialsSasToken = {
+  queryParameters: {},
+  type: "sasToken",
+};
+```
+
 ### `models.AzureCredentialsVMManagedIdentity`
 
 ```typescript

@@ -11,6 +11,7 @@ pub mod machines_resources;
 pub mod network_required;
 pub mod permission_profiles_exist;
 pub mod public_worker_lifecycle;
+pub mod remote_storage_permissions;
 pub mod resource_enabled_valid;
 pub mod resource_id_pattern;
 pub mod resource_name_length;
@@ -36,6 +37,7 @@ pub use network_required::{
 };
 pub use permission_profiles_exist::PermissionProfilesExistCheck;
 pub use public_worker_lifecycle::PublicWorkerLifecycleCheck;
+pub use remote_storage_permissions::RemoteStoragePermissionsCheck;
 pub use resource_enabled_valid::ResourceEnabledValidCheck;
 pub use resource_id_pattern::ResourceIdPatternCheck;
 pub use resource_name_length::ResourceNameLengthCheck;

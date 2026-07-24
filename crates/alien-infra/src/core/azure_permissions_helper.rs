@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::{AuthorizationApi, Scope};
 use alien_azure_clients::models::authorization_role_assignments::{
@@ -230,16 +230,25 @@ impl AzurePermissionsHelper {
             }
         }
 
-        Self::apply_management_permissions_tracking_assignment_ids(
+        // Remote-access Frozen Storage is ordered before RemoteStackManagement.
+        // Its exact management role assignment is therefore owned by the
+        // management controller, after the container exists.
+        if !ResourcePermissionsHelper::remote_management_owns_resource_grants(
             ctx,
             resource_id,
             resource_type,
-            &resource_scope,
-            permission_context,
-            role_assignment_ids,
-            apply,
-        )
-        .await?;
+        ) {
+            Self::apply_management_permissions_tracking_assignment_ids(
+                ctx,
+                resource_id,
+                resource_type,
+                &resource_scope,
+                permission_context,
+                role_assignment_ids,
+                apply,
+            )
+            .await?;
+        }
 
         Ok(())
     }
@@ -743,25 +752,11 @@ impl AzurePermissionsHelper {
             None => return Ok(()),
         };
 
-        let type_prefix = format!("{}/", resource_type);
-
-        let mut combined_refs = Vec::new();
-        if let Some(refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(
-                refs.iter()
-                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
-                    .cloned(),
-            );
-        }
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            combined_refs.extend(
-                wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
-                    .cloned(),
-            );
-        }
+        let combined_refs = Self::explicit_management_resource_permission_refs(
+            management_profile,
+            resource_id,
+            resource_type,
+        );
 
         if combined_refs.is_empty() {
             return Ok(());
@@ -914,6 +909,27 @@ impl AzurePermissionsHelper {
         }
     }
 
+    fn explicit_management_resource_permission_refs(
+        management_profile: &alien_core::permissions::PermissionProfile,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> Vec<alien_core::permissions::PermissionSetReference> {
+        // RemoteStackManagement applies wildcard management permissions at
+        // resource-group scope. Resource controllers only reconcile explicit
+        // resource scopes; otherwise bootstrap resources can wait on management
+        // while management is waiting on them.
+        management_profile
+            .0
+            .get(resource_id)
+            .into_iter()
+            .flatten()
+            .filter(|reference| {
+                !is_worker_command_transport_permission(resource_type, reference.id())
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Get the management UAMI principal ID from the RSM controller
     pub fn get_management_uami_principal_id(
         ctx: &ResourceControllerContext<'_>,
@@ -1033,6 +1049,8 @@ mod tests {
     use super::*;
     use alien_azure_clients::authorization::MockAuthorizationApi;
     use alien_azure_clients::{AzureClientConfig, AzureCredentials};
+    use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+    use indexmap::IndexMap;
     fn azure_config() -> AzureClientConfig {
         AzureClientConfig {
             subscription_id: "sub-123".to_string(),
@@ -1043,6 +1061,32 @@ mod tests {
             },
             service_overrides: None,
         }
+    }
+
+    #[test]
+    fn management_resource_permissions_ignore_wildcard_scope() {
+        let mut profile = IndexMap::new();
+        profile.insert(
+            "*".to_string(),
+            vec![PermissionSetReference::from_name(
+                "storage/data-read".to_string(),
+            )],
+        );
+        profile.insert(
+            "archive".to_string(),
+            vec![PermissionSetReference::from_name(
+                "storage/data-write".to_string(),
+            )],
+        );
+
+        let refs = AzurePermissionsHelper::explicit_management_resource_permission_refs(
+            &PermissionProfile(profile),
+            "archive",
+            "storage",
+        );
+
+        let ids: Vec<_> = refs.iter().map(|reference| reference.id()).collect();
+        assert_eq!(ids, vec!["storage/data-write"]);
     }
 
     #[test]
