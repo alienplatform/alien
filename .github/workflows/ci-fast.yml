@@ -101,7 +101,7 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          version: "27.x"
+          version: "35.x"
           repo-token: ${{ github.token }}
 
       - name: Install CloudFormation linter
