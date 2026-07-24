@@ -324,7 +324,11 @@ fn emit_selected_custom_roles(fragment: &mut TfFragment, custom_roles: &[GcpCust
         let role_label = custom_role_label(custom_role);
         let role_id = custom_role_id_template(custom_role);
 
-        fragment.resource_blocks.push(resource_block(
+        // Shared: the role is project-wide and carries its own
+        // `gcp_manage_custom_roles` count, so a resource's gate must never
+        // reach it — declining one resource would delete a role its siblings
+        // still hold.
+        fragment.push_shared_resource(resource_block(
             "google_project_iam_custom_role",
             &role_label,
             [
