@@ -259,12 +259,13 @@ interface ReceiverConfig {
 /**
  * Construct the pull receiver from environment configuration.
  *
- * Validates required identity, token source, and numeric tuning values
- * **synchronously**. An invalid value throws
+ * Validates required identity, token-source selection, URL parseability, and
+ * numeric tuning values **synchronously**. An invalid value throws
  * {@link CommandReceiverConfigInvalidError} naming the offending variable in
- * `context.envVar`. `resourceType` must be
- * `container` or `daemon`; `worker` (and anything else) is rejected — a receiver
- * must not guess its target type.
+ * `context.envVar`. Token-file contents and the HTTP(S) URL requirement are
+ * validated asynchronously when `run` starts. `resourceType` must be
+ * `container` or `daemon`; `worker` (and anything else) is rejected — a
+ * receiver must not guess its target type.
  */
 export function createCommandReceiver(options: CommandReceiverOptions = {}): CommandReceiver {
   const env = options.env ?? (typeof process !== "undefined" ? process.env : {})

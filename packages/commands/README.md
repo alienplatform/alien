@@ -112,7 +112,7 @@ await commands.invoke("generate-report", { month: "2024-01" }, {
 | `managerUrl` | required | Base URL of the command server. A query string on the base is preserved. |
 | `deploymentId` | required | Deployment the commands are created against. |
 | `token` | required | Bearer token. A deployment token or a workspace token. |
-| `timeoutMs` | `60000` | Default wall-clock budget for one `invoke`. |
+| `timeoutMs` | `60000` | Default polling budget measured from the start of `invoke`. It does not abort in-flight network requests. |
 | `allowLocalStorage` | `false` | Allow reading a `local` storage backend response. Local development only. |
 | `fetch` | global `fetch` | `fetch` implementation to use. |
 
@@ -120,7 +120,7 @@ await commands.invoke("generate-report", { month: "2024-01" }, {
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `timeoutMs` | client `timeoutMs` | Wall-clock budget for this invoke. |
+| `timeoutMs` | client `timeoutMs` | Polling budget measured from the start of `invoke`. A create or status request may finish after it elapses. |
 | `deadline` | none | Server-side `Date` by which the command must complete. |
 | `idempotencyKey` | none | The server dedupes retried creates carrying the same key. |
 | `targetResourceId` | none | Resource to route to. A `target(...)` sender overrides it. |
@@ -162,18 +162,21 @@ both return the receiver, so registrations chain.
 ### Environment
 
 `createCommandReceiver` reads its configuration from `process.env`, or from the
-`env` option if you pass one. Validation is synchronous and fails fast. A
-missing, empty, or invalid value throws `CommandReceiverConfigInvalidError`
-(code `COMMAND_RECEIVER_CONFIG_INVALID`) naming the offending variable in
-`context.envVar`.
+`env` option if you pass one. It synchronously validates required identity,
+token-source selection, URL parseability, and numeric tuning. A missing, empty,
+or invalid value throws `CommandReceiverConfigInvalidError` (code
+`COMMAND_RECEIVER_CONFIG_INVALID`) naming the offending variable in
+`context.envVar`. A token file is read when `run` starts, so an unreadable or
+empty file rejects `run` asynchronously. `run` also requires the parsed command
+URL to use HTTP or HTTPS before the first poll.
 
 Required identity, plus one token source:
 
 | Variable | Meaning |
 | --- | --- |
-| `ALIEN_COMMANDS_URL` | Base URL of the command server. Must parse as a URL. |
+| `ALIEN_COMMANDS_URL` | Base URL of the command server. Must parse during construction and use HTTP or HTTPS when `run` starts. |
 | `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound lease and submit requests. |
-| `ALIEN_COMMANDS_TOKEN_FILE` | File holding that token. Supply this or `ALIEN_COMMANDS_TOKEN`. |
+| `ALIEN_COMMANDS_TOKEN_FILE` | File holding that token. Supply this or `ALIEN_COMMANDS_TOKEN`; `run` reads and validates the file. |
 | `ALIEN_DEPLOYMENT_ID` | Deployment the leased commands belong to. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_ID` | This resource's id within the deployment. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` | `container` or `daemon`, lowercase. Anything else is rejected. |
@@ -302,9 +305,12 @@ non-retryable `AlienError` ended the loop.
 
 ## Errors
 
-Every error is an `AlienError` from `@alienplatform/core`, which the package
-re-exports along with `defineError`. Each definition carries a stable string
-code. Use `error.code`, or `error.hasErrorCode(...)` to search a wrapped chain.
+Protocol, transport, storage, and receiver-loop failures are `AlienError`
+instances from `@alienplatform/core`, which the package re-exports along with
+`defineError`. Each definition carries a stable string code. Use `error.code`,
+or `error.hasErrorCode(...)` to search a wrapped chain. Invalid caller values
+can instead throw native errors before a request is sent—for example,
+non-serializable input, an invalid manager URL, or an invalid `deadline` date.
 
 ```ts
 import {
@@ -340,7 +346,7 @@ try {
 | --- | --- | --- |
 | `CommandCreationFailedError` | `COMMAND_CREATION_FAILED` | Sender, when the create request fails to reach the server. |
 | `CommandStatusFailedError` | `COMMAND_STATUS_FAILED` | Sender, when a status poll fails to reach the server. |
-| `CommandTimeoutError` | `COMMAND_TIMEOUT` | Sender, when the invoke budget elapses before a terminal state. |
+| `CommandTimeoutError` | `COMMAND_TIMEOUT` | Sender, when the polling budget elapses before a terminal state. |
 | `CommandExpiredError` | `COMMAND_EXPIRED` | Sender, when the command reaches `EXPIRED`. |
 | `DeploymentCommandError` | `DEPLOYMENT_COMMAND_ERROR` | Sender, when the handler returned an error response. |
 | `ResponseDecodingFailedError` | `RESPONSE_DECODING_FAILED` | Sender, when a terminal response cannot be decoded. |
