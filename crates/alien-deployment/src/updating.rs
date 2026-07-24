@@ -71,18 +71,20 @@ pub async fn handle_update_pending(
     // A frozen gate is answered once. States from before the fixity-aware
     // protocol carry no recorded answers, so derive them from the settled
     // stack state — presence IS the original answer once setup completed —
-    // and upgrade atomically before the check, refusing rather than guessing
-    // when derivation is impossible.
+    // read against the release the state settled under, not the target: a
+    // gate the target introduces has no history, and fabricating a declined
+    // answer here would record it and refuse the gate's first legitimate
+    // acceptance at the next setup import.
     let mut persisted_gate_answers = current
         .runtime_metadata
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
     if persisted_gate_answers.is_empty() {
-        persisted_gate_answers = crate::pending::resolve_frozen_gate_answers(
+        persisted_gate_answers = crate::pending::derive_legacy_frozen_gate_answers(
+            current.current_release.as_ref().map(|release| &release.stack),
             &target_stack,
             &stack_state,
-            &Default::default(),
         )?;
     }
     crate::pending::enforce_frozen_gate_fixity(

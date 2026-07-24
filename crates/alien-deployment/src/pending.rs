@@ -335,6 +335,38 @@ pub fn resolve_frozen_gate_answers_from_presence(
     Ok(answers)
 }
 
+/// The legacy baseline for a deployment from before answers were recorded:
+/// presence in the settled state, read against the release that state
+/// settled under. The target release may introduce a brand-new gate whose
+/// resource is naturally absent from the settled state — deriving from the
+/// target would fabricate a declined answer, record it, and refuse the
+/// gate's first legitimate acceptance ever after. No baseline and nothing
+/// frozen-gating in the target means there is nothing to enforce; no
+/// baseline with gates to enforce refuses rather than guesses.
+pub fn derive_legacy_frozen_gate_answers(
+    baseline_stack: Option<&Stack>,
+    target_stack: &Stack,
+    stack_state: &StackState,
+) -> Result<alien_core::GateAnswers> {
+    if let Some(baseline_stack) = baseline_stack {
+        return resolve_frozen_gate_answers(baseline_stack, stack_state, &Default::default());
+    }
+    let mut gating = frozen_gating_inputs(target_stack).into_iter().collect::<Vec<_>>();
+    gating.sort();
+    let Some(input_id) = gating.into_iter().next() else {
+        return Ok(alien_core::GateAnswers::new());
+    };
+    Err(AlienError::new(
+        crate::error::ErrorData::FrozenGateAnswerUnderivable {
+            input_id,
+            reason: "the deployment predates recorded gate answers and no settled release is \
+                     available to derive them from"
+                .to_string(),
+        },
+    )
+    .into())
+}
+
 /// The inputs that gate a setup-created resource in `stack`. Fixity applies
 /// to exactly these: an input whose last frozen resource left the release is
 /// no longer frozen-gating, and its recorded answer must not keep refusing
@@ -1002,6 +1034,60 @@ mod tests {
         let kept = strip_frozen_dominated_live_resources(kept, &answers);
         assert!(kept.resources.contains_key("extras"));
         assert!(kept.resources.contains_key("extras-cache"));
+    }
+
+    /// A legacy deployment's baseline reads the settled state against the
+    /// release it settled under: a gate the target release introduces has no
+    /// history to fabricate, while a gate the settled release declared still
+    /// derives from presence and keeps refusing flips.
+    #[test]
+    fn a_legacy_baseline_derives_from_the_settled_release_not_the_target() {
+        let settled_release = Stack::new("gated-stack".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+
+        let no_history =
+            derive_legacy_frozen_gate_answers(Some(&settled_release), &gated_stack(), &state)
+                .expect("a gateless settled release derives");
+        assert!(
+            no_history.is_empty(),
+            "a gate the settled release never declared must not inherit a fabricated answer"
+        );
+
+        let derived =
+            derive_legacy_frozen_gate_answers(Some(&gated_stack()), &gated_stack(), &state)
+                .expect("a settled gate derives from presence");
+        assert_eq!(
+            derived.get("analyticsEnabled"),
+            Some(&false),
+            "the store was absent from the settled state, so its answer was no"
+        );
+    }
+
+    /// With no settled release to read, a target with frozen gates refuses
+    /// rather than guesses — while a target with nothing frozen-gating has
+    /// nothing to enforce and proceeds.
+    #[test]
+    fn a_missing_legacy_baseline_refuses_only_when_frozen_gates_exist() {
+        let state = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+
+        let error = derive_legacy_frozen_gate_answers(None, &gated_stack(), &state)
+            .expect_err("frozen gates with no derivable history must refuse");
+        assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
+
+        let empty = derive_legacy_frozen_gate_answers(None, &live_gated_stack(Some(true)), &state)
+            .expect("live-only gates have no frozen history to enforce");
+        assert!(empty.is_empty());
     }
 
     #[test]
