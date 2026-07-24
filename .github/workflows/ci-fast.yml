@@ -203,4 +203,6 @@ jobs:
         run: pnpm generate
 
       - name: Check generated files are committed
-        run: git diff --exit-code -- packages/core packages/sdk
+        # Kubb may change insignificant whitespace between environments. Keep
+        # the gate focused on generated behavior and schema content.
+        run: git diff --ignore-all-space --exit-code -- packages/core packages/sdk
