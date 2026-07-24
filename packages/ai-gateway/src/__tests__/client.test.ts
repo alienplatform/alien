@@ -239,6 +239,23 @@ describe("Ai.getAvailableModels", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it("returns current-generation Anthropic ids for a BYO anthropic provider, no retired 3.5", async () => {
+    vi.stubEnv(
+      "ALIEN_LLM_BINDING",
+      JSON.stringify({ service: "external", provider: "anthropic", apiKey: "sk-ant" }),
+    )
+    const fetchMock = stubFetch({ data: [] })
+    const models = await ai("llm").getAvailableModels()
+    const ids = models.map(m => m.id)
+    expect(ids).toContain("claude-opus-4-8")
+    expect(ids).toContain("claude-sonnet-5")
+    expect(ids).toContain("claude-haiku-4-5")
+    expect(ids.some(id => id.startsWith("claude-3-5"))).toBe(false)
+    // Each entry carries the provider/displayName shape a model picker consumes.
+    expect(models[0]).toMatchObject({ provider: "anthropic", displayName: models[0]!.id })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it("fetches the gateway's curated catalog for an ambient binding", async () => {
     vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
     const fetchMock = stubFetch({

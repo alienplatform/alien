@@ -104,10 +104,11 @@ function providerBaseUrl(provider: string): string {
 }
 
 // A small curated chat-model list for the BYO-key picker (we don't proxy the provider's own
-// /v1/models, which returns hundreds of non-chat entries).
+// /v1/models, which returns hundreds of non-chat entries). The Anthropic ids are the current-
+// generation aliases served by api.anthropic.com.
 function defaultModels(provider: string): string[] {
   return provider === "anthropic"
-    ? ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"]
+    ? ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
     : ["gpt-4o-mini", "gpt-4o"]
 }
 
