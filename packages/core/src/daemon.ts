@@ -9,6 +9,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
 import { Resource } from "./resource.js"
 
 export type {
@@ -43,6 +44,7 @@ export type DaemonPublicEndpointOptions =
  * agents and local side services.
  */
 export class Daemon {
+  private _enabledWhen?: string
   private _config: Partial<DaemonConfig> = {
     links: [],
     publicEndpoints: [],
@@ -248,12 +250,27 @@ export class Daemon {
    * @returns An immutable Resource representing the configured daemon.
    * @throws Error if the daemon configuration is invalid.
    */
+  /**
+   * Creates this daemon only when the given boolean stack input is true.
+   * A live gate is re-resolved on every reconcile: declining deletes the
+   * daemon (data included), accepting recreates it.
+   * @param input A boolean stack input declared with alien.inputs({...}).
+   * @returns The builder instance.
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = input.id
+    return this
+  }
+
   public build(): Resource {
     const config = DaemonSchema.parse(this._config)
 
-    return new Resource({
-      type: "daemon",
-      ...config,
-    })
+    return new Resource(
+      {
+        type: "daemon",
+        ...config,
+      },
+      this._enabledWhen,
+    )
   }
 }

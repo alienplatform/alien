@@ -24,6 +24,7 @@ const builders: Record<string, () => object> = {
   daemon: () => new alien.Daemon("fixture"),
   container: () => new alien.Container("fixture"),
   email: () => new alien.Email("fixture"),
+  "experimental/aws-opensearch": () => new alien.experimental.AwsOpenSearch("fixture"),
 }
 
 describe("gateability manifest", () => {

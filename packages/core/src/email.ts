@@ -1,4 +1,5 @@
 import { type Email as EmailConfig, EmailSchema, type ResourceType } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
 import { Resource } from "./resource.js"
 
 export type {
@@ -34,6 +35,7 @@ export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
  * `aws ses set-active-receipt-rule-set --rule-set-name <ruleSetName>`.
  */
 export class Email {
+  private _enabledWhen?: string
   private _config: Partial<EmailConfig> = {
     domains: [],
   }
@@ -104,11 +106,25 @@ export class Email {
    * @returns An immutable Resource representing the configured email infrastructure.
    * @throws Error if the email configuration is invalid.
    */
+  /**
+   * Creates this email resource only when the given boolean stack input is true.
+   * A frozen gate's answer is fixed when the deployment is created.
+   * @param input A boolean stack input declared with alien.inputs({...}).
+   * @returns The builder instance.
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = input.id
+    return this
+  }
+
   public build(): Resource {
     const config = EmailSchema.parse(this._config)
-    return new Resource({
-      type: "email",
-      ...config,
-    })
+    return new Resource(
+      {
+        type: "email",
+        ...config,
+      },
+      this._enabledWhen,
+    )
   }
 }

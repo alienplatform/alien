@@ -52,7 +52,7 @@ const STACK_DERIVED_TYPES: &[&str] = &[
 /// post-pass yet. Emptied as each type's gated render is validated; the list
 /// exists so switching the mechanism cannot silently open gating for a type
 /// nobody has rendered gated before.
-const NOT_YET_GENERIC_TYPES: &[&str] = &["email", "experimental/aws-opensearch"];
+const NOT_YET_GENERIC_TYPES: &[&str] = &[];
 
 /// Why a resource cannot carry an `.enabled()` gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,9 +61,6 @@ pub enum GateRefusal {
     ReservedSecretsVault,
     /// Framework infrastructure derived from the stack itself.
     DerivedFromStack,
-    /// Code-carrying compute ships with every release; whether it runs is a
-    /// rollout question, not a data-plane opt-out.
-    CodeCarryingCompute,
     /// The type's gated setup render has not been validated yet.
     NotYetGeneric,
 }
@@ -83,9 +80,6 @@ impl GateRefusal {
             GateRefusal::DerivedFromStack => {
                 "Alien derives this resource from the stack itself, so it cannot be optional"
             }
-            GateRefusal::CodeCarryingCompute => {
-                "code-carrying compute ships with every release, so it cannot be optional"
-            }
             GateRefusal::NotYetGeneric => {
                 "this resource type's conditional setup render has not been validated yet, so \
                  the resource would be created regardless of the deployer's answer"
@@ -104,12 +98,11 @@ pub fn gate_refusal(resource_type: &str, resource_id: &str) -> Option<GateRefusa
     if STACK_DERIVED_TYPES.contains(&resource_type) {
         return Some(GateRefusal::DerivedFromStack);
     }
-    // Live-only ownership is the compute classification, read from the one
-    // table that defines it so a new compute type cannot silently become
-    // gateable.
-    if !ownership_policy_for_resource_type(resource_type).allows_frozen() {
-        return Some(GateRefusal::CodeCarryingCompute);
-    }
+    // Compute (worker, daemon, container) is deliberately gateable: declining
+    // a live workload rides the same removal path as deleting it from a
+    // release, and its provisioning baseline persists so acceptance can
+    // return. Pausing the sole consumer of an ungated queue is allowed by
+    // design — the queue's retention policy governs the backlog.
     if NOT_YET_GENERIC_TYPES.contains(&resource_type) {
         return Some(GateRefusal::NotYetGeneric);
     }
@@ -179,13 +172,12 @@ mod tests {
     }
 
     #[test]
-    fn compute_is_refused() {
+    fn compute_is_live_gateable() {
         for compute in ["worker", "daemon", "container"] {
-            assert_eq!(
-                gate_refusal(compute, "api"),
-                Some(GateRefusal::CodeCarryingCompute),
-                "{compute}"
-            );
+            assert_eq!(gate_refusal(compute, "api"), None, "{compute}");
+            let gateability = type_gateability(compute);
+            assert!(!gateability.frozen, "{compute} cannot be frozen");
+            assert!(gateability.live, "{compute} gates as a live resource");
         }
     }
 
@@ -210,13 +202,12 @@ mod tests {
     }
 
     #[test]
-    fn unproven_setup_types_are_refused_until_validated() {
-        for pending in NOT_YET_GENERIC_TYPES {
-            assert_eq!(
-                gate_refusal(pending, "x"),
-                Some(GateRefusal::NotYetGeneric),
-                "{pending}"
-            );
+    fn email_and_opensearch_gate_as_frozen_resources() {
+        for setup_owned in ["email", "experimental/aws-opensearch"] {
+            assert_eq!(gate_refusal(setup_owned, "x"), None, "{setup_owned}");
+            let gateability = type_gateability(setup_owned);
+            assert!(gateability.frozen, "{setup_owned} gates at setup");
+            assert!(!gateability.live, "{setup_owned} has no runtime controller");
         }
     }
 
