@@ -20,7 +20,7 @@ reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 backon = { workspace = true }
 serde_path_to_error = "0.1.17"
 async-trait = { workspace = true }
-quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"] }
+quick-xml = { version = "0.41.0", features = ["serialize", "overlapped-lists"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

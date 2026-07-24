@@ -25,7 +25,7 @@ http = { workspace = true }
 base64 = { workspace = true }
 urlencoding = { workspace = true }
 sha2 = { workspace = true }
-hmac = "0.12"
+hmac = "0.13"
 backon = { workspace = true }
 url = { workspace = true }
 serde-aux = "4"
@@ -33,7 +33,7 @@ async-trait = { workspace = true }
 mockall = { workspace = true, optional = true }
 
 # Azure specific dependencies
-regress = { version = "0.4.1" }
+regress = { version = "0.11.0" }
 # jwt-simple = { version = "0.12.12", default-features = false, features = ["pure-rust"] }
 
 [dev-dependencies]
@@ -48,7 +48,7 @@ regex = { workspace = true }
 anyhow = { workspace = true }
 httpmock = { workspace = true }
 base64 = { workspace = true }
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 p12 = "0.6"
 pem = "3.0"
 
@@ -60,8 +60,8 @@ default = []
 test-utils = ["dep:mockall"]
 
 [build-dependencies]
-prettyplease = "0.2.22"
-progenitor = { version = "0.11.0", default-features = false }
+prettyplease = "0.3.0"
+progenitor = { version = "0.14.0", default-features = false }
 serde_json = "1.0"
 syn = "2.0"
 openapiv3 = "2.2.0"

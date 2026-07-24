@@ -31,7 +31,7 @@ async-trait = { workspace = true }
 mockall = { workspace = true, optional = true }
 
 # Kubernetes specific dependencies
-k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
+k8s-openapi = { version = "0.28.0", features = ["v1_33"] }
 
 [dev-dependencies]
 rand = { workspace = true }

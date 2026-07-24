@@ -29,11 +29,11 @@
   "devDependencies": {
     "@apiture/openapi-down-convert": "^0.14.2",
     "@biomejs/biome": "1.9.4",
-    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.29.7",
     "turbo": "^2.5.8"
   },
-  "packageManager": "pnpm@10.11.0",
+  "packageManager": "pnpm@10.34.5",
   "pnpm": {
     "overrides": {
       "@alienplatform/sdk": "link:packages/sdk",
