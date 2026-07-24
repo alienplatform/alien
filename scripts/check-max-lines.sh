@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
-readonly max_lines=2000
+readonly max_lines=1000
 readonly repo_root="$(git rev-parse --show-toplevel)"
+readonly baseline_file="$repo_root/scripts/max-lines-baseline.txt"
 
 cd "$repo_root"
 
@@ -20,36 +21,59 @@ source_pathspecs=(
   ":(glob)**/*.jsx"
   ":(exclude,glob)client-sdks/**"
   ":(exclude,glob)packages/sdk/src/worker-runtime/generated/**"
-
-  # The #[controller] macro requires the annotated struct and its single
-  # annotated impl block to live in one module.
-  ":(exclude)crates/alien-infra/src/worker/gcp/mod.rs"
-  ":(exclude)crates/alien-infra/src/worker/aws/mod.rs"
-  ":(exclude)crates/alien-infra/src/worker/azure/mod.rs"
-
-  # Pre-existing large files pending follow-up splits.
-  ":(exclude)crates/alien-deploy-cli/src/commands/join.rs"
-  ":(exclude)crates/alien-infra/src/kubernetes_public_endpoint.rs"
-  ":(exclude)crates/alien-infra/src/network/aws.rs"
-  ":(exclude)crates/alien-bindings/src/provider.rs"
-  ":(exclude)crates/alien-bindings/tests/storage.rs"
-  ":(exclude)crates/alien-infra/src/container/kubernetes.rs"
-  ":(exclude)crates/alien-infra/src/network/azure.rs"
-  ":(exclude)crates/alien-infra/src/core/executor.rs"
-  ":(exclude)crates/alien-commands/src/server/mod.rs"
-  ":(exclude)crates/alien-cli/src/commands/release.rs"
-  ":(exclude)crates/alien-preflights/src/mutations/compute_cluster.rs"
 )
 
 git ls-files -z -- "${source_pathspecs[@]}" |
   xargs -0 wc -l |
   awk -v max_lines="$max_lines" '
-    $2 != "total" && $1 > max_lines {
-      line_count = $1
-      sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", $0)
-      printf "%s has %s lines (max %s) - split this file or add an explicit exclusion\n",
-        $0, line_count, max_lines
-      found = 1
+    NR == FNR {
+      if (NF != 2 || $1 !~ /^[0-9]+$/ || $1 <= max_lines) {
+        printf "%s:%s has an invalid baseline entry\n", FILENAME, FNR
+        invalid_baseline = 1
+        next
+      }
+      if ($2 in baseline) {
+        printf "%s:%s duplicates %s\n", FILENAME, FNR, $2
+        invalid_baseline = 1
+        next
+      }
+      baseline[$2] = $1
+      next
     }
-    END { exit found }
-  '
+    $2 != "total" {
+      line_count = $1
+      path = $2
+      seen[path] = 1
+
+      if (line_count <= max_lines) {
+        if (path in baseline) {
+          printf "%s now has %s lines; remove its stale baseline entry\n",
+            path, line_count
+          found = 1
+        }
+        next
+      }
+
+      if (!(path in baseline)) {
+        printf "%s has %s lines (max %s); split this file\n",
+          path, line_count, max_lines
+        found = 1
+        next
+      }
+
+      if (line_count > baseline[path]) {
+        printf "%s grew to %s lines (grandfathered cap %s); split it before adding code\n",
+          path, line_count, baseline[path]
+        found = 1
+      }
+    }
+    END {
+      for (path in baseline) {
+        if (!(path in seen)) {
+          printf "%s is missing; remove its stale baseline entry\n", path
+          found = 1
+        }
+      }
+      exit invalid_baseline || found
+    }
+  ' "$baseline_file" -

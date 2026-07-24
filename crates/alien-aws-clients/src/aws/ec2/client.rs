@@ -11,6 +11,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+mod instances;
+mod launch_templates;
+mod network;
+
 // ---------------------------------------------------------------------------
 // EC2 Error Response Parsing
 // ---------------------------------------------------------------------------
@@ -427,1329 +431,280 @@ impl Ec2Api for Ec2Client {
     // ---------------------------------------------------------------------------
 
     async fn describe_vpcs(&self, request: DescribeVpcsRequest) -> Result<DescribeVpcsResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeVpcs".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(vpc_ids) = &request.vpc_ids {
-            for (i, vpc_id) in vpc_ids.iter().enumerate() {
-                form_data.insert(format!("VpcId.{}", i + 1), vpc_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeVpcs", "VPC").await
+        self.describe_vpcs_impl(request).await
     }
 
     async fn describe_vpc_attribute(
         &self,
         request: DescribeVpcAttributeRequest,
     ) -> Result<DescribeVpcAttributeResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeVpcAttribute".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-        form_data.insert("Attribute".to_string(), request.attribute.clone());
-
-        self.send_form(form_data, "DescribeVpcAttribute", &request.vpc_id)
-            .await
+        self.describe_vpc_attribute_impl(request).await
     }
 
     async fn create_vpc(&self, request: CreateVpcRequest) -> Result<CreateVpcResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateVpc".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("CidrBlock".to_string(), request.cidr_block.clone());
-
-        if let Some(instance_tenancy) = &request.instance_tenancy {
-            form_data.insert("InstanceTenancy".to_string(), instance_tenancy.clone());
-        }
-
-        if let Some(amazon_provided_ipv6_cidr_block) = request.amazon_provided_ipv6_cidr_block {
-            form_data.insert(
-                "AmazonProvidedIpv6CidrBlock".to_string(),
-                amazon_provided_ipv6_cidr_block.to_string(),
-            );
-        }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "CreateVpc", &request.cidr_block)
-            .await
+        self.create_vpc_impl(request).await
     }
 
     async fn delete_vpc(&self, vpc_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteVpc".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VpcId".to_string(), vpc_id.to_string());
-
-        self.send_form_no_body(form_data, "DeleteVpc", vpc_id).await
+        self.delete_vpc_impl(vpc_id).await
     }
 
     async fn modify_vpc_attribute(&self, request: ModifyVpcAttributeRequest) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "ModifyVpcAttribute".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-
-        if let Some(enable_dns_support) = request.enable_dns_support {
-            form_data.insert(
-                "EnableDnsSupport.Value".to_string(),
-                enable_dns_support.to_string(),
-            );
-        }
-
-        if let Some(enable_dns_hostnames) = request.enable_dns_hostnames {
-            form_data.insert(
-                "EnableDnsHostnames.Value".to_string(),
-                enable_dns_hostnames.to_string(),
-            );
-        }
-
-        self.send_form_no_body(form_data, "ModifyVpcAttribute", &request.vpc_id)
-            .await
+        self.modify_vpc_attribute_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Subnet Operations
-    // ---------------------------------------------------------------------------
 
     async fn describe_subnets(
         &self,
         request: DescribeSubnetsRequest,
     ) -> Result<DescribeSubnetsResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeSubnets".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(subnet_ids) = &request.subnet_ids {
-            for (i, subnet_id) in subnet_ids.iter().enumerate() {
-                form_data.insert(format!("SubnetId.{}", i + 1), subnet_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeSubnets", "Subnet").await
+        self.describe_subnets_impl(request).await
     }
 
     async fn create_subnet(&self, request: CreateSubnetRequest) -> Result<CreateSubnetResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateSubnet".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-        form_data.insert("CidrBlock".to_string(), request.cidr_block.clone());
-
-        if let Some(availability_zone) = &request.availability_zone {
-            form_data.insert("AvailabilityZone".to_string(), availability_zone.clone());
-        }
-
-        if let Some(availability_zone_id) = &request.availability_zone_id {
-            form_data.insert(
-                "AvailabilityZoneId".to_string(),
-                availability_zone_id.clone(),
-            );
-        }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "CreateSubnet", &request.cidr_block)
-            .await
+        self.create_subnet_impl(request).await
     }
 
     async fn delete_subnet(&self, subnet_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteSubnet".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("SubnetId".to_string(), subnet_id.to_string());
-
-        self.send_form_no_body(form_data, "DeleteSubnet", subnet_id)
-            .await
+        self.delete_subnet_impl(subnet_id).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Internet Gateway Operations
-    // ---------------------------------------------------------------------------
 
     async fn create_internet_gateway(
         &self,
         request: CreateInternetGatewayRequest,
     ) -> Result<CreateInternetGatewayResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateInternetGateway".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "CreateInternetGateway", "InternetGateway")
-            .await
+        self.create_internet_gateway_impl(request).await
     }
 
     async fn delete_internet_gateway(&self, internet_gateway_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteInternetGateway".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert(
-            "InternetGatewayId".to_string(),
-            internet_gateway_id.to_string(),
-        );
-
-        self.send_form_no_body(form_data, "DeleteInternetGateway", internet_gateway_id)
-            .await
+        self.delete_internet_gateway_impl(internet_gateway_id).await
     }
 
     async fn attach_internet_gateway(&self, request: AttachInternetGatewayRequest) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "AttachInternetGateway".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert(
-            "InternetGatewayId".to_string(),
-            request.internet_gateway_id.clone(),
-        );
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-
-        self.send_form_no_body(
-            form_data,
-            "AttachInternetGateway",
-            &request.internet_gateway_id,
-        )
-        .await
+        self.attach_internet_gateway_impl(request).await
     }
 
     async fn detach_internet_gateway(&self, request: DetachInternetGatewayRequest) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DetachInternetGateway".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert(
-            "InternetGatewayId".to_string(),
-            request.internet_gateway_id.clone(),
-        );
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-
-        self.send_form_no_body(
-            form_data,
-            "DetachInternetGateway",
-            &request.internet_gateway_id,
-        )
-        .await
+        self.detach_internet_gateway_impl(request).await
     }
 
     async fn describe_internet_gateways(
         &self,
         request: DescribeInternetGatewaysRequest,
     ) -> Result<DescribeInternetGatewaysResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeInternetGateways".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(igw_ids) = &request.internet_gateway_ids {
-            for (i, igw_id) in igw_ids.iter().enumerate() {
-                form_data.insert(format!("InternetGatewayId.{}", i + 1), igw_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeInternetGateways", "InternetGateway")
-            .await
+        self.describe_internet_gateways_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // NAT Gateway Operations
-    // ---------------------------------------------------------------------------
 
     async fn create_nat_gateway(
         &self,
         request: CreateNatGatewayRequest,
     ) -> Result<CreateNatGatewayResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateNatGateway".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("SubnetId".to_string(), request.subnet_id.clone());
-
-        if let Some(allocation_id) = &request.allocation_id {
-            form_data.insert("AllocationId".to_string(), allocation_id.clone());
-        }
-
-        if let Some(connectivity_type) = &request.connectivity_type {
-            form_data.insert("ConnectivityType".to_string(), connectivity_type.clone());
-        }
-
-        if let Some(private_ip_address) = &request.private_ip_address {
-            form_data.insert("PrivateIpAddress".to_string(), private_ip_address.clone());
-        }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "CreateNatGateway", &request.subnet_id)
-            .await
+        self.create_nat_gateway_impl(request).await
     }
 
     async fn delete_nat_gateway(&self, nat_gateway_id: &str) -> Result<DeleteNatGatewayResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteNatGateway".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("NatGatewayId".to_string(), nat_gateway_id.to_string());
-
-        self.send_form(form_data, "DeleteNatGateway", nat_gateway_id)
-            .await
+        self.delete_nat_gateway_impl(nat_gateway_id).await
     }
 
     async fn describe_nat_gateways(
         &self,
         request: DescribeNatGatewaysRequest,
     ) -> Result<DescribeNatGatewaysResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeNatGateways".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(nat_gateway_ids) = &request.nat_gateway_ids {
-            for (i, nat_id) in nat_gateway_ids.iter().enumerate() {
-                form_data.insert(format!("NatGatewayId.{}", i + 1), nat_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeNatGateways", "NatGateway")
-            .await
+        self.describe_nat_gateways_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Elastic IP Operations
-    // ---------------------------------------------------------------------------
 
     async fn allocate_address(
         &self,
         request: AllocateAddressRequest,
     ) -> Result<AllocateAddressResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "AllocateAddress".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        // Default to VPC domain
-        let domain = request.domain.as_deref().unwrap_or("vpc");
-        form_data.insert("Domain".to_string(), domain.to_string());
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "AllocateAddress", "ElasticIP")
-            .await
+        self.allocate_address_impl(request).await
     }
 
     async fn release_address(&self, allocation_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "ReleaseAddress".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("AllocationId".to_string(), allocation_id.to_string());
-
-        self.send_form_no_body(form_data, "ReleaseAddress", allocation_id)
-            .await
+        self.release_address_impl(allocation_id).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Route Table Operations
-    // ---------------------------------------------------------------------------
 
     async fn describe_route_tables(
         &self,
         request: DescribeRouteTablesRequest,
     ) -> Result<DescribeRouteTablesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeRouteTables".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(rt_ids) = &request.route_table_ids {
-            for (i, rt_id) in rt_ids.iter().enumerate() {
-                form_data.insert(format!("RouteTableId.{}", i + 1), rt_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeRouteTables", "RouteTable")
-            .await
+        self.describe_route_tables_impl(request).await
     }
 
     async fn create_route_table(
         &self,
         request: CreateRouteTableRequest,
     ) -> Result<CreateRouteTableResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateRouteTable".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "CreateRouteTable", &request.vpc_id)
-            .await
+        self.create_route_table_impl(request).await
     }
 
     async fn delete_route_table(&self, route_table_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteRouteTable".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("RouteTableId".to_string(), route_table_id.to_string());
-
-        self.send_form_no_body(form_data, "DeleteRouteTable", route_table_id)
-            .await
+        self.delete_route_table_impl(route_table_id).await
     }
 
     async fn create_route(&self, request: CreateRouteRequest) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateRoute".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("RouteTableId".to_string(), request.route_table_id.clone());
-        form_data.insert(
-            "DestinationCidrBlock".to_string(),
-            request.destination_cidr_block.clone(),
-        );
-
-        if let Some(gateway_id) = &request.gateway_id {
-            form_data.insert("GatewayId".to_string(), gateway_id.clone());
-        }
-
-        if let Some(nat_gateway_id) = &request.nat_gateway_id {
-            form_data.insert("NatGatewayId".to_string(), nat_gateway_id.clone());
-        }
-
-        if let Some(instance_id) = &request.instance_id {
-            form_data.insert("InstanceId".to_string(), instance_id.clone());
-        }
-
-        if let Some(network_interface_id) = &request.network_interface_id {
-            form_data.insert(
-                "NetworkInterfaceId".to_string(),
-                network_interface_id.clone(),
-            );
-        }
-
-        if let Some(vpc_peering_connection_id) = &request.vpc_peering_connection_id {
-            form_data.insert(
-                "VpcPeeringConnectionId".to_string(),
-                vpc_peering_connection_id.clone(),
-            );
-        }
-
-        if let Some(transit_gateway_id) = &request.transit_gateway_id {
-            form_data.insert("TransitGatewayId".to_string(), transit_gateway_id.clone());
-        }
-
-        self.send_form_no_body(form_data, "CreateRoute", &request.route_table_id)
-            .await
+        self.create_route_impl(request).await
     }
 
     async fn delete_route(&self, request: DeleteRouteRequest) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteRoute".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("RouteTableId".to_string(), request.route_table_id.clone());
-        form_data.insert(
-            "DestinationCidrBlock".to_string(),
-            request.destination_cidr_block.clone(),
-        );
-
-        self.send_form_no_body(form_data, "DeleteRoute", &request.route_table_id)
-            .await
+        self.delete_route_impl(request).await
     }
 
     async fn associate_route_table(
         &self,
         request: AssociateRouteTableRequest,
     ) -> Result<AssociateRouteTableResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "AssociateRouteTable".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("RouteTableId".to_string(), request.route_table_id.clone());
-        form_data.insert("SubnetId".to_string(), request.subnet_id.clone());
-
-        self.send_form(form_data, "AssociateRouteTable", &request.route_table_id)
-            .await
+        self.associate_route_table_impl(request).await
     }
 
     async fn disassociate_route_table(&self, association_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DisassociateRouteTable".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("AssociationId".to_string(), association_id.to_string());
-
-        self.send_form_no_body(form_data, "DisassociateRouteTable", association_id)
-            .await
+        self.disassociate_route_table_impl(association_id).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Security Group Operations
-    // ---------------------------------------------------------------------------
 
     async fn describe_security_groups(
         &self,
         request: DescribeSecurityGroupsRequest,
     ) -> Result<DescribeSecurityGroupsResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeSecurityGroups".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(group_ids) = &request.group_ids {
-            for (i, group_id) in group_ids.iter().enumerate() {
-                form_data.insert(format!("GroupId.{}", i + 1), group_id.clone());
-            }
-        }
-
-        if let Some(group_names) = &request.group_names {
-            for (i, group_name) in group_names.iter().enumerate() {
-                form_data.insert(format!("GroupName.{}", i + 1), group_name.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeSecurityGroups", "SecurityGroup")
-            .await
+        self.describe_security_groups_impl(request).await
     }
 
     async fn describe_network_interfaces(
         &self,
         request: DescribeNetworkInterfacesRequest,
     ) -> Result<DescribeNetworkInterfacesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "DescribeNetworkInterfaces".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(network_interface_ids) = &request.network_interface_ids {
-            for (i, network_interface_id) in network_interface_ids.iter().enumerate() {
-                form_data.insert(
-                    format!("NetworkInterfaceId.{}", i + 1),
-                    network_interface_id.clone(),
-                );
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeNetworkInterfaces", "NetworkInterface")
-            .await
+        self.describe_network_interfaces_impl(request).await
     }
 
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
     ) -> Result<CreateSecurityGroupResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateSecurityGroup".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("GroupName".to_string(), request.group_name.clone());
-        form_data.insert("GroupDescription".to_string(), request.description.clone());
-        form_data.insert("VpcId".to_string(), request.vpc_id.clone());
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(form_data, "CreateSecurityGroup", &request.group_name)
-            .await
+        self.create_security_group_impl(request).await
     }
 
     async fn delete_security_group(&self, group_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteSecurityGroup".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("GroupId".to_string(), group_id.to_string());
-
-        self.send_form_no_body(form_data, "DeleteSecurityGroup", group_id)
-            .await
+        self.delete_security_group_impl(group_id).await
     }
 
     async fn authorize_security_group_ingress(
         &self,
         request: AuthorizeSecurityGroupIngressRequest,
     ) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "AuthorizeSecurityGroupIngress".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("GroupId".to_string(), request.group_id.clone());
-
-        Self::add_ip_permissions(&mut form_data, &request.ip_permissions);
-
-        self.send_form_no_body(
-            form_data,
-            "AuthorizeSecurityGroupIngress",
-            &request.group_id,
-        )
-        .await
+        self.authorize_security_group_ingress_impl(request).await
     }
 
     async fn authorize_security_group_egress(
         &self,
         request: AuthorizeSecurityGroupEgressRequest,
     ) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "AuthorizeSecurityGroupEgress".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("GroupId".to_string(), request.group_id.clone());
-
-        Self::add_ip_permissions(&mut form_data, &request.ip_permissions);
-
-        self.send_form_no_body(form_data, "AuthorizeSecurityGroupEgress", &request.group_id)
-            .await
+        self.authorize_security_group_egress_impl(request).await
     }
 
     async fn revoke_security_group_ingress(
         &self,
         request: RevokeSecurityGroupIngressRequest,
     ) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "RevokeSecurityGroupIngress".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("GroupId".to_string(), request.group_id.clone());
-
-        Self::add_ip_permissions(&mut form_data, &request.ip_permissions);
-
-        self.send_form_no_body(form_data, "RevokeSecurityGroupIngress", &request.group_id)
-            .await
+        self.revoke_security_group_ingress_impl(request).await
     }
 
     async fn revoke_security_group_egress(
         &self,
         request: RevokeSecurityGroupEgressRequest,
     ) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "RevokeSecurityGroupEgress".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("GroupId".to_string(), request.group_id.clone());
-
-        Self::add_ip_permissions(&mut form_data, &request.ip_permissions);
-
-        self.send_form_no_body(form_data, "RevokeSecurityGroupEgress", &request.group_id)
-            .await
+        self.revoke_security_group_egress_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Availability Zone Operations
-    // ---------------------------------------------------------------------------
 
     async fn describe_availability_zones(
         &self,
         request: DescribeAvailabilityZonesRequest,
     ) -> Result<DescribeAvailabilityZonesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "DescribeAvailabilityZones".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(zone_names) = &request.zone_names {
-            for (i, zone_name) in zone_names.iter().enumerate() {
-                form_data.insert(format!("ZoneName.{}", i + 1), zone_name.clone());
-            }
-        }
-
-        if let Some(zone_ids) = &request.zone_ids {
-            for (i, zone_id) in zone_ids.iter().enumerate() {
-                form_data.insert(format!("ZoneId.{}", i + 1), zone_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(all_availability_zones) = request.all_availability_zones {
-            form_data.insert(
-                "AllAvailabilityZones".to_string(),
-                all_availability_zones.to_string(),
-            );
-        }
-
-        self.send_form(form_data, "DescribeAvailabilityZones", "AvailabilityZone")
-            .await
+        self.describe_availability_zones_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // AMI Operations
-    // ---------------------------------------------------------------------------
 
     async fn describe_images(
         &self,
         request: DescribeImagesRequest,
     ) -> Result<DescribeImagesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeImages".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(image_ids) = &request.image_ids {
-            for (i, image_id) in image_ids.iter().enumerate() {
-                form_data.insert(format!("ImageId.{}", i + 1), image_id.clone());
-            }
-        }
-
-        if let Some(owners) = &request.owners {
-            for (i, owner) in owners.iter().enumerate() {
-                form_data.insert(format!("Owner.{}", i + 1), owner.clone());
-            }
-        }
-
-        if let Some(executable_users) = &request.executable_users {
-            for (i, user) in executable_users.iter().enumerate() {
-                form_data.insert(format!("ExecutableBy.{}", i + 1), user.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(include_deprecated) = request.include_deprecated {
-            form_data.insert(
-                "IncludeDeprecated".to_string(),
-                include_deprecated.to_string(),
-            );
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeImages", "AMI").await
+        self.describe_images_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Instance Operations
-    // ---------------------------------------------------------------------------
 
     async fn terminate_instances(
         &self,
         instance_ids: Vec<String>,
     ) -> Result<TerminateInstancesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "TerminateInstances".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        for (i, instance_id) in instance_ids.iter().enumerate() {
-            form_data.insert(format!("InstanceId.{}", i + 1), instance_id.clone());
-        }
-
-        let resource = instance_ids.join(",");
-        self.send_form(form_data, "TerminateInstances", &resource)
-            .await
+        self.terminate_instances_impl(instance_ids).await
     }
 
     async fn describe_instances(
         &self,
         request: DescribeInstancesRequest,
     ) -> Result<DescribeInstancesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeInstances".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(instance_ids) = &request.instance_ids {
-            for (i, instance_id) in instance_ids.iter().enumerate() {
-                form_data.insert(format!("InstanceId.{}", i + 1), instance_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeInstances", "Instance")
-            .await
+        self.describe_instances_impl(request).await
     }
 
-    // ---------------------------------------------------------------------------
-    // Volume Operations
-    // ---------------------------------------------------------------------------
-
     async fn create_volume(&self, request: CreateVolumeRequest) -> Result<CreateVolumeResponse> {
-        let form_data = Self::create_volume_form_data(&request);
-
-        self.send_form(form_data, "CreateVolume", &request.availability_zone)
-            .await
+        self.create_volume_impl(request).await
     }
 
     async fn modify_volume(&self, request: ModifyVolumeRequest) -> Result<ModifyVolumeResponse> {
-        let form_data = Self::modify_volume_form_data(&request);
-        self.send_form(form_data, "ModifyVolume", &request.volume_id)
-            .await
+        self.modify_volume_impl(request).await
     }
 
     async fn describe_volumes_modifications(
         &self,
         request: DescribeVolumesModificationsRequest,
     ) -> Result<DescribeVolumesModificationsResponse> {
-        let form_data = Self::describe_volumes_modifications_form_data(&request);
-        self.send_form(
-            form_data,
-            "DescribeVolumesModifications",
-            "VolumeModification",
-        )
-        .await
+        self.describe_volumes_modifications_impl(request).await
     }
 
     async fn delete_volume(&self, volume_id: &str) -> Result<()> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteVolume".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VolumeId".to_string(), volume_id.to_string());
-
-        self.send_form_no_body(form_data, "DeleteVolume", volume_id)
-            .await
+        self.delete_volume_impl(volume_id).await
     }
 
     async fn describe_volumes(
         &self,
         request: DescribeVolumesRequest,
     ) -> Result<DescribeVolumesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeVolumes".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(volume_ids) = &request.volume_ids {
-            for (i, volume_id) in volume_ids.iter().enumerate() {
-                form_data.insert(format!("VolumeId.{}", i + 1), volume_id.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeVolumes", "Volume").await
+        self.describe_volumes_impl(request).await
     }
 
     async fn attach_volume(&self, request: AttachVolumeRequest) -> Result<AttachVolumeResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "AttachVolume".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VolumeId".to_string(), request.volume_id.clone());
-        form_data.insert("InstanceId".to_string(), request.instance_id.clone());
-        form_data.insert("Device".to_string(), request.device.clone());
-
-        let resource = format!("{}:{}", request.volume_id, request.instance_id);
-        self.send_form(form_data, "AttachVolume", &resource).await
+        self.attach_volume_impl(request).await
     }
 
     async fn detach_volume(&self, request: DetachVolumeRequest) -> Result<DetachVolumeResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DetachVolume".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("VolumeId".to_string(), request.volume_id.clone());
-
-        if let Some(instance_id) = &request.instance_id {
-            form_data.insert("InstanceId".to_string(), instance_id.clone());
-        }
-
-        if let Some(device) = &request.device {
-            form_data.insert("Device".to_string(), device.clone());
-        }
-
-        if let Some(force) = request.force {
-            form_data.insert("Force".to_string(), force.to_string());
-        }
-
-        self.send_form(form_data, "DetachVolume", &request.volume_id)
-            .await
+        self.detach_volume_impl(request).await
     }
-
-    // ---------------------------------------------------------------------------
-    // Launch Template Operations
-    // ---------------------------------------------------------------------------
 
     async fn create_launch_template(
         &self,
         request: CreateLaunchTemplateRequest,
     ) -> Result<CreateLaunchTemplateResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateLaunchTemplate".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert(
-            "LaunchTemplateName".to_string(),
-            request.launch_template_name.clone(),
-        );
-
-        if let Some(version_description) = &request.version_description {
-            form_data.insert(
-                "VersionDescription".to_string(),
-                version_description.clone(),
-            );
-        }
-
-        // Add launch template data
-        let data = &request.launch_template_data;
-
-        if let Some(image_id) = &data.image_id {
-            form_data.insert("LaunchTemplateData.ImageId".to_string(), image_id.clone());
-        }
-
-        if let Some(instance_type) = &data.instance_type {
-            form_data.insert(
-                "LaunchTemplateData.InstanceType".to_string(),
-                instance_type.clone(),
-            );
-        }
-
-        if let Some(key_name) = &data.key_name {
-            form_data.insert("LaunchTemplateData.KeyName".to_string(), key_name.clone());
-        }
-
-        if let Some(user_data) = &data.user_data {
-            form_data.insert("LaunchTemplateData.UserData".to_string(), user_data.clone());
-        }
-
-        if let Some(security_group_ids) = &data.security_group_ids {
-            for (i, sg_id) in security_group_ids.iter().enumerate() {
-                form_data.insert(
-                    format!("LaunchTemplateData.SecurityGroupId.{}", i + 1),
-                    sg_id.clone(),
-                );
-            }
-        }
-
-        if let Some(iam_instance_profile) = &data.iam_instance_profile {
-            if let Some(arn) = &iam_instance_profile.arn {
-                form_data.insert(
-                    "LaunchTemplateData.IamInstanceProfile.Arn".to_string(),
-                    arn.clone(),
-                );
-            }
-            if let Some(name) = &iam_instance_profile.name {
-                form_data.insert(
-                    "LaunchTemplateData.IamInstanceProfile.Name".to_string(),
-                    name.clone(),
-                );
-            }
-        }
-
-        if let Some(block_device_mappings) = &data.block_device_mappings {
-            for (i, bdm) in block_device_mappings.iter().enumerate() {
-                let idx = i + 1;
-                if let Some(device_name) = &bdm.device_name {
-                    form_data.insert(
-                        format!("LaunchTemplateData.BlockDeviceMapping.{}.DeviceName", idx),
-                        device_name.clone(),
-                    );
-                }
-                if let Some(ebs) = &bdm.ebs {
-                    if let Some(volume_size) = ebs.volume_size {
-                        form_data.insert(
-                            format!(
-                                "LaunchTemplateData.BlockDeviceMapping.{}.Ebs.VolumeSize",
-                                idx
-                            ),
-                            volume_size.to_string(),
-                        );
-                    }
-                    if let Some(volume_type) = &ebs.volume_type {
-                        form_data.insert(
-                            format!(
-                                "LaunchTemplateData.BlockDeviceMapping.{}.Ebs.VolumeType",
-                                idx
-                            ),
-                            volume_type.clone(),
-                        );
-                    }
-                    if let Some(delete_on_termination) = ebs.delete_on_termination {
-                        form_data.insert(
-                            format!(
-                                "LaunchTemplateData.BlockDeviceMapping.{}.Ebs.DeleteOnTermination",
-                                idx
-                            ),
-                            delete_on_termination.to_string(),
-                        );
-                    }
-                    if let Some(encrypted) = ebs.encrypted {
-                        form_data.insert(
-                            format!(
-                                "LaunchTemplateData.BlockDeviceMapping.{}.Ebs.Encrypted",
-                                idx
-                            ),
-                            encrypted.to_string(),
-                        );
-                    }
-                    if let Some(iops) = ebs.iops {
-                        form_data.insert(
-                            format!("LaunchTemplateData.BlockDeviceMapping.{}.Ebs.Iops", idx),
-                            iops.to_string(),
-                        );
-                    }
-                    if let Some(throughput) = ebs.throughput {
-                        form_data.insert(
-                            format!(
-                                "LaunchTemplateData.BlockDeviceMapping.{}.Ebs.Throughput",
-                                idx
-                            ),
-                            throughput.to_string(),
-                        );
-                    }
-                }
-            }
-        }
-
-        if let Some(network_interfaces) = &data.network_interfaces {
-            for (i, ni) in network_interfaces.iter().enumerate() {
-                let idx = i + 1;
-                if let Some(device_index) = ni.device_index {
-                    form_data.insert(
-                        format!("LaunchTemplateData.NetworkInterface.{}.DeviceIndex", idx),
-                        device_index.to_string(),
-                    );
-                }
-                if let Some(associate_public_ip) = ni.associate_public_ip_address {
-                    form_data.insert(
-                        format!(
-                            "LaunchTemplateData.NetworkInterface.{}.AssociatePublicIpAddress",
-                            idx
-                        ),
-                        associate_public_ip.to_string(),
-                    );
-                }
-                if let Some(subnet_id) = &ni.subnet_id {
-                    form_data.insert(
-                        format!("LaunchTemplateData.NetworkInterface.{}.SubnetId", idx),
-                        subnet_id.clone(),
-                    );
-                }
-                if let Some(groups) = &ni.groups {
-                    for (j, group) in groups.iter().enumerate() {
-                        form_data.insert(
-                            format!(
-                                "LaunchTemplateData.NetworkInterface.{}.SecurityGroupId.{}",
-                                idx,
-                                j + 1
-                            ),
-                            group.clone(),
-                        );
-                    }
-                }
-            }
-        }
-
-        if let Some(metadata_options) = &data.metadata_options {
-            if let Some(http_tokens) = &metadata_options.http_tokens {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpTokens".to_string(),
-                    http_tokens.clone(),
-                );
-            }
-            if let Some(http_endpoint) = &metadata_options.http_endpoint {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpEndpoint".to_string(),
-                    http_endpoint.clone(),
-                );
-            }
-            if let Some(http_put_response_hop_limit) = metadata_options.http_put_response_hop_limit
-            {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpPutResponseHopLimit".to_string(),
-                    http_put_response_hop_limit.to_string(),
-                );
-            }
-            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
-                    instance_metadata_tags.clone(),
-                );
-            }
-        }
-
-        Self::add_cpu_options(&mut form_data, data.cpu_options.as_ref());
-
-        if let Some(tag_specs) = &data.tag_specifications {
-            Self::add_tag_specifications_with_prefix(
-                &mut form_data,
-                "LaunchTemplateData.TagSpecification",
-                tag_specs,
-            );
-        }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
-
-        self.send_form(
-            form_data,
-            "CreateLaunchTemplate",
-            &request.launch_template_name,
-        )
-        .await
+        self.create_launch_template_impl(request).await
     }
 
     async fn create_launch_template_version(
         &self,
         request: CreateLaunchTemplateVersionRequest,
     ) -> Result<CreateLaunchTemplateVersionResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert(
-            "Action".to_string(),
-            "CreateLaunchTemplateVersion".to_string(),
-        );
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        let resource_name;
-        if let Some(ref id) = request.launch_template_id {
-            form_data.insert("LaunchTemplateId".to_string(), id.clone());
-            resource_name = id.clone();
-        } else if let Some(ref name) = request.launch_template_name {
-            form_data.insert("LaunchTemplateName".to_string(), name.clone());
-            resource_name = name.clone();
-        } else {
-            return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
-                message: "Either launch_template_id or launch_template_name must be provided"
-                    .to_string(),
-                field_name: Some("launch_template_id".to_string()),
-            }));
-        }
-
-        if let Some(ref source_version) = request.source_version {
-            form_data.insert("SourceVersion".to_string(), source_version.clone());
-        }
-        if let Some(ref description) = request.version_description {
-            form_data.insert("VersionDescription".to_string(), description.clone());
-        }
-
-        let data = &request.launch_template_data;
-        if let Some(ref user_data) = data.user_data {
-            form_data.insert("LaunchTemplateData.UserData".to_string(), user_data.clone());
-        }
-        if let Some(ref image_id) = data.image_id {
-            form_data.insert("LaunchTemplateData.ImageId".to_string(), image_id.clone());
-        }
-        if let Some(ref instance_type) = data.instance_type {
-            form_data.insert(
-                "LaunchTemplateData.InstanceType".to_string(),
-                instance_type.clone(),
-            );
-        }
-        if let Some(metadata_options) = &data.metadata_options {
-            if let Some(http_tokens) = &metadata_options.http_tokens {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpTokens".to_string(),
-                    http_tokens.clone(),
-                );
-            }
-            if let Some(http_endpoint) = &metadata_options.http_endpoint {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpEndpoint".to_string(),
-                    http_endpoint.clone(),
-                );
-            }
-            if let Some(http_put_response_hop_limit) = metadata_options.http_put_response_hop_limit
-            {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.HttpPutResponseHopLimit".to_string(),
-                    http_put_response_hop_limit.to_string(),
-                );
-            }
-            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
-                form_data.insert(
-                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
-                    instance_metadata_tags.clone(),
-                );
-            }
-        }
-        Self::add_cpu_options(&mut form_data, data.cpu_options.as_ref());
-        if let Some(tag_specs) = &data.tag_specifications {
-            Self::add_tag_specifications_with_prefix(
-                &mut form_data,
-                "LaunchTemplateData.TagSpecification",
-                tag_specs,
-            );
-        }
-
-        self.send_form(form_data, "CreateLaunchTemplateVersion", &resource_name)
-            .await
+        self.create_launch_template_version_impl(request).await
     }
 
     async fn delete_launch_template(
         &self,
         request: DeleteLaunchTemplateRequest,
     ) -> Result<DeleteLaunchTemplateResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DeleteLaunchTemplate".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        let resource: String;
-        if let Some(launch_template_id) = &request.launch_template_id {
-            form_data.insert("LaunchTemplateId".to_string(), launch_template_id.clone());
-            resource = launch_template_id.clone();
-        } else if let Some(launch_template_name) = &request.launch_template_name {
-            form_data.insert(
-                "LaunchTemplateName".to_string(),
-                launch_template_name.clone(),
-            );
-            resource = launch_template_name.clone();
-        } else {
-            resource = "unknown".to_string();
-        }
-
-        self.send_form(form_data, "DeleteLaunchTemplate", &resource)
-            .await
+        self.delete_launch_template_impl(request).await
     }
 
     async fn describe_launch_templates(
         &self,
         request: DescribeLaunchTemplatesRequest,
     ) -> Result<DescribeLaunchTemplatesResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "DescribeLaunchTemplates".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-
-        if let Some(launch_template_ids) = &request.launch_template_ids {
-            for (i, lt_id) in launch_template_ids.iter().enumerate() {
-                form_data.insert(format!("LaunchTemplateId.{}", i + 1), lt_id.clone());
-            }
-        }
-
-        if let Some(launch_template_names) = &request.launch_template_names {
-            for (i, lt_name) in launch_template_names.iter().enumerate() {
-                form_data.insert(format!("LaunchTemplateName.{}", i + 1), lt_name.clone());
-            }
-        }
-
-        if let Some(filters) = &request.filters {
-            Self::add_filters(&mut form_data, filters);
-        }
-
-        if let Some(max_results) = request.max_results {
-            form_data.insert("MaxResults".to_string(), max_results.to_string());
-        }
-
-        if let Some(next_token) = &request.next_token {
-            form_data.insert("NextToken".to_string(), next_token.clone());
-        }
-
-        self.send_form(form_data, "DescribeLaunchTemplates", "LaunchTemplate")
-            .await
+        self.describe_launch_templates_impl(request).await
     }
 
     async fn get_console_output(&self, instance_id: String) -> Result<GetConsoleOutputResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "GetConsoleOutput".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert("InstanceId".to_string(), instance_id.clone());
-
-        self.send_form(form_data, "GetConsoleOutput", &instance_id)
-            .await
+        self.get_console_output_impl(instance_id).await
     }
 }
 

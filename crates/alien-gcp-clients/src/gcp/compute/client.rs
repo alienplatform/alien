@@ -5,6 +5,9 @@ use crate::gcp::GcpClientConfig;
 use alien_client_core::Result;
 use reqwest::{Client, Method};
 
+mod instances;
+mod load_balancing;
+
 // =============================================================================================
 // Client Implementation
 // =============================================================================================
@@ -344,49 +347,15 @@ impl ComputeApi for ComputeClient {
     // --- Health Check Operations ---
 
     async fn get_health_check(&self, health_check_name: String) -> Result<HealthCheck> {
-        let path = format!(
-            "projects/{}/global/healthChecks/{}",
-            self.project_id, health_check_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &health_check_name,
-            )
-            .await
+        self.get_health_check_impl(health_check_name).await
     }
 
     async fn insert_health_check(&self, health_check: HealthCheck) -> Result<Operation> {
-        let path = format!("projects/{}/global/healthChecks", self.project_id);
-        let resource_name = health_check.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(health_check),
-                &resource_name,
-            )
-            .await
+        self.insert_health_check_impl(health_check).await
     }
 
     async fn delete_health_check(&self, health_check_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/healthChecks/{}",
-            self.project_id, health_check_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &health_check_name,
-            )
-            .await
+        self.delete_health_check_impl(health_check_name).await
     }
 
     async fn patch_health_check(
@@ -394,67 +363,20 @@ impl ComputeApi for ComputeClient {
         health_check_name: String,
         health_check: HealthCheck,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/healthChecks/{}",
-            self.project_id, health_check_name
-        );
-        self.base
-            .execute_request(
-                Method::PATCH,
-                &path,
-                None,
-                Some(health_check),
-                &health_check_name,
-            )
+        self.patch_health_check_impl(health_check_name, health_check)
             .await
     }
 
-    // --- Backend Service Operations ---
-
     async fn get_backend_service(&self, backend_service_name: String) -> Result<BackendService> {
-        let path = format!(
-            "projects/{}/global/backendServices/{}",
-            self.project_id, backend_service_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &backend_service_name,
-            )
-            .await
+        self.get_backend_service_impl(backend_service_name).await
     }
 
     async fn insert_backend_service(&self, backend_service: BackendService) -> Result<Operation> {
-        let path = format!("projects/{}/global/backendServices", self.project_id);
-        let resource_name = backend_service.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(backend_service),
-                &resource_name,
-            )
-            .await
+        self.insert_backend_service_impl(backend_service).await
     }
 
     async fn delete_backend_service(&self, backend_service_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/backendServices/{}",
-            self.project_id, backend_service_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &backend_service_name,
-            )
-            .await
+        self.delete_backend_service_impl(backend_service_name).await
     }
 
     async fn patch_backend_service(
@@ -462,75 +384,27 @@ impl ComputeApi for ComputeClient {
         backend_service_name: String,
         backend_service: BackendService,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/backendServices/{}",
-            self.project_id, backend_service_name
-        );
-        self.base
-            .execute_request(
-                Method::PATCH,
-                &path,
-                None,
-                Some(backend_service),
-                &backend_service_name,
-            )
+        self.patch_backend_service_impl(backend_service_name, backend_service)
             .await
     }
 
-    // --- URL Map Operations ---
-
     async fn get_url_map(&self, url_map_name: String) -> Result<UrlMap> {
-        let path = format!(
-            "projects/{}/global/urlMaps/{}",
-            self.project_id, url_map_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &url_map_name)
-            .await
+        self.get_url_map_impl(url_map_name).await
     }
 
     async fn insert_url_map(&self, url_map: UrlMap) -> Result<Operation> {
-        let path = format!("projects/{}/global/urlMaps", self.project_id);
-        let resource_name = url_map.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(Method::POST, &path, None, Some(url_map), &resource_name)
-            .await
+        self.insert_url_map_impl(url_map).await
     }
 
     async fn delete_url_map(&self, url_map_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/urlMaps/{}",
-            self.project_id, url_map_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &url_map_name,
-            )
-            .await
+        self.delete_url_map_impl(url_map_name).await
     }
-
-    // --- Target HTTP Proxy Operations ---
 
     async fn get_target_http_proxy(
         &self,
         target_http_proxy_name: String,
     ) -> Result<TargetHttpProxy> {
-        let path = format!(
-            "projects/{}/global/targetHttpProxies/{}",
-            self.project_id, target_http_proxy_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &target_http_proxy_name,
-            )
+        self.get_target_http_proxy_impl(target_http_proxy_name)
             .await
     }
 
@@ -538,53 +412,19 @@ impl ComputeApi for ComputeClient {
         &self,
         target_http_proxy: TargetHttpProxy,
     ) -> Result<Operation> {
-        let path = format!("projects/{}/global/targetHttpProxies", self.project_id);
-        let resource_name = target_http_proxy.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(target_http_proxy),
-                &resource_name,
-            )
-            .await
+        self.insert_target_http_proxy_impl(target_http_proxy).await
     }
 
     async fn delete_target_http_proxy(&self, target_http_proxy_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/targetHttpProxies/{}",
-            self.project_id, target_http_proxy_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &target_http_proxy_name,
-            )
+        self.delete_target_http_proxy_impl(target_http_proxy_name)
             .await
     }
-
-    // --- Target HTTPS Proxy Operations ---
 
     async fn get_target_https_proxy(
         &self,
         target_https_proxy_name: String,
     ) -> Result<TargetHttpsProxy> {
-        let path = format!(
-            "projects/{}/global/targetHttpsProxies/{}",
-            self.project_id, target_https_proxy_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &target_https_proxy_name,
-            )
+        self.get_target_https_proxy_impl(target_https_proxy_name)
             .await
     }
 
@@ -592,13 +432,7 @@ impl ComputeApi for ComputeClient {
         &self,
         target_https_proxy: TargetHttpsProxy,
     ) -> Result<Operation> {
-        let path = format!("projects/{}/global/targetHttpsProxies", self.project_id);
-        let name = target_https_proxy
-            .name
-            .clone()
-            .unwrap_or_else(|| "targetHttpsProxy".to_string());
-        self.base
-            .execute_request(Method::POST, &path, None, Some(target_https_proxy), &name)
+        self.insert_target_https_proxy_impl(target_https_proxy)
             .await
     }
 
@@ -607,19 +441,7 @@ impl ComputeApi for ComputeClient {
         target_https_proxy_name: String,
         ssl_certificates: Vec<String>,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/targetHttpsProxies/{}/setSslCertificates",
-            self.project_id, target_https_proxy_name
-        );
-        let request = SetSslCertificatesRequest { ssl_certificates };
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(request),
-                &target_https_proxy_name,
-            )
+        self.set_target_https_proxy_ssl_certificates_impl(target_https_proxy_name, ssl_certificates)
             .await
     }
 
@@ -627,147 +449,48 @@ impl ComputeApi for ComputeClient {
         &self,
         target_https_proxy_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/targetHttpsProxies/{}",
-            self.project_id, target_https_proxy_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &target_https_proxy_name,
-            )
+        self.delete_target_https_proxy_impl(target_https_proxy_name)
             .await
     }
 
     async fn insert_target_tcp_proxy(&self, target_tcp_proxy: TargetTcpProxy) -> Result<Operation> {
-        let path = format!("projects/{}/global/targetTcpProxies", self.project_id);
-        let name = target_tcp_proxy
-            .name
-            .clone()
-            .unwrap_or_else(|| "targetTcpProxy".to_string());
-        self.base
-            .execute_request(Method::POST, &path, None, Some(target_tcp_proxy), &name)
-            .await
+        self.insert_target_tcp_proxy_impl(target_tcp_proxy).await
     }
 
     async fn delete_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/targetTcpProxies/{}",
-            self.project_id, target_tcp_proxy_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &target_tcp_proxy_name,
-            )
+        self.delete_target_tcp_proxy_impl(target_tcp_proxy_name)
             .await
     }
 
-    // --- SSL Certificate Operations ---
-
     async fn get_ssl_certificate(&self, ssl_certificate_name: String) -> Result<SslCertificate> {
-        let path = format!(
-            "projects/{}/global/sslCertificates/{}",
-            self.project_id, ssl_certificate_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &ssl_certificate_name,
-            )
-            .await
+        self.get_ssl_certificate_impl(ssl_certificate_name).await
     }
 
     async fn insert_ssl_certificate(&self, ssl_certificate: SslCertificate) -> Result<Operation> {
-        let path = format!("projects/{}/global/sslCertificates", self.project_id);
-        let name = ssl_certificate
-            .name
-            .clone()
-            .unwrap_or_else(|| "sslCertificate".to_string());
-        self.base
-            .execute_request(Method::POST, &path, None, Some(ssl_certificate), &name)
-            .await
+        self.insert_ssl_certificate_impl(ssl_certificate).await
     }
 
     async fn delete_ssl_certificate(&self, ssl_certificate_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/sslCertificates/{}",
-            self.project_id, ssl_certificate_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &ssl_certificate_name,
-            )
-            .await
+        self.delete_ssl_certificate_impl(ssl_certificate_name).await
     }
 
-    // --- Global Address Operations ---
-
     async fn get_global_address(&self, address_name: String) -> Result<Address> {
-        let path = format!(
-            "projects/{}/global/addresses/{}",
-            self.project_id, address_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &address_name)
-            .await
+        self.get_global_address_impl(address_name).await
     }
 
     async fn insert_global_address(&self, address: Address) -> Result<Operation> {
-        let path = format!("projects/{}/global/addresses", self.project_id);
-        let resource_name = address.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(Method::POST, &path, None, Some(address), &resource_name)
-            .await
+        self.insert_global_address_impl(address).await
     }
 
     async fn delete_global_address(&self, address_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/addresses/{}",
-            self.project_id, address_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &address_name,
-            )
-            .await
+        self.delete_global_address_impl(address_name).await
     }
-
-    // --- Global Forwarding Rule Operations ---
 
     async fn get_global_forwarding_rule(
         &self,
         forwarding_rule_name: String,
     ) -> Result<ForwardingRule> {
-        let path = format!(
-            "projects/{}/global/forwardingRules/{}",
-            self.project_id, forwarding_rule_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &forwarding_rule_name,
-            )
+        self.get_global_forwarding_rule_impl(forwarding_rule_name)
             .await
     }
 
@@ -775,16 +498,7 @@ impl ComputeApi for ComputeClient {
         &self,
         forwarding_rule: ForwardingRule,
     ) -> Result<Operation> {
-        let path = format!("projects/{}/global/forwardingRules", self.project_id);
-        let resource_name = forwarding_rule.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(forwarding_rule),
-                &resource_name,
-            )
+        self.insert_global_forwarding_rule_impl(forwarding_rule)
             .await
     }
 
@@ -792,76 +506,28 @@ impl ComputeApi for ComputeClient {
         &self,
         forwarding_rule_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/forwardingRules/{}",
-            self.project_id, forwarding_rule_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &forwarding_rule_name,
-            )
+        self.delete_global_forwarding_rule_impl(forwarding_rule_name)
             .await
     }
 
-    // --- Regional Address Operations ---
-
     async fn get_address(&self, region: String, address_name: String) -> Result<Address> {
-        let path = format!(
-            "projects/{}/regions/{}/addresses/{}",
-            self.project_id, region, address_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &address_name)
-            .await
+        self.get_address_impl(region, address_name).await
     }
 
     async fn insert_address(&self, region: String, address: Address) -> Result<Operation> {
-        let path = format!("projects/{}/regions/{}/addresses", self.project_id, region);
-        let resource_name = address.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(Method::POST, &path, None, Some(address), &resource_name)
-            .await
+        self.insert_address_impl(region, address).await
     }
 
     async fn delete_address(&self, region: String, address_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/regions/{}/addresses/{}",
-            self.project_id, region, address_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &address_name,
-            )
-            .await
+        self.delete_address_impl(region, address_name).await
     }
-
-    // --- Regional Forwarding Rule Operations ---
 
     async fn get_forwarding_rule(
         &self,
         region: String,
         forwarding_rule_name: String,
     ) -> Result<ForwardingRule> {
-        let path = format!(
-            "projects/{}/regions/{}/forwardingRules/{}",
-            self.project_id, region, forwarding_rule_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &forwarding_rule_name,
-            )
+        self.get_forwarding_rule_impl(region, forwarding_rule_name)
             .await
     }
 
@@ -870,19 +536,7 @@ impl ComputeApi for ComputeClient {
         region: String,
         forwarding_rule: ForwardingRule,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/regions/{}/forwardingRules",
-            self.project_id, region
-        );
-        let resource_name = forwarding_rule.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(forwarding_rule),
-                &resource_name,
-            )
+        self.insert_forwarding_rule_impl(region, forwarding_rule)
             .await
     }
 
@@ -891,35 +545,16 @@ impl ComputeApi for ComputeClient {
         region: String,
         forwarding_rule_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/regions/{}/forwardingRules/{}",
-            self.project_id, region, forwarding_rule_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &forwarding_rule_name,
-            )
+        self.delete_forwarding_rule_impl(region, forwarding_rule_name)
             .await
     }
-
-    // --- Network Endpoint Group (NEG) Operations ---
 
     async fn get_network_endpoint_group(
         &self,
         zone: String,
         neg_name: String,
     ) -> Result<NetworkEndpointGroup> {
-        let path = format!(
-            "projects/{}/zones/{}/networkEndpointGroups/{}",
-            self.project_id, zone, neg_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &neg_name)
-            .await
+        self.get_network_endpoint_group_impl(zone, neg_name).await
     }
 
     async fn insert_network_endpoint_group(
@@ -927,14 +562,7 @@ impl ComputeApi for ComputeClient {
         zone: String,
         neg: NetworkEndpointGroup,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/networkEndpointGroups",
-            self.project_id, zone
-        );
-        let resource_name = neg.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(Method::POST, &path, None, Some(neg), &resource_name)
-            .await
+        self.insert_network_endpoint_group_impl(zone, neg).await
     }
 
     async fn delete_network_endpoint_group(
@@ -942,12 +570,7 @@ impl ComputeApi for ComputeClient {
         zone: String,
         neg_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/networkEndpointGroups/{}",
-            self.project_id, zone, neg_name
-        );
-        self.base
-            .execute_request(Method::DELETE, &path, None, Option::<()>::None, &neg_name)
+        self.delete_network_endpoint_group_impl(zone, neg_name)
             .await
     }
 
@@ -957,12 +580,7 @@ impl ComputeApi for ComputeClient {
         neg_name: String,
         request: NetworkEndpointGroupsAttachEndpointsRequest,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/networkEndpointGroups/{}/attachNetworkEndpoints",
-            self.project_id, zone, neg_name
-        );
-        self.base
-            .execute_request(Method::POST, &path, None, Some(request), &neg_name)
+        self.attach_network_endpoints_impl(zone, neg_name, request)
             .await
     }
 
@@ -972,28 +590,16 @@ impl ComputeApi for ComputeClient {
         neg_name: String,
         request: NetworkEndpointGroupsDetachEndpointsRequest,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/networkEndpointGroups/{}/detachNetworkEndpoints",
-            self.project_id, zone, neg_name
-        );
-        self.base
-            .execute_request(Method::POST, &path, None, Some(request), &neg_name)
+        self.detach_network_endpoints_impl(zone, neg_name, request)
             .await
     }
-
-    // --- Regional Network Endpoint Group (NEG) Operations ---
 
     async fn get_region_network_endpoint_group(
         &self,
         region: String,
         neg_name: String,
     ) -> Result<NetworkEndpointGroup> {
-        let path = format!(
-            "projects/{}/regions/{}/networkEndpointGroups/{}",
-            self.project_id, region, neg_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &neg_name)
+        self.get_region_network_endpoint_group_impl(region, neg_name)
             .await
     }
 
@@ -1002,13 +608,7 @@ impl ComputeApi for ComputeClient {
         region: String,
         neg: NetworkEndpointGroup,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/regions/{}/networkEndpointGroups",
-            self.project_id, region
-        );
-        let resource_name = neg.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(Method::POST, &path, None, Some(neg), &resource_name)
+        self.insert_region_network_endpoint_group_impl(region, neg)
             .await
     }
 
@@ -1017,33 +617,15 @@ impl ComputeApi for ComputeClient {
         region: String,
         neg_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/regions/{}/networkEndpointGroups/{}",
-            self.project_id, region, neg_name
-        );
-        self.base
-            .execute_request(Method::DELETE, &path, None, Option::<()>::None, &neg_name)
+        self.delete_region_network_endpoint_group_impl(region, neg_name)
             .await
     }
-
-    // --- Instance Template Operations ---
 
     async fn get_instance_template(
         &self,
         instance_template_name: String,
     ) -> Result<InstanceTemplate> {
-        let path = format!(
-            "projects/{}/global/instanceTemplates/{}",
-            self.project_id, instance_template_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_template_name,
-            )
+        self.get_instance_template_impl(instance_template_name)
             .await
     }
 
@@ -1051,54 +633,20 @@ impl ComputeApi for ComputeClient {
         &self,
         instance_template: InstanceTemplate,
     ) -> Result<Operation> {
-        let path = format!("projects/{}/global/instanceTemplates", self.project_id);
-        let resource_name = instance_template.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(instance_template),
-                &resource_name,
-            )
-            .await
+        self.insert_instance_template_impl(instance_template).await
     }
 
     async fn delete_instance_template(&self, instance_template_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/global/instanceTemplates/{}",
-            self.project_id, instance_template_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_template_name,
-            )
+        self.delete_instance_template_impl(instance_template_name)
             .await
     }
-
-    // --- Instance Group Manager Operations ---
 
     async fn get_instance_group_manager(
         &self,
         zone: String,
         instance_group_manager_name: String,
     ) -> Result<InstanceGroupManager> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers/{}",
-            self.project_id, zone, instance_group_manager_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_group_manager_name,
-            )
+        self.get_instance_group_manager_impl(zone, instance_group_manager_name)
             .await
     }
 
@@ -1107,19 +655,7 @@ impl ComputeApi for ComputeClient {
         zone: String,
         instance_group_manager: InstanceGroupManager,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers",
-            self.project_id, zone
-        );
-        let resource_name = instance_group_manager.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(instance_group_manager),
-                &resource_name,
-            )
+        self.insert_instance_group_manager_impl(zone, instance_group_manager)
             .await
     }
 
@@ -1128,18 +664,7 @@ impl ComputeApi for ComputeClient {
         zone: String,
         instance_group_manager_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers/{}",
-            self.project_id, zone, instance_group_manager_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_group_manager_name,
-            )
+        self.delete_instance_group_manager_impl(zone, instance_group_manager_name)
             .await
     }
 
@@ -1149,19 +674,7 @@ impl ComputeApi for ComputeClient {
         instance_group_manager_name: String,
         size: i32,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers/{}/resize",
-            self.project_id, zone, instance_group_manager_name
-        );
-        let query_params = vec![("size", size.to_string())];
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                Some(query_params),
-                Option::<()>::None,
-                &instance_group_manager_name,
-            )
+        self.resize_instance_group_manager_impl(zone, instance_group_manager_name, size)
             .await
     }
 
@@ -1171,19 +684,12 @@ impl ComputeApi for ComputeClient {
         instance_group_manager_name: String,
         request: InstanceGroupManagersDeleteInstancesRequest,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers/{}/deleteInstances",
-            self.project_id, zone, instance_group_manager_name
-        );
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(request),
-                &instance_group_manager_name,
-            )
-            .await
+        self.delete_instance_group_manager_instances_impl(
+            zone,
+            instance_group_manager_name,
+            request,
+        )
+        .await
     }
 
     async fn list_managed_instances(
@@ -1191,18 +697,7 @@ impl ComputeApi for ComputeClient {
         zone: String,
         instance_group_manager_name: String,
     ) -> Result<InstanceGroupManagersListManagedInstancesResponse> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers/{}/listManagedInstances",
-            self.project_id, zone, instance_group_manager_name
-        );
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_group_manager_name,
-            )
+        self.list_managed_instances_impl(zone, instance_group_manager_name)
             .await
     }
 
@@ -1212,47 +707,16 @@ impl ComputeApi for ComputeClient {
         instance_group_manager_name: String,
         patch: InstanceGroupManager,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instanceGroupManagers/{}",
-            self.project_id, zone, instance_group_manager_name
-        );
-        self.base
-            .execute_request(
-                Method::PATCH,
-                &path,
-                None,
-                Some(patch),
-                &instance_group_manager_name,
-            )
+        self.patch_instance_group_manager_impl(zone, instance_group_manager_name, patch)
             .await
     }
 
-    // --- Instance Operations ---
-
     async fn get_instance(&self, zone: String, instance_name: String) -> Result<Instance> {
-        let path = format!(
-            "projects/{}/zones/{}/instances/{}",
-            self.project_id, zone, instance_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &instance_name)
-            .await
+        self.get_instance_impl(zone, instance_name).await
     }
 
     async fn delete_instance(&self, zone: String, instance_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instances/{}",
-            self.project_id, zone, instance_name
-        );
-        self.base
-            .execute_request(
-                Method::DELETE,
-                &path,
-                None,
-                Option::<()>::None,
-                &instance_name,
-            )
-            .await
+        self.delete_instance_impl(zone, instance_name).await
     }
 
     async fn attach_disk(
@@ -1261,18 +725,7 @@ impl ComputeApi for ComputeClient {
         instance_name: String,
         attached_disk: AttachedDisk,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instances/{}/attachDisk",
-            self.project_id, zone, instance_name
-        );
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(attached_disk),
-                &instance_name,
-            )
+        self.attach_disk_impl(zone, instance_name, attached_disk)
             .await
     }
 
@@ -1282,50 +735,20 @@ impl ComputeApi for ComputeClient {
         instance_name: String,
         device_name: String,
     ) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/instances/{}/detachDisk",
-            self.project_id, zone, instance_name
-        );
-        let query = vec![("deviceName", device_name)];
-        self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                Some(query),
-                Option::<()>::None,
-                &instance_name,
-            )
+        self.detach_disk_impl(zone, instance_name, device_name)
             .await
     }
 
-    // --- Disk Operations ---
-
     async fn get_disk(&self, zone: String, disk_name: String) -> Result<Disk> {
-        let path = format!(
-            "projects/{}/zones/{}/disks/{}",
-            self.project_id, zone, disk_name
-        );
-        self.base
-            .execute_request(Method::GET, &path, None, Option::<()>::None, &disk_name)
-            .await
+        self.get_disk_impl(zone, disk_name).await
     }
 
     async fn insert_disk(&self, zone: String, disk: Disk) -> Result<Operation> {
-        let path = format!("projects/{}/zones/{}/disks", self.project_id, zone);
-        let resource_name = disk.name.clone().unwrap_or_default();
-        self.base
-            .execute_request(Method::POST, &path, None, Some(disk), &resource_name)
-            .await
+        self.insert_disk_impl(zone, disk).await
     }
 
     async fn delete_disk(&self, zone: String, disk_name: String) -> Result<Operation> {
-        let path = format!(
-            "projects/{}/zones/{}/disks/{}",
-            self.project_id, zone, disk_name
-        );
-        self.base
-            .execute_request(Method::DELETE, &path, None, Option::<()>::None, &disk_name)
-            .await
+        self.delete_disk_impl(zone, disk_name).await
     }
 
     async fn get_serial_port_output(
@@ -1333,18 +756,6 @@ impl ComputeApi for ComputeClient {
         zone: String,
         instance_name: String,
     ) -> Result<SerialPortOutput> {
-        let path = format!(
-            "projects/{}/zones/{}/instances/{}/serialPort",
-            self.project_id, zone, instance_name
-        );
-        self.base
-            .execute_request(
-                Method::GET,
-                &path,
-                Some(vec![("port", "1".to_string())]),
-                Option::<()>::None,
-                &instance_name,
-            )
-            .await
+        self.get_serial_port_output_impl(zone, instance_name).await
     }
 }
