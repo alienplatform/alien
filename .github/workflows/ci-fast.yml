@@ -39,14 +39,14 @@ jobs:
         env:
           TITLE: ${{ github.event.pull_request.title }}
           BRANCH: ${{ github.head_ref }}
-          ACTOR: ${{ github.actor }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           if ! grep -qE '^(feat|fix|refactor|chore|docs|test|ci|perf|build|revert)(\([^)]+\))?!?: .+' <<< "$TITLE"; then
             echo "::error::PR title must follow Conventional Commits: <type>: <description>"
             echo "  Example: feat: add Azure container deployment support"
             exit 1
           fi
-          if [[ "$ACTOR" != "dependabot[bot]" && "$ACTOR" != "renovate[bot]" ]] &&
+          if [[ "$PR_AUTHOR" != "dependabot[bot]" && "$PR_AUTHOR" != "renovate[bot]" ]] &&
              ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$BRANCH"; then
             echo "::error::Branch must include its Linear issue, for example: alon/alien-123-azure-containers"
             exit 1
