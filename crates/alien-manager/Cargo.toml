@@ -47,7 +47,7 @@ alien-gcp-clients = { workspace = true }
 
 # Web framework
 axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros"] }
-tower-http = { version = "0.6.2", features = ["cors"] }
+tower-http = { version = "0.7.0", features = ["cors"] }
 
 # Async runtime
 async-trait = { workspace = true }

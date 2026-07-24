@@ -483,7 +483,7 @@ jobs:
       - uses: pnpm/action-setup@v6
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v5
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
@@ -573,7 +573,7 @@ jobs:
       - uses: pnpm/action-setup@v6
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v5
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
@@ -1196,7 +1196,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v5
         with:
@@ -1294,7 +1294,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v5
         with:
@@ -1442,7 +1442,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v5
         with:
@@ -1620,7 +1620,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v5
         with:

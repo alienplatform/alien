@@ -42,7 +42,7 @@ dotenvy = { workspace = true }
 test-context = { workspace = true }
 regex = { workspace = true }
 anyhow = { workspace = true }
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 
 [dev-dependencies.tracing-subscriber]
 workspace = true

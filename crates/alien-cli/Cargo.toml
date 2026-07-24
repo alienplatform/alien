@@ -81,13 +81,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 axum = { workspace = true, features = ["tokio", "http2", "query"] }
 # Push-mode debug tunnel: loopback proxy dials the manager via WebSocket
 # and forwards cloud-CLI HTTP requests.
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
-git-url-parse = { version = "0.4.4" }
+git-url-parse = { version = "0.6.0" }
 flate2 = "1"
 tar = "0.4"
-toml = "0.8"
+toml = "0.9"
 crossterm = { workspace = true }
 
 [dev-dependencies]
