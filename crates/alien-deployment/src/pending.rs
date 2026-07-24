@@ -48,10 +48,14 @@ pub async fn handle_pending(
     // value against: a frozen gate is answered once.
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
+    let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack =
         strip_declined_frozen_resources(target_stack, &stack_state, &config.input_values)?;
-    let target_stack =
-        strip_frozen_dominated_live_resources(target_stack, &persisted_gate_answers);
+    let target_stack = strip_frozen_dominated_live_resources(
+        target_stack,
+        &persisted_gate_answers,
+        &frozen_gating,
+    );
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -187,9 +191,17 @@ pub fn strip_declined_frozen_resources_from_presence(
 /// leaving the resource in until the late strip would dangle its links to
 /// the frozen sibling the early strip just removed, failing the reference
 /// preflight on a graph the gate rules explicitly permit.
+///
+/// Dominance applies only to `still_frozen_gating` inputs — computed from
+/// the target stack BEFORE the frozen strip removed declined entries. The
+/// recorded answer map may carry answers for inputs a later release freed
+/// from frozen gating; those follow live resolution (provided value →
+/// recorded answer → default) in the late strip instead, so a freed gate is
+/// toggleable again.
 pub fn strip_frozen_dominated_live_resources(
     mut stack: Stack,
     frozen_answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Stack {
     let mut declined: Vec<String> = Vec::new();
     for (resource_id, entry) in stack.resources() {
@@ -203,7 +215,9 @@ pub fn strip_frozen_dominated_live_resources(
         if setup_created {
             continue;
         }
-        if frozen_answers.get(input_id) == Some(&false) {
+        if still_frozen_gating.contains(input_id)
+            && frozen_answers.get(input_id) == Some(&false)
+        {
             declined.push(resource_id.clone());
         }
     }
@@ -1014,10 +1028,11 @@ mod tests {
             resolve_frozen_gate_answers(&declined, &StackState::new(Platform::Aws), &Default::default())
                 .expect("the declared default resolves");
         assert_eq!(answers.get("extrasEnabled"), Some(&false));
+        let frozen_gating = frozen_gating_inputs(&declined);
         let stripped =
             strip_declined_frozen_resources(declined, &StackState::new(Platform::Aws), &Default::default())
                 .expect("the frozen strip resolves");
-        let stripped = strip_frozen_dominated_live_resources(stripped, &answers);
+        let stripped = strip_frozen_dominated_live_resources(stripped, &answers, &frozen_gating);
         assert!(!stripped.resources.contains_key("extras"));
         assert!(
             !stripped.resources.contains_key("extras-cache"),
@@ -1028,12 +1043,48 @@ mod tests {
         let answers =
             resolve_frozen_gate_answers(&accepted, &StackState::new(Platform::Aws), &Default::default())
                 .expect("the declared default resolves");
+        let frozen_gating = frozen_gating_inputs(&accepted);
         let kept =
             strip_declined_frozen_resources(accepted, &StackState::new(Platform::Aws), &Default::default())
                 .expect("the frozen strip resolves");
-        let kept = strip_frozen_dominated_live_resources(kept, &answers);
+        let kept = strip_frozen_dominated_live_resources(kept, &answers, &frozen_gating);
         assert!(kept.resources.contains_key("extras"));
         assert!(kept.resources.contains_key("extras-cache"));
+    }
+
+    /// A later release freed the input: its last frozen resource is gone and
+    /// only the live resource remains. Dominance no longer applies — the
+    /// stale recorded false must not strip the workload here; the live strip
+    /// resolves it (provided value → recorded answer → default) so the gate
+    /// is toggleable again.
+    #[test]
+    fn a_freed_gate_is_not_dominated_by_its_stale_frozen_answer() {
+        let stale_answers =
+            alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
+        let freed_target = live_gated_stack(Some(false));
+        let frozen_gating = frozen_gating_inputs(&freed_target);
+        assert!(frozen_gating.is_empty(), "nothing frozen gates this input anymore");
+
+        let kept = strip_frozen_dominated_live_resources(
+            freed_target,
+            &stale_answers,
+            &frozen_gating,
+        );
+        assert!(
+            kept.resources.contains_key("cache"),
+            "a freed gate follows live resolution, not the stale frozen answer"
+        );
+
+        let accepted = strip_declined_live_resources(
+            kept,
+            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &stale_answers,
+        )
+        .expect("a provided value resolves");
+        assert!(
+            accepted.resources.contains_key("cache"),
+            "an explicit true re-enables the workload once the gate is freed"
+        );
     }
 
     /// A legacy deployment's baseline reads the settled state against the

@@ -197,9 +197,10 @@ pub async fn stack_import(
             Ok(answers) => answers,
             Err(e) => return e.into_response(),
         };
+    let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
-        &alien_deployment::frozen_gating_inputs(source_stack),
+        &frozen_gating,
         &req.input_values,
     ) {
         return e.into_response();
@@ -221,6 +222,7 @@ pub async fn stack_import(
     let source_stack = alien_deployment::strip_frozen_dominated_live_resources(
         source_stack,
         &imported_gate_answers,
+        &frozen_gating,
     );
 
     let prepared_stack = match prepare_import_stack(source_stack, &req).await {

@@ -87,9 +87,10 @@ pub async fn handle_update_pending(
             &stack_state,
         )?;
     }
+    let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
     crate::pending::enforce_frozen_gate_fixity(
         &persisted_gate_answers,
-        &crate::pending::frozen_gating_inputs(&target_stack),
+        &frozen_gating,
         &config.input_values,
     )?;
 
@@ -110,6 +111,7 @@ pub async fn handle_update_pending(
     let target_stack = crate::pending::strip_frozen_dominated_live_resources(
         target_stack,
         &persisted_gate_answers,
+        &frozen_gating,
     );
 
     let runner = alien_preflights::runner::PreflightRunner::new();
