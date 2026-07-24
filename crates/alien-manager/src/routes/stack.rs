@@ -194,6 +194,7 @@ pub async fn stack_import(
     // still be in the stack for its input to be enumerated — and recorded on
     // the deployment, where the fixity check holds every later value against
     // them.
+    let declared_stack = prepared_stack.clone();
     let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers(
         &prepared_stack,
         &stack_state,
@@ -213,11 +214,14 @@ pub async fn stack_import(
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
-    let prepared_stack =
-        match alien_deployment::strip_declined_live_resources(prepared_stack, &req.input_values) {
-            Ok(stack) => stack,
-            Err(e) => return e.into_response(),
-        };
+    let prepared_stack = match alien_deployment::strip_declined_live_resources(
+        prepared_stack,
+        &req.input_values,
+        &imported_gate_answers,
+    ) {
+        Ok(stack) => stack,
+        Err(e) => return e.into_response(),
+    };
     let environment_info = infer_import_environment_info(&req);
     match state
         .deployment_store
@@ -311,11 +315,27 @@ pub async fn stack_import(
             // roll the whole stack update back: the custom resource fails,
             // and CloudFormation restores whatever its conditionals just
             // created or deleted.
-            let persisted_answers = existing
+            let mut persisted_answers = existing
                 .runtime_metadata
                 .as_ref()
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
+            // A deployment from before answers were recorded still has a
+            // ground truth: presence in its own settled state. Deriving it
+            // here means a re-registration cannot smuggle a flipped answer
+            // past an empty map.
+            if persisted_answers.is_empty() {
+                if let Some(existing_state) = existing.stack_state.as_ref() {
+                    persisted_answers = match alien_deployment::resolve_frozen_gate_answers(
+                        &declared_stack,
+                        existing_state,
+                        &Default::default(),
+                    ) {
+                        Ok(answers) => answers,
+                        Err(e) => return e.into_response(),
+                    };
+                }
+            }
             for (input_id, imported_answer) in &imported_gate_answers {
                 if let Some(persisted) = persisted_answers.get(input_id) {
                     if persisted != imported_answer {

@@ -1277,6 +1277,60 @@ async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
         .await
         .expect("deployment should reach a stable state before re-import");
 
+    // A deployment from before answers were recorded: its settled state is
+    // the ground truth, so a flipped re-registration is still refused.
+    let mut legacy_metadata = persisted
+        .runtime_metadata
+        .clone()
+        .expect("runtime_metadata must be persisted");
+    legacy_metadata.persisted_gate_answers = Default::default();
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-legacy".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_gated_storage("assets", "extras"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: Some(legacy_metadata),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("legacy state should persist");
+    let declined_legacy = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined_legacy).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a legacy deployment's settled state still refuses the flip; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "body = {json:#}"
+    );
+
     // The re-registration omits the gated store: a flipped answer.
     let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;

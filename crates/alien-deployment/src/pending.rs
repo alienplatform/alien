@@ -72,7 +72,11 @@ pub async fn handle_pending(
     // declines were stripped before the mutations above; live declines apply
     // here, after them, so a declined workload's provisioning baseline stays
     // derived and acceptance can return later.
-    let mutated_stack = strip_declined_live_resources(mutated_stack, &config.input_values)?;
+    let mutated_stack = strip_declined_live_resources(
+        mutated_stack,
+        &config.input_values,
+        &persisted_gate_answers,
+    )?;
 
     // Step 4: Store prepared stack and inject environment variables
     let mut runtime_metadata = alien_core::RuntimeMetadata::default();
@@ -175,6 +179,7 @@ pub fn strip_declined_frozen_resources(
 pub fn strip_declined_live_resources(
     mut stack: Stack,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
+    persisted_gate_answers: &alien_core::GateAnswers,
 ) -> Result<Stack> {
     let mut declined: Vec<String> = Vec::new();
     for (resource_id, entry) in stack.resources() {
@@ -189,12 +194,37 @@ pub fn strip_declined_live_resources(
             continue;
         }
 
-        if !gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)? {
+        if !live_gate_resolves_true(
+            &stack.inputs,
+            input_id,
+            input_values,
+            persisted_gate_answers,
+            resource_id,
+        )? {
             declined.push(resource_id.clone());
         }
     }
     remove_declined(&mut stack, &declined);
     Ok(stack)
+}
+
+/// A live gate's answer: the provided value, else the answer recorded when
+/// the deployment was created (frozen dominance — a live resource sharing a
+/// frozen-gating input follows the fixed answer, not the declared default),
+/// else the declared default.
+fn live_gate_resolves_true(
+    inputs: &[alien_core::StackInputDefinition],
+    input_id: &str,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+    persisted_gate_answers: &alien_core::GateAnswers,
+    resource_id: &str,
+) -> Result<bool> {
+    if !input_values.contains_key(input_id) {
+        if let Some(answer) = persisted_gate_answers.get(input_id) {
+            return Ok(*answer);
+        }
+    }
+    gate_resolves_true(inputs, input_id, input_values, resource_id)
 }
 
 /// The canonical resolved answers for every input that gates a Frozen
@@ -246,13 +276,34 @@ pub fn resolve_frozen_gate_answers(
     Ok(answers)
 }
 
+/// The inputs that gate a setup-created resource in `stack`. Fixity applies
+/// to exactly these: an input whose last frozen resource left the release is
+/// no longer frozen-gating, and its recorded answer must not keep refusing
+/// live toggles.
+pub fn frozen_gating_inputs(stack: &Stack) -> std::collections::HashSet<String> {
+    stack
+        .resources()
+        .filter_map(|(_, entry)| {
+            let input_id = entry.enabled_when.as_deref()?;
+            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+                .should_emit_in_setup(entry.lifecycle)
+                .then(|| input_id.to_string())
+        })
+        .collect()
+}
+
 /// Refuse an update whose input values conflict with a persisted frozen-gate
-/// answer. Inputs the update does not mention keep their recorded answer.
+/// answer, for inputs that still gate a frozen resource in the declared
+/// stack. Inputs the update does not mention keep their recorded answer.
 pub fn enforce_frozen_gate_fixity(
     persisted: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<()> {
     for (input_id, persisted_answer) in persisted {
+        if !still_frozen_gating.contains(input_id) {
+            continue;
+        }
         let Some(value) = input_values.get(input_id) else {
             continue;
         };
@@ -593,6 +644,7 @@ mod tests {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &Default::default(),
         )
         .expect("resolvable gate");
         assert!(!stripped.resources.contains_key("cache"));
@@ -603,6 +655,7 @@ mod tests {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(false)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &Default::default(),
         )
         .expect("resolvable gate");
         assert!(stripped.resources.contains_key("cache"));
@@ -611,21 +664,32 @@ mod tests {
     /// No answer given (a direct deploy): the declared default decides.
     #[test]
     fn an_unanswered_live_gate_follows_its_default() {
-        let kept = strip_declined_live_resources(live_gated_stack(Some(true)), &Default::default())
-            .expect("default resolves");
+        let kept = strip_declined_live_resources(
+            live_gated_stack(Some(true)),
+            &Default::default(),
+            &Default::default(),
+        )
+        .expect("default resolves");
         assert!(kept.resources.contains_key("cache"));
 
-        let dropped =
-            strip_declined_live_resources(live_gated_stack(Some(false)), &Default::default())
-                .expect("default resolves");
+        let dropped = strip_declined_live_resources(
+            live_gated_stack(Some(false)),
+            &Default::default(),
+            &Default::default(),
+        )
+        .expect("default resolves");
         assert!(!dropped.resources.contains_key("cache"));
     }
 
     /// An unresolvable gate is a fault, never a silent keep-or-drop.
     #[test]
     fn an_unresolvable_live_gate_fails_fast() {
-        let error = strip_declined_live_resources(live_gated_stack(None), &Default::default())
-            .expect_err("no value and no default cannot resolve");
+        let error = strip_declined_live_resources(
+            live_gated_stack(None),
+            &Default::default(),
+            &Default::default(),
+        )
+        .expect_err("no value and no default cannot resolve");
         assert!(error.message.contains("cacheEnabled"), "{}", error.message);
     }
 
@@ -690,11 +754,14 @@ mod tests {
     #[test]
     fn fixity_refuses_conflicting_answers_only() {
         let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+        let still_frozen =
+            std::collections::HashSet::from(["analyticsEnabled".to_string()]);
 
-        enforce_frozen_gate_fixity(&persisted, &Default::default())
+        enforce_frozen_gate_fixity(&persisted, &still_frozen, &Default::default())
             .expect("an unmentioned input keeps its answer");
         enforce_frozen_gate_fixity(
             &persisted,
+            &still_frozen,
             &std::collections::HashMap::from([(
                 "analyticsEnabled".to_string(),
                 serde_json::json!(false),
@@ -704,6 +771,7 @@ mod tests {
 
         let error = enforce_frozen_gate_fixity(
             &persisted,
+            &still_frozen,
             &std::collections::HashMap::from([(
                 "analyticsEnabled".to_string(),
                 serde_json::json!(true),
@@ -713,6 +781,72 @@ mod tests {
         assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
     }
 
+    /// A release that removes the last frozen resource behind an input frees
+    /// the input: the recorded answer stops binding, so a live toggle on it
+    /// is a normal update again.
+    #[test]
+    fn fixity_releases_inputs_no_longer_frozen_gating() {
+        let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+
+        enforce_frozen_gate_fixity(
+            &persisted,
+            &Default::default(),
+            &std::collections::HashMap::from([(
+                "analyticsEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
+        )
+        .expect("an input that no longer gates a frozen resource is free to change");
+
+        let live_only = Stack::new("s".to_string())
+            .inputs(vec![StackInputDefinition::deployer_boolean(
+                "analyticsEnabled",
+                "Enable analytics",
+                "Whether to run analytics.",
+                Some(true),
+            )])
+            .add_enabled_when(
+                Kv::new("analytics".to_string()).build(),
+                ResourceLifecycle::Live,
+                "analyticsEnabled",
+            )
+            .build();
+        assert!(
+            frozen_gating_inputs(&live_only).is_empty(),
+            "a live-gated input is not frozen-gating"
+        );
+    }
+
+    /// Frozen dominance on an omitted shared input: the live strip resolves
+    /// the recorded answer before the declared default, so an update that
+    /// omits the input cannot deprovision the accepted live resource.
+    #[test]
+    fn an_omitted_live_gate_follows_the_persisted_answer_over_the_default() {
+        let persisted = alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), true)]);
+
+        let kept = strip_declined_live_resources(
+            live_gated_stack(Some(false)),
+            &Default::default(),
+            &persisted,
+        )
+        .expect("the recorded answer resolves");
+        assert!(
+            kept.resources.contains_key("cache"),
+            "the recorded true answer outranks the declared false default"
+        );
+
+        let provided_wins = strip_declined_live_resources(
+            live_gated_stack(Some(false)),
+            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &persisted,
+        )
+        .expect("a provided value resolves");
+        assert!(
+            !provided_wins.resources.contains_key("cache"),
+            "a provided value still outranks the recorded answer for live-only inputs"
+        );
+    }
+
     /// Input values are coerced to their declared kinds before they reach
     /// this layer; a non-boolean here is corrupt input and must fail loudly.
     #[test]
@@ -720,6 +854,7 @@ mod tests {
         let error = strip_declined_live_resources(
             live_gated_stack(Some(true)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
+            &Default::default(),
         )
         .expect_err("string values are not answers");
         assert!(error.message.contains("boolean"), "{}", error.message);

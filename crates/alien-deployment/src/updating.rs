@@ -85,7 +85,11 @@ pub async fn handle_update_pending(
             &Default::default(),
         )?;
     }
-    crate::pending::enforce_frozen_gate_fixity(&persisted_gate_answers, &config.input_values)?;
+    crate::pending::enforce_frozen_gate_fixity(
+        &persisted_gate_answers,
+        &crate::pending::frozen_gating_inputs(&target_stack),
+        &config.input_values,
+    )?;
 
     // Drop gated setup resources the deployer declined, BEFORE the
     // preflights: the frozen-compatibility check compares against the
@@ -155,8 +159,11 @@ pub async fn handle_update_pending(
         &config.input_values,
         target_release_id,
     );
-    let mutated_stack =
-        crate::pending::strip_declined_live_resources(mutated_stack, &config.input_values)?;
+    let mutated_stack = crate::pending::strip_declined_live_resources(
+        mutated_stack,
+        &config.input_values,
+        &persisted_gate_answers,
+    )?;
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
