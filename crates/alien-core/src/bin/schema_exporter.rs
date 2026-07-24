@@ -216,6 +216,9 @@ struct Args {
     /// Output path for the OpenAPI JSON file
     #[arg(short, long, default_value = "openapi.json")]
     output: String,
+    /// Output path for the gateability manifest the SDK surface test consumes
+    #[arg(long, default_value = "src/generated/gateability.json")]
+    gateability_output: String,
 }
 
 fn main() {
@@ -225,4 +228,16 @@ fn main() {
     file.write_all(ApiDoc::openapi().to_pretty_json().unwrap().as_bytes())
         .unwrap();
     println!("OpenAPI spec exported to {}", args.output);
+
+    let manifest: std::collections::BTreeMap<&str, TypeGateability> = MANIFEST_TYPES
+        .iter()
+        .map(|resource_type| (*resource_type, type_gateability(resource_type)))
+        .collect();
+    if let Some(parent) = std::path::Path::new(&args.gateability_output).parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let mut file = File::create(&args.gateability_output).unwrap();
+    file.write_all(serde_json::to_string_pretty(&manifest).unwrap().as_bytes())
+        .unwrap();
+    println!("Gateability manifest exported to {}", args.gateability_output);
 }
