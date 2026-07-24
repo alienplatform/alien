@@ -2733,6 +2733,16 @@ fn terraform_import_request_from_outputs(
     let setup_fingerprint = terraform_output_string(output, "deployment_setup_fingerprint")?;
     let setup_fingerprint_version =
         terraform_output_u32(output, "deployment_setup_fingerprint_version")?;
+    // Emitted only when the stack declares deployer inputs; without it a live
+    // `.enabled(input)` answer would fall back to the input's default at
+    // import. Only true absence defaults — a present-but-malformed output
+    // must fail, or it silently loses the very answers it exists to carry.
+    let input_values = if output.get("deployment_input_values").is_some() {
+        let json = terraform_output_string(output, "deployment_input_values")?;
+        serde_json::from_str(&json).context("Failed to parse deployment_input_values")?
+    } else {
+        Default::default()
+    };
 
     Ok(StackImportRequest {
         setup_import_format_version: 1,
@@ -2750,7 +2760,7 @@ fn terraform_import_request_from_outputs(
         setup_fingerprint_version,
         stack_settings,
         management_config,
-        input_values: Default::default(),
+        input_values,
         resources,
     })
 }
@@ -3210,8 +3220,8 @@ fn terraform_output_u32(outputs: &Value, key: &str) -> anyhow::Result<u32> {
     anyhow::bail!("terraform output {key} is not a number or string")
 }
 
-/// The gate answers the enabled-demo e2e applies: the four `*On` inputs true,
-/// the four `*Off` inputs false. Tuple keys are the Terraform variable names the
+/// The gate answers the enabled-demo e2e applies: every `*On` input true,
+/// every `*Off` input false. Tuple keys are the Terraform variable names the
 /// generator emits for each input id (`input_` + snake_case), so a change to
 /// `stack_input_variable_name` must be mirrored here. Empty for every other app.
 fn enabled_demo_gate_answers(app: TestApp) -> &'static [(&'static str, bool)] {

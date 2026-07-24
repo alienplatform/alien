@@ -75,8 +75,6 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
 /// `count = 0` path applies cleanly and a declined resource never reaches the
 /// cloud.
 async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result<()> {
-    use anyhow::Context as _;
-
     // Manager-level outcome: the imported stack_state reflects exactly what the
     // gated Terraform apply produced. Gated-off resources are absent from the
     // registration payload, so they never enter stack_state.
@@ -194,8 +192,6 @@ async fn assert_cloud_gate_pair(
     on_id: &str,
     off_id: &str,
 ) -> anyhow::Result<()> {
-    use anyhow::Context as _;
-
     let mut cmd = tokio::process::Command::new("aws");
     cmd.args(aws_args);
     for (key, value) in env {

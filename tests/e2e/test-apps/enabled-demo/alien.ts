@@ -1,8 +1,8 @@
 import * as alien from "@alienplatform/core"
 
 // A deployer-input gate per resource type, in matched on/off pairs. The e2e
-// answers the four `*On` inputs true and the four `*Off` inputs false at apply
-// time, then verifies each on-resource (and its grant) exists in the cloud
+// answers every `*On` input true and every `*Off` input false at apply time,
+// then verifies each on-resource (and its grant) exists in the cloud
 // while each off-resource is absent. Defaults are false so the on-resources
 // only appear when the harness actually threads the answer through — otherwise
 // the test would pass without proving the gate value was applied.

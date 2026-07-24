@@ -360,6 +360,12 @@ pub(crate) fn scan_rendered_for_unindexed(
                 if follower == Some('[') && is_instance_index(&contents[end..]) {
                     continue;
                 }
+                // The dot-form attribute splat is the other legal unindexed
+                // continuation: the rewrite deliberately leaves splats alone,
+                // and `.*` renders verbatim, not normalized to `[*]`.
+                if contents[end..].starts_with(".*") {
+                    continue;
+                }
                 if exempt.iter().any(|span| span.contains(&start)) {
                     continue;
                 }
@@ -506,6 +512,26 @@ mod tests {
         );
         scan_rendered_for_unindexed(&bad_files, &gated_analytics())
             .expect_err("a key index on a counted resource is not an instance index");
+    }
+
+    #[test]
+    fn scan_accepts_dot_form_splats_but_not_plain_attributes() {
+        let mut ok_files = indexmap::IndexMap::new();
+        ok_files.insert(
+            "main.tf".to_string(),
+            "locals { a = aws_dynamodb_table.analytics.*.name }".to_string(),
+        );
+        scan_rendered_for_unindexed(&ok_files, &gated_analytics()).expect(
+            "the dot-form splat renders verbatim and is list-aware, exactly like `[*]`",
+        );
+
+        let mut bad_files = indexmap::IndexMap::new();
+        bad_files.insert(
+            "main.tf".to_string(),
+            "locals { x = aws_dynamodb_table.analytics.name }".to_string(),
+        );
+        scan_rendered_for_unindexed(&bad_files, &gated_analytics())
+            .expect_err("a plain attribute access is still an unindexed escape");
     }
 
     #[test]

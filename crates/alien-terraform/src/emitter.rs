@@ -127,10 +127,11 @@ pub trait TfEmitter: Send + Sync {
     /// import data feeds the manager, while binding data feeds user code.
     ///
     /// A gated resource's own references need the same `[0]` indexing they get
-    /// in [`Self::emit_import_ref`]. `ResourceEnabledValidCheck` currently keeps
-    /// a gated resource from reaching here — a Worker cannot be gated, and an
-    /// ungated Worker linking a gated resource is rejected outright — so this is
-    /// only reachable if that rule relaxes.
+    /// in [`Self::emit_import_ref`]. A gated resource still cannot reach here:
+    /// compute is live-only, so a gated Worker never renders into setup
+    /// Terraform, and `ResourceEnabledValidCheck` rejects an ungated dependent
+    /// of a gated resource outright. This is only reachable if compute gains a
+    /// frozen lifecycle or that rule relaxes.
     fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         Ok(None)
     }

@@ -430,7 +430,11 @@ pub fn generate_terraform_module(
     }
     files.insert(
         "outputs.tf".to_string(),
-        render_body(outputs_body(target, options.registration.as_ref()))?,
+        render_body(outputs_body(
+            target,
+            options.registration.as_ref(),
+            &stack_inputs,
+        ))?,
     );
     files.insert(
         "README.md".to_string(),
@@ -2559,8 +2563,18 @@ fn registration_body(
 }
 
 fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Expression {
+    match terraform_input_values_source(inputs) {
+        Some(source) => expr::raw(source),
+        None => expr::raw("{}"),
+    }
+}
+
+/// The HCL source of the deployer input-value map, `None` for a stack without
+/// inputs — shared by the registration resource and the module output so both
+/// carry the same map.
+fn terraform_input_values_source(inputs: &[StackInputDefinition]) -> Option<String> {
     if inputs.is_empty() {
-        return expr::raw("{}");
+        return None;
     }
 
     let mut required_entries = Vec::new();
@@ -2577,11 +2591,11 @@ fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Express
 
     let required_map = format!("{{ {} }}", required_entries.join(", "));
     if optional_maps.is_empty() {
-        expr::raw(required_map)
+        Some(required_map)
     } else {
         let mut maps = vec![required_map];
         maps.extend(optional_maps);
-        expr::raw(format!("merge({})", maps.join(", ")))
+        Some(format!("merge({})", maps.join(", ")))
     }
 }
 
@@ -2620,7 +2634,11 @@ fn helm_install_body(
     ))])
 }
 
-fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistration>) -> Body {
+fn outputs_body(
+    target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
+    stack_inputs: &[StackInputDefinition],
+) -> Body {
     let mut outputs = vec![
         (
             "deployment_target",
@@ -2692,6 +2710,17 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Deployment registration resource metadata JSON.",
         ),
     ];
+    // Registration flows managed outside Terraform rebuild the import request
+    // from these outputs, so the deployer's input answers must ride along —
+    // without them a live `.enabled(input)` gate falls back to its declared
+    // default at import and an accepted workload never provisions.
+    if let Some(source) = terraform_input_values_source(stack_inputs) {
+        outputs.push((
+            "deployment_input_values",
+            expr::raw(format!("jsonencode({source})")),
+            "Deployer input values JSON for registration flows managed outside Terraform.",
+        ));
+    }
     if let Some(registration) = registration {
         outputs.push((
             "deployment_id",
@@ -2790,7 +2819,7 @@ fn readme_md(
             "Terraform registers the deployment after the setup resources are ready. The registration step consumes `local.deployment_management_config`, `local.deployment_settings`, and `local.deployment_resources`; keep those values intact if your organization wraps this module.\n".to_string()
         })
         .unwrap_or_else(|| {
-            "This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.\n".to_string()
+            "This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.\n".to_string()
         });
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
@@ -2840,6 +2869,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
 {kubernetes_operations}",
         display_name = display_name,
@@ -3004,9 +3034,10 @@ mod tests {
         assert!(registration_body
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
-        let outputs =
-            render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");
+        let outputs = render_body(outputs_body(TerraformTarget::Aws, Some(&registration), &[]))
+            .expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
+        assert!(!outputs.contains("deployment_input_values"));
     }
 
     #[test]

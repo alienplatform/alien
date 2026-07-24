@@ -239,6 +239,11 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
 /// including registered extension emitters outside this crate — which is why
 /// it is public. The generator coalesces duplicate cloud memberships only after
 /// every contributor carries the gate of the resource that needs it.
+///
+/// Blocks gated here bypass the generator post-pass, so its rendered-output
+/// scan never learns their addresses. That is safe today because IAM member
+/// blocks are leaves nothing else references; a binding another block starts
+/// referencing would need registration with the scan's gated addresses.
 pub fn gate_bindings(
     fragment: &mut TfFragment,
     appended_from: usize,
