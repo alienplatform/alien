@@ -2039,6 +2039,12 @@ async fn hash_typescript_dependency_inputs(
     targets: &[BinaryTarget],
     hasher: &mut Sha256,
 ) -> Result<()> {
+    for package_dir in discover_local_typescript_dependencies(src_dir).await? {
+        hasher.update(b"local-typescript-package");
+        hasher.update(package_dir.to_string_lossy().as_bytes());
+        hash_source_directory(&package_dir, hasher).await?;
+    }
+
     let scope_dir = src_dir.join("node_modules").join("@alienplatform");
     let Ok(entries) = std::fs::read_dir(&scope_dir) else {
         // No workspace packages installed — nothing extra to hash.
@@ -2098,6 +2104,77 @@ async fn hash_typescript_dependency_inputs(
     }
 
     Ok(())
+}
+
+async fn discover_local_typescript_dependencies(src_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut discovered = HashSet::new();
+    let mut pending = vec![src_dir.to_path_buf()];
+
+    while let Some(package_dir) = pending.pop() {
+        let manifest_path = package_dir.join("package.json");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let manifest_bytes = fs::read(&manifest_path).await.into_alien_error().context(
+            ErrorData::FileOperationFailed {
+                operation: "read file".to_string(),
+                file_path: manifest_path.display().to_string(),
+                reason: "Failed to read package.json for build cache key".to_string(),
+            },
+        )?;
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationError {
+                message: format!(
+                    "Failed to parse {} for build cache key",
+                    manifest_path.display()
+                ),
+            })?;
+
+        for dependency_group in [
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ] {
+            let Some(dependencies) = manifest
+                .get(dependency_group)
+                .and_then(serde_json::Value::as_object)
+            else {
+                continue;
+            };
+
+            for (name, spec) in dependencies {
+                let Some(spec) = spec.as_str() else {
+                    continue;
+                };
+                let dependency_path = if let Some(relative_path) = spec
+                    .strip_prefix("link:")
+                    .or_else(|| spec.strip_prefix("file:"))
+                {
+                    package_dir.join(relative_path)
+                } else if spec.starts_with("workspace:") {
+                    package_dir.join("node_modules").join(name)
+                } else {
+                    continue;
+                };
+
+                let Ok(real_path) = dependency_path.canonicalize() else {
+                    // Dependency installation reports the actionable error later.
+                    // A missing optional or peer workspace package should not make
+                    // cache-key generation fail by itself.
+                    continue;
+                };
+                if discovered.insert(real_path.clone()) {
+                    pending.push(real_path);
+                }
+            }
+        }
+    }
+
+    let mut packages: Vec<_> = discovered.into_iter().collect();
+    packages.sort();
+    Ok(packages)
 }
 
 async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
@@ -4135,6 +4212,68 @@ mod tests {
         .await
         .unwrap();
         std::fs::write(&addon, b"second-addon").unwrap();
+        let second = compute_source_artifact_cache_key(
+            app.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[tokio::test]
+    async fn typescript_cache_key_includes_transitive_linked_dependencies() {
+        let workspace = tempdir().unwrap();
+        let app = workspace.path().join("app");
+        let library = workspace.path().join("library");
+        let shared = workspace.path().join("shared");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(library.join("src")).unwrap();
+        std::fs::create_dir_all(shared.join("src")).unwrap();
+        std::fs::write(
+            app.join("package.json"),
+            r#"{"dependencies":{"library":"link:../library"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            library.join("package.json"),
+            r#"{"dependencies":{"shared":"file:../shared"}}"#,
+        )
+        .unwrap();
+        std::fs::write(shared.join("package.json"), r#"{"name":"shared"}"#).unwrap();
+        std::fs::write(app.join("src/index.ts"), "import 'library';\n").unwrap();
+        std::fs::write(library.join("src/index.ts"), "import 'shared';\n").unwrap();
+        std::fs::write(shared.join("src/index.ts"), "export const value = 1;\n").unwrap();
+
+        let toolchain = ToolchainConfig::TypeScript {
+            binary_name: Some("app".to_string()),
+        };
+        let targets = vec![BinaryTarget::LinuxArm64];
+        let settings = BuildSettings {
+            output_directory: workspace.path().join("out").to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let first = compute_source_artifact_cache_key(
+            app.to_str().unwrap(),
+            &toolchain,
+            &settings,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        std::fs::write(shared.join("src/index.ts"), "export const value = 2;\n").unwrap();
         let second = compute_source_artifact_cache_key(
             app.to_str().unwrap(),
             &toolchain,
