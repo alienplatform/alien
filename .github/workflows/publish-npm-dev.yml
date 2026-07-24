@@ -28,11 +28,11 @@ jobs:
       git_sha: ${{ steps.identity.outputs.git_sha }}
       short_sha: ${{ steps.identity.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source_ref }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           path: .npm-dev-tools
@@ -97,7 +97,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.git_sha }}
 
@@ -175,11 +175,11 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.git_sha }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           path: .npm-dev-tools
