@@ -19,7 +19,12 @@ import type {
 } from "openai/resources/responses/responses"
 
 import { isExternalAiBinding, parseAiBinding } from "./binding.js"
-import { AiTransportError, AiUpstreamError, BindingNotFoundError } from "./errors.js"
+import {
+  AiTransportError,
+  AiUpstreamError,
+  BindingNotFoundError,
+  UnsupportedProviderError,
+} from "./errors.js"
 import type { Gateway } from "./gateway.js"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,12 +76,31 @@ export interface ResponsesApi {
   ): Promise<AsyncIterable<ResponseStreamEvent>>
 }
 
+// The BYO-key providers we know the upstream base URL for. `_postSurface` attaches the
+// projected key as `Authorization: Bearer`, so this map is a security boundary, not a
+// convenience default: resolving an unlisted provider to some fallback host would ship the
+// customer's key to the wrong provider.
+const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
+  openai: "https://api.openai.com",
+  anthropic: "https://api.anthropic.com",
+}
+
 // Upstream base URL (no `/v1`) for a BYO-key provider. `ALIEN_AI_LOCAL_BASE_URL` overrides it so
-// any OpenAI-compatible provider works; unknown providers default to OpenAI's.
+// any OpenAI-compatible provider works locally; without an override we fail closed on an unknown
+// provider rather than defaulting it to OpenAI and leaking the key there.
 function providerBaseUrl(provider: string): string {
   const override = process.env.ALIEN_AI_LOCAL_BASE_URL
   if (override) return override.replace(/\/$/, "")
-  return provider === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com"
+  const base = KNOWN_PROVIDER_BASE_URLS[provider]
+  if (!base) {
+    throw new AlienError(
+      UnsupportedProviderError.create({
+        provider,
+        supported: Object.keys(KNOWN_PROVIDER_BASE_URLS),
+      }),
+    )
+  }
+  return base
 }
 
 // A small curated chat-model list for the BYO-key picker (we don't proxy the provider's own
