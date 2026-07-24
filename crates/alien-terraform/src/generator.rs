@@ -987,6 +987,26 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 }
 
 fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
+    // Distinct ids can normalize to the same variable name (`fooBar` and
+    // `foo_bar` both become `input_foo_bar`); the second declaration would
+    // silently shadow the first, so both values — gates included — would read
+    // from one variable.
+    let mut ids_by_variable: std::collections::HashMap<String, &str> =
+        std::collections::HashMap::new();
+    for input in inputs {
+        let variable = terraform_stack_input_variable_name(input);
+        if let Some(previous_id) = ids_by_variable.insert(variable.clone(), input.id.as_str()) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_terraform_module".to_string(),
+                reason: format!(
+                    "stack inputs '{previous_id}' and '{}' both normalize to Terraform \
+                     variable '{variable}'; rename one so every input keeps its own variable",
+                    input.id
+                ),
+            }));
+        }
+    }
+
     let secret_inputs: Vec<&str> = inputs
         .iter()
         .filter(|input| input.kind == StackInputKind::Secret)
