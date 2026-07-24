@@ -3,6 +3,8 @@ name: Tests
 on:
   pull_request:
   merge_group:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,12 +15,15 @@ env:
   # transient error (e.g. webdav 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
   SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: sccache
 
 jobs:
   pr-conventions:
     name: PR conventions
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.fork != true) &&
+      (github.event_name != 'push' ||
+      startsWith(github.event.head_commit.message, 'chore: release '))
     runs-on: ubuntu-latest
     steps:
       - name: Validate PR title and branch
@@ -78,6 +83,8 @@ jobs:
         continue-on-error: true
         with:
           version: v0.16.0
+      - name: Enable sccache when available
+        run: command -v sccache >/dev/null && echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV" || true
 
       - uses: taiki-e/install-action@nextest
 
@@ -180,6 +187,8 @@ jobs:
         continue-on-error: true
         with:
           version: v0.16.0
+      - name: Enable sccache when available
+        run: command -v sccache >/dev/null && echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV" || true
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -274,7 +283,9 @@ jobs:
     if: >-
       always() &&
       (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.fork != true)
+      github.event.pull_request.head.repo.fork != true) &&
+      (github.event_name != 'push' ||
+      startsWith(github.event.head_commit.message, 'chore: release '))
     needs: [pr-conventions, rust, typescript]
     runs-on: ubuntu-latest
     steps:
