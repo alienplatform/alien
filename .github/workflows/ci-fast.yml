@@ -1,4 +1,4 @@
-name: CI Fast
+name: Tests
 
 on:
   pull_request:
@@ -18,6 +18,7 @@ env:
 
 jobs:
   fast:
+    name: All tests passed
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 120
@@ -33,15 +34,21 @@ jobs:
       NEXTEST_TEST_THREADS: "10"
 
     steps:
-      - name: Validate PR title
+      - name: Validate PR title and branch
         if: github.event_name == 'pull_request'
         env:
           TITLE: ${{ github.event.pull_request.title }}
+          BRANCH: ${{ github.head_ref }}
+          ACTOR: ${{ github.actor }}
         run: |
-          if ! echo "$TITLE" | grep -qE '^(feat|fix|refactor|chore|docs|test|ci|perf)(\(.+\))?!?: .+'; then
+          if ! grep -qE '^(feat|fix|refactor|chore|docs|test|ci|perf|build|revert)(\([^)]+\))?!?: .+' <<< "$TITLE"; then
             echo "::error::PR title must follow Conventional Commits: <type>: <description>"
-            echo "  Valid types: feat, fix, refactor, chore, docs, test, ci, perf"
             echo "  Example: feat: add Azure container deployment support"
+            exit 1
+          fi
+          if [[ "$ACTOR" != "dependabot[bot]" && "$ACTOR" != "renovate[bot]" ]] &&
+             ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$BRANCH"; then
+            echo "::error::Branch must include its Linear issue, for example: alon/alien-123-azure-containers"
             exit 1
           fi
 
@@ -170,15 +177,10 @@ jobs:
           AXIOM_DATASET: dev
         run: |
           depot cargo nextest run --workspace \
-            --exclude alien-aws-clients \
-            --exclude alien-gcp-clients \
-            --exclude alien-azure-clients \
-            --exclude alien-k8s-clients \
-            --exclude alien-bindings \
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+            --filter-expr 'not (package(alien-aws-clients) and kind(test)) and not (package(alien-gcp-clients) and kind(test)) and not (package(alien-azure-clients) and kind(test)) and not (package(alien-bindings) and kind(test)) and not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
@@ -211,3 +213,9 @@ jobs:
           RUST_LOG: info
           VERBOSE: "true"
         run: pnpm test:examples
+
+      - name: Regenerate local TypeScript APIs
+        run: pnpm generate
+
+      - name: Check generated files are committed
+        run: git diff --exit-code -- packages/core packages/sdk
