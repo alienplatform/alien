@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   # Fall back to local compilation when the shared sccache backend returns a
@@ -87,8 +86,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
-
-      - uses: depot/setup-action@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.10
         continue-on-error: true
@@ -176,7 +173,7 @@ jobs:
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
           AXIOM_DATASET: dev
         run: |
-          depot cargo nextest run --workspace \
+          cargo nextest run --workspace \
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
@@ -184,7 +181,7 @@ jobs:
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-        run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-operator
+        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator
 
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
