@@ -134,6 +134,7 @@ function validateOcu(field: string, value: number, allowZero: boolean): void {
     Number.isInteger(value) &&
     value <= 1696 &&
     ((allowZero && value === 0) ||
+      value === 1 ||
       value === 2 ||
       value === 4 ||
       value === 8 ||
@@ -142,7 +143,7 @@ function validateOcu(field: string, value: number, allowZero: boolean): void {
 
   if (!supported) {
     throw new Error(
-      `OpenSearch ${field} must be ${allowZero ? "0, " : ""}2, 4, 8, 16, or a multiple of 16 up to 1696`,
+      `OpenSearch ${field} must be ${allowZero ? "0, " : ""}1, 2, 4, 8, 16, or a multiple of 16 up to 1696`,
     )
   }
 }

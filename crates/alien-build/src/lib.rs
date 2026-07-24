@@ -2631,6 +2631,7 @@ async fn build_target_to_file(
                 base_images,
                 settings.override_base_image.as_deref(),
                 workload,
+                toolchain_config,
             );
 
             if base_images_to_try.is_empty() {
@@ -2857,26 +2858,43 @@ fn effective_source_base_images(
         return vec![];
     }
 
-    let defaults = match workload {
-        toolchain::WorkloadKind::Worker => toolchain::WORKER_BASE_IMAGES,
-        toolchain::WorkloadKind::Container | toolchain::WorkloadKind::Daemon => {
-            toolchain::DIRECT_BASE_IMAGES
+    let defaults = match (workload, toolchain_config) {
+        (toolchain::WorkloadKind::Worker, alien_core::ToolchainConfig::TypeScript { .. }) => {
+            toolchain::typescript_worker_base_images()
         }
-    }
-    .iter()
-    .map(|image| (*image).to_string())
-    .collect::<Vec<_>>();
+        (toolchain::WorkloadKind::Worker, _) => toolchain::worker_base_images(),
+        (toolchain::WorkloadKind::Container, _) | (toolchain::WorkloadKind::Daemon, _) => {
+            toolchain::DIRECT_BASE_IMAGES
+                .iter()
+                .map(|image| (*image).to_string())
+                .collect()
+        }
+    };
 
-    base_images_for_workload(&defaults, settings.override_base_image.as_deref(), workload)
+    base_images_for_workload(
+        &defaults,
+        settings.override_base_image.as_deref(),
+        workload,
+        toolchain_config,
+    )
 }
 
-/// Apply a feature-versioned runtime base only to Worker source images.
+/// Apply a feature-versioned generic runtime base only to non-TypeScript
+/// Workers. TypeScript has its own language-base override, resolved by
+/// `typescript_worker_base_images`, so a mixed-language stack never places
+/// Rust applications on the TypeScript image or vice versa.
 fn base_images_for_workload(
     base_images: &[String],
     override_base_image: Option<&str>,
     workload: toolchain::WorkloadKind,
+    toolchain_config: &alien_core::ToolchainConfig,
 ) -> Vec<String> {
-    if workload == toolchain::WorkloadKind::Worker {
+    if workload == toolchain::WorkloadKind::Worker
+        && !matches!(
+            toolchain_config,
+            alien_core::ToolchainConfig::TypeScript { .. }
+        )
+    {
         if let Some(override_image) = override_base_image {
             return vec![override_image.to_string()];
         }
@@ -3303,9 +3321,13 @@ mod tests {
     fn runtime_base_override_only_applies_to_workers() {
         let direct_bases = vec!["cgr.dev/chainguard/wolfi-base:latest".to_string()];
         let runtime_base = "registry.example.com/alien-base:feature";
+        let rust = alien_core::ToolchainConfig::Rust {
+            binary_name: "worker".to_string(),
+        };
+        let typescript = alien_core::ToolchainConfig::TypeScript { binary_name: None };
 
         assert_eq!(
-            base_images_for_workload(&direct_bases, None, toolchain::WorkloadKind::Worker),
+            base_images_for_workload(&direct_bases, None, toolchain::WorkloadKind::Worker, &rust,),
             direct_bases,
             "without an override the declared default bases must be preserved"
         );
@@ -3314,15 +3336,26 @@ mod tests {
                 &direct_bases,
                 Some(runtime_base),
                 toolchain::WorkloadKind::Worker,
+                &rust,
             ),
             vec![runtime_base.to_string()]
+        );
+        assert_eq!(
+            base_images_for_workload(
+                &direct_bases,
+                Some(runtime_base),
+                toolchain::WorkloadKind::Worker,
+                &typescript,
+            ),
+            direct_bases,
+            "TypeScript Workers use their language-specific base override"
         );
         for workload in [
             toolchain::WorkloadKind::Container,
             toolchain::WorkloadKind::Daemon,
         ] {
             assert_eq!(
-                base_images_for_workload(&direct_bases, Some(runtime_base), workload),
+                base_images_for_workload(&direct_bases, Some(runtime_base), workload, &rust),
                 direct_bases,
                 "{} must not inherit the Worker runtime base",
                 workload.as_str()
