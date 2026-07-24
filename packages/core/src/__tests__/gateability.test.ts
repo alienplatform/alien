@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import * as alien from "../index"
+import * as alien from "../index.js"
 
 /**
  * The SDK's `.enabled()` surface asserted against the generated gateability
@@ -20,10 +20,7 @@ const builders: Record<string, () => object> = {
   queue: () => new alien.Queue("fixture"),
   vault: () => new alien.Vault("fixture"),
   postgres: () => new alien.Postgres("fixture"),
-  worker: () =>
-    new alien.Worker("fixture", {
-      code: { image: "example/image:latest" },
-    } as never),
+  worker: () => new alien.Worker("fixture"),
   daemon: () => new alien.Daemon("fixture"),
   container: () => new alien.Container("fixture"),
   email: () => new alien.Email("fixture"),
