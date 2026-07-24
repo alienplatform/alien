@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Vault,
+    Kv, LifecycleRule, ManagementPermissions, PermissionProfile, Queue, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -55,6 +55,27 @@ fn aws_storage_public_read_allows_get_object() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_storage_public_read", &module);
     assert_terraform_valid(&module, "aws_storage_public_read");
+}
+
+#[test]
+fn aws_remote_storage_management_dependencies_are_acyclic() {
+    let stack = Stack::new("acme-remote-storage".to_string())
+        .management(ManagementPermissions::override_(
+            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
+        ))
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    assert_terraform_valid(&module, "aws_remote_storage_management_dependencies");
 }
 
 #[test]

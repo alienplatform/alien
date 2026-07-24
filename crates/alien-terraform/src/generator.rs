@@ -631,6 +631,27 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             (resource_id.clone(), addresses)
         })
         .collect();
+    // Remote Storage grants refer back to the management identity. For the
+    // management -> storage bootstrap edge, wait for the physical storage
+    // resources but not the grants that cannot exist until management does.
+    let remote_storage_prerequisite_addresses: IndexMap<String, Vec<Expression>> = per_resource
+        .iter()
+        .filter(|(resource_id, _)| {
+            stack
+                .resources
+                .get(*resource_id)
+                .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage)
+        })
+        .map(|(resource_id, fragment)| {
+            let addresses = fragment
+                .resource_blocks
+                .iter()
+                .filter(|resource| !is_remote_storage_permission_support_resource(resource))
+                .filter_map(resource_address)
+                .collect();
+            (resource_id.clone(), addresses)
+        })
+        .collect();
 
     for (resource_id, entry) in stack.resources() {
         let Some(fragment) = per_resource.get_mut(resource_id) else {
@@ -642,7 +663,14 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             if dependency.id() == resource_id {
                 continue;
             }
-            if let Some(addresses) = dependency_addresses.get(dependency.id()) {
+            let addresses = if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+                remote_storage_prerequisite_addresses
+                    .get(dependency.id())
+                    .or_else(|| dependency_addresses.get(dependency.id()))
+            } else {
+                dependency_addresses.get(dependency.id())
+            };
+            if let Some(addresses) = addresses {
                 for address in addresses {
                     if !depends_on.contains(address) {
                         depends_on.push(address.clone());
@@ -727,6 +755,16 @@ fn stack_has_resource_type(stack: &Stack, resource_type: alien_core::ResourceTyp
 
 fn resource_inherits_stack_resource_dependencies(resource: &Block) -> bool {
     !is_gcp_iam_support_resource(resource)
+}
+
+fn is_remote_storage_permission_support_resource(resource: &Block) -> bool {
+    let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+        return false;
+    };
+
+    provider_type == "aws_iam_role_policy"
+        || provider_type == "google_storage_bucket_iam_member"
+        || provider_type == "azurerm_role_assignment"
 }
 
 fn is_gcp_iam_support_resource(resource: &Block) -> bool {
@@ -2906,7 +2944,7 @@ fn readme_kubernetes_destroy_order() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+    use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef, Storage};
 
     fn block_has_depends_on(block: &Block) -> bool {
         block.body.0.iter().any(|structure| {
@@ -3040,5 +3078,92 @@ mod tests {
 
         assert!(!block_has_depends_on(custom_role));
         assert!(block_has_depends_on(topic));
+    }
+
+    #[test]
+    fn remote_management_waits_for_storage_but_not_its_back_referencing_grant() {
+        let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "files");
+        let stack = Stack::new("test".to_string())
+            .add_with_remote_access(
+                Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_dependencies(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                vec![storage_ref.clone()],
+            )
+            .add_with_dependencies(
+                Queue::new("queue".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                vec![storage_ref],
+            )
+            .build();
+
+        let mut per_resource = IndexMap::new();
+        per_resource.insert(
+            "files".to_string(),
+            TfFragment {
+                resource_blocks: vec![
+                    resource_block(
+                        "aws_s3_bucket",
+                        "files",
+                        [attr("bucket", Expression::String("files".to_string()))],
+                    ),
+                    resource_block(
+                        "aws_iam_role_policy",
+                        "files_management_storage",
+                        [attr("role", expr::traversal(["aws_iam_role", "management", "id"]))],
+                    ),
+                ],
+                ..TfFragment::default()
+            },
+        );
+        per_resource.insert(
+            "management".to_string(),
+            TfFragment {
+                resource_blocks: vec![resource_block(
+                    "aws_iam_role",
+                    "management",
+                    [attr("name", Expression::String("management".to_string()))],
+                )],
+                ..TfFragment::default()
+            },
+        );
+        per_resource.insert(
+            "queue".to_string(),
+            TfFragment {
+                resource_blocks: vec![resource_block(
+                    "aws_sqs_queue",
+                    "queue",
+                    [attr("name", Expression::String("queue".to_string()))],
+                )],
+                ..TfFragment::default()
+            },
+        );
+
+        apply_resource_dependencies(&stack, &mut per_resource);
+
+        let management = render_body(Body::from(vec![Structure::Block(
+            per_resource
+                .get("management")
+                .expect("management fragment")
+                .resource_blocks[0]
+                .clone(),
+        )]))
+        .expect("management renders");
+        assert!(management.contains("aws_s3_bucket.files"));
+        assert!(!management.contains("aws_iam_role_policy.files_management_storage"));
+
+        let queue = render_body(Body::from(vec![Structure::Block(
+            per_resource
+                .get("queue")
+                .expect("queue fragment")
+                .resource_blocks[0]
+                .clone(),
+        )]))
+        .expect("queue renders");
+        assert!(queue.contains("aws_s3_bucket.files"));
+        assert!(queue.contains("aws_iam_role_policy.files_management_storage"));
     }
 }

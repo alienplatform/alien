@@ -10,9 +10,10 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
     ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
-    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform,
+    RemoteStackManagement, Result, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -829,6 +830,31 @@ fn apply_resource_dependencies(
             (resource_id.clone(), targets)
         })
         .collect();
+    // Remote Storage grants refer back to the management role. For the
+    // management -> storage bootstrap edge, wait for the bucket resources but
+    // not the grants that cannot exist until management does.
+    let remote_storage_prerequisite_targets: IndexMap<String, Vec<String>> = emitted_resource_ids
+        .iter()
+        .filter(|(resource_id, _)| {
+            stack
+                .resources
+                .get(*resource_id)
+                .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage)
+        })
+        .map(|(resource_id, logical_ids)| {
+            let targets = logical_ids
+                .iter()
+                .filter(|logical_id| {
+                    template.resources.get(*logical_id).is_some_and(|resource| {
+                        resource.condition.is_none()
+                            && !is_remote_storage_permission_support_resource(resource)
+                    })
+                })
+                .cloned()
+                .collect();
+            (resource_id.clone(), targets)
+        })
+        .collect();
 
     for (resource_id, entry) in stack.resources() {
         let Some(resource_logical_ids) = emitted_resource_ids.get(resource_id) else {
@@ -840,7 +866,14 @@ fn apply_resource_dependencies(
             if dependency.id() == resource_id {
                 continue;
             }
-            if let Some(targets) = dependency_targets.get(dependency.id()) {
+            let targets = if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+                remote_storage_prerequisite_targets
+                    .get(dependency.id())
+                    .or_else(|| dependency_targets.get(dependency.id()))
+            } else {
+                dependency_targets.get(dependency.id())
+            };
+            if let Some(targets) = targets {
                 for target in targets {
                     if !depends_on.contains(target) {
                         depends_on.push(target.clone());
@@ -864,6 +897,10 @@ fn apply_resource_dependencies(
             }
         }
     }
+}
+
+fn is_remote_storage_permission_support_resource(resource: &CfResource) -> bool {
+    resource.resource_type == "AWS::IAM::Policy"
 }
 
 fn add_standard_parameters(
