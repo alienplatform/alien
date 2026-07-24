@@ -13,7 +13,6 @@
 //! and a dependent of a gated resource looks up outputs that will not be there.
 
 use crate::error::Result;
-use crate::mutations::secrets_vault::SECRETS_VAULT_ID;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Platform, Stack, StackInputKind, StackInputProvider};
 use std::collections::HashMap;
@@ -209,6 +208,7 @@ fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutations::secrets_vault::SECRETS_VAULT_ID;
     use alien_core::{
         permissions::PermissionProfile, Kv, Storage, ResourceLifecycle, StackInputDefinition,
         Vault, Worker, WorkerCode,
