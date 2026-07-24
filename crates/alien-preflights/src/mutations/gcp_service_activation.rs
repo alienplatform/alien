@@ -20,6 +20,7 @@ use tracing::{debug, info};
 /// - role: iam.googleapis.com + cloudresourcemanager.googleapis.com
 /// - artifact-registry: artifactregistry.googleapis.com
 /// - kv: firestore.googleapis.com (Firestore)
+/// - ai: aiplatform.googleapis.com (Vertex AI)
 /// - queue: pubsub.googleapis.com (Pub/Sub)
 /// - vault: secretmanager.googleapis.com (Secret Manager)
 /// - postgres: sqladmin.googleapis.com (Cloud SQL) + compute.googleapis.com (PSC) + secretmanager.googleapis.com (connection secret)
@@ -159,6 +160,15 @@ impl GcpServiceActivationMutation {
                         "firestore.googleapis.com".to_string(),
                     );
                 }
+                "ai" => {
+                    // Vertex AI. The native controller enables this at runtime, but a
+                    // Frozen/Terraform GCP deploy relies on this activation being injected
+                    // here, otherwise the first Vertex call fails with SERVICE_DISABLED.
+                    services.insert(
+                        "enable-aiplatform".to_string(),
+                        "aiplatform.googleapis.com".to_string(),
+                    );
+                }
                 "queue" => {
                     services.insert(
                         "enable-pubsub".to_string(),
@@ -229,5 +239,24 @@ impl GcpServiceActivationMutation {
         }
 
         services
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Ai, ResourceLifecycle, Stack};
+
+    #[test]
+    fn ai_resource_requires_vertex_aiplatform() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+            .build();
+        let services = GcpServiceActivationMutation.get_required_services(&stack);
+        assert_eq!(
+            services.get("enable-aiplatform").map(String::as_str),
+            Some("aiplatform.googleapis.com"),
+            "a GCP AI resource must inject Vertex AI enablement for the Terraform/Frozen path"
+        );
     }
 }
