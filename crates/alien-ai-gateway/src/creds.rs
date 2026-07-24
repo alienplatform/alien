@@ -4,8 +4,8 @@
 //! ambient identity and never reads a static key from the binding or env:
 //! - AWS: SigV4-sign using the SDK default chain (env / profile / SSO / IMDS /
 //!   IRSA), which on a workload is the instance role. The signing service name is
-//!   per-request: `bedrock` for the OpenAI-compatible endpoint, `bedrock-mantle`
-//!   for the Anthropic Messages endpoint.
+//!   per-request: `bedrock` for the OpenAI-compatible chat/completions endpoint and
+//!   for Claude over classic InvokeModel, `bedrock-mantle` for the Responses API.
 //! - GCP / Azure: attach a bearer token fetched from the instance metadata service
 //!   (GCE metadata server / Azure IMDS), cached until shortly before it expires.
 
