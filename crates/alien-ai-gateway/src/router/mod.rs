@@ -11,7 +11,7 @@ use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -89,6 +89,10 @@ pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
         .route("/{binding}/v1/messages", post(proxy))
         .route("/{binding}/v1/responses", post(proxy_responses))
         .route("/{binding}/v1/models", get(list_models))
+        // This is a pure proxy, so the upstream enforces its own body size. Without
+        // this, axum's 2 MB default rejects legitimate large requests (base64 vision
+        // images, long tool-heavy conversations) with 413 before they ever leave us.
+        .layer(DefaultBodyLimit::disable())
         .with_state(state)
 }
 
