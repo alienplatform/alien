@@ -18,6 +18,7 @@ mod built_ins;
 mod emitter;
 pub mod emitters;
 pub mod expr;
+mod gating;
 mod generator;
 mod k8s_identity;
 mod naming;

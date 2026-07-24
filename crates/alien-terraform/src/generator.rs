@@ -2991,45 +2991,38 @@ mod tests {
         let mut per_resource = IndexMap::new();
         per_resource.insert(
             "queue".to_string(),
-            TfFragment {
-                resource_blocks: vec![
-                    resource_block(
-                        "google_project_iam_custom_role",
-                        "gcp_role_queue_heartbeat_part1",
-                        [
-                            attr("project", expr::raw("var.gcp_project")),
-                            attr("role_id", Expression::String("role_test".to_string())),
-                        ],
-                    ),
-                    resource_block(
-                        "google_pubsub_topic",
-                        "queue",
-                        [attr("name", Expression::String("queue".to_string()))],
-                    ),
-                ],
-                ..TfFragment::default()
-            },
+            TfFragment::default()
+                .with_resource(resource_block(
+                    "google_project_iam_custom_role",
+                    "gcp_role_queue_heartbeat_part1",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("role_id", Expression::String("role_test".to_string())),
+                    ],
+                ))
+                .with_resource(resource_block(
+                    "google_pubsub_topic",
+                    "queue",
+                    [attr("name", Expression::String("queue".to_string()))],
+                )),
         );
         per_resource.insert(
             "management".to_string(),
-            TfFragment {
-                resource_blocks: vec![resource_block(
-                    "google_project_iam_member",
-                    "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
-                    [
-                        attr("project", expr::raw("var.gcp_project")),
-                        attr(
-                            "role",
-                            expr::traversal([
-                                "google_project_iam_custom_role",
-                                "gcp_role_queue_heartbeat_part1",
-                                "name",
-                            ]),
-                        ),
-                    ],
-                )],
-                ..TfFragment::default()
-            },
+            TfFragment::default().with_resource(resource_block(
+                "google_project_iam_member",
+                "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
+                [
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "role",
+                        expr::traversal([
+                            "google_project_iam_custom_role",
+                            "gcp_role_queue_heartbeat_part1",
+                            "name",
+                        ]),
+                    ),
+                ],
+            )),
         );
 
         apply_resource_dependencies(&stack, &mut per_resource);
