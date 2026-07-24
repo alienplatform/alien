@@ -1,0 +1,20 @@
+# The generic Worker runtime remains language-neutral. TypeScript Workers add
+# Bun and the target native addon once in this shared, versioned layer;
+# application images then contain only their bundle and source map.
+ARG ALIEN_WORKER_BASE=ghcr.io/alienplatform/alien-base:latest
+
+FROM docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS bun-runtime
+
+FROM docker.io/chainguard/wolfi-base:latest AS addon-selector
+COPY crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node /tmp/alien-bindings-arm64.node
+COPY crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node /tmp/alien-bindings-amd64.node
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+       amd64) cp /tmp/alien-bindings-amd64.node /tmp/alien-bindings.node ;; \
+       arm64) cp /tmp/alien-bindings-arm64.node /tmp/alien-bindings.node ;; \
+    esac
+
+FROM ${ALIEN_WORKER_BASE}
+
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=addon-selector --chmod=644 --chown=nonroot:nonroot /tmp/alien-bindings.node /app/alien-bindings.node

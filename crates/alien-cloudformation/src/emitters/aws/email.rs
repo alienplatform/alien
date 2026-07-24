@@ -14,13 +14,10 @@
 //! `S3Action` writes raw incoming mail into the linked storage bucket (the
 //! bucket policy statement that allows `ses.amazonaws.com` writes is emitted
 //! by the storage emitter — S3 supports only one bucket policy resource per
-//! bucket).
-//!
-//! Post-deploy caveat: SES allows only one **active** receipt rule set per
-//! account and CloudFormation has no resource that activates one, so the
-//! provisioned rule set must be activated manually:
-//! `aws ses set-active-receipt-rule-set --rule-set-name <name>`.
-//! SES email receiving is also only available in a subset of regions;
+//! bucket). Because CloudFormation has no native resource for the account-wide
+//! active receipt rule set, a stack-local custom resource activates the
+//! provisioned rule set after its receipt rule is ready and deactivates it
+//! before deletion. SES email receiving is only available in a subset of regions;
 //! deploying `inbound` elsewhere fails at the CloudFormation layer.
 
 use crate::{
@@ -46,6 +43,36 @@ use std::collections::BTreeSet;
 /// Permission-set id prefix for this resource type.
 const PERMISSION_SET_PREFIX: &str = "email/";
 
+const ACTIVE_RULE_SET_HANDLER: &str = r#"import boto3
+import cfnresponse
+
+ses = boto3.client("ses")
+
+def handler(event, context):
+    desired = event["ResourceProperties"]["RuleSetName"]
+    physical_id = event.get("PhysicalResourceId", desired)
+    try:
+        if event["RequestType"] == "Delete":
+            active = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+            if active == physical_id:
+                ses.set_active_receipt_rule_set()
+        else:
+            ses.set_active_receipt_rule_set(RuleSetName=desired)
+            physical_id = desired
+        cfnresponse.send(
+            event, context, cfnresponse.SUCCESS, {}, physicalResourceId=physical_id
+        )
+    except Exception as error:
+        cfnresponse.send(
+            event,
+            context,
+            cfnresponse.FAILED,
+            {},
+            physicalResourceId=physical_id,
+            reason=str(error),
+        )
+"#;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsEmailEmitter;
 
@@ -62,6 +89,7 @@ impl CfEmitter for AwsEmailEmitter {
     ) -> Result<Vec<CfResource>> {
         let email = resource_config::<Email>(ctx, Email::RESOURCE_TYPE)?;
         validate_domains(email)?;
+        validate_inbound_topology(ctx)?;
         let logical_id = required_logical_id(ctx)?;
 
         let config_set_id = format!("{logical_id}ConfigSet");
@@ -112,7 +140,7 @@ impl CfEmitter for AwsEmailEmitter {
                 &Storage::RESOURCE_TYPE,
                 "inbound.storage",
             )?;
-            resources.extend(inbound_resources(email, logical_id, bucket_id));
+            resources.extend(inbound_resources(ctx, email, logical_id, bucket_id));
         }
 
         resources.extend(email_iam_policies(ctx, email, logical_id)?);
@@ -212,6 +240,32 @@ fn validate_domains(email: &Email) -> Result<()> {
                 ),
             }));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_inbound_topology(ctx: &EmitContext<'_>) -> Result<()> {
+    let inbound_email_ids = ctx
+        .stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            entry
+                .config
+                .downcast_ref::<Email>()
+                .filter(|email| email.inbound.is_some())
+                .map(|_| id.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    if inbound_email_ids.len() > 1 {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "AWS stacks may contain only one email resource with inbound delivery because \
+                 SES has one active receipt rule set per account and region; found: {}",
+                inbound_email_ids.join(", ")
+            ),
+        }));
     }
 
     Ok(())
@@ -380,8 +434,16 @@ fn event_resources(
 /// bucket. The rule depends on the bucket policy resource emitted by the
 /// storage emitter, because SES validates its write access to the bucket
 /// when the rule is created.
-fn inbound_resources(email: &Email, logical_id: &str, bucket_id: &str) -> Vec<CfResource> {
+fn inbound_resources(
+    ctx: &EmitContext<'_>,
+    email: &Email,
+    logical_id: &str,
+    bucket_id: &str,
+) -> Vec<CfResource> {
     let rule_set_id = format!("{logical_id}RuleSet");
+    let activator_role_id = format!("{logical_id}RuleSetActivatorRole");
+    let activator_function_id = format!("{logical_id}RuleSetActivatorFunction");
+    let activation_id = format!("{logical_id}RuleSetActivation");
 
     let mut rule_set = CfResource::new(rule_set_id.clone(), "AWS::SES::ReceiptRuleSet".to_string());
     rule_set
@@ -418,7 +480,129 @@ fn inbound_resources(email: &Email, logical_id: &str, bucket_id: &str) -> Vec<Cf
     // allows ses.amazonaws.com to write; SES rejects the rule without it.
     rule.depends_on.push(format!("{bucket_id}BucketPolicy"));
 
-    vec![rule_set, rule]
+    let mut activator_role =
+        CfResource::new(activator_role_id.clone(), "AWS::IAM::Role".to_string());
+    activator_role.properties.insert(
+        "AssumeRolePolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Effect", CfExpression::from("Allow")),
+                    (
+                        "Principal",
+                        CfExpression::object([(
+                            "Service",
+                            CfExpression::from("lambda.amazonaws.com"),
+                        )]),
+                    ),
+                    ("Action", CfExpression::from("sts:AssumeRole")),
+                ])]),
+            ),
+        ]),
+    );
+    activator_role.properties.insert(
+        "Policies".to_string(),
+        CfExpression::list([CfExpression::object([
+            (
+                "PolicyName",
+                CfExpression::from("activate-ses-receipt-rule-set"),
+            ),
+            (
+                "PolicyDocument",
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list([
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                (
+                                    "Action",
+                                    CfExpression::list([
+                                        CfExpression::from(
+                                            "ses:DescribeActiveReceiptRuleSet",
+                                        ),
+                                        CfExpression::from("ses:SetActiveReceiptRuleSet"),
+                                    ]),
+                                ),
+                                ("Resource", CfExpression::from("*")),
+                            ]),
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                (
+                                    "Action",
+                                    CfExpression::list([
+                                        CfExpression::from("logs:CreateLogGroup"),
+                                        CfExpression::from("logs:CreateLogStream"),
+                                        CfExpression::from("logs:PutLogEvents"),
+                                    ]),
+                                ),
+                                (
+                                    "Resource",
+                                    CfExpression::sub(
+                                        "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*",
+                                    ),
+                                ),
+                            ]),
+                        ]),
+                    ),
+                ]),
+            ),
+        ])]),
+    );
+
+    let mut activator_function = CfResource::new(
+        activator_function_id.clone(),
+        "AWS::Lambda::Function".to_string(),
+    );
+    activator_function
+        .properties
+        .insert("Runtime".to_string(), CfExpression::from("python3.13"));
+    activator_function
+        .properties
+        .insert("Handler".to_string(), CfExpression::from("index.handler"));
+    activator_function.properties.insert(
+        "Role".to_string(),
+        CfExpression::get_att(&activator_role_id, "Arn"),
+    );
+    activator_function.properties.insert(
+        "Code".to_string(),
+        CfExpression::object([("ZipFile", CfExpression::from(ACTIVE_RULE_SET_HANDLER))]),
+    );
+    activator_function
+        .properties
+        .insert("Timeout".to_string(), CfExpression::from(60_u32));
+    activator_function
+        .properties
+        .insert("Tags".to_string(), tags(ctx));
+    activator_function
+        .depends_on
+        .push(activator_role_id.clone());
+
+    let mut activation = CfResource::new(
+        activation_id,
+        "AWS::CloudFormation::CustomResource".to_string(),
+    );
+    activation.properties.insert(
+        "ServiceToken".to_string(),
+        CfExpression::get_att(&activator_function_id, "Arn"),
+    );
+    activation
+        .properties
+        .insert("RuleSetName".to_string(), CfExpression::ref_(&rule_set_id));
+    activation
+        .depends_on
+        .push(format!("{logical_id}InboundRule"));
+
+    vec![
+        rule_set,
+        rule,
+        activator_role,
+        activator_function,
+        activation,
+    ]
 }
 
 /// IAM policies attaching granted `email/*` permission sets (send /

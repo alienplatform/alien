@@ -30,12 +30,16 @@ use crate::{
     Result,
 };
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, StackState};
+use alien_error::ContextError as _;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
 const CHECKPOINT_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const CHECKPOINT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
+const LEASE_RENEW_FAILURE_DEADLINE: Duration = Duration::from_secs(4 * 60);
+const MAX_INLINE_WAIT_PER_RUN: Duration = Duration::from_secs(30);
 
 /// Policy configuration for the runner.
 pub struct RunnerPolicy {
@@ -59,6 +63,7 @@ impl Default for RunnerPolicy {
 }
 
 /// Result of running the step loop.
+#[derive(Debug)]
 pub struct RunnerResult {
     /// The loop classification result (stop reason + outcome + final status).
     pub loop_result: LoopResult,
@@ -147,6 +152,8 @@ async fn run_step_loop_inner(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
+    let mut inline_wait_spent = Duration::ZERO;
+
     if !state.has_desired() {
         let service_provider = service_provider
             .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
@@ -184,6 +191,11 @@ async fn run_step_loop_inner(
                             *config = updated_config;
                         }
                         break;
+                    }
+                    Err(e) if !e.retryable => {
+                        return Err(e.context(crate::ErrorData::DeploymentCheckpointFailed {
+                            message: "the observed deployment state was not accepted".to_string(),
+                        }))
                     }
                     Err(e) => {
                         warn!(
@@ -243,14 +255,50 @@ async fn run_step_loop_inner(
             "Running deployment step"
         );
 
-        let step_result = match step(
+        let step_future = step(
             state.clone(),
             config.clone(),
             client_config.clone(),
             service_provider.clone(),
-        )
-        .await
-        {
+        );
+        tokio::pin!(step_future);
+        let mut renew_interval = tokio::time::interval(LEASE_RENEW_INTERVAL);
+        renew_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first interval tick is immediate; the lease was just acquired.
+        renew_interval.tick().await;
+        let mut last_successful_renewal = tokio::time::Instant::now();
+
+        let step_result = loop {
+            tokio::select! {
+                result = &mut step_future => break result,
+                _ = renew_interval.tick() => {
+                    match transport.renew_lease(deployment_id, state, config).await {
+                        Ok(()) => last_successful_renewal = tokio::time::Instant::now(),
+                        Err(error) if !error.retryable => {
+                            return Err(error.context(crate::ErrorData::DeploymentLeaseLost {
+                                message: "the active session no longer owns the deployment"
+                                    .to_string(),
+                            }))
+                        }
+                        Err(error) if last_successful_renewal.elapsed() >= LEASE_RENEW_FAILURE_DEADLINE => {
+                            return Err(error.context(crate::ErrorData::DeploymentLeaseLost {
+                                message: "the lease could not be renewed before its safety deadline"
+                                    .to_string(),
+                            }));
+                        }
+                        Err(error) => {
+                            warn!(
+                                deployment_id = %deployment_id,
+                                error = %error,
+                                "Failed to renew deployment lease; will retry before the lease deadline"
+                            );
+                        }
+                    }
+                }
+            }
+        };
+
+        let step_result = match step_result {
             Ok(step_result) => step_result,
             Err(error) => {
                 let deployment_error = error.into_generic();
@@ -271,6 +319,11 @@ async fn run_step_loop_inner(
                                 *config = updated_config;
                             }
                             break;
+                        }
+                        Err(e) if !e.retryable => {
+                            return Err(e.context(crate::ErrorData::DeploymentCheckpointFailed {
+                                message: "the failed deployment state was not accepted".to_string(),
+                            }))
                         }
                         Err(e) => {
                             warn!(
@@ -355,6 +408,11 @@ async fn run_step_loop_inner(
                     }
                     break;
                 }
+                Err(e) if !e.retryable => {
+                    return Err(e.context(crate::ErrorData::DeploymentCheckpointFailed {
+                        message: "the deployment state was not accepted".to_string(),
+                    }))
+                }
                 Err(e) => {
                     warn!(
                         deployment_id = %deployment_id,
@@ -389,8 +447,11 @@ async fn run_step_loop_inner(
 
         // Handle suggested delays
         if let Some(delay_ms) = suggested_delay_ms {
+            let delay = Duration::from_millis(delay_ms);
             if let Some(threshold) = policy.delay_threshold {
-                if Duration::from_millis(delay_ms) > threshold {
+                if delay > threshold
+                    || inline_wait_spent.saturating_add(delay) > MAX_INLINE_WAIT_PER_RUN
+                {
                     debug!(
                         deployment_id = %deployment_id,
                         delay_ms = delay_ms,
@@ -406,7 +467,8 @@ async fn run_step_loop_inner(
                     });
                 }
             }
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            tokio::time::sleep(delay).await;
+            inline_wait_spent = inline_wait_spent.saturating_add(delay);
         }
     }
 
@@ -470,9 +532,10 @@ mod tests {
         EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle,
         Stack, StackSettings, StackState, Worker, WorkerCode, DEPLOYMENT_PROTOCOL_VERSION,
     };
-    use alien_error::GenericError;
+    use alien_error::AlienErrorData;
     use async_trait::async_trait;
     use indexmap::IndexMap;
+    use serde::{Deserialize, Serialize};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
@@ -482,6 +545,22 @@ mod tests {
     struct FailFirstCheckpointTransport {
         attempts: AtomicUsize,
         checkpointed_statuses: Mutex<Vec<DeploymentStatus>>,
+    }
+
+    #[derive(Debug, Default)]
+    struct TerminalCheckpointTransport {
+        attempts: AtomicUsize,
+    }
+
+    #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
+    enum TestTransportError {
+        #[error(
+            code = "TEST_TRANSIENT_CHECKPOINT",
+            message = "Transient checkpoint failure",
+            retryable = "true",
+            internal = "true"
+        )]
+        TransientCheckpoint,
     }
 
     #[async_trait]
@@ -503,15 +582,35 @@ mod tests {
 
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
-                return Err(alien_error::AlienError::new(GenericError {
-                    message: "simulated checkpoint failure".to_string(),
-                }));
+                return Err(
+                    alien_error::AlienError::new(TestTransportError::TransientCheckpoint)
+                        .into_generic(),
+                );
             }
 
             Ok(StepReconcileResult {
                 state: None,
                 config: None,
             })
+        }
+    }
+
+    #[async_trait]
+    impl DeploymentLoopTransport for TerminalCheckpointTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            _state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            Err(alien_error::AlienError::new(alien_error::GenericError {
+                message: "the deployment lease is no longer owned".to_string(),
+            }))
         }
     }
 
@@ -639,6 +738,35 @@ mod tests {
             ],
             "checkpoint retry must persist the same produced state, not run another step"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stops_immediately_when_checkpoint_rejection_is_terminal() {
+        let transport = TerminalCheckpointTransport::default();
+        let mut state = test_state();
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 2,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let error = run_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect_err("terminal checkpoint rejection must stop the active runner");
+
+        assert_eq!(error.code, "DEPLOYMENT_CHECKPOINT_FAILED");
+        assert!(!error.retryable);
+        assert_eq!(transport.attempts.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]

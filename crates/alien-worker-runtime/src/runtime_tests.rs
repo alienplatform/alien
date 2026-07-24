@@ -98,6 +98,7 @@ async fn child_exit_stops_and_joins_transport_listener() {
         Arc::new(WaitUntilGrpcServer::new()),
         &mut child,
         shutdown_rx,
+        None,
     )
     .await
     .expect("successful child exit should stop transport");
@@ -132,6 +133,7 @@ async fn normal_shutdown_stops_listener_and_child_before_returning() {
         Arc::new(WaitUntilGrpcServer::new()),
         &mut child,
         shutdown_rx,
+        None,
     )
     .await
     .expect("normal shutdown");

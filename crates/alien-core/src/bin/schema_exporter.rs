@@ -87,6 +87,8 @@ use utoipa::OpenApi;
     Kv,
     KvOutputs,
     AwsOpenSearch,
+    AwsOpenSearchCapacity,
+    AwsOpenSearchCapacityRange,
     AwsOpenSearchCollectionType,
     AwsOpenSearchOutputs,
     Postgres,

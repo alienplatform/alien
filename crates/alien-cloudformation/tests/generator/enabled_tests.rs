@@ -369,8 +369,9 @@ fn the_outputs_fallback_omits_a_declined_resource() {
             "a declined resource must leave nothing behind, but the payload \
              carries a null with the gate {answer}: {text}"
         );
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .unwrap_or_else(|error| panic!("resources output should be valid JSON: {error}\n{text}"));
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|error| {
+            panic!("resources output should be valid JSON: {error}\n{text}")
+        });
         let serde_json::Value::Array(entries) = parsed else {
             panic!("resources output should be a JSON array: {text}");
         };

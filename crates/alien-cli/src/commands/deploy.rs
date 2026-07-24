@@ -332,7 +332,7 @@ fn collect_raw_input_values(
     }
     for input in input_values {
         let (id, value) = parse_stack_input_arg(input, "--input")?;
-        values.insert(id, serde_json::Value::String(value));
+        values.insert(id, parse_raw_stack_input_value(&value));
     }
     for input in secret_input_values {
         let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
@@ -340,6 +340,60 @@ fn collect_raw_input_values(
     }
 
     Ok(values)
+}
+
+fn parse_raw_stack_input_value(value: &str) -> serde_json::Value {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(values) => {
+            serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect())
+        }
+        Err(_) => serde_json::Value::String(value.to_string()),
+    }
+}
+
+fn to_sdk_stack_input_values(
+    values: &HashMap<String, serde_json::Value>,
+) -> Result<HashMap<String, alien_platform_api::types::StackInputValueRequest>> {
+    values
+        .iter()
+        .map(|(id, value)| {
+            let value = match value {
+                serde_json::Value::String(value) => {
+                    alien_platform_api::types::StackInputValueRequest::Variant0(value.clone())
+                }
+                serde_json::Value::Number(value) => {
+                    let value = value.as_f64().ok_or_else(|| {
+                        AlienError::new(ErrorData::ValidationError {
+                            field: id.clone(),
+                            message: "Stack input number must be finite.".to_string(),
+                        })
+                    })?;
+                    alien_platform_api::types::StackInputValueRequest::Variant1(value)
+                }
+                serde_json::Value::Bool(value) => {
+                    alien_platform_api::types::StackInputValueRequest::Variant2(*value)
+                }
+                serde_json::Value::Array(values)
+                    if values.iter().all(serde_json::Value::is_string) =>
+                {
+                    alien_platform_api::types::StackInputValueRequest::Variant3(
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(ToString::to_string))
+                            .collect(),
+                    )
+                }
+                _ => {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: id.clone(),
+                        message: "Stack input must be a string, number, boolean, or string list."
+                            .to_string(),
+                    }));
+                }
+            };
+            Ok((id.clone(), value))
+        })
+        .collect()
 }
 
 fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
@@ -1074,7 +1128,9 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 environment_variables: None,
                                 deployment_group_id: None,
                                 environment_info: None,
-                                input_values: HashMap::new(),
+                                input_values: to_sdk_stack_input_values(
+                                    &resolved_args.input_values,
+                                )?,
                                 public_subdomain: None,
                                 initial_desired_release: alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
                                 setup_method: None,
@@ -1663,5 +1719,62 @@ mod tests {
 
         assert!(!uses_push_deployment_model(Platform::Kubernetes));
         assert!(!uses_push_deployment_model(Platform::Local));
+    }
+
+    #[test]
+    fn raw_stack_input_values_accept_json_string_lists() {
+        assert_eq!(
+            parse_raw_stack_input_value(r#"["one.example","two.example"]"#),
+            serde_json::json!(["one.example", "two.example"])
+        );
+        assert_eq!(
+            parse_raw_stack_input_value("one.example,two.example"),
+            serde_json::json!("one.example,two.example")
+        );
+        assert_eq!(
+            parse_raw_stack_input_value("true"),
+            serde_json::json!("true")
+        );
+    }
+
+    #[test]
+    fn resolved_stack_input_values_reach_platform_request_types() {
+        let values = HashMap::from([
+            ("domain".to_string(), serde_json::json!("mail.example")),
+            (
+                "domains".to_string(),
+                serde_json::json!(["a.example", "b.example"]),
+            ),
+            ("enabled".to_string(), serde_json::json!(true)),
+            ("replicas".to_string(), serde_json::json!(2)),
+        ]);
+
+        let converted = to_sdk_stack_input_values(&values).expect("valid inputs should convert");
+        assert!(matches!(
+            converted.get("domain"),
+            Some(alien_platform_api::types::StackInputValueRequest::Variant0(value))
+                if value == "mail.example"
+        ));
+        assert!(matches!(
+            converted.get("domains"),
+            Some(alien_platform_api::types::StackInputValueRequest::Variant3(values))
+                if values == &["a.example".to_string(), "b.example".to_string()]
+        ));
+        assert!(matches!(
+            converted.get("enabled"),
+            Some(alien_platform_api::types::StackInputValueRequest::Variant2(
+                true
+            ))
+        ));
+        assert!(matches!(
+            converted.get("replicas"),
+            Some(alien_platform_api::types::StackInputValueRequest::Variant1(value))
+                if (*value - 2.0).abs() < f64::EPSILON
+        ));
+
+        let invalid = HashMap::from([("nested".to_string(), serde_json::json!({ "x": 1 }))]);
+        let error = to_sdk_stack_input_values(&invalid)
+            .expect_err("object-valued stack inputs should be rejected");
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 }

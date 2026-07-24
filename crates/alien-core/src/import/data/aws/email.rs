@@ -18,8 +18,7 @@ pub struct AwsEmailImportData {
     pub configuration_set: String,
     /// Per-seed-domain DNS data, keyed by mail domain.
     pub domains: BTreeMap<String, AwsEmailDomainImportData>,
-    /// SES receipt rule set name, present only when inbound mail is
-    /// configured. Activating the rule set is a manual post-deploy step.
+    /// SES receipt rule set name, present only when inbound mail is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_set_name: Option<String>,
 }

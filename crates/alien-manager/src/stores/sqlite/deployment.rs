@@ -1335,6 +1335,30 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
+    async fn renew_lease(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        session: &str,
+        _state: &alien_core::DeploymentState,
+    ) -> Result<(), AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::LockedAt, Utc::now().to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+            .and_where(Expr::col(Deployments::LockedBy).eq(session))
+            .to_string(SqliteQueryBuilder);
+        let rows_affected = self.db.execute_returning_rows_affected(&sql).await?;
+        if rows_affected == 0 {
+            return Err(AlienError::new(crate::error::ErrorData::DeploymentLocked {
+                deployment_id: deployment_id.to_string(),
+                locked_by: None,
+            })
+            .into_generic());
+        }
+        Ok(())
+    }
+
     // --- Deployment groups ---
 
     async fn create_deployment_group(

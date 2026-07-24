@@ -1329,6 +1329,96 @@ Resources:
               Ref: Mailbox
     DependsOn:
     - MailboxBucketPolicy
+  MailerRuleSetActivatorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: activate-ses-receipt-rule-set
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - ses:DescribeActiveReceiptRuleSet
+            - ses:SetActiveReceiptRuleSet
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+  MailerRuleSetActivatorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.13
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+        - MailerRuleSetActivatorRole
+        - Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          ses = boto3.client("ses")
+
+          def handler(event, context):
+              desired = event["ResourceProperties"]["RuleSetName"]
+              physical_id = event.get("PhysicalResourceId", desired)
+              try:
+                  if event["RequestType"] == "Delete":
+                      active = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+                      if active == physical_id:
+                          ses.set_active_receipt_rule_set()
+                  else:
+                      ses.set_active_receipt_rule_set(RuleSetName=desired)
+                      physical_id = desired
+                  cfnresponse.send(
+                      event, context, cfnresponse.SUCCESS, {}, physicalResourceId=physical_id
+                  )
+              except Exception as error:
+                  cfnresponse.send(
+                      event,
+                      context,
+                      cfnresponse.FAILED,
+                      {},
+                      physicalResourceId=physical_id,
+                      reason=str(error),
+                  )
+      Timeout: 60
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailer
+      - Key: resource-type
+        Value: email
+    DependsOn:
+    - MailerRuleSetActivatorRole
+  MailerRuleSetActivation:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken:
+        Fn::GetAtt:
+        - MailerRuleSetActivatorFunction
+        - Arn
+      RuleSetName:
+        Ref: MailerRuleSet
+    DependsOn:
+    - MailerInboundRule
   RegistryRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -1844,6 +1934,9 @@ Resources:
     - MailerEventsQueuePolicy
     - MailerRuleSet
     - MailerInboundRule
+    - MailerRuleSetActivatorRole
+    - MailerRuleSetActivatorFunction
+    - MailerRuleSetActivation
     - RegistryRepository
     - RegistryPullRole
     - RegistryPushRole
