@@ -1545,6 +1545,85 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
     assert_eq!(store.status, alien_core::ResourceStatus::Running);
 }
 
+/// A frozen gate is answered once: the answer recorded at creation refuses
+/// every later conflicting input value, including on states from before the
+/// fixity-aware protocol, whose answers derive from the settled stack state.
+#[tokio::test]
+async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    // A frozen store gated with a declared default of true.
+    let mut stack = create_test_stack("fixed-stack", "test-function");
+    stack.resources.insert(
+        "archive".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: Some("archiveEnabled".to_string()),
+        },
+    );
+    stack.inputs = vec![boolean_gate_input(
+        "archiveEnabled",
+        "Enable the archive",
+        "Whether to create the archive store.",
+    )];
+
+    fn config_with_archive_enabled(enabled: bool) -> DeploymentConfig {
+        let mut config = create_test_config("hash_v1", false);
+        config.input_values =
+            HashMap::from([("archiveEnabled".to_string(), serde_json::json!(enabled))]);
+        config
+    }
+
+    let mut state = create_initial_state(stack.clone());
+    state = run_to_completion(state, config_with_archive_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.persisted_gate_answers.get("archiveEnabled")),
+        Some(&true),
+        "the answer is recorded at creation"
+    );
+
+    // A conflicting answer on an update is refused, not applied.
+    start_update(&mut state, release_of("rel_v2", stack.clone()));
+    let error = alien_deployment::step(
+        state.clone(),
+        config_with_archive_enabled(false),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect_err("a flipped frozen answer must refuse the update");
+    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
+
+    // The same answer passes and the update completes.
+    let mut state_matching = state.clone();
+    state_matching = run_to_completion(state_matching, config_with_archive_enabled(true)).await;
+    assert_eq!(state_matching.status, DeploymentStatus::Running);
+
+    // A state from before the fixity protocol (no recorded answers): the
+    // settled stack state derives them, and the conflict is still refused.
+    let mut legacy = state.clone();
+    if let Some(metadata) = legacy.runtime_metadata.as_mut() {
+        metadata.persisted_gate_answers = Default::default();
+    }
+    legacy.protocol_version = 1;
+    let error = alien_deployment::step(
+        legacy,
+        config_with_archive_enabled(false),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect_err("derived answers refuse the conflict too");
+    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
+}
+
 /// The split-strip ordering guarantee on compute: declining a live worker on
 /// an update removes the workload but keeps its derived baseline — the
 /// profile-derived service account stays in the prepared stack, so the

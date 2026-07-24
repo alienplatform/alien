@@ -68,6 +68,26 @@ pub async fn handle_update_pending(
         })
     })?;
 
+    // A frozen gate is answered once. States from before the fixity-aware
+    // protocol carry no recorded answers, so derive them from the settled
+    // stack state — presence IS the original answer once setup completed —
+    // and upgrade atomically before the check, refusing rather than guessing
+    // when derivation is impossible.
+    let mut persisted_gate_answers = current
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| metadata.persisted_gate_answers.clone())
+        .unwrap_or_default();
+    if persisted_gate_answers.is_empty() {
+        persisted_gate_answers = crate::pending::resolve_frozen_gate_answers(
+            &target_stack,
+            &stack_state,
+            &Default::default(),
+        )?;
+        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
+    }
+    crate::pending::enforce_frozen_gate_fixity(&persisted_gate_answers, &config.input_values)?;
+
     // Drop gated setup resources the deployer declined, BEFORE the
     // preflights: the frozen-compatibility check compares against the
     // previous prepared stack, which was stripped the same way, and an
@@ -130,12 +150,19 @@ pub async fn handle_update_pending(
     // leaves the desired stack here, and the executor's create/delete
     // planning provisions or deprovisions it. Dependents share their
     // dependency's gate, so the strip stays closed.
+    crate::pending::audit_live_gate_transitions(
+        &mutated_stack,
+        &stack_state,
+        &config.input_values,
+        target_release_id,
+    );
     let mutated_stack =
         crate::pending::strip_declined_live_resources(mutated_stack, &config.input_values)?;
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
+    runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Transition to Updating
     next.status = DeploymentStatus::Updating;
