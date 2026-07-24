@@ -14,7 +14,6 @@ env:
   # Fall back to local compilation when the shared sccache backend returns a
   # transient error (e.g. webdav 403) instead of failing the whole build.
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   pr-conventions:
@@ -83,8 +82,6 @@ jobs:
         continue-on-error: true
         with:
           version: v0.16.0
-      - name: Enable sccache when available
-        run: command -v sccache >/dev/null && echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV" || true
 
       - uses: taiki-e/install-action@nextest
 
@@ -187,8 +184,6 @@ jobs:
         continue-on-error: true
         with:
           version: v0.16.0
-      - name: Enable sccache when available
-        run: command -v sccache >/dev/null && echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV" || true
 
       - uses: oven-sh/setup-bun@v2
         with:
