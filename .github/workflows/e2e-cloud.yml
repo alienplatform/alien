@@ -485,7 +485,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
           node-version: 22
@@ -575,7 +575,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
           node-version: 22
@@ -1198,7 +1198,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1296,7 +1296,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1444,7 +1444,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1622,7 +1622,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
