@@ -285,6 +285,37 @@ describe("Ai.getAvailableModels", () => {
 })
 
 describe("Ai.responses.create", () => {
+  const ANTHROPIC_BYO = JSON.stringify({
+    service: "external",
+    provider: "anthropic",
+    apiKey: "sk-ant",
+  })
+
+  it("fails fast on a BYO-Anthropic Responses call (its compat host has no /v1/responses)", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", ANTHROPIC_BYO)
+    const fetchMock = stubFetch({ id: "resp", output: [] })
+    await expect(
+      ai("llm").responses.create({ model: "claude-opus-4-8", input: "hi" }),
+    ).rejects.toMatchObject({ code: "AI_RESPONSES_API_UNSUPPORTED", httpStatusCode: 400 })
+    // The reason is known before the request, so we never hit the 404.
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("still serves chat.completions for a BYO-Anthropic binding (only Responses is blocked)", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", ANTHROPIC_BYO)
+    const fetchMock = stubFetch({ id: "x", choices: [] })
+    await ai("llm").chat.completions.create({ model: "claude-opus-4-8", messages: [] })
+    expect(callUrl(fetchMock)).toBe("https://api.anthropic.com/v1/chat/completions")
+  })
+
+  it("lets a BYO-Anthropic Responses call through when ALIEN_AI_LOCAL_BASE_URL overrides the base", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", ANTHROPIC_BYO)
+    vi.stubEnv("ALIEN_AI_LOCAL_BASE_URL", "http://localhost:11434")
+    const fetchMock = stubFetch({ id: "resp", output: [] })
+    await ai("llm").responses.create({ model: "claude-opus-4-8", input: "hi" })
+    expect(callUrl(fetchMock)).toBe("http://localhost:11434/v1/responses")
+  })
+
   it("POSTs to the provider's /v1/responses with the body unchanged and the BYO-key auth header", async () => {
     const fetchMock = stubFetch({ id: "resp_x", object: "response", output: [] })
     const params = { model: "gpt-4o", input: "hi" }
