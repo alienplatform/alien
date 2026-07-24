@@ -68,16 +68,16 @@ pub async fn handle_update_pending(
         })
     })?;
 
-    // Drop gated resources the deployer declined, BEFORE the preflights: the
-    // frozen-compatibility check compares against the previous prepared
-    // stack, which was stripped the same way, and an unstripped new stack
-    // would read as "frozen resource added" and refuse the update — or
-    // worse, resurrect the resource the deployer declined. For a live gate
-    // this strip is also what applies an input edit: the resource enters or
-    // leaves the desired stack here, and the executor's create/delete
-    // planning provisions or deprovisions it. Dependents share their
-    // dependency's gate, so the strip stays closed.
-    let target_stack = crate::pending::strip_declined_resources(
+    // Drop gated setup resources the deployer declined, BEFORE the
+    // preflights: the frozen-compatibility check compares against the
+    // previous prepared stack, which was stripped the same way, and an
+    // unstripped new stack would read as "frozen resource added" and refuse
+    // the update — or worse, resurrect the resource the deployer declined.
+    // Live declines apply AFTER the mutations instead, so a declined
+    // workload's derived baseline (service account, profile grants, capacity
+    // contribution) stays identical to the accepted render and the
+    // compatibility checks never see a difference.
+    let target_stack = crate::pending::strip_declined_frozen_resources(
         target_stack,
         &stack_state,
         &config.input_values,
@@ -123,6 +123,15 @@ pub async fn handle_update_pending(
     );
 
     info!("Deployment-time preflight checks completed successfully");
+
+    // Drop gated live resources whose input says no — after the mutations,
+    // at the boundary where the executor's desired set is built. For a live
+    // gate this strip is what applies an input edit: the resource enters or
+    // leaves the desired stack here, and the executor's create/delete
+    // planning provisions or deprovisions it. Dependents share their
+    // dependency's gate, so the strip stays closed.
+    let mutated_stack =
+        crate::pending::strip_declined_live_resources(mutated_stack, &config.input_values)?;
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();

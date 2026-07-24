@@ -1545,6 +1545,98 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
     assert_eq!(store.status, alien_core::ResourceStatus::Running);
 }
 
+/// The split-strip ordering guarantee on compute: declining a live worker on
+/// an update removes the workload but keeps its derived baseline — the
+/// profile-derived service account stays in the prepared stack, so the
+/// frozen-compatibility check never fires and a later acceptance recreates
+/// the worker.
+#[tokio::test]
+async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let mut stack = create_test_stack("gated-stack", "proxy");
+    stack
+        .resources
+        .get_mut("proxy")
+        .expect("worker entry")
+        .enabled_when = Some("proxyEnabled".to_string());
+    stack.inputs = vec![boolean_gate_input(
+        "proxyEnabled",
+        "Enable the proxy",
+        "Whether to run the proxy worker.",
+    )];
+
+    fn config_with_proxy_enabled(enabled: bool) -> DeploymentConfig {
+        let mut config = create_test_config("hash_v1", false);
+        config.input_values =
+            HashMap::from([("proxyEnabled".to_string(), serde_json::json!(enabled))]);
+        config
+    }
+
+    fn prepared_stack_of(state: &DeploymentState) -> &Stack {
+        state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .expect("a completed deployment stores its prepared stack")
+    }
+
+    let mut state = create_initial_state(stack.clone());
+
+    // Accepted (default true): the worker runs and the mutations derived its
+    // service account into the prepared stack.
+    state = run_to_completion(state, config_with_proxy_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("proxy"));
+    assert!(
+        prepared_stack_of(&state).resources.contains_key("default-sa"),
+        "the profile-derived service account belongs to the prepared stack: {:?}",
+        prepared_stack_of(&state).resources.keys().collect::<Vec<_>>()
+    );
+
+    // Declined on an update: the worker is deprovisioned, the deployment
+    // converges, and the derived service account is still in the prepared
+    // stack — the mutations saw the declined worker, only the executor's
+    // desired set lost it.
+    start_update(&mut state, release_of("rel_v2", stack.clone()));
+    state = run_to_completion(state, config_with_proxy_enabled(false)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(!state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("proxy"));
+    assert!(
+        prepared_stack_of(&state).resources.contains_key("default-sa"),
+        "declining the worker must not strip its derived baseline: {:?}",
+        prepared_stack_of(&state).resources.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !prepared_stack_of(&state).resources.contains_key("proxy"),
+        "the declined worker itself leaves the prepared stack"
+    );
+
+    // Accepted again: the worker comes back without any compatibility
+    // refusal, because nothing derived ever changed.
+    start_update(&mut state, release_of("rel_v3", stack));
+    state = run_to_completion(state, config_with_proxy_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let proxy = state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("proxy")
+        .expect("an accepted gate must recreate the worker");
+    assert_eq!(proxy.status, alien_core::ResourceStatus::Running);
+}
+
 /// A setup import that omitted a gated frozen resource: the runner must not
 /// create the resource the deployer declined, while the delivered sibling
 /// and the live function still deploy.

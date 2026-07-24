@@ -12,7 +12,7 @@ pub mod loop_contract;
 pub mod manager_api_transport;
 mod observe;
 mod pending;
-pub use pending::strip_declined_resources;
+pub use pending::{strip_declined_frozen_resources, strip_declined_live_resources};
 mod provisioning;
 pub mod runner;
 mod running;
