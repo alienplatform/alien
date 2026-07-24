@@ -1,0 +1,56 @@
+{
+  "name": "@alienplatform/ai-gateway",
+  "version": "2.1.6",
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./native": {
+      "types": "./dist/native.d.ts",
+      "import": "./dist/native.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=18",
+    "bun": ">=1.0.23"
+  },
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
+    "prepare": "npm run build",
+    "test": "vitest run",
+    "test:ts": "tsc --noEmit",
+    "format-and-lint": "biome check .",
+    "format-and-lint:fix": "biome check . --write"
+  },
+  "keywords": ["alien", "ai", "gateway"],
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "license": "FSL-1.1-Apache-2.0",
+  "description": "Thin TypeScript wrapper that spawns the Alien AI gateway (a Rust binary) and points an OpenAI-compatible client at it",
+  "homepage": "https://alien.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/ai-gateway"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@alienplatform/typescript-config": "workspace:^",
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^24.0.15",
+    "openai": "^4",
+    "tsdown": "^0.13.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  },
+  "dependencies": {
+    "@alienplatform/core": "workspace:^",
+    "zod": "4.3.2"
+  }
+}

@@ -25,7 +25,12 @@ export const vault = factories.vault
 /** Resolve the linked-container binding named `name`. */
 export const container = factories.container
 
-export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
+export {
+  AlienError,
+  BindingNotConfiguredError,
+  BindingNotFoundError,
+  defineError,
+} from "./errors.js"
 
 export type {
   Container,

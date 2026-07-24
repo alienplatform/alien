@@ -28,18 +28,72 @@ use tokio::fs;
 use tokio::process::Command;
 use tracing::info;
 
-/// npm package that carries the JS side of the native bindings.
-const BINDINGS_PACKAGE: &str = "@alienplatform/bindings";
+/// The native-asset shape a package embeds into a compiled binary.
+enum AddonKind {
+    /// A napi-rs addon: `<crate_dir>.<triple>.node`, sourced from a per-triple
+    /// napi prebuild, a workspace dev build, or the napi CLI.
+    Napi { crate_dir: &'static str },
+    /// A standalone launcher executable, sourced from a per-triple binary
+    /// prebuild, the workspace cargo target dir, or a host `cargo build`.
+    Binary {
+        /// The executable's file name (also its source name in a prebuild).
+        bin_name: &'static str,
+        /// The workspace crate producing the `[[bin]]` (`cargo build -p …`).
+        cargo_package: &'static str,
+    },
+}
 
-/// File name the bindings package's `./native` entry statically imports
-/// (`import addon from "./alien-bindings.node"` next to `dist/native.js`).
-const STAGED_ADDON_FILE: &str = "alien-bindings.node";
+/// One package whose native asset a compiled binary embeds statically. Two ship
+/// today: `@alienplatform/bindings` (a napi addon: kv/storage/queue/vault/
+/// container) and `@alienplatform/ai-gateway` (a launcher binary the `ai()`
+/// client spawns). Each stages its own asset next to its own `dist/native.js`
+/// under the literal file name its `./native` entry imports.
+struct NativeAddonSpec {
+    /// npm package carrying the JS side (e.g. "@alienplatform/bindings").
+    package: &'static str,
+    /// Package name without the `@alienplatform/` scope (e.g. "bindings"), used
+    /// for the sibling prebuild directory `<scope>/<scoped_name>-<triple>`.
+    scoped_name: &'static str,
+    /// File name the package's `./native` entry statically imports
+    /// (`import x from "./<staged_file>"` next to `dist/native.js`).
+    staged_file: &'static str,
+    /// Whether the asset is a napi addon or a standalone binary; this drives
+    /// where the source is found and how it is (re)built.
+    kind: AddonKind,
+}
+
+/// The bindings addon: required whenever the app resolves it (every consumer
+/// uses some binding), so a missing addon for the target fails the build.
+const BINDINGS: NativeAddonSpec = NativeAddonSpec {
+    package: "@alienplatform/bindings",
+    scoped_name: "bindings",
+    staged_file: "alien-bindings.node",
+    kind: AddonKind::Napi {
+        crate_dir: "alien-bindings-node",
+    },
+};
+
+/// The AI-gateway launcher binary: staged best-effort. A Worker resolves the
+/// ai-gateway package transitively through the SDK even when it never calls
+/// `ai()`, so a missing binary for the target is skipped (not a build error):
+/// requiring it would regress every non-AI Worker. When present it is embedded
+/// so a compiled `ai()`/`getAiConnection()` can extract and spawn it.
+const AI_GATEWAY: NativeAddonSpec = NativeAddonSpec {
+    package: "@alienplatform/ai-gateway",
+    scoped_name: "ai-gateway",
+    staged_file: "alien-ai-gateway.bin",
+    kind: AddonKind::Binary {
+        bin_name: "alien-ai-gateway",
+        cargo_package: "alien-ai-gateway",
+    },
+};
 
 /// Map a build target to the napi triple used in prebuild package names
 /// (`@alienplatform/bindings-<triple>`) and addon file names
 /// (`alien-bindings-node.<triple>.node`). Mirrors `platformTriple()` in
 /// `packages/bindings/src/loader.ts`. `None` means no addon exists for the
-/// target.
+/// target. `Binary` assets (the ai-gateway launcher) key their per-triple
+/// prebuild packages off this same triple.
 fn napi_triple(target: BinaryTarget) -> Option<&'static str> {
     match target {
         BinaryTarget::LinuxX64 => Some("linux-x64-gnu"),
@@ -69,21 +123,23 @@ fn napi_triple(target: BinaryTarget) -> Option<&'static str> {
 ///
 /// Returns `Ok(None)` when no source exists (the caller turns that into a
 /// build error naming the missing prebuild package).
-async fn find_addon_source(
+async fn find_napi_source(
     src_dir: &Path,
-    bindings_dist: &Path,
+    spec: &NativeAddonSpec,
+    addon_dist: &Path,
     triple: &str,
+    crate_name: &str,
     addon_file_name: &str,
     resource_name: &str,
     checked: &mut Vec<String>,
 ) -> Result<Option<PathBuf>> {
-    // 1a. Prebuild linked next to the resolved bindings package. `bindings_dist`
-    // is `<scope>/@alienplatform/bindings/dist`, so the prebuild
-    // `@alienplatform/bindings-<triple>` sits at `<scope>/@alienplatform/
-    // bindings-<triple>` — two levels up from dist, then the sibling name.
-    if let Some(scope_dir) = bindings_dist.parent().and_then(Path::parent) {
+    // 1a. Prebuild linked next to the resolved package. `addon_dist` is
+    // `<scope>/@alienplatform/<name>/dist`, so the prebuild
+    // `@alienplatform/<name>-<triple>` sits at `<scope>/@alienplatform/
+    // <name>-<triple>` — two levels up from dist, then the sibling name.
+    if let Some(scope_dir) = addon_dist.parent().and_then(Path::parent) {
         let sibling_prebuild = scope_dir
-            .join(format!("bindings-{}", triple))
+            .join(format!("{}-{}", spec.scoped_name, triple))
             .join(addon_file_name);
         if sibling_prebuild.is_file() {
             return Ok(Some(sibling_prebuild));
@@ -94,7 +150,7 @@ async fn find_addon_source(
     // 1b. Prebuild package installed in the app's own node_modules.
     let prebuild = src_dir
         .join("node_modules")
-        .join(format!("{}-{}", BINDINGS_PACKAGE, triple))
+        .join(format!("{}-{}", spec.package, triple))
         .join(addon_file_name);
     if prebuild.is_file() {
         return Ok(Some(prebuild));
@@ -108,15 +164,15 @@ async fn find_addon_source(
     //    only anchor that reaches `crates/alien-bindings-node` in that case.
     //    The dist path is canonicalized so a symlinked node_modules entry
     //    walks the repo, not the app's directory again.
-    let canonical_dist = bindings_dist.canonicalize().ok();
+    let canonical_dist = addon_dist.canonicalize().ok();
     let mut workspace_addon_crate: Option<PathBuf> = None;
     'anchors: for anchor in std::iter::once(src_dir).chain(canonical_dist.as_deref()) {
         let mut dir = Some(anchor);
         while let Some(current) = dir {
-            let crate_dir = current.join("crates").join("alien-bindings-node");
-            if crate_dir.is_dir() {
-                workspace_addon_crate = Some(crate_dir.clone());
-                let dev_addon = crate_dir.join(addon_file_name);
+            let crate_path = current.join("crates").join(crate_name);
+            if crate_path.is_dir() {
+                workspace_addon_crate = Some(crate_path.clone());
+                let dev_addon = crate_path.join(addon_file_name);
                 if dev_addon.is_file() {
                     return Ok(Some(dev_addon));
                 }
@@ -126,7 +182,8 @@ async fn find_addon_source(
             dir = current.parent();
         }
         checked.push(format!(
-            "(no crates/alien-bindings-node above {})",
+            "(no crates/{} above {})",
+            crate_name,
             anchor.display()
         ));
     }
@@ -184,56 +241,179 @@ async fn find_addon_source(
     }
 }
 
-/// bun script that prints the resolved path of the bindings package's `./native`
-/// entry (i.e. `.../@alienplatform/bindings/dist/native.js`) or nothing.
+/// Locate the launcher binary for `triple`, trying (in order):
 ///
-/// It resolves `@alienplatform/bindings/native` first directly from the app
-/// (Container/Daemon direct dependency), then — failing that — from the
-/// resolved location of `@alienplatform/sdk` (a Worker's only path to the
-/// bindings package). Using bun's own resolver honors pnpm symlinks and package
-/// `exports` maps, so the printed path is exactly what `bun build --compile`
-/// will embed.
-const RESOLVE_BINDINGS_NATIVE_SCRIPT: &str = r#"
-const path = require("path");
-const from = process.env.ALIEN_BINDINGS_RESOLVE_FROM;
-const tryResolve = (spec, base) => { try { return Bun.resolveSync(spec, base); } catch { return null; } };
-let route = "direct";
-let nativeEntry = tryResolve("@alienplatform/bindings/native", from);
-if (!nativeEntry) {
-  const sdkEntry = tryResolve("@alienplatform/sdk", from);
-  if (sdkEntry) { nativeEntry = tryResolve("@alienplatform/bindings/native", path.dirname(sdkEntry)); route = "sdk"; }
-}
-if (nativeEntry) process.stdout.write(route + "\n" + nativeEntry);
-"#;
+/// 1. The per-platform prebuild package (`@alienplatform/ai-gateway-<triple>`,
+///    an `optionalDependency` that ships the executable), as a sibling of the
+///    resolved package and in the app's own `node_modules`.
+/// 2. The workspace cargo target dir (`target/release` then `target/debug`),
+///    found by walking up to the crate that produces the bin. Only usable when
+///    building for the host arch, since the dev binary is host-native.
+/// 3. In-repo host-triple build: `cargo build --release --bin <bin> -p <pkg>`.
+///
+/// Returns `Ok(None)` when no source exists (the caller skips this best-effort
+/// asset).
+async fn find_binary_source(
+    src_dir: &Path,
+    spec: &NativeAddonSpec,
+    addon_dist: &Path,
+    triple: &str,
+    bin_name: &str,
+    cargo_package: &str,
+    resource_name: &str,
+    checked: &mut Vec<String>,
+) -> Result<Option<PathBuf>> {
+    // 1a. Prebuild linked next to the resolved package.
+    if let Some(scope_dir) = addon_dist.parent().and_then(Path::parent) {
+        let sibling = scope_dir
+            .join(format!("{}-{}", spec.scoped_name, triple))
+            .join(bin_name);
+        if sibling.is_file() {
+            return Ok(Some(sibling));
+        }
+        checked.push(sibling.display().to_string());
+    }
+    // 1b. Prebuild installed in the app's own node_modules.
+    let prebuild = src_dir
+        .join("node_modules")
+        .join(format!("{}-{}", spec.package, triple))
+        .join(bin_name);
+    if prebuild.is_file() {
+        return Ok(Some(prebuild));
+    }
+    checked.push(prebuild.display().to_string());
 
-/// Resolve the `dist/` directory of `@alienplatform/bindings` as the app itself
-/// resolves the package — directly, or transitively through `@alienplatform/sdk`
-/// (the only path a Worker has). Returns `None` when the app depends on neither,
-/// i.e. it is not a bindings consumer and staging is a no-op.
+    // 2. Workspace cargo target. Walk up (from the app and the resolved dist) to
+    //    the crate that produces the bin; its workspace root holds `target/`.
+    let canonical_dist = addon_dist.canonicalize().ok();
+    let mut workspace_root: Option<PathBuf> = None;
+    'anchors: for anchor in std::iter::once(src_dir).chain(canonical_dist.as_deref()) {
+        let mut dir = Some(anchor);
+        while let Some(current) = dir {
+            if current.join("crates").join(cargo_package).is_dir() {
+                workspace_root = Some(current.to_path_buf());
+                break 'anchors;
+            }
+            dir = current.parent();
+        }
+    }
+    let Some(root) = workspace_root else {
+        checked.push(format!(
+            "(no crates/{cargo_package} above the app or resolved package)"
+        ));
+        return Ok(None);
+    };
+
+    // The dev/target binary is host-native, so only usable when building for the
+    // host triple; a cross target must come from a prebuild.
+    let host_triple = napi_triple(BinaryTarget::current_os());
+    if host_triple != Some(triple) {
+        checked.push(format!(
+            "(cargo build skipped: host triple {host_triple:?} != target '{triple}')"
+        ));
+        return Ok(None);
+    }
+    for profile in ["release", "debug"] {
+        let candidate = root.join("target").join(profile).join(bin_name);
+        if candidate.is_file() {
+            return Ok(Some(candidate));
+        }
+        checked.push(candidate.display().to_string());
+    }
+
+    // 3. Host build.
+    info!(
+        "Gateway binary {} not built yet; running `cargo build --release --bin {} -p {}` in {}",
+        bin_name,
+        bin_name,
+        cargo_package,
+        root.display()
+    );
+    let output = Command::new("cargo")
+        .args(["build", "--release", "--bin", bin_name, "-p", cargo_package])
+        .current_dir(&root)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("Failed to execute `cargo build --bin {bin_name} -p {cargo_package}`"),
+            build_output: None,
+        })?;
+    if !output.status.success() {
+        let mut build_output = String::from_utf8_lossy(&output.stdout).into_owned();
+        build_output.push_str(&String::from_utf8_lossy(&output.stderr));
+        return Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("`cargo build --release --bin {bin_name} -p {cargo_package}` failed"),
+            build_output: Some(build_output),
+        }));
+    }
+    let built = root.join("target").join("release").join(bin_name);
+    if built.is_file() {
+        Ok(Some(built))
+    } else {
+        Ok(None)
+    }
+}
+
+/// bun script that prints the resolved path of a package's `./native` entry
+/// (i.e. `.../@alienplatform/<name>/dist/native.js`) or nothing.
+///
+/// It resolves `<package>/native` first directly from the app (Container/Daemon
+/// direct dependency), then — failing that — from the resolved location of
+/// `@alienplatform/sdk` (a Worker's only path to the package). Using bun's own
+/// resolver honors pnpm symlinks and package `exports` maps, so the printed path
+/// is exactly what `bun build --compile` will embed.
+fn resolve_native_script(package: &str) -> String {
+    format!(
+        r#"
+const path = require("path");
+const from = process.env.ALIEN_ADDON_RESOLVE_FROM;
+const nativeSpec = "{package}/native";
+const tryResolve = (s, base) => {{ try {{ return Bun.resolveSync(s, base); }} catch {{ return null; }} }};
+let route = "direct";
+let nativeEntry = tryResolve(nativeSpec, from);
+if (!nativeEntry) {{
+  const sdkEntry = tryResolve("@alienplatform/sdk", from);
+  if (sdkEntry) {{ nativeEntry = tryResolve(nativeSpec, path.dirname(sdkEntry)); route = "sdk"; }}
+}}
+if (nativeEntry) process.stdout.write(route + "\n" + nativeEntry);
+"#
+    )
+}
+
+/// Resolve the `dist/` directory of `spec.package` as the app itself resolves it
+/// — directly, or transitively through `@alienplatform/sdk` (the only path a
+/// Worker has). Returns `None` when the app depends on neither, i.e. it is not a
+/// consumer of that package and staging is a no-op.
 ///
 /// Resolution is delegated to bun (already required by the compile step) so pnpm
 /// symlinks and package `exports` are honored — the naive
-/// `src_dir/node_modules/@alienplatform/bindings` path does not exist for a
-/// Worker, whose bindings copy lives under the SDK's dependency. This function
-/// is exercised by the SDK-entry compiled-artifact oracle
-/// (`packages/package-layout/steps/compile.ts` covers the `/native` entry;
-/// the Worker/SDK entry is covered by deployment E2E), not a hermetic unit
-/// test, since faithful resolution requires bun and a real installed layout.
-async fn resolve_bindings_dist_dir(
+/// `src_dir/node_modules/<package>` path does not exist for a Worker, whose copy
+/// lives under the SDK's dependency. This function is exercised by the SDK-entry
+/// compiled-artifact oracle (`packages/package-layout/steps/compile.ts` covers
+/// the `/native` entry; the Worker/SDK entry is covered by deployment E2E), not
+/// a hermetic unit test, since faithful resolution requires bun and a real
+/// installed layout.
+async fn resolve_addon_dist_dir(
     src_dir: &Path,
+    spec: &NativeAddonSpec,
     resource_name: &str,
 ) -> Result<Option<(PathBuf, AddonResolutionRoute)>> {
     let output = Command::new("bun")
-        .args(["-e", RESOLVE_BINDINGS_NATIVE_SCRIPT])
-        .env("ALIEN_BINDINGS_RESOLVE_FROM", src_dir)
+        .args(["-e", &resolve_native_script(spec.package)])
+        .env("ALIEN_ADDON_RESOLVE_FROM", src_dir)
         .current_dir(src_dir)
         .output()
         .await
         .into_alien_error()
         .context(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
-            reason: "Failed to run bun to resolve @alienplatform/bindings. Is Bun installed?"
-                .to_string(),
+            reason: format!(
+                "Failed to run bun to resolve {}. Is Bun installed?",
+                spec.package
+            ),
             build_output: None,
         })?;
 
@@ -241,7 +421,8 @@ async fn resolve_bindings_dist_dir(
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
             reason: format!(
-                "bun failed while resolving @alienplatform/bindings from {}",
+                "bun failed while resolving {} from {}",
+                spec.package,
                 src_dir.display()
             ),
             build_output: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
@@ -250,7 +431,7 @@ async fn resolve_bindings_dist_dir(
 
     let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if resolved.is_empty() {
-        // App depends on neither the bindings package nor the SDK: no addon to embed.
+        // App depends on neither this package nor the SDK: no addon to embed.
         return Ok(None);
     }
     // First line is the resolution route ("direct" or "sdk"), second the
@@ -259,7 +440,7 @@ async fn resolve_bindings_dist_dir(
     let (route_str, native_entry) = resolved.split_once('\n').ok_or_else(|| {
         AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
-            reason: format!("Unexpected output resolving @alienplatform/bindings: '{resolved}'"),
+            reason: format!("Unexpected output resolving {}: '{resolved}'", spec.package),
             build_output: None,
         })
     })?;
@@ -273,7 +454,8 @@ async fn resolve_bindings_dist_dir(
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
                 resource_name: resource_name.to_string(),
                 reason: format!(
-                    "Unexpected bindings resolution route '{other}' from the resolver script"
+                    "Unexpected resolution route '{other}' for {} from the resolver script",
+                    spec.package
                 ),
                 build_output: None,
             }));
@@ -286,8 +468,8 @@ async fn resolve_bindings_dist_dir(
             AlienError::new(ErrorData::ImageBuildFailed {
                 resource_name: resource_name.to_string(),
                 reason: format!(
-                    "Resolved bindings native entry '{}' has no parent directory",
-                    native_entry
+                    "Resolved {} native entry '{}' has no parent directory",
+                    spec.package, native_entry
                 ),
                 build_output: None,
             })
@@ -316,34 +498,66 @@ pub(super) enum AddonResolutionRoute {
 /// for multi-target throughput.
 pub(super) struct StagedAddon {
     pub route: AddonResolutionRoute,
-    _guard: tokio::sync::OwnedMutexGuard<()>,
+    // One guard per staged addon (bindings, and ai-gateway when present). Each
+    // holds its per-dist-path lock from staging until the caller's compile
+    // finishes, so a concurrent build cannot swap a staged file mid-embed.
+    _guards: Vec<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-/// Workspace dev addon files that exist for the requested targets, walking
-/// up from `anchor` (typically the realpath of the resolved bindings
-/// package). Used by the build cache key: the compiled binary embeds these
-/// bytes, so a rebuilt addon must invalidate cached artifacts.
-pub(crate) fn workspace_addon_inputs(anchor: &Path, targets: &[BinaryTarget]) -> Vec<PathBuf> {
-    let mut crate_dir: Option<PathBuf> = None;
+/// Walk up from `anchor` to the first `<dir>/crates/<name>` that exists.
+fn find_workspace_crate(anchor: &Path, name: &str) -> Option<PathBuf> {
     let mut dir = Some(anchor);
     while let Some(current) = dir {
-        let candidate = current.join("crates").join("alien-bindings-node");
+        let candidate = current.join("crates").join(name);
         if candidate.is_dir() {
-            crate_dir = Some(candidate);
-            break;
+            return Some(candidate);
         }
         dir = current.parent();
     }
-    let Some(crate_dir) = crate_dir else {
-        return Vec::new();
-    };
+    None
+}
 
-    let mut inputs: Vec<PathBuf> = targets
-        .iter()
-        .filter_map(|target| napi_triple(*target))
-        .map(|triple| crate_dir.join(format!("alien-bindings-node.{triple}.node")))
-        .filter(|path| path.is_file())
-        .collect();
+/// Workspace-built native assets that exist for the requested targets, walking
+/// up from `anchor` (typically the realpath of the resolved package). Used by
+/// the build cache key: the compiled binary embeds these bytes, so a rebuilt
+/// addon or launcher binary must invalidate cached artifacts.
+pub(crate) fn workspace_addon_inputs(anchor: &Path, targets: &[BinaryTarget]) -> Vec<PathBuf> {
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    for spec in [&BINDINGS, &AI_GATEWAY] {
+        match &spec.kind {
+            AddonKind::Napi { crate_dir } => {
+                let Some(crate_path) = find_workspace_crate(anchor, crate_dir) else {
+                    continue;
+                };
+                inputs.extend(
+                    targets
+                        .iter()
+                        .filter_map(|target| napi_triple(*target))
+                        .map(|triple| crate_path.join(format!("{crate_dir}.{triple}.node")))
+                        .filter(|path| path.is_file()),
+                );
+            }
+            AddonKind::Binary {
+                bin_name,
+                cargo_package,
+            } => {
+                // The host-built launcher binary under the workspace target dir.
+                let Some(root) =
+                    find_workspace_crate(anchor, cargo_package).and_then(|c| {
+                        c.parent().and_then(Path::parent).map(Path::to_path_buf)
+                    })
+                else {
+                    continue;
+                };
+                inputs.extend(
+                    ["release", "debug"]
+                        .iter()
+                        .map(|profile| root.join("target").join(profile).join(bin_name))
+                        .filter(|path| path.is_file()),
+                );
+            }
+        }
+    }
     inputs.sort();
     inputs.dedup();
     inputs
@@ -366,108 +580,197 @@ async fn lock_staged_path(staged: &Path) -> tokio::sync::OwnedMutexGuard<()> {
     lock.lock_owned().await
 }
 
-/// Stage the TARGET platform's native addon next to the bindings package's
-/// `dist/native.js` so `bun build --compile` can embed it.
+/// Stage the TARGET platform's native addons next to each package's
+/// `dist/native.js` so `bun build --compile` can embed them.
 ///
-/// The `./native` entry of `@alienplatform/bindings` imports the addon through
-/// the literal specifier `./alien-bindings.node` (see
-/// `packages/bindings/src/native.ts`); this function fulfills that staging
-/// contract. Returns the staged path (for post-build clean-up) plus how the
-/// app resolves the bindings package (directly or via the SDK) when the app
-/// consumes it, `None` when it does not. Fails with a clear error naming the
-/// missing prebuild package when a consumer has no addon for the target —
-/// otherwise `bun build --compile` would fail with an opaque unresolved-import
-/// error.
+/// Each package's `./native` entry imports its addon through a literal specifier
+/// (`./alien-bindings.node`, `./alien-ai-gateway.node`); this fulfills that
+/// staging contract for both. Bindings is required whenever the app resolves it —
+/// a missing addon for the target fails with a clear error naming the prebuild,
+/// since otherwise `bun build --compile` fails with an opaque unresolved-import.
+/// The ai-gateway addon is staged best-effort: a Worker resolves it transitively
+/// through the SDK even when it never calls `ai()`, so a missing addon there is
+/// skipped, not a build error (requiring it would regress every non-AI Worker).
+/// Returns the primary (bindings) resolution route — the generated compile entry
+/// installs both via `@alienplatform/sdk/native` — plus the guards that keep the
+/// staged files valid until the compile finishes. `None` when the app consumes
+/// no native addons.
 pub(super) async fn stage_native_addon(
     src_dir: &Path,
     target: BinaryTarget,
     resource_name: &str,
 ) -> Result<Option<StagedAddon>> {
-    let Some((bindings_dist, route)) = resolve_bindings_dist_dir(src_dir, resource_name).await?
+    // Bindings is the primary addon: its resolution route drives the generated
+    // entry, and an app that resolves neither it nor the SDK embeds nothing.
+    let Some((bindings_dist, route)) =
+        resolve_addon_dist_dir(src_dir, &BINDINGS, resource_name).await?
     else {
         return Ok(None);
     };
-    // Take the per-path staging lock BEFORE writing, and hand it to the
-    // caller so it survives until the compile that embeds the staged file
-    // has finished (see `StagedAddon`).
-    let guard = lock_staged_path(&bindings_dist.join(STAGED_ADDON_FILE)).await;
-    stage_addon_into(src_dir, &bindings_dist, target, resource_name).await?;
+    let mut guards = Vec::new();
+    // Take the per-path staging lock BEFORE writing, and hand it to the caller so
+    // it survives until the compile that embeds the staged file has finished.
+    guards.push(lock_staged_path(&bindings_dist.join(BINDINGS.staged_file)).await);
+    stage_addon_into(src_dir, &BINDINGS, &bindings_dist, target, resource_name, true).await?;
+
+    // AI gateway: best-effort. Stage it only when the app resolves it AND an
+    // addon for the target exists; skipping keeps non-AI Workers building.
+    if let Some((ai_dist, _ai_route)) =
+        resolve_addon_dist_dir(src_dir, &AI_GATEWAY, resource_name).await?
+    {
+        let ai_guard = lock_staged_path(&ai_dist.join(AI_GATEWAY.staged_file)).await;
+        if stage_addon_into(src_dir, &AI_GATEWAY, &ai_dist, target, resource_name, false)
+            .await?
+            .is_some()
+        {
+            guards.push(ai_guard);
+        }
+    }
+
     Ok(Some(StagedAddon {
         route,
-        _guard: guard,
+        _guards: guards,
     }))
 }
 
-/// Source the target addon and copy it into `bindings_dist` as the staged
-/// `alien-bindings.node`. Split from {@link stage_native_addon} so the sourcing
-/// and copy logic is unit-testable against a fixture `dist/` directory without
-/// invoking bun's resolver.
+/// The build error when a required native asset has no source for `target`,
+/// tailored to its kind (napi addon vs launcher binary).
+fn missing_source_reason(
+    spec: &NativeAddonSpec,
+    triple: &str,
+    target: BinaryTarget,
+    checked: &[String],
+) -> String {
+    let pkg = spec.package;
+    let checked = checked.join(", ");
+    match &spec.kind {
+        AddonKind::Napi { crate_dir } => {
+            let lib_name = format!("lib{}.so", crate_dir.replace('-', "_"));
+            format!(
+                "{pkg} is installed, but the native addon for target '{target}' was not found. \
+                 Install the prebuild package '{pkg}-{triple}' (it ships {crate_dir}.{triple}.node), \
+                 or, in the alien workspace, build the dev addon with \
+                 `npx napi build --platform --release` in crates/{crate_dir}. \
+                 Cross-building from another OS: zig/napi-cross cannot build this cdylib; \
+                 build natively in Docker instead: \
+                 `docker run --rm --platform linux/<arch> -v <workspace>:/work \
+                 -e CARGO_TARGET_DIR=/tmp/target -w /work/crates/{crate_dir} \
+                 rust:1-bookworm sh -c 'apt-get update -qq && apt-get install -y -qq \
+                 protobuf-compiler && cargo build --release --lib && \
+                 cp /tmp/target/release/{lib_name} {crate_dir}.{triple}.node'`. \
+                 Checked: {checked}."
+            )
+        }
+        AddonKind::Binary {
+            bin_name,
+            cargo_package,
+        } => format!(
+            "{pkg} is installed, but the launcher binary for target '{target}' was not found. \
+             Install the prebuild package '{pkg}-{triple}' (it ships {bin_name}), or, in the \
+             alien workspace building for the host, build it with \
+             `cargo build --release --bin {bin_name} -p {cargo_package}`. Checked: {checked}."
+        ),
+    }
+}
+
+/// Source the target addon for `spec` and copy it into `addon_dist` as the
+/// staged `spec.staged_file`. Split from {@link stage_native_addon} so the
+/// sourcing and copy logic is unit-testable against a fixture `dist/` directory
+/// without invoking bun's resolver.
+///
+/// `required` distinguishes the two addons: bindings (`required = true`) errors
+/// when no addon exists for the target; ai-gateway (`required = false`) returns
+/// `Ok(None)` instead, so a Worker that resolves ai-gateway through the SDK but
+/// has no addon for the target still builds (it just can't call `ai()` in the
+/// compiled binary). Returns `Some(staged_path)` when it staged, `None` when it
+/// skipped an optional addon.
 async fn stage_addon_into(
     src_dir: &Path,
-    bindings_dist: &Path,
+    spec: &NativeAddonSpec,
+    addon_dist: &Path,
     target: BinaryTarget,
     resource_name: &str,
-) -> Result<PathBuf> {
+    required: bool,
+) -> Result<Option<PathBuf>> {
     let Some(triple) = napi_triple(target) else {
+        if !required {
+            info!(
+                "No {} native addon exists for build target '{}'; skipping (optional)",
+                spec.package, target
+            );
+            return Ok(None);
+        }
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
             reason: format!(
                 "{} is installed, but no native addon exists for build target '{}'. \
-                 Native bindings support linux-x64, linux-arm64, and darwin-arm64 targets.",
-                BINDINGS_PACKAGE, target
+                 Native addons support linux-x64, linux-arm64, and darwin-arm64 targets.",
+                spec.package, target
             ),
             build_output: None,
         }));
     };
-    let addon_file_name = format!("alien-bindings-node.{}.node", triple);
-
     let mut checked = Vec::new();
-    let Some(source) = find_addon_source(
-        src_dir,
-        bindings_dist,
-        triple,
-        &addon_file_name,
-        resource_name,
-        &mut checked,
-    )
-    .await?
-    else {
+    let source = match &spec.kind {
+        AddonKind::Napi { crate_dir } => {
+            let addon_file_name = format!("{crate_dir}.{triple}.node");
+            find_napi_source(
+                src_dir,
+                spec,
+                addon_dist,
+                triple,
+                crate_dir,
+                &addon_file_name,
+                resource_name,
+                &mut checked,
+            )
+            .await?
+        }
+        AddonKind::Binary {
+            bin_name,
+            cargo_package,
+        } => {
+            find_binary_source(
+                src_dir,
+                spec,
+                addon_dist,
+                triple,
+                bin_name,
+                cargo_package,
+                resource_name,
+                &mut checked,
+            )
+            .await?
+        }
+    };
+    let Some(source) = source else {
+        if !required {
+            info!(
+                "Optional native asset {} for target '{}' not found; skipping (the app may not \
+                 use it). Checked: {}",
+                spec.package,
+                target,
+                checked.join(", ")
+            );
+            return Ok(None);
+        }
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
-            reason: format!(
-                "{pkg} is installed, but the native addon for target '{target}' was not found. \
-                 Install the prebuild package '{pkg}-{triple}' (it ships {addon_file_name}), \
-                 or, in the alien workspace, build the dev addon with \
-                 `npx napi build --platform --release` in crates/alien-bindings-node. \
-                 Cross-building from another OS: zig/napi-cross cannot build this cdylib; \
-                 build natively in Docker instead: \
-                 `docker run --rm --platform linux/<arch> -v <workspace>:/work \
-                 -e CARGO_TARGET_DIR=/tmp/target -w /work/crates/alien-bindings-node \
-                 rust:1-bookworm sh -c 'apt-get update -qq && apt-get install -y -qq \
-                 protobuf-compiler && cargo build --release --lib && \
-                 cp /tmp/target/release/libalien_bindings_node.so {addon_file_name}'`. \
-                 Checked: {checked}.",
-                pkg = BINDINGS_PACKAGE,
-                checked = checked.join(", "),
-            ),
+            reason: missing_source_reason(spec, triple, target, &checked),
             build_output: None,
         }));
     };
 
     // The staged path is a SHARED singleton (`native.js` imports the literal
-    // `./alien-bindings.node`), and concurrent builds — parallel containers in
-    // one stack, parallel tests — all stage into it. Write via a unique temp
-    // file + atomic rename so a concurrent `bun build --compile` never reads a
-    // half-written addon, and never delete it after a build (see the cleanup
-    // in `typescript.rs`): removing it would yank the file out from under a
+    // `./<staged_file>`), and concurrent builds — parallel containers in one
+    // stack, parallel tests — all stage into it. Write via a unique temp file +
+    // atomic rename so a concurrent `bun build --compile` never reads a
+    // half-written addon, and never delete it after a build (see the cleanup in
+    // `typescript.rs`): removing it would yank the file out from under a
     // concurrent compile. The dist directory is build output, so a lingering
     // copy is expected debris and the next staging simply renames over it.
-    let staged = bindings_dist.join(STAGED_ADDON_FILE);
-    let staged_tmp = bindings_dist.join(format!(
-        "{}.staging-{}",
-        STAGED_ADDON_FILE,
-        std::process::id()
-    ));
+    let staged = addon_dist.join(spec.staged_file);
+    let staged_tmp = addon_dist.join(format!("{}.staging-{}", spec.staged_file, std::process::id()));
     let stage_result = async {
         fs::copy(&source, &staged_tmp).await?;
         fs::rename(&staged_tmp, &staged).await
@@ -489,12 +792,13 @@ async fn stage_addon_into(
             build_output: None,
         })?;
     info!(
-        "Staged native addon for {}: {} -> {}",
+        "Staged {} native addon for {}: {} -> {}",
+        spec.package,
         target,
         source.display(),
         staged.display()
     );
-    Ok(staged)
+    Ok(Some(staged))
 }
 
 #[cfg(test)]
@@ -510,9 +814,15 @@ mod tests {
     /// bun resolution is needed; the resolver is verified by the compiled
     /// artifact oracle.)
     async fn install_fake_bindings_package(app_dir: &Path) -> PathBuf {
+        install_fake_addon_package(app_dir, &BINDINGS).await
+    }
+
+    /// Create `<dir>/node_modules/<spec.package>/dist/native.js` and return the
+    /// `dist/` path — the directory an addon is staged into.
+    async fn install_fake_addon_package(app_dir: &Path, spec: &NativeAddonSpec) -> PathBuf {
         let dist = app_dir
             .join("node_modules")
-            .join(BINDINGS_PACKAGE)
+            .join(spec.package)
             .join("dist");
         fs::create_dir_all(&dist).await.unwrap();
         fs::write(dist.join("native.js"), "// fake native entry")
@@ -554,13 +864,21 @@ mod tests {
         .await
         .unwrap();
 
-        let staged = stage_addon_into(app.path(), &bindings_dist, BinaryTarget::LinuxArm64, "app")
-            .await
-            .expect("staging should succeed from the installed prebuild");
+        let staged = stage_addon_into(
+            app.path(),
+            &BINDINGS,
+            &bindings_dist,
+            BinaryTarget::LinuxArm64,
+            "app",
+            true,
+        )
+        .await
+        .expect("staging should succeed from the installed prebuild")
+        .expect("required addon must stage");
 
         assert_eq!(
             staged,
-            bindings_dist.join(STAGED_ADDON_FILE),
+            bindings_dist.join(BINDINGS.staged_file),
             "the addon must land next to dist/native.js under the exact name its static import uses"
         );
         assert_eq!(fs::read(&staged).await.unwrap(), addon_bytes);
@@ -593,9 +911,17 @@ mod tests {
         .await
         .unwrap();
 
-        let staged = stage_addon_into(&app_dir, &bindings_dist, BinaryTarget::LinuxX64, "svc")
-            .await
-            .unwrap();
+        let staged = stage_addon_into(
+            &app_dir,
+            &BINDINGS,
+            &bindings_dist,
+            BinaryTarget::LinuxX64,
+            "svc",
+            true,
+        )
+        .await
+        .unwrap()
+        .expect("required addon must stage");
         assert_eq!(fs::read(&staged).await.unwrap(), b"app-prebuild-addon");
     }
 
@@ -614,9 +940,17 @@ mod tests {
         let app_dir = root.path().join("apps").join("svc");
         let bindings_dist = install_fake_bindings_package(&app_dir).await;
 
-        let staged = stage_addon_into(&app_dir, &bindings_dist, BinaryTarget::LinuxX64, "svc")
-            .await
-            .unwrap();
+        let staged = stage_addon_into(
+            &app_dir,
+            &BINDINGS,
+            &bindings_dist,
+            BinaryTarget::LinuxX64,
+            "svc",
+            true,
+        )
+        .await
+        .unwrap()
+        .expect("required addon must stage");
         assert_eq!(fs::read(&staged).await.unwrap(), b"workspace-dev-addon");
     }
 
@@ -634,7 +968,7 @@ mod tests {
         };
         let triple = napi_triple(target).unwrap();
 
-        let error = stage_addon_into(app.path(), &bindings_dist, target, "app")
+        let error = stage_addon_into(app.path(), &BINDINGS, &bindings_dist, target, "app", true)
             .await
             .expect_err("staging must fail when no addon source exists");
         let message = error.to_string();
@@ -649,12 +983,81 @@ mod tests {
         let app = tempdir().unwrap();
         let bindings_dist = install_fake_bindings_package(app.path()).await;
 
-        let error = stage_addon_into(app.path(), &bindings_dist, BinaryTarget::WindowsX64, "app")
-            .await
-            .expect_err("windows has no native addon");
+        let error = stage_addon_into(
+            app.path(),
+            &BINDINGS,
+            &bindings_dist,
+            BinaryTarget::WindowsX64,
+            "app",
+            true,
+        )
+        .await
+        .expect_err("windows has no native addon");
         assert!(
             error.to_string().contains("windows-x64"),
             "error should name the unsupported target, got: {error}"
         );
+    }
+
+    /// The ai-gateway addon is staged best-effort: when its addon for the target
+    /// is missing, staging returns `Ok(None)` (skip) instead of failing — a
+    /// non-AI Worker that resolves ai-gateway through the SDK must still build.
+    #[tokio::test]
+    async fn optional_addon_skips_when_source_is_missing() {
+        let app = tempdir().unwrap();
+        let ai_dist = install_fake_addon_package(app.path(), &AI_GATEWAY).await;
+
+        // Cross target (never the host), no prebuild, no workspace crate above
+        // the temp dir — no ai-gateway addon source exists.
+        let target = if BinaryTarget::current_os() == BinaryTarget::LinuxArm64 {
+            BinaryTarget::LinuxX64
+        } else {
+            BinaryTarget::LinuxArm64
+        };
+
+        let staged = stage_addon_into(app.path(), &AI_GATEWAY, &ai_dist, target, "app", false)
+            .await
+            .expect("optional staging must not error when the addon is missing");
+        assert!(
+            staged.is_none(),
+            "a missing optional addon must be skipped (None), not staged"
+        );
+        assert!(
+            !ai_dist.join(AI_GATEWAY.staged_file).exists(),
+            "nothing should be staged when the optional addon is absent"
+        );
+    }
+
+    /// When the ai-gateway launcher binary IS present (shipped by the per-triple
+    /// prebuild package as the bare `alien-ai-gateway` executable) it stages under
+    /// its own literal file name (`alien-ai-gateway.bin`) next to its dist/native.js.
+    #[tokio::test]
+    async fn optional_ai_gateway_binary_stages_when_present() {
+        let app = tempdir().unwrap();
+        let ai_dist = install_fake_addon_package(app.path(), &AI_GATEWAY).await;
+
+        let prebuild_dir = app
+            .path()
+            .join("node_modules")
+            .join("@alienplatform/ai-gateway-linux-arm64-gnu");
+        fs::create_dir_all(&prebuild_dir).await.unwrap();
+        let binary_bytes = b"fake-ai-gateway-linux-arm64-binary";
+        fs::write(prebuild_dir.join("alien-ai-gateway"), binary_bytes)
+            .await
+            .unwrap();
+
+        let staged = stage_addon_into(
+            app.path(),
+            &AI_GATEWAY,
+            &ai_dist,
+            BinaryTarget::LinuxArm64,
+            "app",
+            false,
+        )
+        .await
+        .expect("staging should succeed from the installed prebuild")
+        .expect("present optional binary must stage");
+        assert_eq!(staged, ai_dist.join(AI_GATEWAY.staged_file));
+        assert_eq!(fs::read(&staged).await.unwrap(), binary_bytes);
     }
 }

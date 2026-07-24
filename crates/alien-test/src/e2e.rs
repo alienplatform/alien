@@ -206,6 +206,8 @@ pub enum Binding {
     ArtifactRegistry,
     /// Service account identity and impersonation
     ServiceAccount,
+    /// AI Gateway binding injection + a real model invoke (skippable via ALIEN_E2E_AI_SKIP_INVOKE=1)
+    Ai,
 }
 
 impl std::fmt::Display for Binding {
@@ -231,6 +233,7 @@ impl std::fmt::Display for Binding {
             Binding::Build => write!(f, "build"),
             Binding::ArtifactRegistry => write!(f, "artifact-registry"),
             Binding::ServiceAccount => write!(f, "service-account"),
+            Binding::Ai => write!(f, "ai"),
         }
     }
 }
@@ -271,6 +274,11 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             // own secret sync.
             if model == DeploymentModel::Push {
                 bindings.push(Binding::ManagedSecret);
+            }
+            // AI check: IAM grant + binding injection on every ambient cloud, plus a
+            // real model call unless ALIEN_E2E_AI_SKIP_INVOKE=1 (quota-zeroed accounts).
+            if model == DeploymentModel::Push {
+                bindings.push(Binding::Ai);
             }
         }
         Platform::Kubernetes => {
@@ -345,6 +353,9 @@ pub fn exclusion_reason(
                 && cfg!(target_os = "windows") =>
         {
             Some("Bun-on-Windows runtime issue: detached async tasks in waitUntil don't execute")
+        }
+        Binding::Ai if app == TestApp::ComprehensiveRust => {
+            Some("AI binding check not implemented in the Rust test app")
         }
         _ => None,
     }

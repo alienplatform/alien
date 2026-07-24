@@ -1108,6 +1108,16 @@ fn deserialize_controller_by_tag(
             deser!(crate::remote_stack_management::TestRemoteStackManagementController)
         }
 
+        // AI controllers
+        #[cfg(feature = "aws")]
+        "AwsAiController" => deser!(crate::ai::AwsAiController),
+        #[cfg(feature = "gcp")]
+        "GcpAiController" => deser!(crate::ai::GcpAiController),
+        #[cfg(feature = "azure")]
+        "AzureAiController" => deser!(crate::ai::AzureAiController),
+        #[cfg(feature = "local")]
+        "LocalAiController" => deser!(crate::ai::LocalAiController),
+
         // Service activation controllers
         #[cfg(feature = "gcp")]
         "GcpServiceActivationController" => {

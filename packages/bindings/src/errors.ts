@@ -130,3 +130,6 @@ export function unwrapNapiError(err: unknown): AlienError {
     context,
   })
 }
+
+// Shared with the AI binding surface in @alienplatform/ai-gateway.
+export { BindingNotFoundError } from "@alienplatform/core"

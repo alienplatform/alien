@@ -61,6 +61,7 @@ pub async fn check_all_bindings(
             Binding::Build => bindings::check_build(deployment).await?,
             Binding::ArtifactRegistry => bindings::check_artifact_registry(deployment).await?,
             Binding::ServiceAccount => bindings::check_service_account(deployment).await?,
+            Binding::Ai => bindings::check_ai(deployment).await?,
         }
 
         info!(binding = %binding, "Binding check passed");

@@ -22,6 +22,7 @@ members = [
   "crates/alien-k8s-clients",
   "crates/alien-observer",
   "crates/alien-error",
+  "crates/alien-ai-gateway",
   "crates/alien-error-derive",
   "crates/alien-permissions",
   "crates/alien-preflights",
@@ -48,6 +49,7 @@ resolver = "2"
 default-members = [
   "crates/alien-core",
   "crates/alien-error",
+  "crates/alien-ai-gateway",
   "crates/alien-macros"
 ]
 
@@ -64,6 +66,7 @@ license-file = "LICENSE.md"
 alien-commands = { path = "crates/alien-commands", version = "2.1.6", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
 alien-bindings = { path = "crates/alien-bindings", version = "2.1.6", default-features = false }
+alien-ai-gateway = { path = "crates/alien-ai-gateway", version = "2.1.6" }
 alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "2.1.6" }
 alien-sdk = { path = "crates/alien-sdk", version = "2.1.6", default-features = false }
 alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "2.1.6" }
@@ -98,6 +101,7 @@ alien-platform-api = { path = "client-sdks/platform/rust", version = "2.1.6", de
 anyhow = "1.0"
 async-stream = "0.3"
 async-trait = "0.1.88"
+aws-config = "1.5"
 aws-credential-types = "1.2"
 aws_lambda_events = { version = "0.16", features = ["cloudwatch_events", "s3", "sqs"] }
 aws-sigv4 = "1.3.2"
@@ -209,6 +213,7 @@ wasm-bindgen-futures = "0.4.40"
 wasm-bindgen-test = "0.3.0"
 console_error_panic_hook = "0.1.7"
 aws-smithy-async = "1.2.5"
+aws-smithy-eventstream = "0.60"
 aws-smithy-runtime-api = "1.8"
 aws-smithy-types = "1.3"
 getrandom = { version = "0.3", features = ["wasm_js"] }

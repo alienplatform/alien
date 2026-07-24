@@ -15,11 +15,11 @@ export const ComputeClusterSchema = z.object({
               },
 "containerCidr": z.string().describe("Container CIDR block for internal container networking.\nAuto-generated as \"10.244.0.0/16\" if not specified.\nEach machine gets a /24 subnet from this range.").nullish(),
 "failureDomainSpread": z.optional(z.object({
-
+    
     }).catchall(z.int().min(0)).describe("Requested failure-domain spread keyed by capacity group.\nEmpty preserves the existing aggregate layout.")),
 "id": z.string().describe("Unique identifier for the container cluster.\nMust contain only alphanumeric characters, hyphens, and underscores."),
 "selectedFailureDomains": z.optional(z.object({
-
+    
     }).catchall(z.array(z.string())).describe("Concrete provider failure domains selected during setup, keyed by capacity group.\nEmpty preserves the existing aggregate layout when no spread policy is configured."))
     }).describe("ComputeCluster resource for running long-running container workloads.\n\nA ComputeCluster provides the setup-owned machine boundary for containers.\nAlien may manage the worker fleet inside that boundary when setup grants\n`compute-cluster/management`.\n\n## Architecture\n\n- **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups\n- **Alien** manages allowed fleet operations: machine count and runtime\n  machine image rollout\n- A node agent runs on each machine from the selected runtime image channel\n\n## Example\n\n```rust\nuse alien_core::{CapacityGroup, ComputeCluster, MachineProfile};\n\nlet cluster = ComputeCluster::new(\"compute\".to_string())\n    .capacity_group(CapacityGroup {\n        group_id: \"general\".to_string(),\n        instance_type: None,\n        profile: Some(MachineProfile {\n            cpu: \"4.0\".to_string(),\n            memory_bytes: 16 * 1024 * 1024 * 1024,\n            ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,\n            architecture: None,\n            gpu: None,\n        }),\n        min_size: 1,\n        max_size: 5,\n        scale_policy: None,\n        nested_virtualization: None,\n    })\n    .build();\n```")
 

@@ -62,6 +62,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "nextjs-app",
         "Deploy a Next.js app as a single container in the customer's cloud.",
     ),
+    (
+        "ai-quickstart-ts",
+        "The smallest AI setup: one worker calling cloud LLMs, no API keys, no database.",
+    ),
 ];
 
 fn fallback_templates() -> Vec<TemplateInfo> {

@@ -11,6 +11,7 @@ import { Hono } from "hono"
 
 import { sanitizeKvKeyPart } from "./helpers.js"
 
+import aiRoutes from "./handlers/ai.js"
 import environmentRoutes from "./handlers/environment.js"
 import eventsRoutes from "./handlers/events.js"
 import healthRoutes from "./handlers/health.js"
@@ -26,6 +27,7 @@ import waitUntilRoutes from "./handlers/wait-until.js"
 const app = new Hono()
 
 // Mount handler routes
+app.route("/", aiRoutes)
 app.route("/", healthRoutes)
 app.route("/", environmentRoutes)
 app.route("/", inspectRoutes)

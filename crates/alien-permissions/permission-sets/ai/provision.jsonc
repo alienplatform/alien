@@ -1,0 +1,69 @@
+{
+  "id": "ai/provision",
+  "description": "Allows provisioning and destroying AI gateway resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Bedrock access is grantless at the infrastructure level; provisioning
+          // consists of attaching/detaching the bedrock-invoke policy on the
+          // workload IAM role created for this resource.
+          "actions": [
+            "iam:PutRolePolicy",
+            "iam:GetRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:ListRolePolicies"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "serviceusage.services.enable",
+            "resourcemanager.projects.getIamPolicy",
+            "resourcemanager.projects.setIamPolicy"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.CognitiveServices/accounts/write",
+            "Microsoft.CognitiveServices/accounts/delete",
+            "Microsoft.CognitiveServices/accounts/read",
+            // Deploy and inspect the predefined model set at provision time.
+            "Microsoft.CognitiveServices/accounts/deployments/write",
+            "Microsoft.CognitiveServices/accounts/deployments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete",
+            "Microsoft.Authorization/roleAssignments/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

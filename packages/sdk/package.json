@@ -50,6 +50,7 @@
     "vitest": "^3.1.4"
   },
   "dependencies": {
+    "@alienplatform/ai-gateway": "workspace:^",
     "@alienplatform/bindings": "workspace:^",
     "@alienplatform/core": "workspace:^",
     "@bufbuild/protobuf": "^2.5.3",
