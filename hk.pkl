@@ -10,6 +10,10 @@ local fast_steps = new Mapping<String, Step> {
     }
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["check-merge-conflict"] = Builtins.check_merge_conflict
+    ["max-lines"] {
+        glob = List("*.rs", "*.ts", "*.tsx", "*.js", "*.jsx")
+        check = "scripts/check-max-lines.sh"
+    }
     ["newlines"] = Builtins.newlines
     ["rustfmt"] = (Builtins.rustfmt) {
         check = "rustfmt --check --edition 2021 {{files}}"

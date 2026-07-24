@@ -5,4 +5,4 @@
 3. Implement core operations only: OK to skip optional fields/features, but all required fields must be present for compatibility
 4. Map service errors: Check AWS docs "Common Errors" section and map to `RemoteResourceNotFound`, `AuthenticationError`, `RateLimitExceeded`, etc
 5. Use infrastructure: `.aws_sign_v4()` for auth, `.aws_error_for_status()` for errors, support `service_endpoint_overrides`
-6. Add comprehensive tests: Create `tests/aws_[servicename]_client_tests.rs`, follow existing test patterns
+6. Add comprehensive tests: Create `tests/aws_[servicename]_client_tests.rs`, follow existing test patterns (s3's tests live in the `tests/aws_s3_client_tests/` directory module, split by topic because of their size)
