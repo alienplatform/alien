@@ -7,6 +7,7 @@ import {
   WorkerSchema,
   type WorkerTrigger,
 } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
 import { Resource } from "./resource.js"
 
 export type {
@@ -36,6 +37,7 @@ export interface WorkerPublicEndpointOptions {
  * Workers are the primary compute resource in serverless applications, designed to be stateless and ephemeral.
  */
 export class Worker {
+  private _enabledWhen?: string
   private _config: Partial<WorkerConfig> = {
     links: [],
     triggers: [],
@@ -240,12 +242,27 @@ export class Worker {
    * @returns An immutable Resource representing the configured worker.
    * @throws Error if the worker configuration is invalid (e.g., missing code).
    */
+  /**
+   * Creates this worker only when the given boolean stack input is true.
+   * A live gate is re-resolved on every reconcile: declining deletes the
+   * worker, accepting recreates it.
+   * @param input A boolean stack input declared with alien.inputs({...}).
+   * @returns The builder instance.
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = input.id
+    return this
+  }
+
   public build(): Resource {
     const config = WorkerSchema.parse(this._config)
 
-    return new Resource({
-      type: "worker",
-      ...config,
-    })
+    return new Resource(
+      {
+        type: "worker",
+        ...config,
+      },
+      this._enabledWhen,
+    )
   }
 }

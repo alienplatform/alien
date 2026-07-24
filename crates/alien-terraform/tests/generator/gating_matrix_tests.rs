@@ -8,8 +8,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, Platform, Queue,
-    ResourceLifecycle, Stack, StackBuilder, StackSettings, Storage, Vault,
+    ownership_policy_for_resource_type, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, Kv, Platform, Queue, ResourceLifecycle, Stack, StackBuilder,
+    StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
 
@@ -119,6 +120,10 @@ fn every_registered_emitter_is_policy_refused_or_renders_gated() {
             // `a_gate_on_a_policy_refused_type_fails_at_render`).
             continue;
         }
+        if !ownership_policy_for_resource_type(resource_type).allows_frozen() {
+            assert_live_gate_ignored_by_setup(resource_type, platform);
+            continue;
+        }
         match gated_fixture(resource_type, platform) {
             Some(stack) => assert_gated_render(resource_type, platform, &stack),
             None => allowed_without_fixture.push(format!("{resource_type} ({platform:?})")),
@@ -130,6 +135,55 @@ fn every_registered_emitter_is_policy_refused_or_renders_gated() {
         "these registered emitters belong to policy-allowed types but have no gated fixture; \
          add one to this matrix (or refuse the type in alien_core::gateability) before the \
          type silently becomes gateable: {allowed_without_fixture:?}"
+    );
+}
+
+/// A gated Live resource never reaches a setup module: the generator skips
+/// Live lifecycles before gate handling, so setup renders as if the resource
+/// were absent while still asking the deployer for the input the runtime
+/// strip resolves.
+fn assert_live_gate_ignored_by_setup(resource_type: &str, platform: Platform) {
+    let Some(target) = target_for(platform) else {
+        return;
+    };
+    let stack = Stack::new("matrix-stack".to_string())
+        .inputs(vec![gate_input(
+            "fixtureEnabled",
+            "Enable the fixture resource",
+            "Whether to create the gated matrix fixture.",
+        )])
+        .add_enabled_when(
+            Worker::new("fixture".to_string())
+                .permissions("fixture".to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/fixture:latest".to_string(),
+                })
+                .build(),
+            ResourceLifecycle::Live,
+            "fixtureEnabled",
+        )
+        .build();
+
+    let module = render(&stack, target, StackSettings::default());
+    let locals = module
+        .files
+        .get("locals.tf")
+        .expect("locals.tf should exist");
+    assert!(
+        !locals.contains("var.input_fixture_enabled ?"),
+        "{resource_type}/{platform:?}: setup has no gated registration entry for a Live          resource:\n{locals}"
+    );
+    assert!(
+        !locals.contains("\"fixture\""),
+        "{resource_type}/{platform:?}: a Live resource has no setup registration entry:\n{locals}"
+    );
+    let variables = module
+        .files
+        .get("variables.tf")
+        .expect("variables.tf should exist");
+    assert!(
+        variables.contains("input_fixture_enabled"),
+        "{resource_type}/{platform:?}: the deployer is still asked for the input the runtime          strip resolves"
     );
 }
 

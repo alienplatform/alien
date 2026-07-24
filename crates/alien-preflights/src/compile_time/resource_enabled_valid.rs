@@ -279,10 +279,11 @@ mod tests {
         assert!(errors_for(stack).await.is_empty());
     }
 
-    /// Compute stays out: gating code-carrying resources is a rollout
-    /// question, not a data-plane opt-out.
+    /// Compute gates as an existence choice: declining a live workload rides
+    /// the same removal path as deleting it from a release, so the gate
+    /// passes the same rules as any live data resource.
     #[tokio::test]
-    async fn rejects_a_gated_compute_resource() {
+    async fn accepts_a_gated_compute_resource() {
         let stack = Stack::new("test-stack".to_string())
             .inputs(vec![boolean_input()])
             .add_enabled_when(
@@ -297,9 +298,7 @@ mod tests {
             )
             .build();
 
-        let errors = errors_for(stack).await;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("cannot be optional"), "{errors:?}");
+        assert!(errors_for(stack).await.is_empty());
     }
 
     #[tokio::test]

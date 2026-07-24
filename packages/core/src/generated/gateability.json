@@ -1,18 +1,18 @@
 {
   "container": {
     "frozen": false,
-    "live": false
+    "live": true
   },
   "daemon": {
     "frozen": false,
-    "live": false
+    "live": true
   },
   "email": {
-    "frozen": false,
+    "frozen": true,
     "live": false
   },
   "experimental/aws-opensearch": {
-    "frozen": false,
+    "frozen": true,
     "live": false
   },
   "kv": {
@@ -37,6 +37,6 @@
   },
   "worker": {
     "frozen": false,
-    "live": false
+    "live": true
   }
 }

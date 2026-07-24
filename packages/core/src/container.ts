@@ -10,6 +10,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
 import { Resource } from "./resource.js"
 
 export type PublicEndpointOptions =
@@ -61,6 +62,7 @@ export interface PersistentStorageOptions {
  * like web services, APIs, databases, and background workers.
  */
 export class Container {
+  private _enabledWhen?: string
   private _config: Partial<ContainerConfig> = {
     links: [],
     ports: [],
@@ -424,12 +426,27 @@ export class Container {
    * @returns An immutable Resource representing the configured container.
    * @throws Error if the container configuration is invalid.
    */
+  /**
+   * Creates this container only when the given boolean stack input is true.
+   * A live gate is re-resolved on every reconcile: declining deletes the
+   * container (data included), accepting recreates it.
+   * @param input A boolean stack input declared with alien.inputs({...}).
+   * @returns The builder instance.
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = input.id
+    return this
+  }
+
   public build(): Resource {
     const config = ContainerSchema.parse(this._config)
 
-    return new Resource({
-      type: "container",
-      ...config,
-    })
+    return new Resource(
+      {
+        type: "container",
+        ...config,
+      },
+      this._enabledWhen,
+    )
   }
 }
