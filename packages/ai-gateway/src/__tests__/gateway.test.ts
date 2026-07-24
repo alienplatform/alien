@@ -8,16 +8,19 @@ import { createGateway } from "../gateway.js"
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }))
 vi.mock("node:child_process", () => ({ spawn: (...args: unknown[]) => spawnMock(...args) }))
 
-/** A minimal stand-in for a spawned ChildProcess the gateway wrapper drives. */
+/** A minimal stand-in for a spawned ChildProcess the gateway wrapper drives. Real stdio are
+ *  `net.Socket`s, so the streams carry `unref` alongside `resume`. */
+type FakeStream = EventEmitter & { resume: () => void; unref: () => void }
 function fakeChild() {
-  const mkStream = () => {
-    const s = new EventEmitter() as EventEmitter & { resume: () => void }
-    s.resume = () => {}
+  const mkStream = (): FakeStream => {
+    const s = new EventEmitter() as FakeStream
+    s.resume = vi.fn()
+    s.unref = vi.fn()
     return s
   }
   const child = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter
-    stderr: EventEmitter
+    stdout: FakeStream
+    stderr: FakeStream
     kill: () => void
     unref: () => void
   }
@@ -51,6 +54,28 @@ describe("createGateway", () => {
     expect(spawnMock).toHaveBeenCalledWith("/opt/alien-ai-gateway", ["--gateway-serve"], {
       stdio: ["ignore", "pipe", "pipe"],
     })
+  })
+
+  it("unrefs the child and both stdio sockets so a one-shot host can exit", async () => {
+    let child: ReturnType<typeof fakeChild> | undefined
+    spawnMock.mockImplementation(() => {
+      child = fakeChild()
+      queueMicrotask(() => child?.stdout.emit("data", Buffer.from(READY)))
+      return child
+    })
+    const gateway = createGateway(async () => "/opt/alien-ai-gateway")
+
+    await gateway.startAiGateway()
+
+    // resume() drains the pipes but keeps their sockets referenced. Unref-ing the child
+    // alone is not enough: unless both stdio sockets are unref'd too, a process that calls
+    // ai() once and returns never exits. (Manual end-to-end check: a one-shot script that
+    // awaits a single ai() call should exit on its own, with no lingering handle.)
+    expect(child?.stdout.resume).toHaveBeenCalledTimes(1)
+    expect(child?.stderr.resume).toHaveBeenCalledTimes(1)
+    expect(child?.stdout.unref).toHaveBeenCalledTimes(1)
+    expect(child?.stderr.unref).toHaveBeenCalledTimes(1)
+    expect(child?.unref).toHaveBeenCalledTimes(1)
   })
 
   it("uses ALIEN_AI_GATEWAY_URL without spawning when a launcher already started the gateway", async () => {
