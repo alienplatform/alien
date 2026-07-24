@@ -175,43 +175,61 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
-    let prepared_stack = match prepare_import_stack(source_stack.clone(), &req).await {
+    // A gated resource renders behind its input in the setup template, so its
+    // absence from the delivered resource ids IS the deployer's answer,
+    // resolved on the declared stack before anything else runs. The answers
+    // are recorded on the deployment, where the fixity check holds every
+    // later value against them — starting with this request's own input
+    // values, which must not contradict what the template actually created:
+    // a live resource sharing a frozen gate would otherwise follow the
+    // contradicting value instead of the frozen answer.
+    let delivered_resource_ids: std::collections::HashSet<String> = req
+        .resources
+        .iter()
+        .map(|resource| resource.id.clone())
+        .collect();
+    let imported_gate_answers =
+        match alien_deployment::resolve_frozen_gate_answers_from_presence(
+            source_stack,
+            &delivered_resource_ids,
+            &req.input_values,
+        ) {
+            Ok(answers) => answers,
+            Err(e) => return e.into_response(),
+        };
+    if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
+        &imported_gate_answers,
+        &alien_deployment::frozen_gating_inputs(source_stack),
+        &req.input_values,
+    ) {
+        return e.into_response();
+    }
+    // The strips run BEFORE the mutations, exactly like the deployment
+    // paths: a declined frozen resource never existed, so nothing may be
+    // derived from it — no service-account grants, no profile entries — and
+    // a live resource dominated by a declined frozen gate goes with it, or
+    // its links to the stripped sibling would dangle through the template
+    // preflights. Live-only gates resolve after the mutations, below.
+    let source_stack = match alien_deployment::strip_declined_frozen_resources_from_presence(
+        source_stack.clone(),
+        &delivered_resource_ids,
+        &req.input_values,
+    ) {
+        Ok(stack) => stack,
+        Err(e) => return e.into_response(),
+    };
+    let source_stack = alien_deployment::strip_frozen_dominated_live_resources(
+        source_stack,
+        &imported_gate_answers,
+    );
+
+    let prepared_stack = match prepare_import_stack(source_stack, &req).await {
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
 
     let mut stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
-    // A gated resource renders behind its input in the setup template, so its
-    // absence from the import IS the deployer's answer. Imported deployments
-    // enter the runner at InitialSetup with this prepared stack; leaving the
-    // declined entry in would make the runner create the very resource the
-    // deployer said no to. A live gated resource follows the request's input
-    // values here for the same reason.
-    // The answers are resolved before the strip — a declined resource must
-    // still be in the stack for its input to be enumerated — and recorded on
-    // the deployment, where the fixity check holds every later value against
-    // them.
-    let declared_stack = prepared_stack.clone();
-    let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers(
-        &prepared_stack,
-        &stack_state,
-        &req.input_values,
-    ) {
-        Ok(answers) => answers,
-        Err(e) => return e.into_response(),
-    };
-    // No mutations run between the two strips on the import path: the
-    // registered stack is the already-mutated release render, so both
-    // families resolve here, back to back.
-    let prepared_stack = match alien_deployment::strip_declined_frozen_resources(
-        prepared_stack,
-        &stack_state,
-        &req.input_values,
-    ) {
-        Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
     let prepared_stack = match alien_deployment::strip_declined_live_resources(
@@ -321,19 +339,64 @@ pub async fn stack_import(
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
             // A deployment from before answers were recorded still has a
-            // ground truth: presence in its own settled state. Deriving it
-            // here means a re-registration cannot smuggle a flipped answer
-            // past an empty map.
-            if persisted_answers.is_empty() {
-                if let Some(existing_state) = existing.stack_state.as_ref() {
-                    persisted_answers = match alien_deployment::resolve_frozen_gate_answers(
-                        &declared_stack,
-                        existing_state,
-                        &Default::default(),
-                    ) {
-                        Ok(answers) => answers,
+            // ground truth: presence in its own settled state, read against
+            // the release that state settled under. The incoming release may
+            // introduce a brand-new gate whose resource is naturally absent
+            // from the old state — deriving from the new stack would
+            // fabricate a declined answer for it and refuse its first
+            // legitimate acceptance. When the baseline cannot be loaded at
+            // all, refuse rather than let this re-registration seed its own
+            // answers as history (fail closed): answers record on the next
+            // successful reconcile, which derives them from the settled
+            // state, and re-imports work again from there.
+            if persisted_answers.is_empty() && !imported_gate_answers.is_empty() {
+                let baseline_release_id = existing
+                    .current_release_id
+                    .as_deref()
+                    .or(existing.desired_release_id.as_deref());
+                let baseline_stack = match baseline_release_id {
+                    Some(baseline_release_id) => match state
+                        .release_store
+                        .get_release(&subject, baseline_release_id)
+                        .await
+                    {
+                        Ok(baseline_release) => baseline_release
+                            .as_ref()
+                            .and_then(|release| resolve_stack(release, req.platform).ok().cloned()),
                         Err(e) => return e.into_response(),
-                    };
+                    },
+                    None => None,
+                };
+                match (baseline_stack, existing.stack_state.as_ref()) {
+                    (Some(baseline_stack), Some(existing_state)) => {
+                        persisted_answers = match alien_deployment::resolve_frozen_gate_answers(
+                            &baseline_stack,
+                            existing_state,
+                            &Default::default(),
+                        ) {
+                            Ok(answers) => answers,
+                            Err(e) => return e.into_response(),
+                        };
+                    }
+                    _ => {
+                        let input_id = imported_gate_answers
+                            .keys()
+                            .next()
+                            .cloned()
+                            .unwrap_or_default();
+                        return AlienError::new(
+                            alien_deployment::ErrorData::FrozenGateAnswerUnderivable {
+                                input_id,
+                                reason: format!(
+                                    "the deployment predates recorded gate answers and its \
+                                     baseline release ({}) or settled state is unavailable to \
+                                     derive them from",
+                                    baseline_release_id.unwrap_or("none")
+                                ),
+                            },
+                        )
+                        .into_response();
+                    }
                 }
             }
             for (input_id, imported_answer) in &imported_gate_answers {

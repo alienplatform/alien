@@ -50,6 +50,8 @@ pub async fn handle_pending(
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let target_stack =
         strip_declined_frozen_resources(target_stack, &stack_state, &config.input_values)?;
+    let target_stack =
+        strip_frozen_dominated_live_resources(target_stack, &persisted_gate_answers);
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -134,8 +136,22 @@ pub async fn handle_pending(
 /// An ungated resource missing from an import stays, so real drift still
 /// surfaces as a failure.
 pub fn strip_declined_frozen_resources(
-    mut stack: Stack,
+    stack: Stack,
     stack_state: &StackState,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<Stack> {
+    let present = stack_state.resources.keys().cloned().collect();
+    strip_declined_frozen_resources_from_presence(stack, &present, input_values)
+}
+
+/// [`strip_declined_frozen_resources`] against a raw set of present resource
+/// ids — the setup import path resolves declines from the registration
+/// payload's ids before any stack state exists, so its strips can run ahead
+/// of the mutations like the deployment paths' do. An empty set means no
+/// import seeded the answer and the input values decide.
+pub fn strip_declined_frozen_resources_from_presence(
+    mut stack: Stack,
+    present_resource_ids: &std::collections::HashSet<String>,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<Stack> {
     let mut declined: Vec<String> = Vec::new();
@@ -151,10 +167,10 @@ pub fn strip_declined_frozen_resources(
             continue;
         }
 
-        let is_declined = if stack_state.resources.is_empty() {
+        let is_declined = if present_resource_ids.is_empty() {
             !gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
         } else {
-            !stack_state.resources.contains_key(resource_id.as_str())
+            !present_resource_ids.contains(resource_id.as_str())
         };
         if is_declined {
             declined.push(resource_id.clone());
@@ -162,6 +178,37 @@ pub fn strip_declined_frozen_resources(
     }
     remove_declined(&mut stack, &declined);
     Ok(stack)
+}
+
+/// Remove live resources whose gate input carries a frozen answer of false.
+/// A live resource sharing a frozen-gating input follows the fixed answer
+/// (frozen dominance): the answer can never flip, so unlike a live-only
+/// decline there is no later acceptance to preserve a baseline for — and
+/// leaving the resource in until the late strip would dangle its links to
+/// the frozen sibling the early strip just removed, failing the reference
+/// preflight on a graph the gate rules explicitly permit.
+pub fn strip_frozen_dominated_live_resources(
+    mut stack: Stack,
+    frozen_answers: &alien_core::GateAnswers,
+) -> Stack {
+    let mut declined: Vec<String> = Vec::new();
+    for (resource_id, entry) in stack.resources() {
+        let Some(input_id) = entry.enabled_when.as_deref() else {
+            continue;
+        };
+        let setup_created = alien_core::ownership_policy_for_resource_type(
+            entry.config.resource_type().as_ref(),
+        )
+        .should_emit_in_setup(entry.lifecycle);
+        if setup_created {
+            continue;
+        }
+        if frozen_answers.get(input_id) == Some(&false) {
+            declined.push(resource_id.clone());
+        }
+    }
+    remove_declined(&mut stack, &declined);
+    stack
 }
 
 /// Remove gated live resources whose input resolves false. Runs AFTER the
@@ -239,6 +286,18 @@ pub fn resolve_frozen_gate_answers(
     stack_state: &StackState,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<alien_core::GateAnswers> {
+    let present = stack_state.resources.keys().cloned().collect();
+    resolve_frozen_gate_answers_from_presence(stack, &present, input_values)
+}
+
+/// [`resolve_frozen_gate_answers`] against a raw set of present resource ids
+/// — see [`strip_declined_frozen_resources_from_presence`] for why the setup
+/// import path resolves from the registration payload directly.
+pub fn resolve_frozen_gate_answers_from_presence(
+    stack: &Stack,
+    present_resource_ids: &std::collections::HashSet<String>,
+    input_values: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<alien_core::GateAnswers> {
     let mut answers = alien_core::GateAnswers::new();
     for (resource_id, entry) in stack.resources() {
         let Some(input_id) = entry.enabled_when.as_deref() else {
@@ -252,10 +311,10 @@ pub fn resolve_frozen_gate_answers(
             continue;
         }
 
-        let answer = if stack_state.resources.is_empty() {
+        let answer = if present_resource_ids.is_empty() {
             gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
         } else {
-            stack_state.resources.contains_key(resource_id.as_str())
+            present_resource_ids.contains(resource_id.as_str())
         };
         if let Some(previous) = answers.insert(input_id.to_string(), answer) {
             if previous != answer {
@@ -307,7 +366,7 @@ pub fn enforce_frozen_gate_fixity(
         let Some(value) = input_values.get(input_id) else {
             continue;
         };
-        let Some(requested) = value.as_bool() else {
+        let Some(requested) = gate_value_as_bool(value) else {
             return Err(AlienError::new(ErrorData::MissingConfiguration {
                 message: format!(
                     "Input '{input_id}' gates a setup-created resource but its value is not a \
@@ -407,6 +466,22 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
     }
 }
 
+/// A gate value from the wire: JSON booleans stay booleans, and the
+/// CloudFormation parameter strings "true"/"false" coerce — CloudFormation
+/// has no boolean parameter type, so its registration payloads deliver gate
+/// answers as strings. Anything else is `None`, refused loudly by callers.
+fn gate_value_as_bool(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(answer) => Some(*answer),
+        serde_json::Value::String(text) => match text.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The deployer's answer for a live gate: the provided value, else the
 /// input's declared boolean default.
 fn gate_resolves_true(
@@ -416,7 +491,7 @@ fn gate_resolves_true(
     resource_id: &str,
 ) -> Result<bool> {
     if let Some(value) = input_values.get(input_id) {
-        return value.as_bool().ok_or_else(|| {
+        return gate_value_as_bool(value).ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
                 message: format!(
                     "Input '{input_id}' enables resource '{resource_id}' but its value is not \
@@ -847,17 +922,86 @@ mod tests {
         );
     }
 
-    /// Input values are coerced to their declared kinds before they reach
-    /// this layer; a non-boolean here is corrupt input and must fail loudly.
+    /// CloudFormation has no boolean parameter type, so its registration
+    /// payloads deliver gate answers as the strings "true"/"false" — those
+    /// coerce. Anything else is corrupt input and must fail loudly.
     #[test]
-    fn a_non_boolean_gate_value_fails_fast() {
-        let error = strip_declined_live_resources(
+    fn a_string_boolean_gate_value_coerces_and_anything_else_fails_fast() {
+        let dropped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
             &Default::default(),
         )
-        .expect_err("string values are not answers");
+        .expect("a CloudFormation string boolean resolves");
+        assert!(
+            !dropped.resources.contains_key("cache"),
+            "the string \"false\" declines like the boolean"
+        );
+
+        let error = strip_declined_live_resources(
+            live_gated_stack(Some(true)),
+            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("yes"))]),
+            &Default::default(),
+        )
+        .expect_err("an arbitrary string is not an answer");
         assert!(error.message.contains("boolean"), "{}", error.message);
+    }
+
+    /// The pause-consumer shape: a live consumer sharing its frozen
+    /// dependency's gate. A decline must remove BOTH before the preflights —
+    /// the frozen strip alone would leave the consumer's link dangling and
+    /// fail the reference check on a graph the gate rules explicitly permit.
+    /// The answer can never flip (frozen dominance), so no baseline needs
+    /// preserving for a later acceptance.
+    #[test]
+    fn a_declined_shared_gate_strips_the_dominated_live_resource() {
+        let shared_gate_stack = |value: bool| {
+            let input = StackInputDefinition::deployer_boolean(
+                "extrasEnabled",
+                "Enable extras",
+                "Whether to run the extras store and its consumer.",
+                Some(value),
+            );
+            Stack::new("gated-stack".to_string())
+                .inputs(vec![input])
+                .add_enabled_when(
+                    Kv::new("extras".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                    "extrasEnabled",
+                )
+                .add_enabled_when(
+                    Kv::new("extras-cache".to_string()).build(),
+                    ResourceLifecycle::Live,
+                    "extrasEnabled",
+                )
+                .build()
+        };
+
+        let declined = shared_gate_stack(false);
+        let answers =
+            resolve_frozen_gate_answers(&declined, &StackState::new(Platform::Aws), &Default::default())
+                .expect("the declared default resolves");
+        assert_eq!(answers.get("extrasEnabled"), Some(&false));
+        let stripped =
+            strip_declined_frozen_resources(declined, &StackState::new(Platform::Aws), &Default::default())
+                .expect("the frozen strip resolves");
+        let stripped = strip_frozen_dominated_live_resources(stripped, &answers);
+        assert!(!stripped.resources.contains_key("extras"));
+        assert!(
+            !stripped.resources.contains_key("extras-cache"),
+            "the dominated live consumer leaves with its frozen dependency"
+        );
+
+        let accepted = shared_gate_stack(true);
+        let answers =
+            resolve_frozen_gate_answers(&accepted, &StackState::new(Platform::Aws), &Default::default())
+                .expect("the declared default resolves");
+        let kept =
+            strip_declined_frozen_resources(accepted, &StackState::new(Platform::Aws), &Default::default())
+                .expect("the frozen strip resolves");
+        let kept = strip_frozen_dominated_live_resources(kept, &answers);
+        assert!(kept.resources.contains_key("extras"));
+        assert!(kept.resources.contains_key("extras-cache"));
     }
 
     #[test]

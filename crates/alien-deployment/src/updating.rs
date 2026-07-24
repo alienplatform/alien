@@ -105,6 +105,10 @@ pub async fn handle_update_pending(
         &stack_state,
         &config.input_values,
     )?;
+    let target_stack = crate::pending::strip_frozen_dominated_live_resources(
+        target_stack,
+        &persisted_gate_answers,
+    );
 
     let runner = alien_preflights::runner::PreflightRunner::new();
 

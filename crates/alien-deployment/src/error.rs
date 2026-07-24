@@ -40,14 +40,17 @@ pub enum ErrorData {
         requested: bool,
     },
 
-    /// A frozen gate's answer could not be derived while upgrading an older
-    /// deployment state to the fixity-aware protocol.
+    /// A frozen gate's answer could not be resolved from its sources — the
+    /// import's state presence, the provided input values, or the declared
+    /// default — wherever answers are recorded or re-derived: deployment
+    /// creation, setup import, and legacy states with no recorded answers.
     #[error(
         code = "FROZEN_GATE_ANSWER_UNDERIVABLE",
         message = "Cannot derive the recorded answer for input '{input_id}': {reason}. Refusing \
                    the update rather than guessing a frozen resource's existence",
         retryable = "false",
-        internal = "false"
+        internal = "false",
+        http_status_code = 400
     )]
     FrozenGateAnswerUnderivable {
         /// The input whose answer could not be derived
