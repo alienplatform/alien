@@ -279,6 +279,12 @@ enum BearerSource {
     Managed { provider: Managed, native: Box<BearerSource> },
 }
 
+/// Bound the instance-metadata fetch. It feeds `/v1/models`, and single-flight holds the
+/// cache lock across it, so without a timeout a hung metadata service would wedge every
+/// waiting caller indefinitely. The endpoint is link-local and normally answers in well
+/// under a second, so this only trips on a real hang.
+const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Attaches an ambient bearer token — fetched and cached from the cloud metadata endpoint,
 /// or supplied directly (static / minted).
 pub struct BearerTokenCred {
@@ -426,6 +432,7 @@ impl BearerTokenCred {
         let resp = self
             .client
             .get(&url)
+            .timeout(METADATA_TIMEOUT)
             .header(header_name, header_value)
             .send()
             .await
