@@ -140,15 +140,21 @@ fn remote_storage_management_dependencies_are_acyclic() {
         serde_json::json!([{ "Ref": management_role.logical_id }]),
         "setup must attach the exact storage grant to the management role"
     );
-    assert_eq!(
-        grant_properties["PolicyDocument"]["Statement"][0]["Action"],
-        serde_json::json!([
-            "s3:ListBucket",
-            "s3:GetObject",
-            "s3:PutObject",
-            "s3:DeleteObject"
-        ])
-    );
+    let grant_actions = grant_properties["PolicyDocument"]["Statement"][0]["Action"]
+        .as_array()
+        .expect("storage grant must list actions");
+    assert_eq!(grant_actions.len(), 4);
+    for action in [
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+    ] {
+        assert!(
+            grant_actions.contains(&serde_json::json!(action)),
+            "storage grant must contain {action}"
+        );
+    }
     assert_eq!(
         grant_properties["PolicyDocument"]["Statement"][0]["Resource"],
         serde_json::json!([
