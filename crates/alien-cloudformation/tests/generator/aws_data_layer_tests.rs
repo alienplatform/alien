@@ -132,6 +132,51 @@ fn remote_storage_management_dependencies_are_acyclic() {
         .depends_on
         .contains(&management_role.logical_id));
     assert!(queue.depends_on.contains(&storage_grant.logical_id));
+
+    let grant_properties =
+        serde_json::to_value(&storage_grant.properties).expect("serialize storage grant");
+    assert_eq!(
+        grant_properties["Roles"],
+        serde_json::json!([{ "Ref": management_role.logical_id }]),
+        "setup must attach the exact storage grant to the management role"
+    );
+    assert_eq!(
+        grant_properties["PolicyDocument"]["Statement"][0]["Action"],
+        serde_json::json!([
+            "s3:ListBucket",
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject"
+        ])
+    );
+    assert_eq!(
+        grant_properties["PolicyDocument"]["Statement"][0]["Resource"],
+        serde_json::json!([
+            { "Fn::GetAtt": [storage_bucket.logical_id, "Arn"] },
+            {
+                "Fn::Sub": format!(
+                    "arn:${{AWS::Partition}}:s3:::${{{}}}/*",
+                    storage_bucket.logical_id
+                )
+            }
+        ]),
+        "setup must scope remote binding access to the concrete bucket"
+    );
+
+    for setup_policy in template
+        .resources
+        .values()
+        .filter(|resource| resource.resource_type == "AWS::IAM::ManagedPolicy")
+    {
+        let policy = serde_json::to_string(&setup_policy.properties)
+            .expect("serialize setup management policy");
+        assert!(
+            !policy.contains("iam:CreatePolicy")
+                && !policy.contains("iam:CreatePolicyVersion")
+                && !policy.contains("iam:AttachRolePolicy"),
+            "the management role must not be able to expand its own permissions"
+        );
+    }
 }
 
 #[test]

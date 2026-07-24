@@ -303,6 +303,7 @@ mod tests {
         )
         .unwrap();
         let mut controller = AwsRemoteStackManagementController {
+            setup_managed: Some(false),
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some("arn:aws:iam::123456789012:role/test-management".to_string()),
             role_name: Some("test-management".to_string()),

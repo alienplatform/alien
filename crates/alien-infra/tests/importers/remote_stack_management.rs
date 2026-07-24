@@ -1,22 +1,7 @@
 use super::*;
 
-fn assert_updating_with_internal_state(state: &alien_core::StackResourceState) {
-    assert_eq!(
-        state.status,
-        ResourceStatus::Updating,
-        "imported management identity must reconcile runtime-owned grants before Running"
-    );
-    let internal = internal_state(state)
-        .as_object()
-        .expect("internal_state must serialize as object");
-    assert!(
-        internal.contains_key("type"),
-        "serialize_controller must inject a `type` discriminator"
-    );
-}
-
 #[test]
-fn aws_remote_stack_management_round_trip() {
+fn aws_remote_stack_management_import_preserves_setup_ownership() {
     let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
     let data = AwsRemoteStackManagementImportData {
         role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
@@ -31,12 +16,21 @@ fn aws_remote_stack_management_round_trip() {
         "us-east-1",
         &aws_management_config(),
     );
-    assert_updating_with_internal_state(&state);
-    assert_eq!(internal_state(&state)["state"], "updateStart");
+    assert_eq!(state.status, ResourceStatus::Running);
+    let internal = internal_state(&state);
+    assert!(
+        internal
+            .as_object()
+            .expect("internal_state must serialize as object")
+            .contains_key("type"),
+        "serialize_controller must inject a `type` discriminator"
+    );
+    assert_eq!(internal["state"], "ready");
+    assert_eq!(internal["setupManaged"], true);
     assert_eq!(
-        internal_state(&state)["appliedManagementGrantFingerprint"],
+        internal["appliedManagementGrantFingerprint"],
         serde_json::Value::Null,
-        "imported management identities must force one runtime grant reconciliation"
+        "import must not claim setup-created grants are runtime-owned"
     );
 }
 

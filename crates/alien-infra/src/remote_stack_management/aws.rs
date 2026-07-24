@@ -26,7 +26,11 @@ use super::aws_remote_storage::{
 };
 
 mod controller_helpers;
+mod ownership;
 use controller_helpers::*;
+
+#[cfg(test)]
+mod ownership_tests;
 
 /// Generates the AWS IAM role name for RemoteStackManagement.
 const LEGACY_INLINE_POLICY_NAME: &str = "alien-management-policy";
@@ -36,6 +40,11 @@ const IAM_POLICY_NAME_MAX_LEN: usize = 128;
 
 #[controller]
 pub struct AwsRemoteStackManagementController {
+    /// Whether setup owns the role and its IAM grants.
+    ///
+    /// `None` is a legacy checkpoint from before ownership was persisted.
+    #[serde(default)]
+    pub(crate) setup_managed: Option<bool>,
     /// The ARN of the created IAM role.
     pub(crate) role_arn: Option<String>,
     /// The name of the created IAM role.
@@ -61,6 +70,10 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // Persist ownership before the first cloud mutation. A failed direct
+        // create must never be mistaken for a setup-owned import.
+        self.setup_managed = Some(false);
+
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
@@ -241,6 +254,18 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        if self.setup_managed_resources() {
+            info!(
+                config_id = %config.id,
+                "Skipping runtime mutation of setup-managed AWS role and grants"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -292,6 +317,18 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Deleting,
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        if self.setup_managed_resources() {
+            info!(
+                config_id = %config.id,
+                "Leaving setup-managed AWS role and grants for setup teardown"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
+
         let role_name = match &self.role_name {
             Some(name) => name,
             None => {
@@ -511,6 +548,10 @@ impl AwsRemoteStackManagementController {
     }
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if self.setup_managed_resources() {
+            return Ok(false);
+        }
+
         let desired = super::desired_management_grant_fingerprint(
             ctx,
             &desired_remote_storage_bucket_names(ctx)?,
@@ -986,6 +1027,7 @@ impl AwsRemoteStackManagementController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(role_name: &str) -> Self {
         Self {
+            setup_managed: Some(false),
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
