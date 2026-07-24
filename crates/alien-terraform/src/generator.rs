@@ -225,7 +225,9 @@ pub fn generate_terraform_module(
                 alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
             {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("enabled() on resource '{resource_id}'"),
+                    operation: format!(
+                        "enabled() on resource '{resource_id}' of type '{resource_type}'"
+                    ),
                     reason: refusal.reason().to_string(),
                 }));
             }

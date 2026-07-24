@@ -23,9 +23,8 @@ use alien_core::{ErrorData, Result};
 use alien_error::AlienError;
 use hcl::{
     expr::{Expression, TemplateExpr, TraversalOperator},
-    structure::{Attribute, Block, Body, Structure},
+    structure::{Block, Body, Structure},
     template::{Element, Template},
-    Identifier,
 };
 use std::collections::HashSet;
 
