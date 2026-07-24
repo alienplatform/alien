@@ -471,7 +471,9 @@ fn add_stack_input_parameters(
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "generate_cloudformation_template".to_string(),
                 reason: format!(
-                    "stack input '{}' normalizes to CloudFormation parameter                      '{parameter_name}', which another input already claimed; rename one so                      every input keeps its own parameter",
+                    "stack input '{}' normalizes to CloudFormation parameter \
+                     '{parameter_name}', which another input already claimed; rename one so \
+                     every input keeps its own parameter",
                     input.id
                 ),
             }));

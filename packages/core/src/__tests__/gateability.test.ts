@@ -24,6 +24,9 @@ const builders: Record<string, () => object> = {
     new alien.Worker("fixture", {
       code: { image: "example/image:latest" },
     } as never),
+  daemon: () => new alien.Daemon("fixture"),
+  container: () => new alien.Container("fixture"),
+  email: () => new alien.Email("fixture"),
 }
 
 describe("gateability manifest", () => {

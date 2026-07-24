@@ -170,10 +170,11 @@ pub(crate) fn rewrite_expression(expression: &mut Expression, gated: &GatedAddre
                 // counted resource (`depends_on`), never indexed.
                 return;
             };
-            let indexes_attribute = matches!(
-                following,
-                TraversalOperator::GetAttr(_) | TraversalOperator::AttrSplat | TraversalOperator::FullSplat
-            );
+            // Only plain attribute access needs the count index. A splat
+            // (`.*` / `[*]`) over the counted resource is already list-aware
+            // and stays unindexed, like `depends_on`; inserting `[0]` there
+            // would splat a single instance and break when the gate is off.
+            let indexes_attribute = matches!(following, TraversalOperator::GetAttr(_));
             if indexes_attribute && gated.contains(root.as_str(), label.as_str()) {
                 traversal.operators.insert(
                     1,
@@ -190,8 +191,25 @@ pub(crate) fn rewrite_expression(expression: &mut Expression, gated: &GatedAddre
             }
         }
         Expression::Object(object) => {
-            for (_key, value) in object.iter_mut() {
-                rewrite_expression(value, gated);
+            let needs_key_rewrite = object
+                .keys()
+                .any(|key| matches!(key, hcl::expr::ObjectKey::Expression(_)));
+            if needs_key_rewrite {
+                let entries: Vec<(hcl::expr::ObjectKey, Expression)> = std::mem::take(object)
+                    .into_iter()
+                    .map(|(mut key, mut value)| {
+                        if let hcl::expr::ObjectKey::Expression(expression) = &mut key {
+                            rewrite_expression(expression, gated);
+                        }
+                        rewrite_expression(&mut value, gated);
+                        (key, value)
+                    })
+                    .collect();
+                *object = entries.into_iter().collect();
+            } else {
+                for (_key, value) in object.iter_mut() {
+                    rewrite_expression(value, gated);
+                }
             }
         }
         Expression::FuncCall(func_call) => {
@@ -257,21 +275,52 @@ fn rewrite_template(template_expr: &mut TemplateExpr, gated: &GatedAddresses) {
         return;
     };
     let mut changed = false;
-    for element in template.elements_mut() {
-        if let Element::Interpolation(interpolation) = element {
-            let before = interpolation.expr.clone();
-            rewrite_expression(&mut interpolation.expr, gated);
-            if interpolation.expr != before {
-                changed = true;
-            }
-        }
-    }
+    rewrite_template_elements(&mut template, gated, &mut changed);
     if !changed {
         return;
     }
     match template_expr {
         TemplateExpr::QuotedString(quoted) => *quoted = template.to_string(),
         TemplateExpr::Heredoc(heredoc) => heredoc.template = template.to_string(),
+    }
+}
+
+/// Interpolations plus `%{if}` / `%{for}` directives, recursively — a gated
+/// reference inside a directive's condition or body needs the same index as
+/// one in a plain interpolation.
+fn rewrite_template_elements(template: &mut Template, gated: &GatedAddresses, changed: &mut bool) {
+    for element in template.elements_mut() {
+        match element {
+            Element::Interpolation(interpolation) => {
+                let before = interpolation.expr.clone();
+                rewrite_expression(&mut interpolation.expr, gated);
+                if interpolation.expr != before {
+                    *changed = true;
+                }
+            }
+            Element::Directive(directive) => match directive.as_mut() {
+                hcl::template::Directive::If(directive) => {
+                let before = directive.cond_expr.clone();
+                rewrite_expression(&mut directive.cond_expr, gated);
+                if directive.cond_expr != before {
+                    *changed = true;
+                }
+                    rewrite_template_elements(&mut directive.true_template, gated, changed);
+                    if let Some(false_template) = directive.false_template.as_mut() {
+                        rewrite_template_elements(false_template, gated, changed);
+                    }
+                }
+                hcl::template::Directive::For(directive) => {
+                let before = directive.collection_expr.clone();
+                rewrite_expression(&mut directive.collection_expr, gated);
+                if directive.collection_expr != before {
+                    *changed = true;
+                }
+                    rewrite_template_elements(&mut directive.template, gated, changed);
+                }
+            },
+            Element::Literal(_) => {}
+        }
     }
 }
 
@@ -308,26 +357,42 @@ pub(crate) fn scan_rendered_for_unindexed(
                 {
                     continue;
                 }
-                if follower == Some('[') {
+                if follower == Some('[') && is_instance_index(&contents[end..]) {
                     continue;
                 }
                 if exempt.iter().any(|span| span.contains(&start)) {
                     continue;
                 }
                 // The resource's own declaration is `resource "type" "label"`,
-                // quoted, so it never matches the dotted form.
-                return Err(AlienError::new(ErrorData::GenericError {
-                    message: format!(
-                        "gated resource `{address}` is referenced without its count index in \
-                         `{file_name}`; the reference escaped the rewrite (raw string?) and \
-                         would fail or, worse, silently mis-resolve when the deployer declines \
-                         the resource"
+                // quoted, so it never matches the dotted form. Deterministic:
+                // the same stack renders the same escape every time, so the
+                // refusal must not be retryable.
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("enabled() on `{address}`"),
+                    reason: format!(
+                        "the resource is referenced without its count index in `{file_name}`; \
+                         the reference escaped the rewrite (raw string?) and would fail or, \
+                         worse, silently mis-resolve when the deployer declines the resource"
                     ),
                 }));
             }
         }
     }
     Ok(())
+}
+
+/// True when the text starts with a real instance index — `[0]` (any digits)
+/// or the full splat `[*]` — the only bracket forms that are valid directly
+/// on a counted resource address.
+fn is_instance_index(text: &str) -> bool {
+    let Some(inner) = text.strip_prefix('[') else {
+        return false;
+    };
+    let Some(close) = inner.find(']') else {
+        return false;
+    };
+    let index = inner[..close].trim();
+    index == "*" || (!index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 /// Byte ranges of `depends_on = [ ... ]` attribute values, where
@@ -338,10 +403,15 @@ fn depends_on_spans(contents: &str) -> Vec<std::ops::Range<usize>> {
     while let Some(found) = contents[search_from..].find("depends_on") {
         let start = search_from + found;
         search_from = start + "depends_on".len();
-        let Some(open_offset) = contents[start..].find('[') else {
+        // Only the attribute form `depends_on = [` opens an exemption; the
+        // word appearing in prose (a README paragraph, a comment) must not
+        // exempt whatever bracket happens to follow it.
+        let after = &contents[start + "depends_on".len()..];
+        let assignment: String = after.chars().take_while(|ch| ch.is_whitespace() || *ch == '=').collect();
+        if !assignment.contains('=') || !after[assignment.len()..].starts_with('[') {
             continue;
-        };
-        let open = start + open_offset;
+        }
+        let open = start + "depends_on".len() + assignment.len();
         let mut depth = 0usize;
         let mut close = None;
         for (offset, ch) in contents[open..].char_indices() {
@@ -403,6 +473,62 @@ mod tests {
         let before = expression.clone();
         rewrite_expression(&mut expression, &gated_analytics());
         assert_eq!(expression, before);
+    }
+
+    #[test]
+    fn splat_references_stay_unindexed() {
+        for splat in [
+            "aws_dynamodb_table.analytics[*].name",
+            "aws_dynamodb_table.analytics.*.name",
+        ] {
+            let mut expression = expr::parse(splat).expect("valid splat");
+            let before = expression.clone();
+            rewrite_expression(&mut expression, &gated_analytics());
+            assert_eq!(expression, before, "{splat}");
+        }
+    }
+
+    #[test]
+    fn scan_accepts_instance_indexes_but_not_key_indexes() {
+        let mut ok_files = indexmap::IndexMap::new();
+        ok_files.insert(
+            "main.tf".to_string(),
+            "locals { a = aws_dynamodb_table.analytics[0].name, b = aws_dynamodb_table.analytics[*].name }"
+                .to_string(),
+        );
+        scan_rendered_for_unindexed(&ok_files, &gated_analytics())
+            .expect("instance indexes and splats are valid on a counted resource");
+
+        let mut bad_files = indexmap::IndexMap::new();
+        bad_files.insert(
+            "main.tf".to_string(),
+            "locals { x = aws_dynamodb_table.analytics[\"key\"].name }".to_string(),
+        );
+        scan_rendered_for_unindexed(&bad_files, &gated_analytics())
+            .expect_err("a key index on a counted resource is not an instance index");
+    }
+
+    #[test]
+    fn prose_mentioning_depends_on_exempts_nothing() {
+        let mut files = indexmap::IndexMap::new();
+        files.insert(
+            "main.tf".to_string(),
+            "# depends_on ordering notes\nlocals { x = [aws_dynamodb_table.analytics.name] }"
+                .to_string(),
+        );
+        scan_rendered_for_unindexed(&files, &gated_analytics())
+            .expect_err("only `depends_on = [` opens an exemption");
+    }
+
+    #[test]
+    fn template_directives_are_rewritten() {
+        let mut expression =
+            expr::template("%{ if aws_dynamodb_table.analytics.name != \"\" }yes%{ endif }");
+        rewrite_expression(&mut expression, &gated_analytics());
+        assert_eq!(
+            expression,
+            expr::template("%{ if aws_dynamodb_table.analytics[0].name != \"\" }yes%{ endif }")
+        );
     }
 
     #[test]
