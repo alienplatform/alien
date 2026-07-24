@@ -23,6 +23,7 @@ import {
   AiTransportError,
   AiUpstreamError,
   BindingNotFoundError,
+  ResponsesApiUnsupportedError,
   UnsupportedProviderError,
 } from "./errors.js"
 import type { Gateway } from "./gateway.js"
@@ -353,7 +354,14 @@ export class Ai {
     return this._postSurface("/v1/chat/completions", params)
   }
 
-  private _responsesCreate(params: ResponseCreateParams): Promise<unknown> {
+  private async _responsesCreate(params: ResponseCreateParams): Promise<unknown> {
+    // Anthropic's OpenAI-compatible host serves /v1/chat/completions but not /v1/responses,
+    // so a BYO-Anthropic Responses call would 404. Fail fast with the reason instead. An
+    // ALIEN_AI_LOCAL_BASE_URL override resolves to a different base, so it is not blocked here.
+    const { baseUrl } = await this.connection()
+    if (baseUrl === KNOWN_PROVIDER_BASE_URLS.anthropic) {
+      throw new AlienError(ResponsesApiUnsupportedError.create({ provider: "anthropic" }))
+    }
     return this._postSurface("/v1/responses", params)
   }
 

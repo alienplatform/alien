@@ -68,6 +68,23 @@ export const UnsupportedProviderError = defineError({
 })
 
 /**
+ * Error thrown when a binding's upstream serves chat/completions but not the OpenAI Responses
+ * API. Anthropic's OpenAI-compatible host is the case in point: `/v1/chat/completions` works,
+ * `/v1/responses` 404s. External (a caller usage error), not retryable.
+ */
+export const ResponsesApiUnsupportedError = defineError({
+  code: "AI_RESPONSES_API_UNSUPPORTED",
+  context: z.object({
+    provider: z.string(),
+  }),
+  message: ({ provider }) =>
+    `The '${provider}' provider serves chat/completions but not the OpenAI Responses API (/v1/responses). Use chat.completions.create, or set ALIEN_AI_LOCAL_BASE_URL to a Responses-capable endpoint.`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/**
  * Error thrown when this platform/architecture has no prebuilt gateway binary.
  */
 export const UnsupportedPlatformError = defineError({
