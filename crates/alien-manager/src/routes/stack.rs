@@ -1347,6 +1347,7 @@ mod setup_update_authorization_tests {
                 &target,
                 "release",
                 &request(),
+                Default::default(),
             )
             .expect("stable setup import should succeed");
 
@@ -1364,7 +1365,13 @@ mod setup_update_authorization_tests {
         let baseline = stack("live", "frozen-a");
         let target = stack("live", "frozen-b");
         let metadata =
-            reimport_runtime_metadata(&record(baseline.clone()), &target, "release", &request())
+            reimport_runtime_metadata(
+                &record(baseline.clone()),
+                &target,
+                "release",
+                &request(),
+                Default::default(),
+            )
                 .expect("setup-owned update should succeed");
         let authorization = metadata
             .setup_update_authorization
