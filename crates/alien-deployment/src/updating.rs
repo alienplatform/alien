@@ -84,7 +84,6 @@ pub async fn handle_update_pending(
             &stack_state,
             &Default::default(),
         )?;
-        next.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
     }
     crate::pending::enforce_frozen_gate_fixity(&persisted_gate_answers, &config.input_values)?;
 
