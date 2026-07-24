@@ -1173,4 +1173,121 @@ async fn a_declined_gated_resource_is_stripped_from_the_prepared_stack() {
          carry it into provisioning"
     );
     assert!(prepared_stack.resources.contains_key("assets"));
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&false),
+        "the declined answer is recorded at import, where the fixity check \
+         holds every later value against it"
+    );
+}
+
+/// A two-resource variant of `aws_s3_import_request`: the gated store was
+/// delivered alongside the ungated one.
+fn aws_two_store_import_request(
+    deployment_name: &str,
+    region: &str,
+    ungated_id: &str,
+    gated_id: &str,
+) -> StackImportRequest {
+    let mut request = aws_s3_import_request(deployment_name, region, ungated_id, "acme-imports");
+    request.resources.push(ImportedResource {
+        id: gated_id.to_string(),
+        resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
+        import_data: serde_json::to_value(AwsStorageImportData {
+            bucket_name: "acme-extras".to_string(),
+            bucket_arn: "arn:aws:s3:::acme-extras".to_string(),
+        })
+        .unwrap(),
+    });
+    request
+}
+
+/// An accepted answer is recorded too, and a re-registration that flips it is
+/// refused synchronously — the setup artifact's custom resource fails, which
+/// is what forces CloudFormation to roll the parameter edit back.
+#[tokio::test]
+async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+
+    // First install: the deployer accepted the gated store.
+    let accepted = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepted).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&true),
+        "the accepted answer is recorded at import"
+    );
+
+    // The deployment must be in a re-importable state before the flipped
+    // answer can even reach the fixity check.
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-reconcile".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_gated_storage("assets", "extras"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: persisted.runtime_metadata.clone(),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+
+    // The re-registration omits the gated store: a flipped answer.
+    let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a frozen gate is answered once; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "body = {json:#}"
+    );
 }

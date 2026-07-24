@@ -190,6 +190,18 @@ pub async fn stack_import(
     // declined entry in would make the runner create the very resource the
     // deployer said no to. A live gated resource follows the request's input
     // values here for the same reason.
+    // The answers are resolved before the strip — a declined resource must
+    // still be in the stack for its input to be enumerated — and recorded on
+    // the deployment, where the fixity check holds every later value against
+    // them.
+    let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers(
+        &prepared_stack,
+        &stack_state,
+        &req.input_values,
+    ) {
+        Ok(answers) => answers,
+        Err(e) => return e.into_response(),
+    };
     // No mutations run between the two strips on the import path: the
     // registered stack is the already-mutated release render, so both
     // families resolve here, back to back.
@@ -293,8 +305,38 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
-            let runtime_metadata =
-                match reimport_runtime_metadata(&existing, &prepared_stack, &release.id, &req) {
+            // A frozen gate is answered once. Refusing a changed answer HERE
+            // — inside the registration the setup artifact calls
+            // synchronously — is what makes a CloudFormation parameter edit
+            // roll the whole stack update back: the custom resource fails,
+            // and CloudFormation restores whatever its conditionals just
+            // created or deleted.
+            let persisted_answers = existing
+                .runtime_metadata
+                .as_ref()
+                .map(|metadata| metadata.persisted_gate_answers.clone())
+                .unwrap_or_default();
+            for (input_id, imported_answer) in &imported_gate_answers {
+                if let Some(persisted) = persisted_answers.get(input_id) {
+                    if persisted != imported_answer {
+                        return AlienError::new(
+                            alien_deployment::ErrorData::FrozenGateAnswerChanged {
+                                input_id: input_id.clone(),
+                                persisted: *persisted,
+                                requested: *imported_answer,
+                            },
+                        )
+                        .into_response();
+                    }
+                }
+            }
+            let runtime_metadata = match reimport_runtime_metadata(
+                &existing,
+                &prepared_stack,
+                &release.id,
+                &req,
+                imported_gate_answers,
+            ) {
                     Ok(metadata) => metadata,
                     Err(error) => return error.into_response(),
                 };
@@ -353,7 +395,7 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     }
 
-    let runtime_metadata = import_runtime_metadata(&prepared_stack);
+    let runtime_metadata = import_runtime_metadata(&prepared_stack, imported_gate_answers);
 
     let create_ctx = crate::auth::DeploymentCreateCtx {
         workspace_id: &dg.workspace_id,
@@ -808,9 +850,13 @@ fn imported_resources_are_unchanged(
     })
 }
 
-fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
+fn import_runtime_metadata(
+    stack: &Stack,
+    persisted_gate_answers: alien_core::GateAnswers,
+) -> RuntimeMetadata {
     RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
+        persisted_gate_answers,
         ..RuntimeMetadata::default()
     }
 }
@@ -820,8 +866,19 @@ fn reimport_runtime_metadata(
     prepared_stack: &Stack,
     release_id: &str,
     req: &StackImportRequest,
+    imported_gate_answers: alien_core::GateAnswers,
 ) -> crate::error::Result<RuntimeMetadata> {
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    // The route refused conflicting answers before calling this, so what
+    // remains is bookkeeping: answers for inputs a new release introduces are
+    // recorded, recorded answers are never overwritten, and a pre-fixity
+    // deployment adopts the import's answers wholesale.
+    for (input_id, imported_answer) in &imported_gate_answers {
+        metadata
+            .persisted_gate_answers
+            .entry(input_id.clone())
+            .or_insert(*imported_answer);
+    }
     let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::ImportedDeploymentConflict {
             reason: format!(
