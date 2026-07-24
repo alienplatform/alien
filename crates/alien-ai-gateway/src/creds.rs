@@ -285,11 +285,19 @@ pub struct BearerTokenCred {
     source: BearerSource,
     client: reqwest::Client,
     cache: Mutex<Option<(String, Instant)>>,
+    /// Base URL for the instance metadata endpoint. `None` uses the real cloud host;
+    /// tests set it to point the metadata fetch at a mock server.
+    metadata_base: Option<String>,
 }
 
 impl BearerTokenCred {
     pub fn gcp() -> Self {
-        Self { source: BearerSource::Gcp, client: reqwest::Client::new(), cache: Mutex::new(None) }
+        Self {
+            source: BearerSource::Gcp,
+            client: reqwest::Client::new(),
+            cache: Mutex::new(None),
+            metadata_base: None,
+        }
     }
 
     /// `resource` is the audience, e.g. `https://cognitiveservices.azure.com`.
@@ -298,6 +306,7 @@ impl BearerTokenCred {
             source: BearerSource::Azure { resource: resource.into() },
             client: reqwest::Client::new(),
             cache: Mutex::new(None),
+            metadata_base: None,
         }
     }
 
@@ -308,6 +317,7 @@ impl BearerTokenCred {
             source: BearerSource::Static { token: token.into() },
             client: reqwest::Client::new(),
             cache: Mutex::new(None),
+            metadata_base: None,
         }
     }
 
@@ -328,6 +338,7 @@ impl BearerTokenCred {
             source: BearerSource::Managed { provider, native: Box::new(native) },
             client: reqwest::Client::new(),
             cache: Mutex::new(None),
+            metadata_base: None,
         }
     }
 
@@ -377,7 +388,12 @@ impl BearerTokenCred {
     /// Cache-then-fetch the workload's projected-identity token from the instance metadata
     /// service. `source` must be `Gcp` or `Azure`.
     async fn metadata_token(&self, source: &BearerSource) -> Result<String> {
-        if let Some((tok, exp)) = self.cache.lock().await.as_ref() {
+        // Hold the cache lock across the refresh so a burst of concurrent probes (the
+        // `/v1/models` fan-out authorizes every model at once) collapses to a single
+        // metadata fetch instead of stampeding the metadata service. `tokio::sync::Mutex`
+        // may be held across `.await`.
+        let mut cache = self.cache.lock().await;
+        if let Some((tok, exp)) = cache.as_ref() {
             if Instant::now() < *exp {
                 return Ok(tok.clone());
             }
@@ -385,12 +401,18 @@ impl BearerTokenCred {
 
         let (url, header_name, header_value) = match source {
             BearerSource::Gcp => (
-                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token".to_string(),
+                format!(
+                    "{}/computeMetadata/v1/instance/service-accounts/default/token",
+                    self.metadata_base.as_deref().unwrap_or("http://metadata.google.internal")
+                ),
                 "Metadata-Flavor",
                 "Google".to_string(),
             ),
             BearerSource::Azure { resource } => (
-                format!("http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource={resource}"),
+                format!(
+                    "{}/metadata/identity/oauth2/token?api-version=2018-02-01&resource={resource}",
+                    self.metadata_base.as_deref().unwrap_or("http://169.254.169.254")
+                ),
                 "Metadata",
                 "true".to_string(),
             ),
@@ -440,7 +462,7 @@ impl BearerTokenCred {
             })?;
 
         let exp = Instant::now() + Duration::from_secs(expires_in.saturating_sub(60));
-        *self.cache.lock().await = Some((access_token.clone(), exp));
+        *cache = Some((access_token.clone(), exp));
         Ok(access_token)
     }
 }
@@ -510,6 +532,53 @@ mod tests {
         assert!(
             auth.contains("/bedrock/"),
             "credential scope must name the bedrock service: {auth}"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_cold_cache_collapses_to_one_metadata_fetch() {
+        use httpmock::prelude::*;
+
+        // A metadata server that counts how many token fetches actually reach it.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/computeMetadata/v1/instance/service-accounts/default/token")
+                    .header("Metadata-Flavor", "Google");
+                then.status(200).json_body(serde_json::json!({
+                    "access_token": "tok-single-flight",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                }));
+            })
+            .await;
+
+        // A cold-cache GCP credential whose metadata fetch is aimed at the mock host.
+        let cred = Arc::new(BearerTokenCred {
+            source: BearerSource::Gcp,
+            client: reqwest::Client::new(),
+            cache: Mutex::new(None),
+            metadata_base: Some(server.base_url()),
+        });
+
+        // Fire many token fetches at once, exactly like the `/v1/models` probe fan-out that
+        // authorizes every catalog model concurrently. Single-flight must collapse them to
+        // one upstream fetch; without holding the lock across the refresh, each caller misses
+        // the cold cache and stampedes the metadata service.
+        let calls = (0..16).map(|_| {
+            let cred = cred.clone();
+            tokio::spawn(async move { cred.token().await })
+        });
+        for joined in futures::future::join_all(calls).await {
+            let token = joined.expect("token task did not panic").expect("token fetch succeeds");
+            assert_eq!(token, "tok-single-flight");
+        }
+
+        assert_eq!(
+            mock.hits_async().await,
+            1,
+            "concurrent cold-cache fetches must collapse to a single metadata request"
         );
     }
 }
