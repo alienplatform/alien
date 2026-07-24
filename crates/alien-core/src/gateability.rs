@@ -21,15 +21,31 @@ use crate::ownership_policy_for_resource_type;
 /// constant.
 pub const SECRETS_VAULT_ID: &str = "secrets";
 
-/// Framework infrastructure Alien derives from the stack itself. A gate here
-/// is never a customer choice, and `ServiceAccountMutation` inserts
-/// profile-derived "{profile}-sa" entries unconditionally, which would
-/// silently overwrite a gated entry before any render guard could fire.
+/// Framework and auxiliary infrastructure Alien derives from the stack, the
+/// platform, or the deployment settings. A gate here is never a customer
+/// choice: `ServiceAccountMutation` inserts profile-derived "{profile}-sa"
+/// entries unconditionally, the Azure `default-*` resources are
+/// preflight-injected hosts other resources build on, and network presence is
+/// a StackSettings decision, not a stack-resource one. Both naming variants
+/// are listed where the ownership table accepts both.
 const STACK_DERIVED_TYPES: &[&str] = &[
     "build",
     "artifact-registry",
     "service-account",
     "compute-cluster",
+    "kubernetes-cluster",
+    "network",
+    "remote-stack-management",
+    "service_activation",
+    "service-activation",
+    "azure_resource_group",
+    "azure-resource-group",
+    "azure_storage_account",
+    "azure-storage-account",
+    "azure_container_apps_environment",
+    "azure-container-apps-environment",
+    "azure_service_bus_namespace",
+    "azure-service-bus-namespace",
 ];
 
 /// Types whose setup emitters have not been proven under the generic gating

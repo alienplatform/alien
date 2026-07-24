@@ -75,6 +75,15 @@ impl TfRegistry {
 
     /// Look up an emitter and produce a typed `ImportRegistrationMissing`
     /// error if none is registered.
+    /// Every registered `(resource type, platform)` pair. The gating test
+    /// matrix walks this so a newly registered emitter cannot ship without
+    /// either a policy refusal or a gated-render fixture.
+    pub fn registered_keys(&self) -> impl Iterator<Item = (&str, Platform)> {
+        self.emitters
+            .keys()
+            .map(|key| (key.resource_type.as_ref(), key.platform))
+    }
+
     pub fn require(
         &self,
         resource_type: &ResourceType,

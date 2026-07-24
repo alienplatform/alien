@@ -256,7 +256,7 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         supports_custom_domain,
     )?;
-    add_stack_input_parameters(&mut template, &stack_inputs);
+    add_stack_input_parameters(&mut template, &stack_inputs)?;
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
@@ -457,13 +457,30 @@ pub(crate) fn stack_input_parameter_name_for_id(input_id: &str) -> String {
     format!("Input{}", sanitize_logical_id(input_id))
 }
 
-fn add_stack_input_parameters(template: &mut CfTemplate, inputs: &[StackInputDefinition]) {
+fn add_stack_input_parameters(
+    template: &mut CfTemplate,
+    inputs: &[StackInputDefinition],
+) -> Result<()> {
     for input in inputs {
-        template.parameters.insert(
-            stack_input_parameter_name(input),
-            stack_input_parameter(input),
-        );
+        let parameter_name = stack_input_parameter_name(input);
+        // Distinct ids can sanitize to the same logical id (`fooBar` and
+        // `foo_bar` both become `InputFooBar`); a silent overwrite would make
+        // both inputs — gates and their conditions included — read one
+        // parameter.
+        if template.parameters.contains_key(&parameter_name) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "stack input '{}' normalizes to CloudFormation parameter                      '{parameter_name}', which another input already claimed; rename one so                      every input keeps its own parameter",
+                    input.id
+                ),
+            }));
+        }
+        template
+            .parameters
+            .insert(parameter_name, stack_input_parameter(input));
     }
+    Ok(())
 }
 
 fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
