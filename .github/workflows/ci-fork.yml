@@ -96,7 +96,7 @@ jobs:
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not (package(alien-aws-clients) and kind(test)) and not (package(alien-gcp-clients) and kind(test)) and not (package(alien-azure-clients) and kind(test)) and not (package(alien-bindings) and kind(test)) and not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+            --filter-expr 'not (package(alien-aws-clients) and kind(test)) and not (package(alien-gcp-clients) and kind(test)) and not (package(alien-azure-clients) and kind(test)) and not (package(alien-bindings) and kind(test)) and not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::cloudrun) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate
