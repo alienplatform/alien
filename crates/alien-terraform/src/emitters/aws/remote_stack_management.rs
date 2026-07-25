@@ -16,7 +16,8 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_managed_policy_chunks,
-        iam_role_name_template, jsonencode, policy_document_expr, required_label, tags,
+        ensure_unique_statement_sids, iam_role_name_template, jsonencode, policy_document_expr,
+        required_label, tags,
     },
     expr,
 };
@@ -127,7 +128,11 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             "deployment-management",
             statements,
         )?;
-        for (input_id, statements) in gated_statements {
+        for (input_id, mut statements) in gated_statements {
+            // Two resources gated on one input each contribute the same
+            // permission set, so their statements arrive with identical Sids.
+            // IAM rejects a policy document that repeats one.
+            ensure_unique_statement_sids(&mut statements);
             let suffix = crate::generator::stack_input_variable_name(&input_id);
             let mut block = resource_block(
                 "aws_iam_role_policy",

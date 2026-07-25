@@ -146,6 +146,65 @@ fn aws_management_grants_for_a_gated_resource_carry_its_gate() {
     assert_terraform_valid(&module, "aws_management_grants_for_a_gated_resource");
 }
 
+/// Two resources gated on one input land in one policy, each contributing the
+/// same permission set and therefore the same statement id. IAM rejects a
+/// policy document that repeats one, so the ids must be made unique — the
+/// shared managed-policy path already does this, and the gated path has to
+/// agree.
+#[test]
+fn management_grants_sharing_a_gate_get_unique_statement_ids() {
+    let worker = |id: &str| {
+        Worker::new(id.to_string())
+            .code(WorkerCode::Image {
+                image: format!("123456789012.dkr.ecr.us-east-1.amazonaws.com/app/{id}:1.2.3"),
+            })
+            .permissions("execution".to_string())
+            .build()
+    };
+    let stack = Stack::new("acme-mgmt".to_string())
+        .inputs(vec![gate_input(
+            "jobsEnabled",
+            "Enable the job workers",
+            "Whether to run the job workers.",
+        )])
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new()
+                .resource("jobs-a", ["worker/dispatch-command"])
+                .resource("jobs-b", ["worker/dispatch-command"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(worker("jobs-a"), ResourceLifecycle::Live, "jobsEnabled")
+        .add_enabled_when(worker("jobs-b"), ResourceLifecycle::Live, "jobsEnabled")
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let mut rendered = String::new();
+    for (_, contents) in module.iter() {
+        rendered.push_str(contents);
+        rendered.push('\n');
+    }
+
+    let gated_policy = rendered
+        .split("resource \"")
+        .find(|block| block.starts_with("aws_iam_role_policy\" \"management_input_jobs_enabled\""))
+        .unwrap_or_else(|| panic!("the gated management policy should render:\n{rendered}"));
+
+    let sids: Vec<&str> = gated_policy.match_indices("Sid = \"").map(|(i, _)| {
+        let rest = &gated_policy[i + 7..];
+        &rest[..rest.find('"').unwrap_or(0)]
+    }).collect();
+    assert_eq!(sids.len(), 2, "both workers contribute a statement: {sids:?}");
+    assert_ne!(
+        sids[0], sids[1],
+        "IAM rejects a policy document with duplicate statement ids: {sids:?}"
+    );
+
+    assert_terraform_valid(&module, "management_grants_sharing_a_gate");
+}
+
 #[test]
 fn aws_network_create_two_az() {
     let settings = StackSettings {

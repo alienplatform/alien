@@ -451,7 +451,7 @@ pub fn emit_iam_managed_policy_chunks(
     Ok(())
 }
 
-fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
+pub(crate) fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
     let mut used = HashSet::new();
 
     for statement in statements {
