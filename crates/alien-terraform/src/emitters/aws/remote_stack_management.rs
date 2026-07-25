@@ -134,7 +134,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             // IAM rejects a policy document that repeats one.
             ensure_unique_statement_sids(&mut statements);
             let suffix = crate::generator::stack_input_variable_name(&input_id);
-            let mut block = resource_block(
+            let block = resource_block(
                 "aws_iam_role_policy",
                 &format!("{label}_{suffix}"),
                 [
@@ -146,8 +146,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                     attr("policy", policy_document_expr(statements)?),
                 ],
             );
-            crate::emitters::enabled::gate(&mut block, Some(&input_id))?;
-            fragment.resource_blocks.push(block);
+            fragment.push_gated_resource(block, std::slice::from_ref(&input_id));
         }
 
         // The management role always needs to read its own role —

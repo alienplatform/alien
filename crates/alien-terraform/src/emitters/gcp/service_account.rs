@@ -108,7 +108,7 @@ impl TfEmitter for GcpServiceAccountEmitter {
                                 BindingTarget::Resource,
                                 resource_id,
                             )?;
-                            gate_bindings(&mut fragment, appended_from, enabled_when)?;
+                            gate_bindings(&mut fragment, appended_from, enabled_when);
                         }
                     }
                 }

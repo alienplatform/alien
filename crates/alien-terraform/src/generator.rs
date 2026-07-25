@@ -255,6 +255,10 @@ pub fn generate_terraform_module(
         if let Some(input_id) = resource.enabled_when.as_deref() {
             crate::gating::gate_fragment(&mut fragment, resource_id, input_id, &mut gated)?;
         }
+        // Grants this fragment renders on behalf of OTHER resources' gates.
+        // Applied here, in the emit loop, because the GCP dedup pass below
+        // folds sibling counts together and has to see them already installed.
+        crate::gating::apply_gated_contributions(&mut fragment, &mut gated)?;
         // Split per-emitter `locals` out of the per-resource file \u2014 they
         // belong in `locals.tf` so reviewers see all locals together.
         let local_contributions = std::mem::take(&mut fragment.locals);
@@ -876,7 +880,7 @@ fn format_with_terraform(module: &mut ModuleFiles) -> std::io::Result<()> {
     Ok(())
 }
 
-fn render_body(body: Body) -> Result<String> {
+pub(crate) fn render_body(body: Body) -> Result<String> {
     hcl::format::to_string(&body)
         .into_alien_error()
         .map_err(|err| {

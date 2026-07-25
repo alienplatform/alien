@@ -112,6 +112,49 @@ pub(crate) fn gate_fragment(
     Ok(())
 }
 
+/// Install the gate on every block a fragment declared as carrying another
+/// resource's gate, and record its address.
+///
+/// A shared emitter — the management role, a service account — renders grants
+/// on behalf of resources the deployer can decline, while never being gated
+/// itself. Those blocks cannot go through [`gate_fragment`], which only ever
+/// sees the gated resource's own fragment, so the emitter declares them and
+/// this applies them. Registering the address is the point: it puts them
+/// inside the same reference rewrite and rendered-output scan as everything
+/// else, instead of relying on nothing ever referencing them.
+pub(crate) fn apply_gated_contributions(
+    fragment: &mut TfFragment,
+    gated: &mut GatedAddresses,
+) -> Result<()> {
+    let plan: Vec<Option<Vec<String>>> = fragment
+        .resource_blocks
+        .iter()
+        .map(|block| {
+            if fragment.is_shared(block) {
+                return None;
+            }
+            fragment
+                .contribution_gates(block)
+                .map(|input_ids| input_ids.to_vec())
+        })
+        .collect();
+
+    for (block, input_ids) in fragment.resource_blocks.iter_mut().zip(plan) {
+        let Some(input_ids) = input_ids else {
+            continue;
+        };
+        let (Some(provider_type), Some(label)) = (
+            block.labels.first().map(|label| label.as_str().to_string()),
+            block.labels.get(1).map(|label| label.as_str().to_string()),
+        ) else {
+            continue;
+        };
+        enabled::gate_any(block, &input_ids)?;
+        gated.addresses.insert((provider_type, label));
+    }
+    Ok(())
+}
+
 /// A residual block renders ungated inside a gated fragment, so it must not
 /// be able to create anything or run anything.
 fn verify_residual_is_footprintless(block: &Block, resource_id: &str) -> Result<()> {
@@ -453,6 +496,62 @@ mod tests {
             .addresses
             .insert(("aws_dynamodb_table".to_string(), "analytics".to_string()));
         gated
+    }
+
+    /// A contributed block is gated AND registered. Registration is the half
+    /// that matters: without it the block carries a count that the reference
+    /// rewrite and the rendered-output scan know nothing about, and the only
+    /// thing keeping that safe is nothing ever referencing it.
+    #[test]
+    fn a_declared_contribution_is_gated_and_registered() {
+        let mut fragment = TfFragment::default();
+        fragment.push_gated_resource(
+            resource_block("aws_iam_role_policy", "mgmt_jobs", [attr("role", expr::raw("x"))]),
+            std::slice::from_ref(&"jobsEnabled".to_string()),
+        );
+        let mut gated = GatedAddresses::default();
+
+        apply_gated_contributions(&mut fragment, &mut gated).expect("a plain block gates");
+
+        let rendered = crate::generator::render_body(hcl::structure::Body::from(vec![
+            hcl::structure::Structure::Block(fragment.resource_blocks[0].clone()),
+        ]))
+        .expect("renders");
+        assert!(
+            rendered.contains("var.input_jobs_enabled ? 1 : 0"),
+            "the contribution carries the gate:\n{rendered}"
+        );
+        assert!(
+            gated
+                .rendered_forms()
+                .contains(&"aws_iam_role_policy.mgmt_jobs".to_string()),
+            "and its address reaches the rewrite and the scan: {:?}",
+            gated.rendered_forms()
+        );
+    }
+
+    /// A block merged from several contributors exists while ANY of them is
+    /// enabled, and is registered once.
+    #[test]
+    fn a_contribution_merged_from_several_gates_carries_all_of_them() {
+        let mut fragment = TfFragment::default();
+        fragment.push_gated_resource(
+            resource_block("azurerm_role_assignment", "mgmt", [attr("scope", expr::raw("x"))]),
+            &["auditEnabled".to_string(), "jobsEnabled".to_string()],
+        );
+        let mut gated = GatedAddresses::default();
+
+        apply_gated_contributions(&mut fragment, &mut gated).expect("a plain block gates");
+
+        let rendered = crate::generator::render_body(hcl::structure::Body::from(vec![
+            hcl::structure::Structure::Block(fragment.resource_blocks[0].clone()),
+        ]))
+        .expect("renders");
+        assert!(
+            rendered.contains("var.input_audit_enabled || var.input_jobs_enabled ? 1 : 0"),
+            "the merged grant survives while any contributor is enabled:\n{rendered}"
+        );
+        assert_eq!(gated.rendered_forms().len(), 1);
     }
 
     #[test]

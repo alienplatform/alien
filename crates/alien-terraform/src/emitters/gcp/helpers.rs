@@ -226,45 +226,32 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
         .with_service_account_name(label.to_string())
 }
 
-/// Gate the IAM bindings appended to `fragment` from `appended_from` on, and
-/// only those.
+/// Declare that the IAM bindings appended to `fragment` from `appended_from`
+/// on carry `enabled_when`'s gate, and only those.
 ///
 /// The calls that emit bindings also emit the custom roles those bindings
 /// reference. Custom roles are shared project-wide and carry their own
 /// `var.gcp_manage_custom_roles` count, so one resource's gate must not reach
 /// them: a second count conflicts, and declining this resource would delete
-/// roles its siblings still hold.
+/// roles its siblings still hold. The fragment's own shared classification is
+/// what keeps them out.
 ///
 /// Every emitter that grants against a gated resource has to call this,
 /// including registered extension emitters outside this crate — which is why
-/// it is public. The generator coalesces duplicate cloud memberships only after
-/// every contributor carries the gate of the resource that needs it.
+/// it is public. Declaring by range rather than threading a gate through every
+/// shared IAM helper is what lets ungated resources call the same helpers.
 ///
-/// Blocks gated here bypass the generator post-pass, so its rendered-output
-/// scan never learns their addresses. That is safe today because IAM member
-/// blocks are leaves nothing else references; a binding another block starts
-/// referencing would need registration with the scan's gated addresses.
+/// The generator installs the count and records the addresses, so these
+/// bindings sit inside the same reference rewrite and rendered-output scan as
+/// any other gated block — they no longer depend on nothing ever referencing
+/// them. It does so before coalescing duplicate cloud memberships, which needs
+/// every contributor's gate already in place.
 pub fn gate_bindings(
     fragment: &mut TfFragment,
     appended_from: usize,
     enabled_when: Option<&str>,
-) -> Result<()> {
-    // Which of the appended blocks are shared comes from the fragment's own
-    // classification, not a second copy of the type name — the two could
-    // otherwise drift the moment another shared block type appears.
-    let shared: Vec<bool> = fragment.resource_blocks[appended_from..]
-        .iter()
-        .map(|block| fragment.is_shared(block))
-        .collect();
-    for (block, is_shared) in fragment.resource_blocks[appended_from..]
-        .iter_mut()
-        .zip(shared)
-    {
-        if !is_shared {
-            enabled::gate(block, enabled_when)?;
-        }
-    }
-    Ok(())
+) {
+    fragment.mark_gated_from(appended_from, enabled_when);
 }
 
 /// Emit a GCP custom role plus IAM bindings for `permission_set`.

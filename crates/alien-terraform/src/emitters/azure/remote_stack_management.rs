@@ -276,7 +276,7 @@ fn emit_management_assignments(
         let assignment_name = format!(
             "deployment:azure:mgmt-role-assign:${{local.resource_prefix}}:uami:{binding_index}"
         );
-        let mut block = resource_block(
+        let block = resource_block(
             "azurerm_role_assignment",
             &format!("{label}_management_uami_assignment_{binding_index}"),
             [
@@ -294,12 +294,11 @@ fn emit_management_assignments(
         );
         // A grant a global permission set also asks for is unconditional; only
         // one owed purely to gated resources follows their gates.
-        if let Some(gates) = merged_gates {
-            if !grants.unconditional_bindings.contains(&assignment_key) {
-                enabled::gate_any(&mut block, gates)?;
-            }
-        }
-        fragment.resource_blocks.push(block);
+        let gates = match merged_gates {
+            Some(gates) if !grants.unconditional_bindings.contains(&assignment_key) => gates,
+            _ => &[],
+        };
+        fragment.push_gated_resource(block, gates);
     }
     Ok(())
 }
