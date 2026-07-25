@@ -233,11 +233,12 @@ pub fn strip_frozen_dominated_live_resources(
 /// capacity contribution — stays stable and acceptance can return without a
 /// frozen-compatibility violation.
 ///
-/// The answer is the provided value when present, else the input's declared
-/// boolean default; anything else is an error, never a silent keep-or-drop.
-/// Dropping the resource from the desired stack is what deprovisions it — the
-/// executor deletes state resources absent from the desired stack, so a
-/// decline removes the resource AND its data by design.
+/// The answer is the provided value, else the recorded answer while the input
+/// still gates a frozen resource, else the input's declared boolean default;
+/// anything else is an error, never a silent keep-or-drop. Dropping the
+/// resource from the desired stack is what deprovisions it — the executor
+/// deletes state resources absent from the desired stack, so a decline removes
+/// the resource AND its data by design.
 pub fn strip_declined_live_resources(
     mut stack: Stack,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
@@ -368,6 +369,14 @@ pub fn resolve_frozen_gate_answers_from_presence(
 /// acceptance ever after, so an unprovable gate gets no recorded answer and
 /// stays unconstrained until a setup import answers it for real — which is
 /// exactly where these deployments already were.
+///
+/// The accepted cost: a legacy deployment that genuinely declined a frozen
+/// resource records nothing either, so that gate carries no fixity and no
+/// dominance until an import answers it. A live resource sharing it can then
+/// be toggled while the frozen one stays absent. That combination fails loudly
+/// at the reference preflight if the live resource actually uses the frozen
+/// one, and it only lasts until the next import — both preferable to
+/// fabricating a decline that could never be undone.
 pub fn derive_legacy_frozen_gate_answers(
     target_stack: &Stack,
     stack_state: &StackState,
@@ -485,7 +494,12 @@ pub fn audit_live_gate_transitions(
             continue;
         };
         let exists = stack_state.resources.contains_key(resource_id.as_str());
-        let source = source_of(input_values, persisted_gate_answers, input_id);
+        let source = source_of(
+            input_values,
+            persisted_gate_answers,
+            still_frozen_gating,
+            input_id,
+        );
         let (transition, value_source) = match (accepted, exists) {
             (false, true) => ("delete", source),
             (true, false) => ("create", source),
@@ -509,14 +523,21 @@ pub fn audit_live_gate_transitions(
     }
 }
 
+/// Where the audited answer came from. Mirrors [`live_gate_resolves_true`]
+/// exactly, including its dominance scoping — a recorded answer for an input
+/// the release no longer frozen-gates was not consulted, so reporting it as
+/// the source would misattribute the transition.
 fn source_of(
     input_values: &std::collections::HashMap<String, serde_json::Value>,
     persisted_gate_answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
     input_id: &str,
 ) -> &'static str {
     if input_values.contains_key(input_id) {
         "provided"
-    } else if persisted_gate_answers.contains_key(input_id) {
+    } else if still_frozen_gating.contains(input_id)
+        && persisted_gate_answers.contains_key(input_id)
+    {
         "persisted"
     } else {
         "default"
