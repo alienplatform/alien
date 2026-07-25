@@ -402,7 +402,6 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         deployment_id: &str,
         session: &str,
-        state: &DeploymentState,
     ) -> Result<(), AlienError>;
 
     /// Release lock on a deployment.

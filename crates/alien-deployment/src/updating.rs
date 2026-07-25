@@ -6,7 +6,7 @@ use alien_core::{
     StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::StackExecutor;
+use alien_infra::{RunningResourcePolicy, StackExecutor};
 use tracing::{debug, info};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -77,11 +77,8 @@ pub async fn handle_update_pending(
     // leaves the desired stack here, and the executor's create/delete
     // planning provisions or deprovisions it. Dependents share their
     // dependency's gate, so the strip stays closed.
-    let target_stack = crate::pending::strip_declined_resources(
-        target_stack,
-        &stack_state,
-        &config.input_values,
-    )?;
+    let target_stack =
+        crate::pending::strip_declined_resources(target_stack, &stack_state, &config.input_values)?;
 
     let runner = alien_preflights::runner::PreflightRunner::new();
 
@@ -239,6 +236,7 @@ pub async fn handle_updating(
 
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
         .lifecycle_filter(lifecycle_filter_vec)
         .service_provider(service_provider)
         .build()
@@ -258,7 +256,10 @@ pub async fn handle_updating(
     prune_deprovisioned_resources(
         &mut step_result.next_state,
         &target_stack,
-        current.target_release.as_ref().map(|release| &release.stack),
+        current
+            .target_release
+            .as_ref()
+            .map(|release| &release.stack),
     );
 
     // Compute the stack status from the resulting state
