@@ -49,12 +49,8 @@ pub async fn handle_pending(
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
-    let target_stack = strip_declined_frozen_resources(target_stack, &persisted_gate_answers);
-    let target_stack = strip_frozen_dominated_live_resources(
-        target_stack,
-        &persisted_gate_answers,
-        &frozen_gating,
-    );
+    let target_stack =
+        strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -142,29 +138,33 @@ pub async fn handle_pending(
 /// the frozen-compatibility check say so — "frozen resources are setup-owned
 /// and can only be added by rerunning setup" — instead of this strip silently
 /// deleting the release's new resource and reporting success.
-pub fn strip_declined_frozen_resources(
+fn strip_declined_frozen_resources(
     mut stack: Stack,
     answers: &alien_core::GateAnswers,
 ) -> Stack {
-    let mut declined: Vec<String> = Vec::new();
-    for (resource_id, entry) in stack.resources() {
-        let Some(input_id) = entry.enabled_when.as_deref() else {
-            continue;
-        };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
-        if !setup_created {
-            continue;
-        }
-
-        if answers.get(input_id) == Some(&false) {
-            declined.push(resource_id.clone());
-        }
-    }
+    let declined: Vec<String> = frozen_gated(&stack)
+        .filter(|(_, input_id)| answers.get(*input_id) == Some(&false))
+        .map(|(resource_id, _)| resource_id.clone())
+        .collect();
     remove_declined(&mut stack, &declined);
     stack
+}
+
+/// Apply every frozen-side decline to a stack, in the one order that is
+/// correct: declined frozen resources first, then the live resources their
+/// gates dominate. Both run BEFORE the mutations on all three paths.
+///
+/// `still_frozen_gating` must be computed from the stack as declared, before
+/// this runs — the frozen strip removes the very entries that make an input
+/// count as frozen-gating, so deriving it afterwards would defeat the filter.
+/// Doing both steps here is what keeps that order out of each caller's hands.
+pub fn strip_frozen_declines(
+    stack: Stack,
+    answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
+) -> Stack {
+    let stack = strip_declined_frozen_resources(stack, answers);
+    strip_frozen_dominated_live_resources(stack, answers, still_frozen_gating)
 }
 
 /// Remove live resources whose gate input carries a frozen answer of false.
@@ -181,29 +181,17 @@ pub fn strip_declined_frozen_resources(
 /// from frozen gating; those follow live resolution (provided value →
 /// recorded answer → default) in the late strip instead, so a freed gate is
 /// toggleable again.
-pub fn strip_frozen_dominated_live_resources(
+fn strip_frozen_dominated_live_resources(
     mut stack: Stack,
     frozen_answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Stack {
-    let mut declined: Vec<String> = Vec::new();
-    for (resource_id, entry) in stack.resources() {
-        let Some(input_id) = entry.enabled_when.as_deref() else {
-            continue;
-        };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
-        if setup_created {
-            continue;
-        }
-        if still_frozen_gating.contains(input_id)
-            && frozen_answers.get(input_id) == Some(&false)
-        {
-            declined.push(resource_id.clone());
-        }
-    }
+    let declined: Vec<String> = live_gated(&stack)
+        .filter(|(_, input_id)| {
+            still_frozen_gating.contains(*input_id) && frozen_answers.get(*input_id) == Some(&false)
+        })
+        .map(|(resource_id, _)| resource_id.clone())
+        .collect();
     remove_declined(&mut stack, &declined);
     stack
 }
@@ -228,26 +216,16 @@ pub fn strip_declined_live_resources(
     still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Result<Stack> {
     let mut declined: Vec<String> = Vec::new();
-    for (resource_id, entry) in stack.resources() {
-        let Some(input_id) = entry.enabled_when.as_deref() else {
-            continue;
-        };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
-        if setup_created {
-            continue;
-        }
-
-        if !live_gate_resolves_true(
+    for (resource_id, input_id) in live_gated(&stack) {
+        let (accepted, _source) = live_gate_resolves_true(
             &stack.inputs,
             input_id,
             input_values,
             persisted_gate_answers,
             still_frozen_gating,
             resource_id,
-        )? {
+        )?;
+        if !accepted {
             declined.push(resource_id.clone());
         }
     }
@@ -266,17 +244,29 @@ fn live_gate_resolves_true(
     persisted_gate_answers: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
     resource_id: &str,
-) -> Result<bool> {
+) -> Result<(bool, &'static str)> {
     // The recorded answer outranks the default only while the input actually
     // gates a frozen resource — that is what dominance means. Once a release
     // frees the input, its recorded answer is history, and a live gate
     // resolves the way any other live gate does.
-    if !input_values.contains_key(input_id) && still_frozen_gating.contains(input_id) {
+    //
+    // The source travels with the answer so the audit log cannot describe a
+    // precedence this function did not apply.
+    if input_values.contains_key(input_id) {
+        return Ok((
+            gate_resolves_true(inputs, input_id, input_values, resource_id)?,
+            "provided",
+        ));
+    }
+    if still_frozen_gating.contains(input_id) {
         if let Some(answer) = persisted_gate_answers.get(input_id) {
-            return Ok(*answer);
+            return Ok((*answer, "persisted"));
         }
     }
-    gate_resolves_true(inputs, input_id, input_values, resource_id)
+    Ok((
+        gate_resolves_true(inputs, input_id, input_values, resource_id)?,
+        "default",
+    ))
 }
 
 /// The canonical resolved answers for every input that gates a Frozen
@@ -304,18 +294,7 @@ pub fn resolve_frozen_gate_answers_from_presence(
     input_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<alien_core::GateAnswers> {
     let mut answers = alien_core::GateAnswers::new();
-    for (resource_id, entry) in stack.resources() {
-        let Some(input_id) = entry.enabled_when.as_deref() else {
-            continue;
-        };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
-        if !setup_created {
-            continue;
-        }
-
+    for (resource_id, input_id) in frozen_gated(stack) {
         let answer = if present_resource_ids.is_empty() {
             gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
         } else {
@@ -390,10 +369,37 @@ pub fn derive_legacy_frozen_gate_answers(
 
 /// The gate input of a setup-created gated resource, `None` for anything else.
 fn frozen_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
+    gate_of(entry, true)
+}
+
+/// The gate input of a runtime-created gated resource, `None` for anything
+/// else. The mirror of [`frozen_gate_of`] — which side of the setup boundary a
+/// gated resource falls on is decided in exactly these two places.
+fn live_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
+    gate_of(entry, false)
+}
+
+fn gate_of(entry: &alien_core::ResourceEntry, setup_created: bool) -> Option<&str> {
     let input_id = entry.enabled_when.as_deref()?;
-    alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-        .should_emit_in_setup(entry.lifecycle)
-        .then_some(input_id)
+    let emitted_in_setup = alien_core::ownership_policy_for_resource_type(
+        entry.config.resource_type().as_ref(),
+    )
+    .should_emit_in_setup(entry.lifecycle);
+    (emitted_in_setup == setup_created).then_some(input_id)
+}
+
+/// Every gated resource setup creates, as `(resource_id, input_id)`.
+fn frozen_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
+    stack
+        .resources()
+        .filter_map(|(resource_id, entry)| Some((resource_id, frozen_gate_of(entry)?)))
+}
+
+/// Every gated resource the runtime creates, as `(resource_id, input_id)`.
+fn live_gated(stack: &Stack) -> impl Iterator<Item = (&String, &str)> {
+    stack
+        .resources()
+        .filter_map(|(resource_id, entry)| Some((resource_id, live_gate_of(entry)?)))
 }
 
 /// The inputs that gate a setup-created resource in `stack`. Fixity applies
@@ -401,14 +407,8 @@ fn frozen_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
 /// no longer frozen-gating, and its recorded answer must not keep refusing
 /// live toggles.
 pub fn frozen_gating_inputs(stack: &Stack) -> std::collections::HashSet<String> {
-    stack
-        .resources()
-        .filter_map(|(_, entry)| {
-            let input_id = entry.enabled_when.as_deref()?;
-            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-                .should_emit_in_setup(entry.lifecycle)
-                .then(|| input_id.to_string())
-        })
+    frozen_gated(stack)
+        .map(|(_, input_id)| input_id.to_string())
         .collect()
 }
 
@@ -467,20 +467,10 @@ pub fn audit_live_gate_transitions(
     still_frozen_gating: &std::collections::HashSet<String>,
     release_id: Option<&str>,
 ) {
-    for (resource_id, entry) in stack.resources() {
-        let Some(input_id) = entry.enabled_when.as_deref() else {
-            continue;
-        };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
-        if setup_created {
-            continue;
-        }
+    for (resource_id, input_id) in live_gated(stack) {
         // The same resolver the strip uses, or the audit would describe a
         // transition that never happens — and miss the one that does.
-        let Ok(accepted) = live_gate_resolves_true(
+        let Ok((accepted, source)) = live_gate_resolves_true(
             &stack.inputs,
             input_id,
             input_values,
@@ -493,12 +483,6 @@ pub fn audit_live_gate_transitions(
             continue;
         };
         let exists = stack_state.resources.contains_key(resource_id.as_str());
-        let source = source_of(
-            input_values,
-            persisted_gate_answers,
-            still_frozen_gating,
-            input_id,
-        );
         let (transition, value_source) = match (accepted, exists) {
             (false, true) => ("delete", source),
             (true, false) => ("create", source),
@@ -519,27 +503,6 @@ pub fn audit_live_gate_transitions(
             "A live gate transition was requested; the executor's status \
              transitions for this resource complete or fail it"
         );
-    }
-}
-
-/// Where the audited answer came from. Mirrors [`live_gate_resolves_true`]
-/// exactly, including its dominance scoping — a recorded answer for an input
-/// the release no longer frozen-gates was not consulted, so reporting it as
-/// the source would misattribute the transition.
-fn source_of(
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-    persisted_gate_answers: &alien_core::GateAnswers,
-    still_frozen_gating: &std::collections::HashSet<String>,
-    input_id: &str,
-) -> &'static str {
-    if input_values.contains_key(input_id) {
-        "provided"
-    } else if still_frozen_gating.contains(input_id)
-        && persisted_gate_answers.contains_key(input_id)
-    {
-        "persisted"
-    } else {
-        "default"
     }
 }
 

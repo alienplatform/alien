@@ -249,12 +249,18 @@ pub fn gate_bindings(
     appended_from: usize,
     enabled_when: Option<&str>,
 ) -> Result<()> {
-    for block in &mut fragment.resource_blocks[appended_from..] {
-        let is_custom_role = block
-            .labels
-            .first()
-            .is_some_and(|label| label.as_str() == "google_project_iam_custom_role");
-        if !is_custom_role {
+    // Which of the appended blocks are shared comes from the fragment's own
+    // classification, not a second copy of the type name — the two could
+    // otherwise drift the moment another shared block type appears.
+    let shared: Vec<bool> = fragment.resource_blocks[appended_from..]
+        .iter()
+        .map(|block| fragment.is_shared(block))
+        .collect();
+    for (block, is_shared) in fragment.resource_blocks[appended_from..]
+        .iter_mut()
+        .zip(shared)
+    {
+        if !is_shared {
             enabled::gate(block, enabled_when)?;
         }
     }

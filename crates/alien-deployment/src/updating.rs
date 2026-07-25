@@ -102,9 +102,7 @@ pub async fn handle_update_pending(
     // workload's derived baseline (service account, profile grants, capacity
     // contribution) stays identical to the accepted render and the
     // compatibility checks never see a difference.
-    let target_stack =
-        crate::pending::strip_declined_frozen_resources(target_stack, &persisted_gate_answers);
-    let target_stack = crate::pending::strip_frozen_dominated_live_resources(
+    let target_stack = crate::pending::strip_frozen_declines(
         target_stack,
         &persisted_gate_answers,
         &frozen_gating,
