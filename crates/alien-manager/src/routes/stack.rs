@@ -242,6 +242,7 @@ pub async fn stack_import(
         prepared_stack,
         &req.input_values,
         &imported_gate_answers,
+        &frozen_gating,
     ) {
         Ok(stack) => stack,
         Err(e) => return e.into_response(),

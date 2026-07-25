@@ -161,12 +161,14 @@ pub async fn handle_update_pending(
         &stack_state,
         &config.input_values,
         &persisted_gate_answers,
+        &frozen_gating,
         target_release_id,
     );
     let mutated_stack = crate::pending::strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
         &persisted_gate_answers,
+        &frozen_gating,
     )?;
 
     // Store the mutated stack in runtime_metadata for future compatibility checks

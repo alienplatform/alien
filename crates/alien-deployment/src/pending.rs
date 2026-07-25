@@ -82,6 +82,7 @@ pub async fn handle_pending(
         mutated_stack,
         &config.input_values,
         &persisted_gate_answers,
+        &frozen_gating,
     )?;
 
     // Step 4: Store prepared stack and inject environment variables
@@ -241,6 +242,7 @@ pub fn strip_declined_live_resources(
     mut stack: Stack,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
     persisted_gate_answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
 ) -> Result<Stack> {
     let mut declined: Vec<String> = Vec::new();
     for (resource_id, entry) in stack.resources() {
@@ -260,6 +262,7 @@ pub fn strip_declined_live_resources(
             input_id,
             input_values,
             persisted_gate_answers,
+            still_frozen_gating,
             resource_id,
         )? {
             declined.push(resource_id.clone());
@@ -278,9 +281,14 @@ fn live_gate_resolves_true(
     input_id: &str,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
     persisted_gate_answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
     resource_id: &str,
 ) -> Result<bool> {
-    if !input_values.contains_key(input_id) {
+    // The recorded answer outranks the default only while the input actually
+    // gates a frozen resource — that is what dominance means. Once a release
+    // frees the input, its recorded answer is history, and a live gate
+    // resolves the way any other live gate does.
+    if !input_values.contains_key(input_id) && still_frozen_gating.contains(input_id) {
         if let Some(answer) = persisted_gate_answers.get(input_id) {
             return Ok(*answer);
         }
@@ -448,6 +456,7 @@ pub fn audit_live_gate_transitions(
     stack_state: &StackState,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
     persisted_gate_answers: &alien_core::GateAnswers,
+    still_frozen_gating: &std::collections::HashSet<String>,
     release_id: Option<&str>,
 ) {
     for (resource_id, entry) in stack.resources() {
@@ -468,6 +477,7 @@ pub fn audit_live_gate_transitions(
             input_id,
             input_values,
             persisted_gate_answers,
+            still_frozen_gating,
             resource_id,
         ) else {
             // The strip right after this reports the unresolvable gate as the
@@ -777,6 +787,7 @@ mod tests {
             live_gated_stack(Some(true)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
             &Default::default(),
+            &Default::default(),
         )
         .expect("resolvable gate");
         assert!(!stripped.resources.contains_key("cache"));
@@ -787,6 +798,7 @@ mod tests {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(false)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &Default::default(),
             &Default::default(),
         )
         .expect("resolvable gate");
@@ -800,12 +812,14 @@ mod tests {
             live_gated_stack(Some(true)),
             &Default::default(),
             &Default::default(),
+            &Default::default(),
         )
         .expect("default resolves");
         assert!(kept.resources.contains_key("cache"));
 
         let dropped = strip_declined_live_resources(
             live_gated_stack(Some(false)),
+            &Default::default(),
             &Default::default(),
             &Default::default(),
         )
@@ -818,6 +832,7 @@ mod tests {
     fn an_unresolvable_live_gate_fails_fast() {
         let error = strip_declined_live_resources(
             live_gated_stack(None),
+            &Default::default(),
             &Default::default(),
             &Default::default(),
         )
@@ -955,11 +970,14 @@ mod tests {
     #[test]
     fn an_omitted_live_gate_follows_the_persisted_answer_over_the_default() {
         let persisted = alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), true)]);
+        let still_gating =
+            std::collections::HashSet::from(["cacheEnabled".to_string()]);
 
         let kept = strip_declined_live_resources(
             live_gated_stack(Some(false)),
             &Default::default(),
             &persisted,
+            &still_gating,
         )
         .expect("the recorded answer resolves");
         assert!(
@@ -971,11 +989,48 @@ mod tests {
             live_gated_stack(Some(false)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
             &persisted,
+            &still_gating,
         )
         .expect("a provided value resolves");
         assert!(
             !provided_wins.resources.contains_key("cache"),
             "a provided value still outranks the recorded answer for live-only inputs"
+        );
+    }
+
+    /// Dominance ends when the gate does. Once a release stops gating any
+    /// frozen resource on an input, the recorded answer is history: a live
+    /// resource still gated on it follows the release's declared default,
+    /// instead of being deprovisioned by an answer that no longer governs
+    /// anything.
+    #[test]
+    fn a_freed_gate_stops_following_its_recorded_answer() {
+        let recorded_no =
+            alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
+
+        let kept = strip_declined_live_resources(
+            live_gated_stack(Some(true)),
+            &Default::default(),
+            &recorded_no,
+            // The release no longer frozen-gates this input.
+            &Default::default(),
+        )
+        .expect("the declared default resolves");
+        assert!(
+            kept.resources.contains_key("cache"),
+            "a freed gate follows the release's default, not a stale recorded no"
+        );
+
+        let still_dominated = strip_declined_live_resources(
+            live_gated_stack(Some(true)),
+            &Default::default(),
+            &recorded_no,
+            &std::collections::HashSet::from(["cacheEnabled".to_string()]),
+        )
+        .expect("the recorded answer resolves");
+        assert!(
+            !still_dominated.resources.contains_key("cache"),
+            "while the input still gates a frozen resource, the recorded no governs"
         );
     }
 
@@ -988,6 +1043,7 @@ mod tests {
             live_gated_stack(Some(true)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
             &Default::default(),
+            &Default::default(),
         )
         .expect("a CloudFormation string boolean resolves");
         assert!(
@@ -998,6 +1054,7 @@ mod tests {
         let error = strip_declined_live_resources(
             live_gated_stack(Some(true)),
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("yes"))]),
+            &Default::default(),
             &Default::default(),
         )
         .expect_err("an arbitrary string is not an answer");
@@ -1090,6 +1147,7 @@ mod tests {
             kept,
             &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
             &stale_answers,
+            &Default::default(),
         )
         .expect("a provided value resolves");
         assert!(
