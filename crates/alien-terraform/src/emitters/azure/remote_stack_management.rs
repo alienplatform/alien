@@ -16,6 +16,7 @@ use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, permission_context, required_label, tags},
+    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -73,8 +74,21 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             .unwrap_or_default();
         let grant_plan =
             generate_management_grant_plan(label, &global_refs, &resource_scoped_refs)?;
-        emit_management_role(&mut fragment, label, &grant_plan);
-        emit_management_assignments(&mut fragment, label, &grant_plan);
+        // The role definition stays ungated: a definition nothing is assigned
+        // to grants nothing, so leaving it is the same unbound shell a shared
+        // custom role leaves. The assignment is the grant, and that is what
+        // follows the gate.
+        //
+        // What that gate can and cannot express: these grants render at
+        // resource-group scope, merged across every resource that asked for
+        // one, so the assignment can only go away when the LAST contributor is
+        // declined. Declining one worker while a sibling stays enabled leaves
+        // the grant — and its resource-group reach — in place. Revoking
+        // per-worker needs per-resource assignments, which the permission set
+        // already describes but this emitter does not yet render.
+        emit_management_role(&mut fragment, label, &grant_plan.plan);
+        let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
+        emit_management_assignments(&mut fragment, label, &grant_plan, merged_gates.as_deref())?;
         emit_existing_network_reader_assignments(&mut fragment, label);
 
         fragment.resource_blocks.push(resource_block(
@@ -183,15 +197,20 @@ fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetRefe
         .unwrap_or_default()
 }
 
+/// Global refs, plus resource-scoped refs paired with the resource that asked
+/// for them — the pairing is what lets a grant follow that resource's gate.
 fn management_permission_refs(
     profile: &PermissionProfile,
-) -> (Vec<&PermissionSetReference>, Vec<&PermissionSetReference>) {
+) -> (
+    Vec<&PermissionSetReference>,
+    Vec<(&String, &PermissionSetReference)>,
+) {
     let global_refs = global_permission_refs(profile);
     let resource_scoped_refs = profile
         .0
         .iter()
         .filter(|(scope, _)| scope.as_str() != "*")
-        .flat_map(|(_, refs)| refs.iter())
+        .flat_map(|(resource_id, refs)| refs.iter().map(move |r| (resource_id, r)))
         .collect();
     (global_refs, resource_scoped_refs)
 }
@@ -243,11 +262,13 @@ fn emit_management_role(fragment: &mut TfFragment, label: &str, grant_plan: &Azu
 fn emit_management_assignments(
     fragment: &mut TfFragment,
     label: &str,
-    grant_plan: &AzureGrantPlan,
-) {
+    grants: &ManagementGrants,
+    merged_gates: Option<&[String]>,
+) -> Result<()> {
     let mut seen_assignments = BTreeSet::new();
-    for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
-        if !seen_assignments.insert(management_assignment_key(binding)) {
+    for (binding_index, binding) in grants.plan.bindings.iter().enumerate() {
+        let assignment_key = management_assignment_key(binding);
+        if !seen_assignments.insert(assignment_key.clone()) {
             continue;
         }
 
@@ -255,7 +276,7 @@ fn emit_management_assignments(
         let assignment_name = format!(
             "deployment:azure:mgmt-role-assign:${{local.resource_prefix}}:uami:{binding_index}"
         );
-        fragment.resource_blocks.push(resource_block(
+        let mut block = resource_block(
             "azurerm_role_assignment",
             &format!("{label}_management_uami_assignment_{binding_index}"),
             [
@@ -270,8 +291,17 @@ fn emit_management_assignments(
                     expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
                 ),
             ],
-        ));
+        );
+        // A grant a global permission set also asks for is unconditional; only
+        // one owed purely to gated resources follows their gates.
+        if let Some(gates) = merged_gates {
+            if !grants.unconditional_bindings.contains(&assignment_key) {
+                enabled::gate_any(&mut block, gates)?;
+            }
+        }
+        fragment.resource_blocks.push(block);
     }
+    Ok(())
 }
 
 fn management_assignment_key(binding: &alien_permissions::generators::AzureRoleBinding) -> String {
@@ -284,11 +314,50 @@ fn management_assignment_key(binding: &alien_permissions::generators::AzureRoleB
     format!("{}:{role_key}", binding.scope)
 }
 
+/// Gates for a merged management grant, or `None` when it must stay
+/// unconditional.
+///
+/// Azure folds every resource-scoped management permission set into one
+/// stack-scoped assignment, so the grant belongs to all of its contributors at
+/// once. It can only be gated when every contributor is gated — one ungated
+/// contributor needs the grant unconditionally, and declining a sibling must
+/// not take it away.
+fn merged_grant_gates(
+    ctx: &EmitContext<'_>,
+    resource_scoped_refs: &[(&String, &PermissionSetReference)],
+) -> Option<Vec<String>> {
+    let mut gates: Vec<String> = Vec::new();
+    for (resource_id, permission_set_ref) in resource_scoped_refs {
+        // The same filters the plan applies, so the two cannot disagree about
+        // who contributed: a set that renders nothing must not get a vote on
+        // the gate either.
+        let Some(permission_set) = resolve_stack_management_permission_set(permission_set_ref)
+        else {
+            continue;
+        };
+        if permission_set.platforms.azure.is_none() {
+            continue;
+        }
+        let input_id = ctx
+            .stack
+            .resources
+            .get(resource_id.as_str())
+            .and_then(|entry| entry.enabled_when.clone())?;
+        if !gates.contains(&input_id) {
+            gates.push(input_id);
+        }
+    }
+    // Stable order: the profile's iteration order would otherwise reshuffle
+    // the rendered condition when a stack author reorders resources.
+    gates.sort();
+    (!gates.is_empty()).then_some(gates)
+}
+
 fn generate_management_grant_plan(
     label: &str,
     global_refs: &[&PermissionSetReference],
-    resource_scoped_refs: &[&PermissionSetReference],
-) -> Result<AzureGrantPlan> {
+    resource_scoped_refs: &[(&String, &PermissionSetReference)],
+) -> Result<ManagementGrants> {
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
     let context = permission_context(label);
@@ -310,10 +379,15 @@ fn generate_management_grant_plan(
         custom_roles.extend(grant_plan.custom_roles);
         bindings.extend(grant_plan.bindings);
     }
+    // Anything a global permission set already grants is unconditional, so a
+    // gated resource asking for the same grant cannot make it conditional.
+    let unconditional_bindings: BTreeSet<String> =
+        bindings.iter().map(management_assignment_key).collect();
 
     let mut seen_stack_management_refs = BTreeSet::new();
     for permission_set in resource_scoped_refs
         .iter()
+        .map(|(_resource_id, permission_set_ref)| permission_set_ref)
         .filter_map(resolve_stack_management_permission_set)
     {
         if !seen_stack_management_refs.insert(permission_set.id.clone()) {
@@ -335,10 +409,20 @@ fn generate_management_grant_plan(
         bindings.extend(grant_plan.bindings);
     }
 
-    Ok(AzureGrantPlan {
-        custom_roles,
-        bindings: dedupe_azure_role_bindings(bindings),
+    Ok(ManagementGrants {
+        plan: AzureGrantPlan {
+            custom_roles,
+            bindings: dedupe_azure_role_bindings(bindings),
+        },
+        unconditional_bindings,
     })
+}
+
+/// The management grant plan plus which of its assignments a global permission
+/// set already made unconditional.
+struct ManagementGrants {
+    plan: AzureGrantPlan,
+    unconditional_bindings: BTreeSet<String>,
 }
 
 fn combined_management_role_definition(

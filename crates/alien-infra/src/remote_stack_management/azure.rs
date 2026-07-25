@@ -1075,7 +1075,8 @@ mod tests {
         ]);
 
         let grant_plan =
-            generate_stack_management_grant_plan(&profile, &permission_context()).unwrap();
+            generate_stack_management_grant_plan(&profile, &permission_context(), &Default::default())
+                .unwrap();
 
         assert!(
             grant_plan.custom_roles.iter().any(|role| role
@@ -1133,8 +1134,10 @@ mod tests {
                 [PermissionSetReference::from_name("worker/dispatch-command")],
             );
 
+        let live: std::collections::HashSet<String> =
+            ["api".to_string(), "jobs".to_string()].into_iter().collect();
         let grant_plan =
-            generate_stack_management_grant_plan(&profile, &permission_context()).unwrap();
+            generate_stack_management_grant_plan(&profile, &permission_context(), &live).unwrap();
 
         assert_eq!(
             grant_plan
@@ -1144,6 +1147,30 @@ mod tests {
                 .count(),
             1,
             "worker dispatch is a stack management transport grant and should be deduped"
+        );
+    }
+
+    /// The management profile still names a resource the deployer declined —
+    /// the strip removes it from the stack, never from the profile. Absence
+    /// from the desired stack is the decline, and the grant must go with it,
+    /// or the runtime would restore what the setup template withheld.
+    #[test]
+    fn stack_management_grant_plan_skips_a_declined_resource() {
+        let profile = PermissionProfile::new().resource(
+            "jobs",
+            [PermissionSetReference::from_name("worker/dispatch-command")],
+        );
+
+        let grant_plan =
+            generate_stack_management_grant_plan(&profile, &permission_context(), &Default::default())
+                .unwrap();
+
+        assert!(
+            grant_plan
+                .bindings
+                .iter()
+                .all(|binding| binding.permission_set_id != "worker/dispatch-command"),
+            "a declined worker's dispatch grant must not be issued at runtime"
         );
     }
 }
@@ -1211,9 +1238,16 @@ fn existing_azure_vnet_resource_id(ctx: &ResourceControllerContext<'_>) -> Optio
     }
 }
 
+/// `live_resource_ids` is the set of resources that still exist in the desired
+/// stack. The management profile is authored before the declined-resource
+/// strip runs and is never pruned by it, so a profile entry can name a
+/// resource the deployer declined. Absence from the desired stack is that
+/// decline, and the grant has to go with it — the setup template withholds it
+/// the same way, and the two must agree.
 fn generate_stack_management_grant_plan(
     management_profile: &PermissionProfile,
     permission_context: &PermissionContext,
+    live_resource_ids: &std::collections::HashSet<String>,
 ) -> Result<AzureGrantPlan> {
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
@@ -1255,6 +1289,7 @@ fn generate_stack_management_grant_plan(
         .0
         .iter()
         .filter(|(scope, _)| scope.as_str() != "*")
+        .filter(|(resource_id, _)| live_resource_ids.contains(resource_id.as_str()))
         .flat_map(|(_, refs)| refs.iter())
         .filter(|reference| reference.id() == "worker/dispatch-command")
     {
@@ -1405,7 +1440,11 @@ impl AzureRemoteStackManagementController {
 
         let generator = AzureRuntimePermissionsGenerator::new();
         let grant_plan =
-            generate_stack_management_grant_plan(management_profile, &permission_context)?;
+            generate_stack_management_grant_plan(
+                management_profile,
+                &permission_context,
+                &ctx.desired_stack.resources.keys().cloned().collect(),
+            )?;
         custom_roles.extend(grant_plan.custom_roles);
         bindings.extend(grant_plan.bindings);
 
