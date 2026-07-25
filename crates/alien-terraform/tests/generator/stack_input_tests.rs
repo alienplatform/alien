@@ -102,6 +102,50 @@ fn terraform_rejects_deployer_secret_inputs_until_provider_state_safety_exists()
         .contains("Terraform deployer-provided secret stack inputs are not enabled"));
 }
 
+/// `deployment_input_values` publishes every deployer answer as a plain
+/// module output so registration flows outside Terraform can read it. That is
+/// only safe while secret inputs cannot reach the module at all. This holds
+/// the two together: if the refusal above is ever relaxed, this fails and
+/// whoever relaxes it has to decide what the output does with a secret.
+#[test]
+fn a_secret_input_cannot_reach_the_input_values_output() {
+    let stack = Stack::new("secret-input-stack".to_string())
+        .inputs(vec![StackInputDefinition {
+            id: "apiKey".to_string(),
+            kind: StackInputKind::Secret,
+            provided_by: vec![StackInputProvider::Deployer],
+            required: true,
+            label: "API key".to_string(),
+            description: "Secret key for setup.".to_string(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            env: vec![],
+        }])
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    match try_render(&stack, TerraformTarget::Aws, StackSettings::default()) {
+        Err(_) => {}
+        Ok(module) => {
+            let outputs = module
+                .iter()
+                .find(|(name, _)| *name == "outputs.tf")
+                .map(|(_, contents)| contents.clone())
+                .expect("outputs.tf should render");
+            assert!(
+                !outputs.contains("deployment_input_values"),
+                "a secret answer may not be published as a plain output; mark it \
+                 sensitive or keep refusing secret inputs:\n{outputs}"
+            );
+        }
+    }
+}
+
 /// Distinct ids can normalize to the same Terraform variable; a silent shadow
 /// would make both inputs read one variable, so generation must refuse.
 #[test]

@@ -190,12 +190,11 @@ pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 /// Deployment protocol version this binary writes.
 /// Bump when making incompatible changes to DeploymentState semantics.
 ///
-/// The frozen-gate fixity contract (`persisted_gate_answers` on the runtime
-/// metadata) deliberately did NOT bump this: the field is additive, an actor
-/// unaware of it still cannot flip a frozen resource (its strip resolves from
-/// state presence, so a changed input is ignored rather than applied), and a
-/// write-back that drops the field is rebuilt faithfully by the
-/// derive-when-empty fallback. Bumping would instead hard-refuse every
+/// `persisted_gate_answers` on the runtime metadata stays at this version:
+/// the field is additive, an actor unaware of it still cannot flip a frozen
+/// resource (its strip resolves from state presence, so a changed input is
+/// ignored rather than applied), and a write-back that drops the field is
+/// rebuilt from the settled state. A bump would hard-refuse every
 /// customer-scheduled pull agent the moment a newer manager writes state.
 pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 

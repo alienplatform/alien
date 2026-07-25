@@ -140,13 +140,13 @@ variable "gcp_custom_role_prefix" {
 
 variable "input_first_enabled" {
   type        = bool
-  description = "Enable first Whether to create the first store."
+  description = "Enable first. Whether to create the first store."
   default     = true
 }
 
 variable "input_second_enabled" {
   type        = bool
-  description = "Enable second Whether to create the second store."
+  description = "Enable second. Whether to create the second store."
   default     = true
 }
 

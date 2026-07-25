@@ -136,7 +136,7 @@ variable "gcp_custom_role_prefix" {
 
 variable "input_fixture_enabled" {
   type        = bool
-  description = "Enable the fixture resource Whether to create the gated matrix fixture."
+  description = "Enable the fixture resource. Whether to create the gated matrix fixture."
   default     = true
 }
 

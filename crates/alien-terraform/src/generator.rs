@@ -1029,6 +1029,22 @@ fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Resul
     }))
 }
 
+fn stack_input_description(label: &str, description: &str) -> String {
+    let label = label.trim_end();
+    if label.is_empty() {
+        return description.to_string();
+    }
+    if description.is_empty() {
+        return label.to_string();
+    }
+    let separator = if label.ends_with(['.', '!', '?', ':']) {
+        " "
+    } else {
+        ". "
+    };
+    format!("{label}{separator}{description}")
+}
+
 fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
     stack_input_variable_name(&input.id)
 }
@@ -1757,7 +1773,9 @@ fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
         attr("type", stack_input_terraform_type(input)),
         attr(
             "description",
-            Expression::String(format!("{} {}", input.label, input.description)),
+            // The label is a heading, not a sentence, so give it a stop of its
+            // own — a customer reads these two joined in `variables.tf`.
+            Expression::String(stack_input_description(&input.label, &input.description)),
         ),
     ];
     if let Some(default) = input.default.as_ref().map(stack_input_default_expression) {

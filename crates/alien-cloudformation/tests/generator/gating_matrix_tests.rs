@@ -211,7 +211,7 @@ fn every_registered_emitter_is_policy_refused_or_renders_gated() {
     );
 }
 
-/// Vault gates purely through the generator — its emitter never carried
+/// Vault gates purely through the generator; its emitter contains no
 /// gating code. On AWS the vault's secrets are created lazily at runtime by
 /// name prefix, so a granting-profile-free vault contributes no template
 /// resources at all; its gated render is exactly the registration splice,
