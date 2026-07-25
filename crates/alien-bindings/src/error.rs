@@ -341,6 +341,32 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// A cloud Postgres binding's password could not be read from its secret store.
+    ///
+    /// Retryable: the cloud variants carry only a *pointer* to the password (Secrets
+    /// Manager ARN / Secret Manager name / Key Vault URI) and the workload reads it with
+    /// its own identity, so a failure here is an upstream one — throttling, a network
+    /// blip, IAM propagation lag, or a secret the control plane has not finished writing.
+    /// A binding whose *shape* is wrong (missing/malformed locator) is user-fixable
+    /// configuration and reports `BINDING_CONFIG_INVALID` instead, which is not retryable.
+    ///
+    /// `secret` is the locator, never the secret value.
+    #[error(
+        code = "POSTGRES_SECRET_RESOLUTION_FAILED",
+        message = "Failed to resolve the password for Postgres binding '{binding_name}' from secret '{secret}': {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 502
+    )]
+    PostgresSecretResolutionFailed {
+        /// Name of the Postgres binding whose password could not be resolved
+        binding_name: String,
+        /// The secret locator that was read (an ARN / name / URI — never the value)
+        secret: String,
+        /// What went wrong while reading the secret
+        reason: String,
+    },
+
     /// Resource not found in the cloud platform.
     #[error(
         code = "RESOURCE_NOT_FOUND",

@@ -16,6 +16,11 @@
  *   → `{"service":"local-vault","vaultName":"<name>","dataDir":"<dir>"}` —
  *     secrets live at `<dir>/secrets.json`
  *     (see `crates/alien-bindings/src/providers/vault/local.rs`).
+ * - Postgres: `crates/alien-core/src/bindings/postgres.rs::LocalPostgresBinding` /
+ *   `ExternalPostgresBinding` →
+ *   `{"service":"local-postgres"|"external","host","port","database","username","password"}`
+ *   — connection-only, so there is no directory or on-disk state
+ *   (see `crates/alien-bindings/src/providers/postgres/local.rs`).
  *
  * Cross-checked against `crates/alien-local/src/local_bindings_provider.rs`
  * (which extracts exactly these fields from the parsed binding) and against
@@ -172,6 +177,50 @@ export function localVaultBindingEnv(
   }
   installBindingEnv(fixture.env)
   return fixture
+}
+
+/**
+ * The connection fields every Postgres fixture uses. Shared by the `local-postgres`
+ * and `external` builders below so the two backends differ only in `service` (and
+ * therefore only in the resolved `sslmode`).
+ *
+ * `password` deliberately contains every character the connection string must
+ * percent-encode: the RFC 3986 sub-delims `! * ' ( )` plus `@` and `/`, which would
+ * otherwise split the userinfo from the host.
+ *
+ * `scripts/run-bun-tests.mjs` seeds the same values into the child process env (Bun
+ * cannot mutate the C environment a native addon reads), so the two must stay in
+ * sync — `tests/postgres.test.ts` asserts the exact resolved URL and fails if they
+ * drift.
+ */
+export const POSTGRES_FIXTURE = {
+  host: "db.internal",
+  port: 5432,
+  database: "app",
+  username: "alien",
+  password: "a!b*c'd(e)f@/",
+} as const
+
+/** Build the env for a `local-postgres` binding (resolves to `sslmode=disable`). */
+export function localPostgresBindingEnv(bindingName: string): void {
+  installBindingEnv({
+    ...LOCAL_DEPLOYMENT_ENV,
+    [bindingEnvVarName(bindingName)]: JSON.stringify({
+      service: "local-postgres",
+      ...POSTGRES_FIXTURE,
+    }),
+  })
+}
+
+/** Build the env for an `external` (BYO) Postgres binding (resolves to `sslmode=prefer`). */
+export function externalPostgresBindingEnv(bindingName: string): void {
+  installBindingEnv({
+    ...LOCAL_DEPLOYMENT_ENV,
+    [bindingEnvVarName(bindingName)]: JSON.stringify({
+      service: "external",
+      ...POSTGRES_FIXTURE,
+    }),
+  })
 }
 
 /** Build the env for a local linked-container binding. */

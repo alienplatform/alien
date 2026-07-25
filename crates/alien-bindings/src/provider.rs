@@ -1415,9 +1415,110 @@ impl BindingsProviderApi for BindingsProvider {
 
         let binding: PostgresBinding = self.parse_binding(binding_name, "Postgres")?;
 
-        let result: Arc<dyn Postgres> = Arc::new(
-            crate::providers::postgres::local::LocalPostgres::from_binding(binding_name, &binding)?,
-        );
+        // Local/External carry the password inline; the cloud variants carry only a
+        // secret locator and each reads it from its own cloud secret store here, once,
+        // with the workload's own identity.
+        let result: Arc<dyn Postgres> = match &binding {
+            PostgresBinding::Local(_) | PostgresBinding::External(_) => {
+                use crate::providers::postgres::local::LocalPostgres;
+
+                let postgres: Arc<dyn Postgres> =
+                    Arc::new(LocalPostgres::from_binding(binding_name, &binding)?);
+                Ok(postgres)
+            }
+
+            #[cfg(feature = "aws")]
+            PostgresBinding::Aurora(config) => {
+                use crate::providers::postgres::aurora::AuroraPostgres;
+                use alien_aws_clients::secrets_manager::{SecretsManagerApi, SecretsManagerClient};
+
+                let aws_config = self.client_config.aws_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Aws,
+                        message: "AWS config not available".to_string(),
+                    })
+                })?;
+                let credentials =
+                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config.clone())
+                        .await
+                        .context(ErrorData::ClientConfigInvalid {
+                            platform: Platform::Aws,
+                            message: "Failed to create AWS credential provider".to_string(),
+                        })?;
+
+                let client: Arc<dyn SecretsManagerApi> = Arc::new(SecretsManagerClient::new(
+                    crate::http_client::create_http_client(),
+                    credentials,
+                ));
+
+                let postgres: Arc<dyn Postgres> =
+                    Arc::new(AuroraPostgres::from_binding(binding_name, config, client).await?);
+                Ok(postgres)
+            }
+            #[cfg(not(feature = "aws"))]
+            PostgresBinding::Aurora(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                feature: "aws".to_string(),
+            })),
+
+            #[cfg(feature = "gcp")]
+            PostgresBinding::CloudSql(config) => {
+                use crate::providers::postgres::cloud_sql::CloudSqlPostgres;
+                use alien_gcp_clients::secret_manager::{SecretManagerApi, SecretManagerClient};
+
+                let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Gcp,
+                        message: "GCP config not available".to_string(),
+                    })
+                })?;
+
+                let client: Arc<dyn SecretManagerApi> = Arc::new(SecretManagerClient::new(
+                    crate::http_client::create_http_client(),
+                    gcp_config.clone(),
+                ));
+
+                let postgres: Arc<dyn Postgres> =
+                    Arc::new(CloudSqlPostgres::from_binding(binding_name, config, client).await?);
+                Ok(postgres)
+            }
+            #[cfg(not(feature = "gcp"))]
+            PostgresBinding::CloudSql(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                feature: "gcp".to_string(),
+            })),
+
+            #[cfg(feature = "azure")]
+            PostgresBinding::FlexibleServer(config) => {
+                use crate::providers::postgres::flexible_server::FlexibleServerPostgres;
+                use alien_azure_clients::keyvault::{
+                    AzureKeyVaultSecretsClient, KeyVaultSecretsApi,
+                };
+                use alien_azure_clients::AzureTokenCache;
+
+                let azure_config = self.client_config.azure_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Azure,
+                        message: "Azure config not available".to_string(),
+                    })
+                })?;
+
+                let client: Arc<dyn KeyVaultSecretsApi> =
+                    Arc::new(AzureKeyVaultSecretsClient::new(
+                        crate::http_client::create_http_client(),
+                        AzureTokenCache::new(azure_config.clone()),
+                    ));
+
+                let postgres: Arc<dyn Postgres> = Arc::new(
+                    FlexibleServerPostgres::from_binding(binding_name, config, client).await?,
+                );
+                Ok(postgres)
+            }
+            #[cfg(not(feature = "azure"))]
+            PostgresBinding::FlexibleServer(_) => {
+                Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                    feature: "azure".to_string(),
+                }))
+            }
+        }?;
 
         self.put_cache("postgres", binding_name, result.clone())
             .await;

@@ -1,14 +1,16 @@
 //! App-facing convenience API for accessing bindings.
 //!
 //! [`Bindings`] wraps a [`crate::provider::LazyEnvBindingsProvider`], giving application
-//! code a small, stable surface — `storage`, `kv`, `queue`, `vault`, `container` — instead of the full
-//! [`crate::traits::BindingsProviderApi`] used internally by the manager and controllers.
+//! code a small, stable surface — `storage`, `kv`, `queue`, `vault`, `container`,
+//! `postgres` — instead of the full [`crate::traits::BindingsProviderApi`] used internally
+//! by the manager and controllers.
 
 use crate::error::Result;
 use crate::provider::{BindingsProvider, LazyEnvBindingsProvider};
 use crate::refreshing::{RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault};
 use crate::traits::{
-    BindingsProviderApi, Container, Kv, MessagePayload, Queue, QueueMessage, Storage, Vault,
+    BindingsProviderApi, Container, Kv, MessagePayload, Postgres, Queue, QueueMessage, Storage,
+    Vault,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -163,6 +165,19 @@ impl Bindings {
     /// Loads a linked container for read-only service discovery.
     pub async fn container(&self, binding_name: &str) -> Result<Arc<dyn Container>> {
         self.provider.load_container(binding_name).await
+    }
+
+    /// Loads the connection details for a linked Postgres database.
+    ///
+    /// Unlike the other kinds this returns no operations — Postgres has no gRPC service
+    /// and every backend speaks the same wire protocol, so the handle carries connection
+    /// details and the application connects with its own driver.
+    ///
+    /// A cloud backend's password is read from its secret store during this call and
+    /// then held for the handle's lifetime, so there is no refreshing wrapper: call this
+    /// again to pick up a rotated password.
+    pub async fn postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
+        self.provider.load_postgres(binding_name).await
     }
 }
 

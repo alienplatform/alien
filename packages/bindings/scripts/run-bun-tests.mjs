@@ -54,6 +54,24 @@ env[bindingEnvName("bun-container")] = JSON.stringify({
   internalUrl: "http://database.internal:5432",
   publicUrl: "http://localhost:15432",
 })
+// Postgres is connection-only, so these need no data dir. The field values must match
+// POSTGRES_FIXTURE in tests/helpers/local-binding-env.ts — tests/postgres.test.ts asserts
+// the exact resolved URL and fails if the two drift.
+const postgresFixture = {
+  host: "db.internal",
+  port: 5432,
+  database: "app",
+  username: "alien",
+  password: "a!b*c'd(e)f@/",
+}
+env[bindingEnvName("bun-postgres-local")] = JSON.stringify({
+  service: "local-postgres",
+  ...postgresFixture,
+})
+env[bindingEnvName("bun-postgres-external")] = JSON.stringify({
+  service: "external",
+  ...postgresFixture,
+})
 const testFiles = readdirSync("tests")
   .filter(file => file.endsWith(".test.ts") && file !== "errors.test.ts")
   .map(file => `tests/${file}`)

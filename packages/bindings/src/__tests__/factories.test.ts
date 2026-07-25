@@ -6,6 +6,8 @@ import type {
   RawBindingsHandle,
   RawContainerHandle,
   RawKvHandle,
+  RawPostgresConnection,
+  RawPostgresHandle,
   RawQueueHandle,
   RawStorageHandle,
   RawVaultHandle,
@@ -16,6 +18,35 @@ import type {
  * trivial resource handles, so factory behavior can be exercised without the
  * real `.node`.
  */
+/**
+ * A raw addon connection for `sslmode`, matching what the napi `PostgresHandle`
+ * returns: the connection string already carries the same mode.
+ */
+function rawConnection(sslmode: string): RawPostgresConnection {
+  return {
+    connectionString: `postgres://alien:pw@db.internal:5432/app?sslmode=${sslmode}`,
+    host: "db.internal",
+    port: 5432,
+    database: "app",
+    username: "alien",
+    password: "pw",
+    sslmode,
+  }
+}
+
+/** Build an addon whose `postgres(name)` resolves to a handle returning `raw`. */
+function addonForPostgres(raw: RawPostgresConnection): NativeAddon {
+  class FakeBindingsHandle {
+    async postgres(): Promise<RawPostgresHandle> {
+      return { connection: () => raw }
+    }
+  }
+  return {
+    BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    version: () => "test",
+  }
+}
+
 function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   const constructions: unknown[] = []
 
@@ -53,6 +84,9 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     getInternalUrl: async () => "http://service.internal:8080",
     getPublicUrl: async () => null,
   }
+  const postgresHandle: RawPostgresHandle = {
+    connection: () => rawConnection("require"),
+  }
 
   const bindings: RawBindingsHandle = {
     storage: async () => storageHandle,
@@ -60,6 +94,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     queue: async () => queueHandle,
     vault: async () => vaultHandle,
     container: async () => containerHandle,
+    postgres: async () => postgresHandle,
   }
 
   class FakeBindingsHandle {
@@ -71,6 +106,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     queue = bindings.queue
     vault = bindings.vault
     container = bindings.container
+    postgres = bindings.postgres
   }
 
   return {
@@ -271,5 +307,53 @@ describe("createFactories method mapping", () => {
       "http://service.internal:8080",
     )
     await expect(container("database").getPublicUrl()).resolves.toBeNull()
+  })
+})
+
+describe("createFactories postgres surface", () => {
+  it("passes every addon field through and exposes the connection string shorthand", async () => {
+    const { postgres } = createFactories(() => addonForPostgres(rawConnection("require")))
+
+    const connection = await postgres("db").connection()
+
+    expect(connection).toEqual({
+      connectionString: "postgres://alien:pw@db.internal:5432/app?sslmode=require",
+      ssl: { rejectUnauthorized: false },
+      host: "db.internal",
+      port: 5432,
+      database: "app",
+      username: "alien",
+      password: "pw",
+      sslmode: "require",
+    })
+    await expect(postgres("db").connectionString()).resolves.toBe(connection.connectionString)
+  })
+
+  // `ssl` is what a node-postgres caller actually passes to the driver, so the mapping
+  // from the Rust SslMode has to be exact: only the managed clouds (`require`) get TLS.
+  it.each([
+    ["disable", false],
+    ["prefer", false],
+    ["require", { rejectUnauthorized: false }],
+  ] as const)("derives ssl from sslmode %s", async (sslmode, expected) => {
+    const { postgres } = createFactories(() => addonForPostgres(rawConnection(sslmode)))
+
+    const connection = await postgres("db").connection()
+
+    expect(connection.sslmode).toBe(sslmode)
+    expect(connection.ssl).toEqual(expected)
+  })
+
+  // An sslmode this wrapper doesn't know means wrapper/addon version skew. Silently
+  // defaulting would hand back a connection with the wrong TLS posture, so it must throw.
+  it("rejects an unknown sslmode from the addon rather than guessing a TLS posture", async () => {
+    const { postgres } = createFactories(() => addonForPostgres(rawConnection("verify-full")))
+
+    const error = await postgres("db")
+      .connection()
+      .catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).message).toContain("verify-full")
   })
 })

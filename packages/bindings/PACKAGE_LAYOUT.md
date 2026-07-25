@@ -9,12 +9,14 @@
 `@alienplatform/bindings` is the public, direct bindings package for TypeScript: a
 thin wrapper over a napi-rs native addon. The Rust crate `alien-bindings` is the
 single provider implementation (S3/GCS/Blob, DynamoDB/Firestore/Table Storage,
-SQS/Pub-Sub/Service Bus, the vaults, the local providers, and their credential
-chains). The TypeScript layer carries only types, the binding factories, and error
-mapping; every storage/kv/queue/vault/container operation runs the Rust provider in-process.
+SQS/Pub-Sub/Service Bus, the vaults, the Postgres backends, the local providers, and
+their credential chains). The TypeScript layer carries only types, the binding
+factories, and error mapping; every storage/kv/queue/vault/container/postgres operation
+runs the Rust provider in-process.
 
-The package exposes five app-facing binding kinds — **storage**, **kv**,
-**queue**, **vault**, and linked **container** discovery. It has no JS cloud SDK dependencies and no provider logic of
+The package exposes six app-facing binding kinds — **storage**, **kv**,
+**queue**, **vault**, linked **container** discovery, and **postgres** connection
+details. It has no JS cloud SDK dependencies and no provider logic of
 its own.
 
 ## Public surface — all exports from `"."`
@@ -26,11 +28,14 @@ its own.
 | `queue` | function | `queue(name: string): Queue` | Factory. |
 | `vault` | function | `vault(name: string): Vault` | Factory. |
 | `container` | function | `container(name: string): Container` | Lazy, read-only linked-service discovery. |
+| `postgres` | function | `postgres(name: string): Postgres` | Connection-only. Resolving a managed cloud backend reads its password from that cloud's secret store with the workload's own identity. |
 | `Storage` | type | resource handle | Instance type returned by `storage()`. Operation method signatures mirror the Rust `alien-bindings` storage handle. |
 | `Kv` | type | resource handle | Instance type returned by `kv()`. Method signatures mirror the Rust handle. |
 | `Queue` | type | resource handle | Instance type returned by `queue()`. Method signatures mirror the Rust handle. |
 | `Container` | type | resource handle | `getInternalUrl()` and nullable `getPublicUrl()`. |
 | `Vault` | type | resource handle | Instance type returned by `vault()`. Method signatures mirror the Rust handle. |
+| `Postgres` | type | resource handle | Instance type returned by `postgres()`: `connection()` and `connectionString()`. |
+| `PostgresConnection`, `PostgresSslMode` | type | connection details | The URL, the driver `ssl` value, and the same details as individual fields. |
 | `BindingNotConfiguredError` | error | `defineError({ code: "BINDING_NOT_CONFIGURED", context: { binding, envVar } })` | Thrown on the first operation against an unconfigured binding. `binding` is the binding name; `envVar` is `ALIEN_<NAME>_BINDING`. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported so consumers handle bindings errors without a direct `@alienplatform/core` import. |
 
@@ -40,7 +45,6 @@ The non-app binding kinds are deliberately absent from this package and must not
 added:
 
 - worker invoke
-- container
 - build
 - artifact-registry
 - service-account

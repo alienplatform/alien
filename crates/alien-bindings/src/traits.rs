@@ -424,7 +424,9 @@ pub enum SslMode {
 }
 
 impl SslMode {
-    fn as_str(self) -> &'static str {
+    /// The `sslmode` query-parameter value, and the wire form embedders (the napi addon)
+    /// hand to their own callers.
+    pub fn as_str(self) -> &'static str {
         match self {
             SslMode::Disable => "disable",
             SslMode::Prefer => "prefer",
@@ -808,9 +810,10 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
     /// Given a binding identifier, builds a Postgres implementation.
     ///
-    /// Only the **local** (developer) backend is supported here. Cloud backends (Aurora, CloudSQL,
-    /// Azure Flexible Server) are resolved by the TypeScript SDK only; a Rust worker that requests one
-    /// gets a runtime error from the local resolver, with no compile-time gate.
+    /// Every backend is resolved here. Local and External carry their password inline;
+    /// Aurora, Cloud SQL, and Azure Flexible Server carry only a locator for it and read
+    /// the value from that cloud's secret store during this call, using the workload's own
+    /// identity. Resolution happens once per load, so the returned handle is synchronous.
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>>;
 
     /// Given a binding identifier, builds a Queue implementation.

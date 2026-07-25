@@ -152,6 +152,81 @@ export interface Container {
   getPublicUrl(): Promise<string | null>
 }
 
+/**
+ * TLS mode for a Postgres connection: `disable` for the local developer backend,
+ * `prefer` for an external (BYO) database, `require` for every managed cloud
+ * backend (Aurora, Cloud SQL, Flexible Server).
+ */
+export type PostgresSslMode = "disable" | "prefer" | "require"
+
+/** Everything a Postgres driver needs to connect. */
+export interface PostgresConnection {
+  /**
+   * `postgres://user:password@host:port/database?sslmode=<mode>`. The username,
+   * password, and database are percent-encoded to the RFC 3986 unreserved set, so a
+   * generated password containing URL-special characters can never corrupt the URL.
+   */
+  connectionString: string
+  /**
+   * The TLS setting for drivers that take one, derived from {@link sslmode}:
+   * `{ rejectUnauthorized: false }` for the managed clouds (TLS on, certificate not
+   * verified against a pinned CA), `false` otherwise.
+   *
+   * For node-postgres, pass this with the individual fields —
+   * `new Client({ host, port, ..., ssl })` — NOT with `connectionString`.
+   * node-postgres parses the URL's `sslmode` (treating `require` as `verify-full`)
+   * and that overrides an explicit `ssl`, so the URL form rejects a managed
+   * provider's certificate with "unable to get local issuer certificate".
+   *
+   * `rejectUnauthorized: false` is deliberate: Postgres is private-only on every
+   * cloud (no public IP, reachable only from same-stack workloads), so the network
+   * boundary is the primary control. Verified TLS against provider CAs is
+   * defense-in-depth to add later.
+   *
+   * For the external (BYO) backend this is `false`: node-postgres has no `prefer`
+   * mode, so the field stays plaintext while `connectionString` still carries
+   * `sslmode=prefer` for sslmode-aware consumers such as `psql`. A BYO database that
+   * *requires* TLS needs TLS configured outside this object.
+   */
+  ssl: false | { rejectUnauthorized: boolean }
+  /** Address to dial — the cluster writer endpoint for Aurora, the host elsewhere. */
+  host: string
+  /** TCP port. */
+  port: number
+  /** Database name. */
+  database: string
+  /** Role to connect as. */
+  username: string
+  /**
+   * Connection password. For the managed cloud backends this was read from the
+   * cloud secret store when the binding resolved; the binding itself only ever
+   * carries a locator for it.
+   */
+  password: string
+  /** The `sslmode` carried in {@link connectionString}. */
+  sslmode: PostgresSslMode
+}
+
+/**
+ * A resolved Postgres binding.
+ *
+ * Unlike the other kinds this exposes no operations: every Postgres backend speaks
+ * the same wire protocol, so the binding hands back connection details and the
+ * application connects with its own driver.
+ */
+export interface Postgres {
+  /**
+   * Resolve the connection details.
+   *
+   * For a managed cloud backend the first call reads the password from that cloud's
+   * secret store with the workload's own identity; the resolved value is then reused,
+   * so call the factory again to pick up a rotated password.
+   */
+  connection(): Promise<PostgresConnection>
+  /** Shorthand for `(await connection()).connectionString`. */
+  connectionString(): Promise<string>
+}
+
 /** A resolved vault (secrets) binding. */
 export interface Vault {
   /** Get the secret named `name` as a string. */

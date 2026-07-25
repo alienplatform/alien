@@ -19,6 +19,8 @@ import type {
   RawBindingsHandle,
   RawContainerHandle,
   RawKvHandle,
+  RawPostgresConnection,
+  RawPostgresHandle,
   RawQueueHandle,
   RawStorageHandle,
   RawVaultHandle,
@@ -28,6 +30,9 @@ import type {
   Kv,
   KvScanResult,
   KvSetOptions,
+  Postgres,
+  PostgresConnection,
+  PostgresSslMode,
   PresignedRequest,
   Queue,
   QueueMessage,
@@ -168,6 +173,48 @@ function makeVault(handle: () => Promise<RawVaultHandle>): Vault {
   }
 }
 
+/**
+ * The set of `sslmode` values the Rust `SslMode` can emit. Used to reject anything
+ * else at the addon boundary rather than widening the public union by assertion.
+ */
+const POSTGRES_SSL_MODES: readonly string[] = ["disable", "prefer", "require"]
+
+/**
+ * Widen the raw addon connection into the public shape, deriving `ssl` from
+ * `sslmode` (see the `ssl` doc on {@link PostgresConnection} for why the managed
+ * clouds get `rejectUnauthorized: false`).
+ *
+ * An unrecognized `sslmode` means the addon and this wrapper disagree about the
+ * `SslMode` enum — a version skew that must fail loudly rather than produce a
+ * connection with a silently wrong TLS posture.
+ */
+function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
+  if (!POSTGRES_SSL_MODES.includes(raw.sslmode)) {
+    throw new Error(
+      `@alienplatform/bindings received an unknown Postgres sslmode '${raw.sslmode}' from the native addon; expected one of ${POSTGRES_SSL_MODES.join(", ")}.`,
+    )
+  }
+  const sslmode = raw.sslmode as PostgresSslMode
+  return {
+    connectionString: raw.connectionString,
+    ssl: sslmode === "require" ? { rejectUnauthorized: false } : false,
+    host: raw.host,
+    port: raw.port,
+    database: raw.database,
+    username: raw.username,
+    password: raw.password,
+    sslmode,
+  }
+}
+
+function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
+  return {
+    connection: (): Promise<PostgresConnection> =>
+      guard(handle, async raw => toPostgresConnection(raw.connection())),
+    connectionString: () => guard(handle, async raw => raw.connection().connectionString),
+  }
+}
+
 /** The public factory surface. */
 export interface Factories {
   storage(name: string): Storage
@@ -175,6 +222,7 @@ export interface Factories {
   queue(name: string): Queue
   vault(name: string): Vault
   container(name: string): Container
+  postgres(name: string): Postgres
 }
 
 /** Build the factories bound to a given addon provider. */
@@ -185,5 +233,6 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
     queue: name => makeQueue(lazyHandle(getAddon, name, (b, n) => b.queue(n))),
     vault: name => makeVault(lazyHandle(getAddon, name, (b, n) => b.vault(n))),
     container: name => makeContainer(lazyHandle(getAddon, name, (b, n) => b.container(n))),
+    postgres: name => makePostgres(lazyHandle(getAddon, name, (b, n) => b.postgres(n))),
   }
 }

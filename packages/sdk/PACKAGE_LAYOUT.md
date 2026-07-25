@@ -34,8 +34,9 @@ in [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md).
 | `onQueueMessage` | function | Worker queue-message handler registrar | Signature pinned by `src/worker-runtime`. |
 | `waitUntil` | function | `waitUntil(promise): void` | Extend Worker task lifetime past the response. |
 | handler types | type | `StorageEvent`, `StorageEventType`, `CronEvent`, `QueueMessage`, `QueueMessageEvent`, `ScheduledEvent` | The event/handler types for the APIs above. |
-| `storage`, `kv`, `queue`, `vault`, `container` | function | re-export from `@alienplatform/bindings` | Facade re-export of the binding factories. |
-| `Storage`, `Kv`, `Queue`, `Vault` | type | re-export from `@alienplatform/bindings` | Facade re-export of the instance types. |
+| `storage`, `kv`, `queue`, `vault`, `container`, `postgres` | function | re-export from `@alienplatform/bindings` | Facade re-export of the binding factories. |
+| `Storage`, `Kv`, `Queue`, `Vault`, `Container`, `Postgres` | type | re-export from `@alienplatform/bindings` | Facade re-export of the instance types. |
+| `PostgresConnection`, `PostgresSslMode` | type | re-export from `@alienplatform/bindings` | Facade re-export of the Postgres connection shape. |
 | error re-exports | error | from `@alienplatform/bindings` and `@alienplatform/core` | Includes `BindingNotConfiguredError`; `AlienError`. |
 
 ### Removed from the root surface
@@ -50,8 +51,10 @@ These names must remain absent from `"."`:
 - gRPC-era binding errors that the direct bindings package replaces:
   `GrpcConnectionError`, `GrpcCallError`, `BindingNotFoundError` (superseded by
   `BINDING_NOT_CONFIGURED` in `@alienplatform/bindings`).
-- `getPostgresConnection` / `PostgresConnection`; applications resolve their own
-  Postgres connections.
+- `getPostgresConnection` — the SDK-local Postgres resolver. Postgres connections
+  come from the `postgres()` binding factory re-exported above, which resolves every
+  backend (including reading a cloud backend's password from its secret store) in the
+  Rust provider.
 
 ## Subpaths
 
