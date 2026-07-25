@@ -1136,19 +1136,76 @@ async fn renew_lease_requires_the_active_session() {
         )
         .await
         .expect("deployment should be acquired");
-    let state = test_deployment_state(DeploymentStatus::InitialSetup, None);
-
     store
-        .renew_lease(&test_subject(), &deployment.id, "session-A", &state)
+        .renew_lease(&test_subject(), &deployment.id, "session-A")
         .await
         .expect("the active session should renew its lease");
 
     let error = store
-        .renew_lease(&test_subject(), &deployment.id, "session-B", &state)
+        .renew_lease(&test_subject(), &deployment.id, "session-B")
         .await
         .expect_err("a different session must not renew the lease");
     assert_eq!(error.code, "DEPLOYMENT_LOCKED");
     assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn suggested_delay_defers_reacquisition_until_external_work_wakes_it() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let deployment = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    store
+        .acquire(
+            &test_subject(),
+            "session-A",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("deployment should be acquired");
+    let mut reconcile = test_reconcile_data(
+        &deployment.id,
+        "session-A",
+        DeploymentStatus::InitialSetup,
+        None,
+    );
+    reconcile.suggested_delay_ms = Some(60_000);
+    store
+        .reconcile(&test_subject(), reconcile)
+        .await
+        .expect("checkpoint should persist the suggested schedule");
+    store
+        .release(&test_subject(), &deployment.id, "session-A")
+        .await
+        .expect("deployment lease should release");
+
+    let delayed = store
+        .acquire(
+            &test_subject(),
+            "session-B",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("acquire should succeed without returning delayed work");
+    assert!(delayed.is_empty());
+
+    store
+        .set_retry_requested(&test_subject(), &deployment.id)
+        .await
+        .expect("external retry should wake the deployment");
+    let woken = store
+        .acquire(
+            &test_subject(),
+            "session-B",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("woken deployment should be acquirable");
+    assert_eq!(woken.len(), 1);
 }
 
 #[tokio::test]

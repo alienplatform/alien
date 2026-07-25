@@ -780,7 +780,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 update.value(Deployments::CurrentReleaseId, release_id);
             }
             if schedule_reconciliation {
-                update.value(Deployments::Status, "update-pending");
+                update
+                    .value(Deployments::Status, "update-pending")
+                    .value(Deployments::NextStepAfter, Option::<String>::None);
             }
 
             update.to_string(SqliteQueryBuilder)
@@ -953,6 +955,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             .table(Deployments::Table)
             .value(Deployments::Status, "delete-pending")
             .value(Deployments::RuntimeMetadata, runtime_metadata_json)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -966,6 +969,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::RetryRequested, 1i64)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -979,6 +983,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "update-pending")
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -993,6 +998,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::DesiredReleaseId, release_id)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(deployment_id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -1013,6 +1019,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .table(Deployments::Table)
                 .value(Deployments::DesiredReleaseId, release_id)
                 .value(Deployments::Status, "update-pending")
+                .value(Deployments::NextStepAfter, Option::<String>::None)
                 .and_where(Expr::col(Deployments::Status).is_in(eligible_statuses));
 
             if let Some(p) = platform {
@@ -1058,6 +1065,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                         .add(Expr::col(Deployments::LockedBy).is_null())
                         .add(Expr::cust(stale_lock_condition.clone())),
                 );
+            query.cond_where(
+                sea_query::Cond::any()
+                    .add(Expr::col(Deployments::NextStepAfter).is_null())
+                    .add(Expr::col(Deployments::NextStepAfter).lte(now.to_rfc3339())),
+            );
 
             if let Some(dg_id) = &filter.deployment_group_id {
                 query.and_where(Expr::col(Deployments::DeploymentGroupId).eq(dg_id.as_str()));
@@ -1125,6 +1137,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                             .add(Expr::col(Deployments::LockedBy).is_null())
                             .add(Expr::cust(stale_lock_condition.clone())),
                     )
+                    .cond_where(
+                        sea_query::Cond::any()
+                            .add(Expr::col(Deployments::NextStepAfter).is_null())
+                            .add(Expr::col(Deployments::NextStepAfter).lte(now.to_rfc3339())),
+                    )
                     .to_string(SqliteQueryBuilder)
             };
 
@@ -1161,6 +1178,10 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<DeploymentRecord, AlienError> {
         let now = Utc::now();
         let state = &data.state;
+        let next_step_after = data.suggested_delay_ms.map(|delay_ms| {
+            let bounded_delay_ms = delay_ms.min(365 * 24 * 60 * 60 * 1_000);
+            now + chrono::Duration::milliseconds(bounded_delay_ms as i64)
+        });
 
         let stack_state_json: Option<String> = state
             .stack_state
@@ -1254,6 +1275,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Deployments::RetryRequested,
                     if retry_requested { 1i64 } else { 0i64 },
                 )
+                .value(
+                    Deployments::NextStepAfter,
+                    next_step_after.map(|value| value.to_rfc3339()),
+                )
                 .value(Deployments::UpdatedAt, now.to_rfc3339());
 
             // Nullable fields: set value or explicit NULL to clear stale data
@@ -1340,7 +1365,6 @@ impl DeploymentStore for SqliteDeploymentStore {
         _caller: &crate::auth::Subject,
         deployment_id: &str,
         session: &str,
-        _state: &alien_core::DeploymentState,
     ) -> Result<(), AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)

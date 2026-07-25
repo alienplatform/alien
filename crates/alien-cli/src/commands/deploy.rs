@@ -1464,7 +1464,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         } else {
             LoopOperation::Deploy
         },
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = alien_deployment::runner::run_step_loop(

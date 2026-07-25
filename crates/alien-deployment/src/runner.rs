@@ -30,7 +30,7 @@ use crate::{
     Result,
 };
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, StackState};
-use alien_error::ContextError as _;
+use alien_error::{AlienError, ContextError as _};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -38,18 +38,24 @@ use tracing::{debug, info, warn};
 const CHECKPOINT_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const CHECKPOINT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
+const LEASE_RENEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const LEASE_RENEW_FAILURE_DEADLINE: Duration = Duration::from_secs(4 * 60);
-const MAX_INLINE_WAIT_PER_RUN: Duration = Duration::from_secs(30);
 
 /// Policy configuration for the runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelayStrategy {
+    /// Sleep inside the current process. Intended for interactive/local callers.
+    Inline,
+    /// Persist the schedule and return so a shared scheduler can release capacity.
+    Yield,
+}
+
 pub struct RunnerPolicy {
     /// Maximum number of step() calls before the runner yields.
     pub max_steps: usize,
     /// The operation being performed (determines success criteria).
     pub operation: LoopOperation,
-    /// If a step suggests waiting longer than this threshold, the runner
-    /// yields back to the caller instead of sleeping inline.
-    pub delay_threshold: Option<Duration>,
+    pub delay_strategy: DelayStrategy,
 }
 
 impl Default for RunnerPolicy {
@@ -57,7 +63,7 @@ impl Default for RunnerPolicy {
         Self {
             max_steps: 200,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         }
     }
 }
@@ -152,8 +158,77 @@ async fn run_step_loop_inner(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
-    let mut inline_wait_spent = Duration::ZERO;
+    let loop_future = run_step_loop_body(
+        state,
+        config,
+        client_config,
+        deployment_id,
+        policy,
+        transport,
+        service_provider,
+        on_progress,
+        allow_initial_running_step,
+    );
+    tokio::pin!(loop_future);
+    let mut renew_interval = tokio::time::interval(LEASE_RENEW_INTERVAL);
+    renew_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    renew_interval.tick().await;
+    let mut last_successful_renewal = tokio::time::Instant::now();
 
+    loop {
+        tokio::select! {
+            result = &mut loop_future => return result,
+            _ = renew_interval.tick() => {
+                match tokio::time::timeout(
+                    LEASE_RENEW_REQUEST_TIMEOUT,
+                    transport.renew_lease(deployment_id),
+                )
+                .await
+                {
+                    Err(_) if last_successful_renewal.elapsed() >= LEASE_RENEW_FAILURE_DEADLINE => {
+                        return Err(AlienError::new(crate::ErrorData::DeploymentLeaseLost {
+                            message: "lease renewal requests timed out before the safety deadline"
+                                .to_string(),
+                        }))
+                    }
+                    Err(_) => warn!(
+                        deployment_id = %deployment_id,
+                        "Deployment lease renewal timed out; will retry before the lease deadline"
+                    ),
+                    Ok(Ok(())) => last_successful_renewal = tokio::time::Instant::now(),
+                    Ok(Err(error)) if !error.retryable => {
+                        return Err(error.context(crate::ErrorData::DeploymentLeaseLost {
+                            message: "the active session no longer owns the deployment".to_string(),
+                        }))
+                    }
+                    Ok(Err(error)) if last_successful_renewal.elapsed() >= LEASE_RENEW_FAILURE_DEADLINE => {
+                        return Err(error.context(crate::ErrorData::DeploymentLeaseLost {
+                            message: "the lease could not be renewed before its safety deadline".to_string(),
+                        }))
+                    }
+                    Ok(Err(error)) => warn!(
+                        deployment_id = %deployment_id,
+                        error = %error,
+                        "Failed to renew deployment lease; will retry before the lease deadline"
+                    ),
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_step_loop_body(
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &dyn DeploymentLoopTransport,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    on_progress: Option<&ProgressCallback>,
+    allow_initial_running_step: bool,
+) -> Result<RunnerResult> {
     if !state.has_desired() {
         let service_provider = service_provider
             .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
@@ -255,48 +330,13 @@ async fn run_step_loop_inner(
             "Running deployment step"
         );
 
-        let step_future = step(
+        let step_result = step(
             state.clone(),
             config.clone(),
             client_config.clone(),
             service_provider.clone(),
-        );
-        tokio::pin!(step_future);
-        let mut renew_interval = tokio::time::interval(LEASE_RENEW_INTERVAL);
-        renew_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // The first interval tick is immediate; the lease was just acquired.
-        renew_interval.tick().await;
-        let mut last_successful_renewal = tokio::time::Instant::now();
-
-        let step_result = loop {
-            tokio::select! {
-                result = &mut step_future => break result,
-                _ = renew_interval.tick() => {
-                    match transport.renew_lease(deployment_id, state, config).await {
-                        Ok(()) => last_successful_renewal = tokio::time::Instant::now(),
-                        Err(error) if !error.retryable => {
-                            return Err(error.context(crate::ErrorData::DeploymentLeaseLost {
-                                message: "the active session no longer owns the deployment"
-                                    .to_string(),
-                            }))
-                        }
-                        Err(error) if last_successful_renewal.elapsed() >= LEASE_RENEW_FAILURE_DEADLINE => {
-                            return Err(error.context(crate::ErrorData::DeploymentLeaseLost {
-                                message: "the lease could not be renewed before its safety deadline"
-                                    .to_string(),
-                            }));
-                        }
-                        Err(error) => {
-                            warn!(
-                                deployment_id = %deployment_id,
-                                error = %error,
-                                "Failed to renew deployment lease; will retry before the lease deadline"
-                            );
-                        }
-                    }
-                }
-            }
-        };
+        )
+        .await;
 
         let step_result = match step_result {
             Ok(step_result) => step_result,
@@ -448,27 +488,22 @@ async fn run_step_loop_inner(
         // Handle suggested delays
         if let Some(delay_ms) = suggested_delay_ms {
             let delay = Duration::from_millis(delay_ms);
-            if let Some(threshold) = policy.delay_threshold {
-                if delay > threshold
-                    || inline_wait_spent.saturating_add(delay) > MAX_INLINE_WAIT_PER_RUN
-                {
-                    debug!(
-                        deployment_id = %deployment_id,
-                        delay_ms = delay_ms,
-                        "Step suggests delay above threshold, yielding to caller"
-                    );
-                    return Ok(RunnerResult {
-                        loop_result: LoopResult {
-                            stop_reason: LoopStopReason::Synced,
-                            outcome: LoopOutcome::Neutral,
-                            final_status: state.status,
-                        },
-                        steps_executed: step_count,
-                    });
-                }
+            if !delay.is_zero() && policy.delay_strategy == DelayStrategy::Yield {
+                debug!(
+                    deployment_id = %deployment_id,
+                    delay_ms,
+                    "Step scheduled future work; yielding to the caller"
+                );
+                return Ok(RunnerResult {
+                    loop_result: LoopResult {
+                        stop_reason: LoopStopReason::Delayed,
+                        outcome: LoopOutcome::Neutral,
+                        final_status: state.status,
+                    },
+                    steps_executed: step_count,
+                });
             }
             tokio::time::sleep(delay).await;
-            inline_wait_spent = inline_wait_spent.saturating_add(delay);
         }
     }
 
@@ -704,7 +739,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 1,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let result = run_step_loop(
@@ -748,7 +783,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 2,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let error = run_step_loop(
@@ -778,7 +813,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 1,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let result = run_step_loop(
@@ -826,7 +861,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 1,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let result = run_step_loop(
@@ -868,7 +903,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 1,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let result = run_step_loop(
@@ -899,7 +934,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 1,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let result = run_running_refresh_step_loop(
@@ -933,7 +968,7 @@ mod tests {
         let policy = RunnerPolicy {
             max_steps: 1,
             operation: LoopOperation::Deploy,
-            delay_threshold: None,
+            delay_strategy: DelayStrategy::Inline,
         };
 
         let result = run_running_refresh_step_loop(
