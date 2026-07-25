@@ -1027,7 +1027,7 @@ jobs:
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
   publish-images:
-    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    needs: [prepare, build-addon, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
@@ -1053,6 +1053,20 @@ jobs:
             done
           done
 
+      - name: Download Linux Worker addons
+        uses: actions/download-artifact@v7
+        with:
+          pattern: addon-linux-*-gnu
+          path: ./linux-addons
+          merge-multiple: true
+
+      - name: Place Worker addons in Docker build context
+        run: |
+          cp ./linux-addons/alien-bindings-node.linux-x64-gnu.node \
+            crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+          cp ./linux-addons/alien-bindings-node.linux-arm64-gnu.node \
+            crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -1073,6 +1087,7 @@ jobs:
             type=raw,value=v${{ needs.prepare.outputs.version }}
 
       - name: Publish alien-base
+        id: publish_base
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
@@ -1084,6 +1099,41 @@ jobs:
           labels: ${{ steps.meta_base.outputs.labels }}
           provenance: true
           sbom: true
+
+      - name: Metadata (alien-worker-typescript)
+        id: meta_worker_typescript
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-worker-typescript
+          tags: |
+            type=raw,value=latest
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+
+      - name: Publish alien-worker-typescript
+        id: publish_worker_typescript
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-worker-typescript
+          build-args: |
+            ALIEN_WORKER_BASE=ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_worker_typescript.outputs.tags }}
+          labels: ${{ steps.meta_worker_typescript.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Smoke-test Worker base images
+        env:
+          GENERIC_BASE: ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
+          TYPESCRIPT_BASE: ghcr.io/alienplatform/alien-worker-typescript@${{ steps.publish_worker_typescript.outputs.digest }}
+        run: |
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$GENERIC_BASE" \
+            -c 'test ! -e /usr/local/bin/bun && test -x /app/alien-worker-runtime'
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/bun "$TYPESCRIPT_BASE" \
+            -e 'const a=require("/app/alien-bindings.node"); if (!a.version()) throw new Error("native version() returned empty")'
 
       - name: Metadata (alien-builder)
         id: meta_builder

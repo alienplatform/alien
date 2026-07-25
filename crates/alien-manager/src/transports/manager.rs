@@ -45,6 +45,14 @@ impl ManagerTransport {
 
 #[async_trait]
 impl DeploymentLoopTransport for ManagerTransport {
+    async fn renew_lease(&self, deployment_id: &str) -> Result<(), AlienError> {
+        let caller = Subject::system();
+        self.deployment_store
+            .renew_lease(&caller, deployment_id, &self.session)
+            .await?;
+        Ok(())
+    }
+
     async fn reconcile_step(
         &self,
         deployment_id: &str,

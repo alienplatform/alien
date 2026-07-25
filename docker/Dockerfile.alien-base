@@ -1,6 +1,6 @@
 # Multi-stage build to avoid copying both architectures to final image
 # Stage 1: Copy and select the correct binary
-FROM docker.io/chainguard/wolfi-base:latest as binary-selector
+FROM docker.io/chainguard/wolfi-base:latest AS binary-selector
 
 # Copy alien-worker-runtime for both architectures
 COPY target/aarch64-unknown-linux-musl/release/alien-worker-runtime /tmp/alien-worker-runtime-aarch64
@@ -18,12 +18,9 @@ FROM docker.io/chainguard/wolfi-base:latest
 
 WORKDIR /app
 
-# Copy the correct binary from the selector stage
-COPY --from=binary-selector /tmp/alien-worker-runtime /app/alien-worker-runtime
-RUN chmod +x /app/alien-worker-runtime
-
-# Change ownership of app directory to nonroot user
-RUN chown -R nonroot:nonroot /app
+# Apply mode and ownership in the copy layer. Separate chmod/chown layers would
+# duplicate the runtime binary in the OCI image.
+COPY --from=binary-selector --chmod=755 --chown=nonroot:nonroot /tmp/alien-worker-runtime /app/alien-worker-runtime
 
 # Switch to nonroot user
 USER nonroot

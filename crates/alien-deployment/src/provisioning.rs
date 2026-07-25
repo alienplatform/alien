@@ -5,7 +5,7 @@ use alien_core::{
     ComputeClusterOutputs, Platform, ResourceLifecycle, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::StackExecutor;
+use alien_infra::{RunningResourcePolicy, StackExecutor};
 use tracing::{debug, info};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -108,6 +108,7 @@ pub async fn handle_provisioning(
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .running_resource_policy(RunningResourcePolicy::OptIn)
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {

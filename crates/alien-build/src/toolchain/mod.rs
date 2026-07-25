@@ -144,10 +144,33 @@ pub struct ToolchainOutput {
     pub runtime_command: Vec<String>,
 }
 
-/// Base image for Worker source images. It bundles `alien-worker-runtime`
-/// with `ENTRYPOINT ["/app/alien-worker-runtime"]`; the Worker image's CMD is
-/// `["--", "./<binary>"]` (the `--` separator is required by the runtime CLI).
-pub(crate) const WORKER_BASE_IMAGES: &[&str] = &["ghcr.io/alienplatform/alien-base:latest"];
+/// Base image for Worker source images.
+///
+/// The runtime base is released with the same version as `alien-build`.
+/// Pinning that version here prevents a source build from silently consuming a
+/// different `alien-worker-runtime` when the mutable registry `latest` tag
+/// moves independently of the CLI performing the build.
+pub(crate) fn worker_base_images() -> Vec<String> {
+    vec![format!(
+        "ghcr.io/alienplatform/alien-base:v{}",
+        env!("CARGO_PKG_VERSION")
+    )]
+}
+
+/// Language runtime base for TypeScript Workers. It extends the matching
+/// generic Worker base with Bun while keeping application bundles separate.
+pub(crate) fn typescript_worker_base_images() -> Vec<String> {
+    if let Ok(image) = std::env::var("ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE") {
+        if !image.is_empty() {
+            return vec![image];
+        }
+    }
+
+    vec![format!(
+        "ghcr.io/alienplatform/alien-worker-typescript:v{}",
+        env!("CARGO_PKG_VERSION")
+    )]
+}
 
 /// Base images for Container/Daemon source images, in fallback order: a plain
 /// glibc userland (the same Wolfi base that alien-base builds on) with no
@@ -209,7 +232,7 @@ pub(crate) fn image_output_for_binary(
         // separator followed by the application binary.
         return ToolchainOutput {
             build_strategy: ImageBuildStrategy::FromBaseImage {
-                base_images: WORKER_BASE_IMAGES.iter().map(|s| s.to_string()).collect(),
+                base_images: worker_base_images(),
                 files_to_package,
             },
             entrypoint: None,
@@ -227,6 +250,26 @@ pub(crate) fn image_output_for_binary(
         },
         entrypoint: Some(vec![format!("/app/{}", binary_filename)]),
         runtime_command: vec![],
+    }
+}
+
+/// Assemble a cloud Worker image whose language runtime lives in the
+/// versioned Worker base and whose application layer contains ordinary files.
+pub(crate) fn image_output_for_worker_files(
+    files_to_package: Vec<FileSpec>,
+    application_entry: &str,
+) -> ToolchainOutput {
+    ToolchainOutput {
+        build_strategy: ImageBuildStrategy::FromBaseImage {
+            base_images: typescript_worker_base_images(),
+            files_to_package,
+        },
+        entrypoint: None,
+        runtime_command: vec![
+            "--".to_string(),
+            "/usr/local/bin/bun".to_string(),
+            format!("./{application_entry}"),
+        ],
     }
 }
 
@@ -376,7 +419,10 @@ mod tests {
             ImageBuildStrategy::FromBaseImage { base_images, .. } => {
                 assert_eq!(
                     base_images,
-                    &vec!["ghcr.io/alienplatform/alien-base:latest".to_string()],
+                    &vec![format!(
+                        "ghcr.io/alienplatform/alien-base:v{}",
+                        env!("CARGO_PKG_VERSION")
+                    )],
                     "Worker images must build on alien-base (runtime entrypoint)"
                 );
             }
@@ -387,6 +433,43 @@ mod tests {
             output.runtime_command,
             vec!["--".to_string(), "./app".to_string()],
             "Worker CMD needs the runtime CLI's -- separator"
+        );
+    }
+
+    #[test]
+    fn typescript_worker_cloud_image_uses_language_base_and_bun() {
+        let output = image_output_for_worker_files(
+            vec![FileSpec {
+                host_path: PathBuf::from("/build/app.js"),
+                container_path: "./app.js".to_string(),
+                mode: Some(0o644),
+            }],
+            "app.js",
+        );
+
+        match &output.build_strategy {
+            ImageBuildStrategy::FromBaseImage { base_images, .. } => {
+                assert_eq!(
+                    base_images,
+                    &vec![format!(
+                        "ghcr.io/alienplatform/alien-worker-typescript:v{}",
+                        env!("CARGO_PKG_VERSION")
+                    )],
+                );
+            }
+            other => panic!("TypeScript Worker should use its language base, got {other:?}"),
+        }
+        assert_eq!(
+            output.entrypoint, None,
+            "keep the Worker runtime entrypoint"
+        );
+        assert_eq!(
+            output.runtime_command,
+            vec![
+                "--".to_string(),
+                "/usr/local/bin/bun".to_string(),
+                "./app.js".to_string()
+            ]
         );
     }
 

@@ -435,10 +435,24 @@ fn prepare_for_destroy_matching(
                             ));
                         }
 
-                        tracing::warn!(
-                            resource_id = %resource_id,
-                            "No internal controller state for failed resource - cannot transition to delete"
-                        );
+                        if resource_state.status == ResourceStatus::ProvisionFailed {
+                            tracing::info!(
+                                resource_id = %resource_id,
+                                "Marking never-provisioned resource as deleted"
+                            );
+                            resource_state.status = ResourceStatus::Deleted;
+                            resource_state.outputs = None;
+                            resource_state.retry_attempt = 0;
+                            resource_state.error = None;
+                            resource_state.last_failed_state = None;
+                            prepared_resource_ids.push(resource_id.clone());
+                        } else {
+                            tracing::warn!(
+                                resource_id = %resource_id,
+                                current_status = ?resource_state.status,
+                                "No internal controller state for failed resource - cannot transition to delete"
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::error!(
@@ -578,6 +592,39 @@ mod tests {
         assert!(updated_resource.error.is_none());
         assert_eq!(updated_resource.retry_attempt, 0);
         assert!(updated_resource.last_failed_state.is_none());
+    }
+
+    #[test]
+    fn runtime_cleanup_marks_never_provisioned_resource_deleted() {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: "invalid-source-image".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let mut resource_state = StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(function_config),
+            None,
+            Vec::new(),
+        );
+        resource_state.lifecycle = Some(ResourceLifecycle::Live);
+        resource_state.status = ResourceStatus::ProvisionFailed;
+        resource_state.error = Some(AlienError::new(GenericError {
+            message: "provision failed".to_string(),
+        }));
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state
+            .resources
+            .insert("test-function".to_string(), resource_state);
+
+        let prepared = stack_state.prepare_for_runtime_cleanup_destroy().unwrap();
+
+        assert_eq!(prepared, vec!["test-function"]);
+        let deleted_resource = stack_state.resources.get("test-function").unwrap();
+        assert_eq!(deleted_resource.status, ResourceStatus::Deleted);
+        assert!(deleted_resource.error.is_none());
+        assert!(deleted_resource.outputs.is_none());
     }
 
     #[tokio::test]

@@ -28,10 +28,10 @@ export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
  *
  * When inbound mail is configured, the receipt rule is a catch-all (no
  * recipient filter), so mail for runtime-verified identities lands in the
- * bucket without redeployment. The provisioned SES receipt rule set must be
- * activated manually after deployment (only one receipt rule set can be
- * active per AWS account, and CloudFormation cannot activate one):
- * `aws ses set-active-receipt-rule-set --rule-set-name <ruleSetName>`.
+ * bucket without redeployment. Setup activates the provisioned receipt rule
+ * set automatically. SES permits one active receipt rule set per account and
+ * region, so an AWS stack may contain only one Email with inbound delivery,
+ * and installing it makes its rule set the account's active rule set.
  */
 export class Email {
   private _config: Partial<EmailConfig> = {
