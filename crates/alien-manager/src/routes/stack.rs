@@ -80,7 +80,7 @@ pub fn router() -> Router<AppState> {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Deployment group or release not found"),
-        (status = 409, description = "Deployment name conflict"),
+        (status = 409, description = "Deployment name conflict, or the current release cannot be read to resolve a gate answer"),
     )
 ))]
 pub async fn stack_import(
@@ -343,6 +343,9 @@ pub async fn stack_import(
             // presence there is their answer. A gate only the incoming release
             // declares was never asked, so nothing is recorded and this
             // registration is free to answer it for the first time.
+            // A decline is only legible against the release that offered the
+            // gate; acceptance isn't, since the resource is already settled.
+            let mut lost_settled_release: Option<(String, String)> = None;
             if persisted_answers.is_empty() {
                 if let Some(existing_state) = existing.stack_state.as_ref() {
                     let settled_stack = match existing.current_release_id.as_deref() {
@@ -351,10 +354,28 @@ pub async fn stack_import(
                             .get_release(&subject, settled_release_id)
                             .await
                         {
-                            Ok(settled_release) => settled_release
-                                .as_ref()
-                                .and_then(|release| resolve_stack(release, req.platform).ok())
-                                .cloned(),
+                            Ok(Some(settled_release)) => {
+                                match resolve_stack(&settled_release, req.platform) {
+                                    Ok(stack) => Some(stack.clone()),
+                                    Err(_) => {
+                                        lost_settled_release = Some((
+                                            settled_release_id.to_string(),
+                                            format!(
+                                                "it carries no stack for platform '{}'",
+                                                req.platform
+                                            ),
+                                        ));
+                                        None
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                lost_settled_release = Some((
+                                    settled_release_id.to_string(),
+                                    "it could not be read back".to_string(),
+                                ));
+                                None
+                            }
                             Err(e) => return e.into_response(),
                         },
                         None => None,
@@ -366,6 +387,9 @@ pub async fn stack_import(
                     );
                 }
             }
+            // A contradiction the settled state proves outranks an ambiguity it
+            // can't, so this names the offending input before the check below
+            // falls back to blaming the unreadable release.
             for (input_id, imported_answer) in &imported_gate_answers {
                 if let Some(persisted) = persisted_answers.get(input_id) {
                     if persisted != imported_answer {
@@ -378,6 +402,15 @@ pub async fn stack_import(
                         )
                         .into_response();
                     }
+                }
+            }
+            // Accepting a gate we can't prove wasn't declined would overwrite
+            // that decline.
+            if let Some((settled_release_id, reason)) = lost_settled_release {
+                if imported_gate_answers.iter().any(|(input_id, accepted)| {
+                    *accepted && !persisted_answers.contains_key(input_id)
+                }) {
+                    return settled_release_unavailable(&settled_release_id, reason);
                 }
             }
             let runtime_metadata = match reimport_runtime_metadata(
@@ -1119,6 +1152,18 @@ fn resolve_stack(
             ),
         })
     })
+}
+
+/// Refuse to reconstruct gate answers when the settled release they would be
+/// read against can no longer be resolved.
+fn settled_release_unavailable(release_id: &str, reason: String) -> Response {
+    AlienError::new(
+        alien_deployment::ErrorData::SettledReleaseUnavailable {
+            release_id: release_id.to_string(),
+            reason,
+        },
+    )
+    .into_response()
 }
 
 /// Run every `ImportedResource` through the [`alien_infra::ImporterRegistry`]

@@ -59,6 +59,25 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// The settled release can't be read, so a declined gate can't be told
+    /// apart from an unoffered one.
+    #[error(
+        code = "SETTLED_RELEASE_UNAVAILABLE",
+        message = "This deployment's current release '{release_id}' cannot be read ({reason}), so \
+                   a resource the deployer declined cannot be told apart from one that was never \
+                   offered. Restore that release, or run setup again without the resource, so an \
+                   earlier decline is not overwritten",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SettledReleaseUnavailable {
+        /// The settled release the deployment names
+        release_id: String,
+        /// Why that release's stack could not be read
+        reason: String,
+    },
+
     /// Environment information collection failed.
     #[error(
         code = "ENVIRONMENT_INFO_COLLECTION_FAILED",
