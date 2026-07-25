@@ -16,7 +16,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_managed_policy_chunks,
-        iam_role_name_template, jsonencode, required_label, tags,
+        iam_role_name_template, jsonencode, policy_document_expr, required_label, tags,
     },
     expr,
 };
@@ -54,6 +54,9 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
         let context = aws_terraform_permission_context();
         let stack_context = context.clone().with_resource_name("management".to_string());
         let mut statements = Vec::<AwsIamStatement>::new();
+        // Keyed by gate input so resources sharing one input share a policy.
+        let mut gated_statements =
+            std::collections::BTreeMap::<String, Vec<AwsIamStatement>>::new();
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(profile) {
                 if let Some(permission_set) = permission_set_ref
@@ -104,7 +107,17 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                             permission_set.id
                         ),
                     })?;
-                statements.extend(policy.statement);
+                // A grant naming a resource the deployer can decline has to
+                // follow that resource's gate. The shared managed policy is
+                // unconditional, so these statements go to their own gated
+                // policy instead of surviving the resource they name.
+                match resource_entry.enabled_when.as_deref() {
+                    Some(input_id) => gated_statements
+                        .entry(input_id.to_string())
+                        .or_default()
+                        .extend(policy.statement),
+                    None => statements.extend(policy.statement),
+                }
             }
         }
         emit_iam_managed_policy_chunks(
@@ -114,6 +127,23 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             "deployment-management",
             statements,
         )?;
+        for (input_id, statements) in gated_statements {
+            let suffix = crate::generator::stack_input_variable_name(&input_id);
+            let mut block = resource_block(
+                "aws_iam_role_policy",
+                &format!("{label}_{suffix}"),
+                [
+                    attr(
+                        "name",
+                        Expression::String(format!("deployment-management-{suffix}")),
+                    ),
+                    attr("role", expr::traversal(["aws_iam_role", label, "id"])),
+                    attr("policy", policy_document_expr(statements)?),
+                ],
+            );
+            crate::emitters::enabled::gate(&mut block, Some(&input_id))?;
+            fragment.resource_blocks.push(block);
+        }
 
         // The management role always needs to read its own role —
         // `iam:GetRole` is what the manager calls to verify the role

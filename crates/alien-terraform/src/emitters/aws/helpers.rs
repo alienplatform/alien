@@ -524,7 +524,7 @@ fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {
         .map(|policy| policy.len())
 }
 
-fn policy_document_expr(statements: Vec<AwsIamStatement>) -> Result<Expression> {
+pub(crate) fn policy_document_expr(statements: Vec<AwsIamStatement>) -> Result<Expression> {
     Ok(jsonencode_policy_value(policy_document_json(&statements)?))
 }
 
