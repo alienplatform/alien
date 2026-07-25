@@ -1137,6 +1137,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                             .add(Expr::col(Deployments::LockedBy).is_null())
                             .add(Expr::cust(stale_lock_condition.clone())),
                     )
+                    .cond_where(
+                        sea_query::Cond::any()
+                            .add(Expr::col(Deployments::NextStepAfter).is_null())
+                            .add(Expr::col(Deployments::NextStepAfter).lte(now.to_rfc3339())),
+                    )
                     .to_string(SqliteQueryBuilder)
             };
 
