@@ -1,5 +1,5 @@
 import { type Email as EmailConfig, EmailSchema, type ResourceType } from "./generated/index.js"
-import { Resource, ResourceBuilder } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   EmailOutputs,

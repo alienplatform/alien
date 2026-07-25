@@ -7,7 +7,7 @@ import {
   WorkerSchema,
   type WorkerTrigger,
 } from "./generated/index.js"
-import { Resource, ResourceBuilder } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   Worker as WorkerConfig,
