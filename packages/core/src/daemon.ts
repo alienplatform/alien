@@ -9,8 +9,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
-import type { StackInputRef } from "./input.js"
-import { Resource } from "./resource.js"
+import { Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   Daemon as DaemonConfig,
@@ -43,8 +42,7 @@ export type DaemonPublicEndpointOptions =
  * Daemons are intended for long-lived background processes such as endpoint
  * agents and local side services.
  */
-export class Daemon {
-  private _enabledWhen?: string
+export class Daemon extends ResourceBuilder {
   private _config: Partial<DaemonConfig> = {
     links: [],
     publicEndpoints: [],
@@ -58,6 +56,7 @@ export class Daemon {
    * @param id Identifier for the daemon. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -250,27 +249,12 @@ export class Daemon {
    * @returns An immutable Resource representing the configured daemon.
    * @throws Error if the daemon configuration is invalid.
    */
-  /**
-   * Creates this daemon only when the given boolean stack input is true.
-   * A live gate is re-resolved on every reconcile: declining deletes the
-   * daemon (data included), accepting recreates it.
-   * @param input A boolean stack input declared with alien.inputs({...}).
-   * @returns The builder instance.
-   */
-  public enabled(input: StackInputRef<boolean>): this {
-    this._enabledWhen = input.id
-    return this
-  }
-
   public build(): Resource {
     const config = DaemonSchema.parse(this._config)
 
-    return new Resource(
-      {
-        type: "daemon",
-        ...config,
-      },
-      this._enabledWhen,
-    )
+    return this.resource({
+      type: "daemon",
+      ...config,
+    })
   }
 }

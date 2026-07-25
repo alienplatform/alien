@@ -4,8 +4,7 @@ import {
   AwsOpenSearchSchema,
   type ResourceType,
 } from "../generated/index.js"
-import type { StackInputRef } from "../input.js"
-import { Resource } from "../resource.js"
+import { Resource, ResourceBuilder } from "../resource.js"
 
 export type {
   AwsOpenSearch as AwsOpenSearchConfig,
@@ -33,8 +32,7 @@ export { AwsOpenSearchSchema as AwsOpenSearchConfigSchema } from "../generated/i
  * lowercase letter, contain only lowercase letters, digits, and hyphens, and
  * be at most 23 characters.
  */
-export class AwsOpenSearch {
-  private _enabledWhen?: string
+export class AwsOpenSearch extends ResourceBuilder {
   private _config: Partial<AwsOpenSearchConfig> = {
     collectionType: "search",
   }
@@ -44,6 +42,7 @@ export class AwsOpenSearch {
    * @param id Identifier for the collection (lowercase letters, digits, and hyphens; max 23 characters).
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -68,17 +67,6 @@ export class AwsOpenSearch {
   }
 
   /**
-   * Creates this collection only when the given boolean stack input is true.
-   * A frozen gate's answer is fixed when the deployment is created.
-   * @param input A boolean stack input declared with alien.inputs({...}).
-   * @returns The AwsOpenSearch builder instance.
-   */
-  public enabled(input: StackInputRef<boolean>): this {
-    this._enabledWhen = input.id
-    return this
-  }
-
-  /**
    * Builds and validates the collection configuration.
    * @returns An immutable Resource representing the configured collection.
    * @throws Error if the configuration is invalid.
@@ -86,12 +74,9 @@ export class AwsOpenSearch {
   public build(): Resource {
     const config = AwsOpenSearchSchema.parse(this._config)
 
-    return new Resource(
-      {
-        type: "experimental/aws-opensearch",
-        ...config,
-      },
-      this._enabledWhen,
-    )
+    return this.resource({
+      type: "experimental/aws-opensearch",
+      ...config,
+    })
   }
 }
