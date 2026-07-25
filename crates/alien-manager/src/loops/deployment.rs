@@ -502,18 +502,36 @@ impl DeploymentLoop {
             stack: deployment_stack.clone(),
         };
 
-        let mut state = DeploymentState {
-            status: parse_status(&deployment.status),
-            platform: deployment.platform.clone(),
-            current_release: deployment
-                .current_release_id
-                .as_ref()
-                .map(|id| ReleaseInfo {
+        // `current_release` is the release currently deployed, so its stack has
+        // to come from that release. During an update it differs from the
+        // target, and carrying the target's stack here would make anything
+        // that asks "what is deployed now?" compare the target against itself.
+        // The pull path hydrates it the same way.
+        let current_release = match deployment.current_release_id.as_ref() {
+            None => None,
+            Some(id) if id == target_release_id => Some(ReleaseInfo {
+                release_id: Some(id.clone()),
+                version: None,
+                description: None,
+                stack: deployment_stack.clone(),
+            }),
+            Some(id) => self
+                .release_store
+                .get_release(&system, id)
+                .await?
+                .and_then(|release| release.stacks.get(&deployment.platform).cloned())
+                .map(|stack| ReleaseInfo {
                     release_id: Some(id.clone()),
                     version: None,
                     description: None,
-                    stack: deployment_stack.clone(),
+                    stack,
                 }),
+        };
+
+        let mut state = DeploymentState {
+            status: parse_status(&deployment.status),
+            platform: deployment.platform.clone(),
+            current_release,
             target_release: Some(target_release),
             stack_state: deployment.stack_state.clone(),
             error: deployment_record_error(&deployment.error),

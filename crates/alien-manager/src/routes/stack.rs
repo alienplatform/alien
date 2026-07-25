@@ -199,8 +199,8 @@ pub async fn stack_import(
         };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
     // Held across the strips below: reconstructing a legacy deployment's
-    // answers needs every gate the release declares, including one whose
-    // resource this request declines.
+    // answers needs every gate the release declares, including the ones this
+    // registration is about to decline.
     let declared_stack = source_stack;
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
@@ -215,14 +215,10 @@ pub async fn stack_import(
     // a live resource dominated by a declined frozen gate goes with it, or
     // its links to the stripped sibling would dangle through the template
     // preflights. Live-only gates resolve after the mutations, below.
-    let source_stack = match alien_deployment::strip_declined_frozen_resources_from_presence(
+    let source_stack = alien_deployment::strip_declined_frozen_resources(
         source_stack.clone(),
-        &delivered_resource_ids,
-        &req.input_values,
-    ) {
-        Ok(stack) => stack,
-        Err(e) => return e.into_response(),
-    };
+        &imported_gate_answers,
+    );
     let source_stack = alien_deployment::strip_frozen_dominated_live_resources(
         source_stack,
         &imported_gate_answers,
@@ -345,17 +341,31 @@ pub async fn stack_import(
                 .as_ref()
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
-            // A deployment from before answers were recorded still proves
-            // some of them: a gated resource that exists in its settled state
-            // was accepted. A gate that state says nothing about could have
-            // been declined or introduced by a later release, so it stays
-            // unrecorded — fabricating a decline from absence would refuse
-            // the gate's first legitimate acceptance, which is this very
-            // request.
+            // A deployment from before answers were recorded gets them
+            // reconstructed from its settled state read against the release it
+            // settled under — that release is what was put to the deployer, so
+            // presence there is their answer. A gate only the incoming release
+            // declares was never asked, so nothing is recorded and this
+            // registration is free to answer it for the first time.
             if persisted_answers.is_empty() {
                 if let Some(existing_state) = existing.stack_state.as_ref() {
+                    let settled_stack = match existing.current_release_id.as_deref() {
+                        Some(settled_release_id) => match state
+                            .release_store
+                            .get_release(&subject, settled_release_id)
+                            .await
+                        {
+                            Ok(settled_release) => settled_release
+                                .as_ref()
+                                .and_then(|release| resolve_stack(release, req.platform).ok())
+                                .cloned(),
+                            Err(e) => return e.into_response(),
+                        },
+                        None => None,
+                    };
                     persisted_answers = alien_deployment::derive_legacy_frozen_gate_answers(
-                        &declared_stack,
+                        settled_stack.as_ref(),
+                        declared_stack,
                         existing_state,
                     );
                 }

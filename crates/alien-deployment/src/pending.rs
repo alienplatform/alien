@@ -49,8 +49,7 @@ pub async fn handle_pending(
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
-    let target_stack =
-        strip_declined_frozen_resources(target_stack, &stack_state, &config.input_values)?;
+    let target_stack = strip_declined_frozen_resources(target_stack, &persisted_gate_answers);
     let target_stack = strip_frozen_dominated_live_resources(
         target_stack,
         &persisted_gate_answers,
@@ -126,39 +125,27 @@ pub async fn handle_pending(
     })
 }
 
-/// Remove gated setup-created resources the deployer declined. Runs BEFORE
-/// the mutations on both deployment paths: a declined frozen resource never
+/// Remove the gated setup-created resources the deployer declined. Runs
+/// BEFORE the mutations on every path: a declined frozen resource never
 /// existed, so nothing may be derived from it — no service-account grants, no
 /// profile entries, no capacity contribution.
 ///
-/// The answer's source is the import when one seeded the state — the template
-/// rendered the resource behind its input, so absence IS the answer — and the
-/// initial input values on a direct deployment, where no template ever asked.
-/// A non-empty state at Pending can only come from a setup import: Pending
-/// runs once, before this runner has created anything, and a direct deploy
-/// enters it with an empty state.
+/// One rule, everywhere: a resource leaves if and only if its gate's recorded
+/// answer is no. Every path resolves those answers first, from whatever is
+/// authoritative there — the deployer's input values on a direct deployment,
+/// the delivered resource ids on a setup import, the recorded answers on an
+/// update. Nothing is inferred here.
 ///
-/// An ungated resource missing from an import stays, so real drift still
-/// surfaces as a failure.
+/// A gate with NO recorded answer is deliberately not a decline. It is a gate
+/// nobody has been asked, which happens when a release introduces a frozen
+/// resource that setup has never created. Leaving it in the stack is what lets
+/// the frozen-compatibility check say so — "frozen resources are setup-owned
+/// and can only be added by rerunning setup" — instead of this strip silently
+/// deleting the release's new resource and reporting success.
 pub fn strip_declined_frozen_resources(
-    stack: Stack,
-    stack_state: &StackState,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<Stack> {
-    let present = stack_state.resources.keys().cloned().collect();
-    strip_declined_frozen_resources_from_presence(stack, &present, input_values)
-}
-
-/// [`strip_declined_frozen_resources`] against a raw set of present resource
-/// ids — the setup import path resolves declines from the registration
-/// payload's ids before any stack state exists, so its strips can run ahead
-/// of the mutations like the deployment paths' do. An empty set means no
-/// import seeded the answer and the input values decide.
-pub fn strip_declined_frozen_resources_from_presence(
     mut stack: Stack,
-    present_resource_ids: &std::collections::HashSet<String>,
-    input_values: &std::collections::HashMap<String, serde_json::Value>,
-) -> Result<Stack> {
+    answers: &alien_core::GateAnswers,
+) -> Stack {
     let mut declined: Vec<String> = Vec::new();
     for (resource_id, entry) in stack.resources() {
         let Some(input_id) = entry.enabled_when.as_deref() else {
@@ -172,17 +159,12 @@ pub fn strip_declined_frozen_resources_from_presence(
             continue;
         }
 
-        let is_declined = if present_resource_ids.is_empty() {
-            !gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)?
-        } else {
-            !present_resource_ids.contains(resource_id.as_str())
-        };
-        if is_declined {
+        if answers.get(input_id) == Some(&false) {
             declined.push(resource_id.clone());
         }
     }
     remove_declined(&mut stack, &declined);
-    Ok(stack)
+    stack
 }
 
 /// Remove live resources whose gate input carries a frozen answer of false.
@@ -314,7 +296,7 @@ pub fn resolve_frozen_gate_answers(
 }
 
 /// [`resolve_frozen_gate_answers`] against a raw set of present resource ids
-/// — see [`strip_declined_frozen_resources_from_presence`] for why the setup
+/// — see [`resolve_frozen_gate_answers`] for why the setup
 /// import path resolves from the registration payload directly.
 pub fn resolve_frozen_gate_answers_from_presence(
     stack: &Stack,
@@ -358,43 +340,60 @@ pub fn resolve_frozen_gate_answers_from_presence(
     Ok(answers)
 }
 
-/// Reconstruct what a deployment from before answers were recorded can
-/// actually prove about its frozen gates, from its settled state alone.
+/// Reconstruct the frozen-gate answers of a deployment created before they
+/// were recorded, by reading its settled state against the release that state
+/// settled under.
 ///
-/// A gated resource present in the settled state was accepted — setup
-/// created it, which no other answer explains. Absence proves nothing: the
-/// deployer may have declined it, or the release being deployed may have
-/// introduced the gate after that state settled. Recording a decline from
-/// absence would fabricate history and refuse the gate's first legitimate
-/// acceptance ever after, so an unprovable gate gets no recorded answer and
-/// stays unconstrained until a setup import answers it for real — which is
-/// exactly where these deployments already were.
+/// That release is what makes the reading unambiguous. A gate it declared was
+/// put to the deployer, so the resource's presence is their answer: there if
+/// they accepted, absent if they declined. A gate it never declared was never
+/// asked, so nothing is recorded for it and the resource stays in the stack
+/// for the frozen-compatibility check to refuse — which is the truth, since a
+/// release cannot add a frozen resource without setup running again.
 ///
-/// The accepted cost: a legacy deployment that genuinely declined a frozen
-/// resource records nothing either, so that gate carries no fixity and no
-/// dominance until an import answers it. A live resource sharing it can then
-/// be toggled while the frozen one stays absent. That combination fails loudly
-/// at the reference preflight if the live resource actually uses the frozen
-/// one, and it only lasts until the next import — both preferable to
-/// fabricating a decline that could never be undone.
+/// Without the settled release there is no way to tell a decline from a gate
+/// the target release just introduced, so nothing is recorded at all and every
+/// gate falls to that same check. Loud and wrong-free, rather than quiet and
+/// guessed.
 pub fn derive_legacy_frozen_gate_answers(
+    settled_stack: Option<&Stack>,
     target_stack: &Stack,
     stack_state: &StackState,
 ) -> alien_core::GateAnswers {
     let mut answers = alien_core::GateAnswers::new();
+
+    // A gated frozen resource that exists was accepted — setup created it, and
+    // no other answer explains that. This direction needs no release: presence
+    // is proof on its own, so it holds even when the settled release is gone.
     for (resource_id, entry) in target_stack.resources() {
-        let Some(input_id) = entry.enabled_when.as_deref() else {
-            continue;
-        };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
-        if setup_created && stack_state.resources.contains_key(resource_id.as_str()) {
-            answers.insert(input_id.to_string(), true);
+        if let Some(input_id) = frozen_gate_of(entry) {
+            if stack_state.resources.contains_key(resource_id.as_str()) {
+                answers.insert(input_id.to_string(), true);
+            }
+        }
+    }
+
+    // Absence only means "declined" for a gate the deployer was actually
+    // offered, which is what the settled release records. Without it, absence
+    // stays unexplained and the gate goes unrecorded.
+    if let Some(settled_stack) = settled_stack {
+        for (resource_id, entry) in settled_stack.resources() {
+            if let Some(input_id) = frozen_gate_of(entry) {
+                if !stack_state.resources.contains_key(resource_id.as_str()) {
+                    answers.entry(input_id.to_string()).or_insert(false);
+                }
+            }
         }
     }
     answers
+}
+
+/// The gate input of a setup-created gated resource, `None` for anything else.
+fn frozen_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
+    let input_id = entry.enabled_when.as_deref()?;
+    alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+        .should_emit_in_setup(entry.lifecycle)
+        .then_some(input_id)
 }
 
 /// The inputs that gate a setup-created resource in `stack`. Fixity applies
@@ -717,6 +716,17 @@ mod tests {
             .build()
     }
 
+    /// Resolve-then-strip is the whole contract, so the tests exercise the
+    /// pair: what each path proves, and what the strip does with it.
+    fn resolve_and_strip(
+        stack: Stack,
+        stack_state: &StackState,
+        input_values: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Stack> {
+        let answers = resolve_frozen_gate_answers(&stack, stack_state, input_values)?;
+        Ok(strip_declined_frozen_resources(stack, &answers))
+    }
+
     /// The import delivered the service account but not the gated store: the
     /// deployer declined it, so the runner must not try to create it.
     #[test]
@@ -726,9 +736,8 @@ mod tests {
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
 
-        let stripped =
-            strip_declined_frozen_resources(gated_stack(), &state, &Default::default())
-                .expect("an imported answer resolves without error");
+        let stripped = resolve_and_strip(gated_stack(), &state, &Default::default())
+            .expect("an imported answer resolves without error");
 
         assert!(!stripped.resources.contains_key("analytics"));
         assert!(stripped.resources.contains_key("execution-sa"));
@@ -740,7 +749,7 @@ mod tests {
     /// default, and never a guess.
     #[test]
     fn a_direct_deploy_frozen_gate_follows_the_input() {
-        let kept = strip_declined_frozen_resources(
+        let kept = resolve_and_strip(
             gated_stack_with_default(Some(true)),
             &StackState::new(Platform::Aws),
             &Default::default(),
@@ -748,7 +757,7 @@ mod tests {
         .expect("default resolves");
         assert!(kept.resources.contains_key("analytics"));
 
-        let dropped = strip_declined_frozen_resources(
+        let dropped = resolve_and_strip(
             gated_stack_with_default(Some(true)),
             &StackState::new(Platform::Aws),
             &std::collections::HashMap::from([(
@@ -759,7 +768,7 @@ mod tests {
         .expect("provided answer resolves");
         assert!(!dropped.resources.contains_key("analytics"));
 
-        let error = strip_declined_frozen_resources(
+        let error = resolve_and_strip(
             gated_stack_with_default(None),
             &StackState::new(Platform::Aws),
             &Default::default(),
@@ -776,9 +785,8 @@ mod tests {
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
 
-        let stripped =
-            strip_declined_frozen_resources(gated_stack(), &state, &Default::default())
-                .expect("an imported answer resolves without error");
+        let stripped = resolve_and_strip(gated_stack(), &state, &Default::default())
+            .expect("an imported answer resolves without error");
 
         assert!(stripped.resources.contains_key("analytics"));
     }
@@ -792,11 +800,33 @@ mod tests {
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
 
-        let stripped =
-            strip_declined_frozen_resources(gated_stack(), &state, &Default::default())
-                .expect("an imported answer resolves without error");
+        let stripped = resolve_and_strip(gated_stack(), &state, &Default::default())
+            .expect("an imported answer resolves without error");
 
         assert!(stripped.resources.contains_key("execution-sa"));
+    }
+
+    /// The heart of the model: a gate nobody has answered is not a decline.
+    /// A release that introduces a frozen gated resource leaves it in the
+    /// stack so the frozen-compatibility check can refuse the update and say
+    /// setup has to run again — the strip must not delete it and report
+    /// success.
+    #[test]
+    fn an_unanswered_frozen_gate_is_left_for_the_compatibility_check() {
+        let kept = strip_declined_frozen_resources(gated_stack(), &Default::default());
+        assert!(
+            kept.resources.contains_key("analytics"),
+            "no recorded answer means the gate was never asked, not declined"
+        );
+
+        let declined = strip_declined_frozen_resources(
+            gated_stack(),
+            &alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]),
+        );
+        assert!(
+            !declined.resources.contains_key("analytics"),
+            "a recorded no is the only thing that strips"
+        );
     }
 
     /// The deployer said no: the live resource leaves the desired stack, and
@@ -1118,9 +1148,7 @@ mod tests {
                 .expect("the declared default resolves");
         assert_eq!(answers.get("extrasEnabled"), Some(&false));
         let frozen_gating = frozen_gating_inputs(&declined);
-        let stripped =
-            strip_declined_frozen_resources(declined, &StackState::new(Platform::Aws), &Default::default())
-                .expect("the frozen strip resolves");
+        let stripped = strip_declined_frozen_resources(declined, &answers);
         let stripped = strip_frozen_dominated_live_resources(stripped, &answers, &frozen_gating);
         assert!(!stripped.resources.contains_key("extras"));
         assert!(
@@ -1133,9 +1161,7 @@ mod tests {
             resolve_frozen_gate_answers(&accepted, &StackState::new(Platform::Aws), &Default::default())
                 .expect("the declared default resolves");
         let frozen_gating = frozen_gating_inputs(&accepted);
-        let kept =
-            strip_declined_frozen_resources(accepted, &StackState::new(Platform::Aws), &Default::default())
-                .expect("the frozen strip resolves");
+        let kept = strip_declined_frozen_resources(accepted, &answers);
         let kept = strip_frozen_dominated_live_resources(kept, &answers, &frozen_gating);
         assert!(kept.resources.contains_key("extras"));
         assert!(kept.resources.contains_key("extras-cache"));
@@ -1177,36 +1203,92 @@ mod tests {
         );
     }
 
-    /// A legacy deployment's baseline reads the settled state against the
-    /// release it settled under: a gate the target release introduces has no
-    /// history to fabricate, while a gate the settled release declared still
-    /// derives from presence and keeps refusing flips.
+    /// The settled release is what makes the reading unambiguous: a gate it
+    /// declared was put to the deployer, so presence is their answer — there
+    /// if accepted, absent if declined. Both are recorded.
     #[test]
-    fn a_legacy_gate_absent_from_the_settled_state_records_no_answer() {
-        // The gated store is absent: either the deployer declined it, or the
-        // release being deployed introduced the gate after this state
-        // settled. Both look identical here, so neither is recorded.
-        let without_the_store = imported_state_with(
+    fn a_legacy_derivation_reads_presence_against_the_settled_release() {
+        let declined_state = imported_state_with(
             "execution-sa",
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
-        let unprovable = derive_legacy_frozen_gate_answers(&gated_stack(), &without_the_store);
-        assert!(
-            unprovable.is_empty(),
-            "absence proves nothing, so no answer may be fabricated from it"
+        let declined =
+            derive_legacy_frozen_gate_answers(Some(&gated_stack()), &gated_stack(), &declined_state);
+        assert_eq!(
+            declined.get("analyticsEnabled"),
+            Some(&false),
+            "the settled release declared this gate and the resource is absent: a decline"
         );
 
-        // The gated store exists: setup created it, which no answer other
-        // than yes explains.
+        let accepted_state = imported_state_with(
+            "analytics",
+            Resource::new(Kv::new("analytics".to_string()).build()),
+        );
+        let accepted =
+            derive_legacy_frozen_gate_answers(Some(&gated_stack()), &gated_stack(), &accepted_state);
+        assert_eq!(
+            accepted.get("analyticsEnabled"),
+            Some(&true),
+            "the resource exists, so setup created it"
+        );
+    }
+
+    /// A gate the settled release never declared was never asked. Recording
+    /// nothing is what leaves its resource in the stack for the
+    /// frozen-compatibility check to refuse — a release cannot add a frozen
+    /// resource without setup running again.
+    #[test]
+    fn a_gate_the_settled_release_never_declared_records_nothing() {
+        let settled_without_the_gate = Stack::new("gated-stack".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+
+        let answers =
+            derive_legacy_frozen_gate_answers(Some(&settled_without_the_gate), &gated_stack(), &state);
+        assert!(
+            answers.is_empty(),
+            "a gate the settled release never declared has no history to record"
+        );
+
+        let kept = strip_declined_frozen_resources(gated_stack(), &answers);
+        assert!(
+            kept.resources.contains_key("analytics"),
+            "so the new resource survives the strip and reaches the compatibility check"
+        );
+    }
+
+    /// Without the settled release, presence still proves acceptance — that
+    /// direction never needed a release. Only absence becomes unexplained, so
+    /// it records nothing and falls to the compatibility check.
+    #[test]
+    fn a_legacy_derivation_without_a_settled_release_keeps_only_positive_proof() {
         let with_the_store = imported_state_with(
             "analytics",
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
-        let proven = derive_legacy_frozen_gate_answers(&gated_stack(), &with_the_store);
+        let proven = derive_legacy_frozen_gate_answers(None, &gated_stack(), &with_the_store);
         assert_eq!(
             proven.get("analyticsEnabled"),
             Some(&true),
-            "a gated resource that exists was accepted"
+            "the resource exists, so it was accepted — no release needed to know that"
+        );
+
+        let without_the_store = imported_state_with(
+            "execution-sa",
+            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+        );
+        let unprovable =
+            derive_legacy_frozen_gate_answers(None, &gated_stack(), &without_the_store);
+        assert!(
+            unprovable.is_empty(),
+            "absence with no release to explain it stays unrecorded"
         );
     }
 
@@ -1219,7 +1301,12 @@ mod tests {
             Resource::new(Kv::new("cache".to_string()).build()),
         );
 
-        let answers = derive_legacy_frozen_gate_answers(&live_gated_stack(Some(true)), &state);
+        let answers =
+            derive_legacy_frozen_gate_answers(
+            Some(&live_gated_stack(Some(true))),
+            &live_gated_stack(Some(true)),
+            &state,
+        );
         assert!(
             answers.is_empty(),
             "a live gate re-resolves every cycle; it has no answered-once history"

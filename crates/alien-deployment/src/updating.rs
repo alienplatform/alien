@@ -69,18 +69,22 @@ pub async fn handle_update_pending(
     })?;
 
     // A frozen gate is answered once. States from before answers were
-    // recorded carry none, so reconstruct what the settled state proves: a
-    // gated resource that exists was accepted. A gate it says nothing about
-    // stays unrecorded rather than guessed — these deployments were already
-    // running without fixity, and the next setup import answers for real.
+    // recorded carry none, so reconstruct them from the settled state read
+    // against the release it settled under: that release is what was put to
+    // the deployer, so presence there is their answer. A gate only the target
+    // release declares was never asked and stays unrecorded, which leaves its
+    // resource in the stack for the frozen-compatibility check to refuse.
     let mut persisted_gate_answers = current
         .runtime_metadata
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
     if persisted_gate_answers.is_empty() {
-        persisted_gate_answers =
-            crate::pending::derive_legacy_frozen_gate_answers(&target_stack, &stack_state);
+        persisted_gate_answers = crate::pending::derive_legacy_frozen_gate_answers(
+            current.current_release.as_ref().map(|release| &release.stack),
+            &target_stack,
+            &stack_state,
+        );
     }
     let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
     crate::pending::enforce_frozen_gate_fixity(
@@ -98,11 +102,8 @@ pub async fn handle_update_pending(
     // workload's derived baseline (service account, profile grants, capacity
     // contribution) stays identical to the accepted render and the
     // compatibility checks never see a difference.
-    let target_stack = crate::pending::strip_declined_frozen_resources(
-        target_stack,
-        &stack_state,
-        &config.input_values,
-    )?;
+    let target_stack =
+        crate::pending::strip_declined_frozen_resources(target_stack, &persisted_gate_answers);
     let target_stack = crate::pending::strip_frozen_dominated_live_resources(
         target_stack,
         &persisted_gate_answers,
