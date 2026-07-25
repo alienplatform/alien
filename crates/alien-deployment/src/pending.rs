@@ -349,36 +349,35 @@ pub fn resolve_frozen_gate_answers_from_presence(
     Ok(answers)
 }
 
-/// The legacy baseline for a deployment from before answers were recorded:
-/// presence in the settled state, read against the release that state
-/// settled under. The target release may introduce a brand-new gate whose
-/// resource is naturally absent from the settled state — deriving from the
-/// target would fabricate a declined answer, record it, and refuse the
-/// gate's first legitimate acceptance ever after. No baseline and nothing
-/// frozen-gating in the target means there is nothing to enforce; no
-/// baseline with gates to enforce refuses rather than guesses.
+/// Reconstruct what a deployment from before answers were recorded can
+/// actually prove about its frozen gates, from its settled state alone.
+///
+/// A gated resource present in the settled state was accepted — setup
+/// created it, which no other answer explains. Absence proves nothing: the
+/// deployer may have declined it, or the release being deployed may have
+/// introduced the gate after that state settled. Recording a decline from
+/// absence would fabricate history and refuse the gate's first legitimate
+/// acceptance ever after, so an unprovable gate gets no recorded answer and
+/// stays unconstrained until a setup import answers it for real — which is
+/// exactly where these deployments already were.
 pub fn derive_legacy_frozen_gate_answers(
-    baseline_stack: Option<&Stack>,
     target_stack: &Stack,
     stack_state: &StackState,
-) -> Result<alien_core::GateAnswers> {
-    if let Some(baseline_stack) = baseline_stack {
-        return resolve_frozen_gate_answers(baseline_stack, stack_state, &Default::default());
+) -> alien_core::GateAnswers {
+    let mut answers = alien_core::GateAnswers::new();
+    for (resource_id, entry) in target_stack.resources() {
+        let Some(input_id) = entry.enabled_when.as_deref() else {
+            continue;
+        };
+        let setup_created = alien_core::ownership_policy_for_resource_type(
+            entry.config.resource_type().as_ref(),
+        )
+        .should_emit_in_setup(entry.lifecycle);
+        if setup_created && stack_state.resources.contains_key(resource_id.as_str()) {
+            answers.insert(input_id.to_string(), true);
+        }
     }
-    let mut gating = frozen_gating_inputs(target_stack).into_iter().collect::<Vec<_>>();
-    gating.sort();
-    let Some(input_id) = gating.into_iter().next() else {
-        return Ok(alien_core::GateAnswers::new());
-    };
-    Err(AlienError::new(
-        crate::error::ErrorData::FrozenGateAnswerUnderivable {
-            input_id,
-            reason: "the deployment predates recorded gate answers and no settled release is \
-                     available to derive them from"
-                .to_string(),
-        },
-    )
-    .into())
+    answers
 }
 
 /// The inputs that gate a setup-created resource in `stack`. Fixity applies
@@ -448,6 +447,7 @@ pub fn audit_live_gate_transitions(
     stack: &Stack,
     stack_state: &StackState,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
+    persisted_gate_answers: &alien_core::GateAnswers,
     release_id: Option<&str>,
 ) {
     for (resource_id, entry) in stack.resources() {
@@ -461,16 +461,24 @@ pub fn audit_live_gate_transitions(
         if setup_created {
             continue;
         }
-        let Ok(accepted) = gate_resolves_true(&stack.inputs, input_id, input_values, resource_id)
-        else {
+        // The same resolver the strip uses, or the audit would describe a
+        // transition that never happens — and miss the one that does.
+        let Ok(accepted) = live_gate_resolves_true(
+            &stack.inputs,
+            input_id,
+            input_values,
+            persisted_gate_answers,
+            resource_id,
+        ) else {
             // The strip right after this reports the unresolvable gate as the
             // step's error; nothing to audit for a step that will not run.
             continue;
         };
         let exists = stack_state.resources.contains_key(resource_id.as_str());
+        let source = source_of(input_values, persisted_gate_answers, input_id);
         let (transition, value_source) = match (accepted, exists) {
-            (false, true) => ("delete", source_of(input_values, input_id)),
-            (true, false) => ("create", source_of(input_values, input_id)),
+            (false, true) => ("delete", source),
+            (true, false) => ("create", source),
             _ => continue,
         };
         let release = release_id.unwrap_or("unversioned");
@@ -493,10 +501,13 @@ pub fn audit_live_gate_transitions(
 
 fn source_of(
     input_values: &std::collections::HashMap<String, serde_json::Value>,
+    persisted_gate_answers: &alien_core::GateAnswers,
     input_id: &str,
 ) -> &'static str {
     if input_values.contains_key(input_id) {
         "provided"
+    } else if persisted_gate_answers.contains_key(input_id) {
+        "persisted"
     } else {
         "default"
     }
@@ -1092,53 +1103,48 @@ mod tests {
     /// history to fabricate, while a gate the settled release declared still
     /// derives from presence and keeps refusing flips.
     #[test]
-    fn a_legacy_baseline_derives_from_the_settled_release_not_the_target() {
-        let settled_release = Stack::new("gated-stack".to_string())
-            .add(
-                ServiceAccount::new("execution-sa".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        let state = imported_state_with(
+    fn a_legacy_gate_absent_from_the_settled_state_records_no_answer() {
+        // The gated store is absent: either the deployer declined it, or the
+        // release being deployed introduced the gate after this state
+        // settled. Both look identical here, so neither is recorded.
+        let without_the_store = imported_state_with(
             "execution-sa",
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
-
-        let no_history =
-            derive_legacy_frozen_gate_answers(Some(&settled_release), &gated_stack(), &state)
-                .expect("a gateless settled release derives");
+        let unprovable = derive_legacy_frozen_gate_answers(&gated_stack(), &without_the_store);
         assert!(
-            no_history.is_empty(),
-            "a gate the settled release never declared must not inherit a fabricated answer"
+            unprovable.is_empty(),
+            "absence proves nothing, so no answer may be fabricated from it"
         );
 
-        let derived =
-            derive_legacy_frozen_gate_answers(Some(&gated_stack()), &gated_stack(), &state)
-                .expect("a settled gate derives from presence");
+        // The gated store exists: setup created it, which no answer other
+        // than yes explains.
+        let with_the_store = imported_state_with(
+            "analytics",
+            Resource::new(Kv::new("analytics".to_string()).build()),
+        );
+        let proven = derive_legacy_frozen_gate_answers(&gated_stack(), &with_the_store);
         assert_eq!(
-            derived.get("analyticsEnabled"),
-            Some(&false),
-            "the store was absent from the settled state, so its answer was no"
+            proven.get("analyticsEnabled"),
+            Some(&true),
+            "a gated resource that exists was accepted"
         );
     }
 
-    /// With no settled release to read, a target with frozen gates refuses
-    /// rather than guesses — while a target with nothing frozen-gating has
-    /// nothing to enforce and proceeds.
+    /// A live gate has no frozen history to reconstruct — only setup-created
+    /// resources leave the presence evidence this derivation reads.
     #[test]
-    fn a_missing_legacy_baseline_refuses_only_when_frozen_gates_exist() {
+    fn a_legacy_derivation_ignores_live_gates() {
         let state = imported_state_with(
-            "execution-sa",
-            Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
+            "cache",
+            Resource::new(Kv::new("cache".to_string()).build()),
         );
 
-        let error = derive_legacy_frozen_gate_answers(None, &gated_stack(), &state)
-            .expect_err("frozen gates with no derivable history must refuse");
-        assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
-
-        let empty = derive_legacy_frozen_gate_answers(None, &live_gated_stack(Some(true)), &state)
-            .expect("live-only gates have no frozen history to enforce");
-        assert!(empty.is_empty());
+        let answers = derive_legacy_frozen_gate_answers(&live_gated_stack(Some(true)), &state);
+        assert!(
+            answers.is_empty(),
+            "a live gate re-resolves every cycle; it has no answered-once history"
+        );
     }
 
     #[test]

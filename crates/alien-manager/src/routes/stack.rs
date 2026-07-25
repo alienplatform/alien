@@ -198,6 +198,10 @@ pub async fn stack_import(
             Err(e) => return e.into_response(),
         };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
+    // Held across the strips below: reconstructing a legacy deployment's
+    // answers needs every gate the release declares, including one whose
+    // resource this request declines.
+    let declared_stack = source_stack;
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
         &frozen_gating,
@@ -340,65 +344,19 @@ pub async fn stack_import(
                 .as_ref()
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
-            // A deployment from before answers were recorded still has a
-            // ground truth: presence in its own settled state, read against
-            // the release that state settled under. The incoming release may
-            // introduce a brand-new gate whose resource is naturally absent
-            // from the old state — deriving from the new stack would
-            // fabricate a declined answer for it and refuse its first
-            // legitimate acceptance. When the baseline cannot be loaded at
-            // all, refuse rather than let this re-registration seed its own
-            // answers as history (fail closed): answers record on the next
-            // successful reconcile, which derives them from the settled
-            // state, and re-imports work again from there.
-            if persisted_answers.is_empty() && !imported_gate_answers.is_empty() {
-                let baseline_release_id = existing
-                    .current_release_id
-                    .as_deref()
-                    .or(existing.desired_release_id.as_deref());
-                let baseline_stack = match baseline_release_id {
-                    Some(baseline_release_id) => match state
-                        .release_store
-                        .get_release(&subject, baseline_release_id)
-                        .await
-                    {
-                        Ok(baseline_release) => baseline_release
-                            .as_ref()
-                            .and_then(|release| resolve_stack(release, req.platform).ok().cloned()),
-                        Err(e) => return e.into_response(),
-                    },
-                    None => None,
-                };
-                match (baseline_stack, existing.stack_state.as_ref()) {
-                    (Some(baseline_stack), Some(existing_state)) => {
-                        persisted_answers = match alien_deployment::resolve_frozen_gate_answers(
-                            &baseline_stack,
-                            existing_state,
-                            &Default::default(),
-                        ) {
-                            Ok(answers) => answers,
-                            Err(e) => return e.into_response(),
-                        };
-                    }
-                    _ => {
-                        let input_id = imported_gate_answers
-                            .keys()
-                            .next()
-                            .cloned()
-                            .unwrap_or_default();
-                        return AlienError::new(
-                            alien_deployment::ErrorData::FrozenGateAnswerUnderivable {
-                                input_id,
-                                reason: format!(
-                                    "the deployment predates recorded gate answers and its \
-                                     baseline release ({}) or settled state is unavailable to \
-                                     derive them from",
-                                    baseline_release_id.unwrap_or("none")
-                                ),
-                            },
-                        )
-                        .into_response();
-                    }
+            // A deployment from before answers were recorded still proves
+            // some of them: a gated resource that exists in its settled state
+            // was accepted. A gate that state says nothing about could have
+            // been declined or introduced by a later release, so it stays
+            // unrecorded — fabricating a decline from absence would refuse
+            // the gate's first legitimate acceptance, which is this very
+            // request.
+            if persisted_answers.is_empty() {
+                if let Some(existing_state) = existing.stack_state.as_ref() {
+                    persisted_answers = alien_deployment::derive_legacy_frozen_gate_answers(
+                        &declared_stack,
+                        existing_state,
+                    );
                 }
             }
             for (input_id, imported_answer) in &imported_gate_answers {

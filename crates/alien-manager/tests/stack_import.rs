@@ -1506,11 +1506,11 @@ async fn an_import_whose_input_values_contradict_the_delivered_resources_is_refu
     );
 }
 
-/// A legacy deployment whose baseline release is gone cannot prove what the
-/// original answers were — the re-registration must NOT get to seed its own
-/// answers as history, or a flipped answer becomes the recorded baseline.
+/// A legacy deployment's settled state is enough on its own: the gated store
+/// exists there, which only acceptance explains, so a flipped re-import is
+/// still refused even when the release that installed it is gone.
 #[tokio::test]
-async fn a_legacy_reimport_without_a_loadable_baseline_is_refused() {
+async fn a_legacy_reimport_is_refused_from_settled_state_without_any_release() {
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
 
     let accepted = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
@@ -1529,7 +1529,7 @@ async fn a_legacy_reimport_without_a_loadable_baseline_is_refused() {
         .expect("deployment must persist");
 
     // Settle at Running as a pre-fixity deployment whose recorded release no
-    // longer exists: no answers, no derivable baseline.
+    // longer exists: no answers, and nothing to load a baseline stack from.
     let mut legacy_metadata = persisted
         .runtime_metadata
         .clone()
@@ -1575,11 +1575,11 @@ async fn a_legacy_reimport_without_a_loadable_baseline_is_refused() {
     assert_eq!(
         status,
         StatusCode::BAD_REQUEST,
-        "an unprovable baseline refuses rather than trusts the re-registration; body = {json:#}"
+        "the settled state alone proves the store was accepted; body = {json:#}"
     );
     assert_eq!(
         json.get("code").and_then(|code| code.as_str()),
-        Some("FROZEN_GATE_ANSWER_UNDERIVABLE"),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
         "body = {json:#}"
     );
 }
