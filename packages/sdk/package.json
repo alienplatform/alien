@@ -45,7 +45,7 @@
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^24.0.15",
     "ts-proto": "^2.7.0",
-    "tsdown": "^0.13.0",
+    "tsdown": "^0.22.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"
   },
@@ -56,6 +56,6 @@
     "@grpc/grpc-js": "^1.14.4",
     "nice-grpc": "^2.1.11",
     "nice-grpc-common": "^2.0.2",
-    "zod": "4.3.2"
+    "zod": "4.4.3"
   }
 }

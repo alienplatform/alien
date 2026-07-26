@@ -57,7 +57,7 @@ sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 
 # Kubernetes
-k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
+k8s-openapi = { version = "0.28.0", features = ["v1_33"], optional = true }
 
 [dev-dependencies]
 alien-aws-clients = { workspace = true, features = ["test-utils"] }
