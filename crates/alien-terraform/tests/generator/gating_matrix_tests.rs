@@ -8,9 +8,9 @@
 
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
-    ownership_policy_for_resource_type, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Kv, Platform, Queue, ResourceLifecycle, Stack, StackBuilder,
-    StackSettings, Storage, Vault, Worker, WorkerCode,
+    ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
+    AzureStorageAccount, Kv, PermissionProfile, Platform, Queue, ResourceLifecycle,
+    ServiceAccount, Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
 
@@ -67,6 +67,11 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<Stack> {
         }
         "vault" => base().add_enabled_when(
             Vault::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "fixtureEnabled",
+        ),
+        "ai" => base().add_enabled_when(
+            Ai::new("fixture".to_string()).build(),
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
@@ -254,5 +259,90 @@ fn a_gated_vault_renders_conditionally_on_every_cloud() {
         let module = render(&stack, target, StackSettings::default());
         assert_terraform_valid(&module, name);
         snapshot_module(name, &module);
+    }
+}
+
+/// An AI resource whose only AWS footprint is its `ai/invoke` grants: a "*"
+/// grant could not be gated, so the profile scopes the grant to the resource
+/// and the grant blocks must carry the resource's gate.
+#[test]
+fn a_gated_ai_renders_conditionally_with_its_scoped_grants() {
+    for (platform, name) in [
+        (Platform::Aws, "enabled_gated_ai_aws"),
+        (Platform::Gcp, "enabled_gated_ai_gcp"),
+        (Platform::Azure, "enabled_gated_ai_azure"),
+    ] {
+        let builder = Stack::new("matrix-stack".to_string())
+            .inputs(vec![gate_input(
+                "fixtureEnabled",
+                "Enable the fixture resource",
+                "Whether to create the gated matrix fixture.",
+            )])
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("fixture", ["ai/invoke"]),
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        let builder = if platform == Platform::Azure {
+            builder
+                .add(
+                    AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+        } else {
+            builder
+        };
+        let stack = builder
+            .add_enabled_when(
+                Ai::new("fixture".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "fixtureEnabled",
+            )
+            .build();
+        let target = target_for(platform).expect("cloud target");
+        let module = render(&stack, target, StackSettings::default());
+        assert_terraform_valid(&module, name);
+        snapshot_module(name, &module);
+
+        // The block attaching inference rights to the workload identity, per
+        // cloud. Each must ride the gate — an ungated grant would survive a
+        // declined deploy — and at least one must exist, or the assertion
+        // proves nothing.
+        let (grant_type, grant_marker) = match platform {
+            Platform::Aws => ("aws_iam_role_policy", "bedrock:InvokeModel"),
+            Platform::Gcp => ("google_project_iam_member", "ai_invoke"),
+            Platform::Azure => ("azurerm_role_assignment", "cognitive"),
+            _ => unreachable!("matrix platforms"),
+        };
+        let gate_count = "var.input_fixture_enabled ? 1 : 0";
+        let mut gated_grants = 0usize;
+        for (file_name, contents) in module.iter() {
+            if !file_name.ends_with(".tf") {
+                continue;
+            }
+            let padded = format!("\n{contents}");
+            for block in padded.split("\nresource \"").skip(1) {
+                let header = block.lines().next().unwrap_or_default();
+                if !header.contains(grant_type) || !block.contains(grant_marker) {
+                    continue;
+                }
+                assert!(
+                    block.contains(gate_count),
+                    "{platform:?}: an inference grant must carry the ai gate:\n{block}"
+                );
+                gated_grants += 1;
+            }
+        }
+        assert!(
+            gated_grants > 0,
+            "{platform:?}: expected a gated `{grant_type}` inference grant in the render"
+        );
     }
 }
