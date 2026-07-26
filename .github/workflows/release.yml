@@ -1817,9 +1817,9 @@ jobs:
           COMMIT="${{ needs.prepare.outputs.release_commit }}"
           FULL_REF="refs/tags/${TAG}"
 
-          MATCHING_REFS=$(gh api \
+          MATCHING_REFS=$(gh api --paginate --slurp \
             "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
-            jq -c --arg ref "$FULL_REF" '[.[] | select(.ref == $ref)]')
+            jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
           if [ "$(jq 'length' <<< "$MATCHING_REFS")" = "0" ]; then
             if ! gh api \
               --method POST \
@@ -1828,9 +1828,9 @@ jobs:
               --raw-field "sha=${COMMIT}" >/dev/null; then
               echo "Tag creation failed; checking whether a concurrent release created it"
             fi
-            MATCHING_REFS=$(gh api \
+            MATCHING_REFS=$(gh api --paginate --slurp \
               "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
-              jq -c --arg ref "$FULL_REF" '[.[] | select(.ref == $ref)]')
+              jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
           fi
 
           if [ "$(jq 'length' <<< "$MATCHING_REFS")" != "1" ]; then
