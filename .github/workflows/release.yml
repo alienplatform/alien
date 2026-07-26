@@ -1808,7 +1808,7 @@ jobs:
           name: qualified-github-release
           path: .
 
-      - name: Require immutable GitHub releases
+      - name: Require immutable GitHub release protections
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -1818,6 +1818,33 @@ jobs:
             --jq '.enabled')
           if [ "$enabled" != "true" ]; then
             echo "::error::Immutable GitHub releases must be enabled"
+            exit 1
+          fi
+
+          ruleset_id=$(gh api --paginate \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/${GITHUB_REPOSITORY}/rulesets" \
+            --jq '.[] | select(
+              .name == "Immutable release tags" and
+              .target == "tag" and
+              .enforcement == "active"
+            ) | .id' | head -n 1)
+          if [ -z "$ruleset_id" ]; then
+            echo "::error::The active Immutable release tags ruleset is required"
+            exit 1
+          fi
+
+          ruleset=$(gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")
+          if ! jq -e '
+            .conditions.ref_name.include == ["refs/tags/v*"] and
+            .conditions.ref_name.exclude == [] and
+            ([.rules[].type] | index("deletion")) != null and
+            ([.rules[].type] | index("non_fast_forward")) != null and
+            (.bypass_actors | length) == 0
+          ' <<< "$ruleset" >/dev/null; then
+            echo "::error::Release tags must prohibit updates and deletion without bypasses"
             exit 1
           fi
 
