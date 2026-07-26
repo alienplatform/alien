@@ -330,10 +330,10 @@ pub fn resolve_frozen_gate_answers_from_presence(
 /// for the frozen-compatibility check to refuse — which is the truth, since a
 /// release cannot add a frozen resource without setup running again.
 ///
-/// Without the settled release there is no way to tell a decline from a gate
-/// the target release just introduced, so nothing is recorded at all and every
-/// gate falls to that same check. Loud and wrong-free, rather than quiet and
-/// guessed.
+/// Without the settled release, acceptance still derives from presence, but a
+/// decline cannot be told from a gate the target release just introduced, so
+/// absent resources go unrecorded and their gates fall to that same check.
+/// Loud and wrong-free, rather than quiet and guessed.
 pub fn derive_legacy_frozen_gate_answers(
     settled_stack: Option<&Stack>,
     target_stack: &Stack,
