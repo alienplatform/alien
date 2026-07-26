@@ -41,6 +41,26 @@ export const BindingNotConfiguredError = defineError({
   httpStatusCode: 400,
 })
 
+/**
+ * Thrown when the native addon reports a Postgres `sslmode` this package does not
+ * recognize, which means the addon and this wrapper disagree about the Rust `SslMode`
+ * enum — a version skew between the two halves of the package.
+ *
+ * `sslmode` is the value the addon sent; `expected` is the set this wrapper accepts.
+ * Not retryable: a skew is fixed by aligning versions, not by trying again.
+ */
+export const UnknownPostgresSslModeError = defineError({
+  code: "UNKNOWN_POSTGRES_SSLMODE",
+  context: z.object({
+    sslmode: z.string(),
+    expected: z.array(z.string()),
+  }),
+  message: ({ sslmode, expected }) =>
+    `@alienplatform/bindings received an unknown Postgres sslmode '${sslmode}' from the native addon; expected one of ${expected.join(", ")}.`,
+  retryable: false,
+  internal: false,
+})
+
 /** Fallback code for napi-internal errors whose message is not an envelope. */
 const GENERIC_BINDINGS_CODE = "BINDINGS_ERROR"
 

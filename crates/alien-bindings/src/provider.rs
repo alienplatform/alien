@@ -20,10 +20,14 @@ use tokio::sync::{OnceCell, RwLock};
 /// Direct platform-specific bindings provider.
 /// Routes to appropriate platform implementations based on binding configuration.
 ///
-/// Caches all loaded bindings by name. Each `load_*` call creates cloud clients
+/// Caches loaded bindings by name. Each `load_*` call creates cloud clients
 /// (HTTP connection pools, token caches) which are expensive to initialize. Since
 /// the binding configuration is immutable for the provider's lifetime, the same
 /// binding name always produces the same client — so we cache on first load.
+///
+/// The one exception is a cloud Postgres binding: its handle holds a password read
+/// from the cloud secret store, and caching it would make a rotated password
+/// unreachable for the life of the process. See [`Self::load_postgres`].
 #[derive(Debug, Clone)]
 pub struct BindingsProvider {
     client_config: ClientConfig,
@@ -1406,30 +1410,38 @@ impl BindingsProviderApi for BindingsProvider {
     }
 
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
-        if let Some(cached) = self
-            .get_cached::<Arc<dyn Postgres>>("postgres", binding_name)
-            .await
-        {
-            return Ok(cached);
-        }
-
         let binding: PostgresBinding = self.parse_binding(binding_name, "Postgres")?;
 
         // Local/External carry the password inline; the cloud variants carry only a
-        // secret locator and each reads it from its own cloud secret store here, once,
-        // with the workload's own identity.
-        let result: Arc<dyn Postgres> = match &binding {
+        // secret locator and each reads it from its own cloud secret store here, with the
+        // workload's own identity.
+        //
+        // Only the inline-password variants are cached. A cloud handle deliberately is
+        // not: caching it would freeze the password that was current when the binding was
+        // first used, so a rotation would be unreachable for the life of the process.
+        // Re-reading costs one secret-store call per `postgres()` call, and `postgres()`
+        // is a per-handle setup call, not a per-query one.
+        match &binding {
             PostgresBinding::Local(_) | PostgresBinding::External(_) => {
                 use crate::providers::postgres::local::LocalPostgres;
 
+                if let Some(cached) = self
+                    .get_cached::<Arc<dyn Postgres>>("postgres", binding_name)
+                    .await
+                {
+                    return Ok(cached);
+                }
+
                 let postgres: Arc<dyn Postgres> =
                     Arc::new(LocalPostgres::from_binding(binding_name, &binding)?);
+                self.put_cache("postgres", binding_name, postgres.clone())
+                    .await;
                 Ok(postgres)
             }
 
             #[cfg(feature = "aws")]
             PostgresBinding::Aurora(config) => {
-                use crate::providers::postgres::aurora::AuroraPostgres;
+                use crate::providers::postgres::{aurora, CloudPostgres};
                 use alien_aws_clients::secrets_manager::{SecretsManagerApi, SecretsManagerClient};
 
                 let aws_config = self.client_config.aws_config().ok_or_else(|| {
@@ -1451,8 +1463,9 @@ impl BindingsProviderApi for BindingsProvider {
                     credentials,
                 ));
 
-                let postgres: Arc<dyn Postgres> =
-                    Arc::new(AuroraPostgres::from_binding(binding_name, config, client).await?);
+                let postgres: Arc<dyn Postgres> = Arc::new(CloudPostgres::new(
+                    aurora::resolve(binding_name, config, client).await?,
+                ));
                 Ok(postgres)
             }
             #[cfg(not(feature = "aws"))]
@@ -1462,7 +1475,7 @@ impl BindingsProviderApi for BindingsProvider {
 
             #[cfg(feature = "gcp")]
             PostgresBinding::CloudSql(config) => {
-                use crate::providers::postgres::cloud_sql::CloudSqlPostgres;
+                use crate::providers::postgres::{cloud_sql, CloudPostgres};
                 use alien_gcp_clients::secret_manager::{SecretManagerApi, SecretManagerClient};
 
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
@@ -1477,8 +1490,9 @@ impl BindingsProviderApi for BindingsProvider {
                     gcp_config.clone(),
                 ));
 
-                let postgres: Arc<dyn Postgres> =
-                    Arc::new(CloudSqlPostgres::from_binding(binding_name, config, client).await?);
+                let postgres: Arc<dyn Postgres> = Arc::new(CloudPostgres::new(
+                    cloud_sql::resolve(binding_name, config, client).await?,
+                ));
                 Ok(postgres)
             }
             #[cfg(not(feature = "gcp"))]
@@ -1488,7 +1502,7 @@ impl BindingsProviderApi for BindingsProvider {
 
             #[cfg(feature = "azure")]
             PostgresBinding::FlexibleServer(config) => {
-                use crate::providers::postgres::flexible_server::FlexibleServerPostgres;
+                use crate::providers::postgres::{flexible_server, CloudPostgres};
                 use alien_azure_clients::keyvault::{
                     AzureKeyVaultSecretsClient, KeyVaultSecretsApi,
                 };
@@ -1507,9 +1521,9 @@ impl BindingsProviderApi for BindingsProvider {
                         AzureTokenCache::new(azure_config.clone()),
                     ));
 
-                let postgres: Arc<dyn Postgres> = Arc::new(
-                    FlexibleServerPostgres::from_binding(binding_name, config, client).await?,
-                );
+                let postgres: Arc<dyn Postgres> = Arc::new(CloudPostgres::new(
+                    flexible_server::resolve(binding_name, config, client).await?,
+                ));
                 Ok(postgres)
             }
             #[cfg(not(feature = "azure"))]
@@ -1518,11 +1532,7 @@ impl BindingsProviderApi for BindingsProvider {
                     feature: "azure".to_string(),
                 }))
             }
-        }?;
-
-        self.put_cache("postgres", binding_name, result.clone())
-            .await;
-        Ok(result)
+        }
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
@@ -2122,6 +2132,152 @@ mod tests {
             error.to_string().contains("ALIEN_CACHE_BINDING"),
             "message should name the env var, got: {error}"
         );
+    }
+
+    /// Which Postgres handles may be cached. The contract `Bindings::postgres` documents
+    /// — "a cloud backend re-reads its password on every call, so calling again picks up
+    /// a rotation" — is only true while the cloud handles stay out of the cache, and the
+    /// cache is invisible from the outside, so it is pinned here.
+    mod postgres_cache {
+        use super::*;
+        use crate::traits::BindingsProviderApi;
+
+        /// An inline-password binding parses out of the environment with no I/O, so its
+        /// handle is cached: two loads must hand back the very same `Arc`.
+        #[tokio::test]
+        async fn inline_password_binding_is_served_from_the_cache() {
+            let provider = BindingsProvider::new(
+                ClientConfig::Test,
+                HashMap::from([(
+                    "db".to_string(),
+                    serde_json::json!({
+                        "service": "local-postgres",
+                        "host": "127.0.0.1",
+                        "port": 6543,
+                        "database": "app",
+                        "username": "alien",
+                        "password": "inline-pw",
+                    }),
+                )]),
+            )
+            .expect("provider constructs");
+
+            let first = provider.load_postgres("db").await.expect("first load");
+            let second = provider.load_postgres("db").await.expect("second load");
+
+            assert!(
+                Arc::ptr_eq(&first, &second),
+                "a Local binding must be served from the cache, not re-resolved"
+            );
+            assert_eq!(first.connection_params().password, "inline-pw");
+        }
+
+        /// The rotation contract, end to end: two loads of the *same* Aurora binding must
+        /// perform two `GetSecretValue` calls, and the second handle must carry the value
+        /// the secret holds at that moment — a password rotated between the two calls.
+        ///
+        /// The fake Secrets Manager is a real HTTP endpoint reached through the client's
+        /// `secretsmanager` endpoint override, so the whole `load_postgres` path runs:
+        /// binding parse, credential provider, signed request, response decode.
+        #[cfg(feature = "aws")]
+        #[tokio::test]
+        async fn cloud_binding_rereads_its_secret_on_every_load() {
+            use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+            use axum::{extract::State, routing::post, Json, Router};
+            use std::net::SocketAddr;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            const SECRET_ARN: &str =
+                "arn:aws:secretsmanager:us-east-1:000000000000:secret:pg-AbCdEf";
+
+            // Every read returns a different password: the Nth read sees "password-vN",
+            // which is what a rotation between two loads looks like to the workload.
+            async fn get_secret_value(
+                State(reads): State<Arc<AtomicUsize>>,
+            ) -> Json<serde_json::Value> {
+                let nth = reads.fetch_add(1, Ordering::SeqCst) + 1;
+                Json(serde_json::json!({
+                    "ARN": SECRET_ARN,
+                    "Name": "pg",
+                    "SecretString": format!("password-v{nth}"),
+                }))
+            }
+
+            let reads = Arc::new(AtomicUsize::new(0));
+            let app = Router::new()
+                .route("/", post(get_secret_value))
+                .with_state(reads.clone());
+            let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.expect("serve");
+            });
+
+            let provider = BindingsProvider::new(
+                ClientConfig::Aws(Box::new(AwsClientConfig {
+                    account_id: "000000000000".to_string(),
+                    region: "us-east-1".to_string(),
+                    credentials: AwsCredentials::AccessKeys {
+                        access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+                        secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+                        session_token: None,
+                    },
+                    service_overrides: Some(AwsServiceOverrides {
+                        endpoints: HashMap::from([(
+                            "secretsmanager".to_string(),
+                            format!("http://{addr}"),
+                        )]),
+                    }),
+                })),
+                HashMap::from([(
+                    "db".to_string(),
+                    serde_json::json!({
+                        "service": "aurora",
+                        "clusterEndpoint": "cluster.cluster-abc.us-east-1.rds.amazonaws.com",
+                        "port": 5432,
+                        "database": "app",
+                        "username": "alien",
+                        "passwordSecretArn": SECRET_ARN,
+                    }),
+                )]),
+            )
+            .expect("provider constructs");
+
+            let first = provider.load_postgres("db").await.expect("first load");
+            assert_eq!(
+                reads.load(Ordering::SeqCst),
+                1,
+                "the first load must read the secret exactly once"
+            );
+            assert_eq!(first.connection_params().password, "password-v1");
+
+            let second = provider.load_postgres("db").await.expect("second load");
+            assert_eq!(
+                reads.load(Ordering::SeqCst),
+                2,
+                "a cached cloud handle would make a rotated password unreachable, \
+                 so the second load must read the secret again"
+            );
+
+            let params = second.connection_params();
+            assert_eq!(
+                params.password, "password-v2",
+                "the second load must observe the rotated password"
+            );
+            assert_eq!(
+                first.connection_params().password,
+                "password-v1",
+                "a handle already handed out keeps the password it resolved with"
+            );
+            assert_eq!(
+                params.connection_string(),
+                "postgres://alien:password-v2@\
+                 cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=require",
+                "re-resolving must rebuild every connection field, not just the password"
+            );
+        }
     }
 
     // --- Selection order on the lazy path (native-vs-mint) ---

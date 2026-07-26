@@ -34,9 +34,10 @@ its own.
 | `Queue` | type | resource handle | Instance type returned by `queue()`. Method signatures mirror the Rust handle. |
 | `Container` | type | resource handle | `getInternalUrl()` and nullable `getPublicUrl()`. |
 | `Vault` | type | resource handle | Instance type returned by `vault()`. Method signatures mirror the Rust handle. |
-| `Postgres` | type | resource handle | Instance type returned by `postgres()`: `connection()` and `connectionString()`. |
+| `Postgres` | type | resource handle | Instance type returned by `postgres()`: `connection()`. |
 | `PostgresConnection`, `PostgresSslMode` | type | connection details | The URL, the driver `ssl` value, and the same details as individual fields. |
 | `BindingNotConfiguredError` | error | `defineError({ code: "BINDING_NOT_CONFIGURED", context: { binding, envVar } })` | Thrown on the first operation against an unconfigured binding. `binding` is the binding name; `envVar` is `ALIEN_<NAME>_BINDING`. |
+| `UnknownPostgresSslModeError` | error | `defineError({ code: "UNKNOWN_POSTGRES_SSLMODE", context: { sslmode, expected } })` | Thrown when the native addon reports an `sslmode` this wrapper does not know — a version skew between the two halves of the package. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported so consumers handle bindings errors without a direct `@alienplatform/core` import. |
 
 ### Intentionally not exposed

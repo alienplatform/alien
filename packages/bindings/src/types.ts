@@ -223,8 +223,6 @@ export interface Postgres {
    * so call the factory again to pick up a rotated password.
    */
   connection(): Promise<PostgresConnection>
-  /** Shorthand for `(await connection()).connectionString`. */
-  connectionString(): Promise<string>
 }
 
 /** A resolved vault (secrets) binding. */

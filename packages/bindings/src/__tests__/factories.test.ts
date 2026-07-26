@@ -311,7 +311,7 @@ describe("createFactories method mapping", () => {
 })
 
 describe("createFactories postgres surface", () => {
-  it("passes every addon field through and exposes the connection string shorthand", async () => {
+  it("passes every addon field through", async () => {
     const { postgres } = createFactories(() => addonForPostgres(rawConnection("require")))
 
     const connection = await postgres("db").connection()
@@ -326,7 +326,6 @@ describe("createFactories postgres surface", () => {
       password: "pw",
       sslmode: "require",
     })
-    await expect(postgres("db").connectionString()).resolves.toBe(connection.connectionString)
   })
 
   // `ssl` is what a node-postgres caller actually passes to the driver, so the mapping
@@ -353,7 +352,12 @@ describe("createFactories postgres surface", () => {
       .connection()
       .catch((e: unknown) => e)
 
+    // The code is what a caller discriminates on: `guard` would otherwise flatten a
+    // bare `Error` into the generic BINDINGS_ERROR fallback.
     expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("UNKNOWN_POSTGRES_SSLMODE")
+    expect((error as AlienError).retryable).toBe(false)
     expect((error as AlienError).message).toContain("verify-full")
+    expect((error as AlienError).message).toContain("disable, prefer, require")
   })
 })

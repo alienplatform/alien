@@ -173,9 +173,15 @@ impl Bindings {
     /// and every backend speaks the same wire protocol, so the handle carries connection
     /// details and the application connects with its own driver.
     ///
-    /// A cloud backend's password is read from its secret store during this call and
-    /// then held for the handle's lifetime, so there is no refreshing wrapper: call this
-    /// again to pick up a rotated password.
+    /// The Local and External backends carry their password inline in the binding
+    /// environment variable, so their handle is resolved once and then cached.
+    ///
+    /// The three cloud backends carry only a locator for their password and read it from
+    /// the cloud secret store on **every** call — their handle is never cached. There is
+    /// no refreshing wrapper, so a handle keeps the password that was current when it was
+    /// created and calling this again is what picks up a rotated one. Each call is
+    /// therefore one secret-store read: hold the returned handle for the lifetime of a
+    /// connection pool rather than calling this per query.
     pub async fn postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
         self.provider.load_postgres(binding_name).await
     }

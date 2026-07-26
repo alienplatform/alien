@@ -6,18 +6,12 @@
 
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{resolve_params, resolve_secret_locator};
-use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
+use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_azure_clients::keyvault::KeyVaultSecretsApi;
 use alien_core::bindings::FlexibleServerPostgresBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::sync::Arc;
 use url::Url;
-
-/// A resolved Flexible Server Postgres binding. Holds connection details only.
-#[derive(Debug)]
-pub struct FlexibleServerPostgres {
-    params: PostgresConnectionParams,
-}
 
 /// The parts of a Key Vault secret URI needed to read it.
 #[derive(Debug, PartialEq, Eq)]
@@ -30,39 +24,35 @@ struct SecretUri {
     version: Option<String>,
 }
 
-impl FlexibleServerPostgres {
-    /// Reads the password from Key Vault and resolves the connection parameters.
-    ///
-    /// The workload dials the binding's `host` (the private DNS FQDN fronting the
-    /// server's Private Endpoint) and TLS is required (`sslmode=require`).
-    ///
-    /// Performs exactly one `getSecret`; a failure is returned to the caller, which owns
-    /// any retry policy.
-    pub async fn from_binding(
-        binding_name: &str,
-        binding: &FlexibleServerPostgresBinding,
-        secrets: Arc<dyn KeyVaultSecretsApi>,
-    ) -> Result<Self> {
-        let secret_uri = resolve_secret_locator(
-            binding_name,
-            "passwordSecretUri",
-            &binding.password_secret_uri,
-        )?;
-        let parsed = parse_secret_uri(binding_name, &secret_uri)?;
-        let password = read_password(binding_name, &secret_uri, &parsed, secrets.as_ref()).await?;
+/// Reads the password from Key Vault and resolves the connection parameters.
+///
+/// The workload dials the binding's `host` (the private DNS FQDN fronting the
+/// server's Private Endpoint) and TLS is required (`sslmode=require`).
+///
+/// Performs exactly one `getSecret`; a failure is returned to the caller, which owns
+/// any retry policy.
+pub(crate) async fn resolve(
+    binding_name: &str,
+    binding: &FlexibleServerPostgresBinding,
+    secrets: Arc<dyn KeyVaultSecretsApi>,
+) -> Result<PostgresConnectionParams> {
+    let secret_uri = resolve_secret_locator(
+        binding_name,
+        "passwordSecretUri",
+        &binding.password_secret_uri,
+    )?;
+    let parsed = parse_secret_uri(binding_name, &secret_uri)?;
+    let password = read_password(binding_name, &secret_uri, &parsed, secrets.as_ref()).await?;
 
-        Ok(Self {
-            params: resolve_params(
-                binding_name,
-                &binding.host,
-                &binding.port,
-                &binding.database,
-                &binding.username,
-                &password,
-                SslMode::Require,
-            )?,
-        })
-    }
+    resolve_params(
+        binding_name,
+        &binding.host,
+        &binding.port,
+        &binding.database,
+        &binding.username,
+        &password,
+        SslMode::Require,
+    )
 }
 
 /// Splits a Key Vault secret URI into the vault URL, secret name, and optional version.
@@ -133,14 +123,6 @@ async fn read_password(
         .ok_or_else(|| AlienError::new(failed("secret has no value")))
 }
 
-impl Binding for FlexibleServerPostgres {}
-
-impl Postgres for FlexibleServerPostgres {
-    fn connection_params(&self) -> PostgresConnectionParams {
-        self.params.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,12 +165,10 @@ mod tests {
             })
             .returning(|_, _, _| Ok(bundle(Some("a!b*c'd(e)f@/"))));
 
-        let pg =
-            FlexibleServerPostgres::from_binding("db", &binding(SECRET_URI), Arc::new(secrets))
-                .await
-                .expect("flexible server binding resolves");
+        let params = resolve("db", &binding(SECRET_URI), Arc::new(secrets))
+            .await
+            .expect("flexible server binding resolves");
 
-        let params = pg.connection_params();
         assert_eq!(params.host, "pg.privatelink.postgres.database.azure.com");
         assert_eq!(params.port, 5432);
         assert_eq!(params.database, "app");
@@ -196,7 +176,7 @@ mod tests {
         assert_eq!(params.password, "a!b*c'd(e)f@/");
         assert_eq!(params.sslmode, SslMode::Require);
         assert_eq!(
-            pg.connection_string(),
+            params.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@\
              pg.privatelink.postgres.database.azure.com:5432/app?sslmode=require"
         );
@@ -214,7 +194,7 @@ mod tests {
             })
             .returning(|_, _, _| Ok(bundle(Some("pw"))));
 
-        let pg = FlexibleServerPostgres::from_binding(
+        let params = resolve(
             "db",
             &binding(&format!("{SECRET_URI}/abc123")),
             Arc::new(secrets),
@@ -222,7 +202,7 @@ mod tests {
         .await
         .expect("versioned secret URI resolves");
 
-        assert_eq!(pg.connection_params().password, "pw");
+        assert_eq!(params.password, "pw");
     }
 
     /// A failed secret read is upstream/transient — it must stay retryable so an
@@ -236,10 +216,9 @@ mod tests {
             }))
         });
 
-        let error =
-            FlexibleServerPostgres::from_binding("db", &binding(SECRET_URI), Arc::new(secrets))
-                .await
-                .expect_err("a failed secret read must not resolve a connection");
+        let error = resolve("db", &binding(SECRET_URI), Arc::new(secrets))
+            .await
+            .expect_err("a failed secret read must not resolve a connection");
 
         assert_eq!(error.code, "POSTGRES_SECRET_RESOLUTION_FAILED");
         assert!(error.retryable, "an upstream read failure is retryable");
@@ -259,10 +238,9 @@ mod tests {
                 .times(1)
                 .returning(move |_, _, _| Ok(bundle(stored)));
 
-            let error =
-                FlexibleServerPostgres::from_binding("db", &binding(SECRET_URI), Arc::new(secrets))
-                    .await
-                    .expect_err("an empty secret must not resolve a connection");
+            let error = resolve("db", &binding(SECRET_URI), Arc::new(secrets))
+                .await
+                .expect_err("an empty secret must not resolve a connection");
 
             assert_eq!(error.code, "POSTGRES_SECRET_RESOLUTION_FAILED");
             assert!(error.retryable);
@@ -290,13 +268,10 @@ mod tests {
             let mut secrets = MockKeyVaultSecretsApi::new();
             secrets.expect_get_secret().never();
 
-            let error =
-                match FlexibleServerPostgres::from_binding("db", &binding(uri), Arc::new(secrets))
-                    .await
-                {
-                    Ok(_) => panic!("'{uri}' ({why}) must be rejected"),
-                    Err(error) => error,
-                };
+            let error = match resolve("db", &binding(uri), Arc::new(secrets)).await {
+                Ok(_) => panic!("'{uri}' ({why}) must be rejected"),
+                Err(error) => error,
+            };
 
             assert_eq!(error.code, "BINDING_CONFIG_INVALID", "for '{uri}' ({why})");
             assert!(!error.retryable, "for '{uri}' ({why})");
@@ -315,7 +290,7 @@ mod tests {
             "Fn::GetAtt": ["PgSecret", "Uri"]
         }));
 
-        let error = FlexibleServerPostgres::from_binding("db", &malformed, Arc::new(secrets))
+        let error = resolve("db", &malformed, Arc::new(secrets))
             .await
             .expect_err("an unresolved secret URI must not resolve a connection");
 

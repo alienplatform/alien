@@ -7,51 +7,41 @@
 
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{resolve_params, resolve_secret_locator};
-use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
+use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_core::bindings::CloudSqlPostgresBinding;
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::secret_manager::SecretManagerApi;
 use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
 use std::sync::Arc;
 
-/// A resolved Cloud SQL Postgres binding. Holds connection details only.
-#[derive(Debug)]
-pub struct CloudSqlPostgres {
-    params: PostgresConnectionParams,
-}
+/// Reads the password from Secret Manager and resolves the connection parameters.
+///
+/// The workload dials the binding's `host` (the Private Service Connect consumer
+/// endpoint) and TLS is required (`sslmode=require`).
+///
+/// Performs exactly one `accessSecretVersion`; a failure is returned to the caller,
+/// which owns any retry policy.
+pub(crate) async fn resolve(
+    binding_name: &str,
+    binding: &CloudSqlPostgresBinding,
+    secrets: Arc<dyn SecretManagerApi>,
+) -> Result<PostgresConnectionParams> {
+    let secret_name = resolve_secret_locator(
+        binding_name,
+        "passwordSecretName",
+        &binding.password_secret_name,
+    )?;
+    let password = read_password(binding_name, &secret_name, secrets.as_ref()).await?;
 
-impl CloudSqlPostgres {
-    /// Reads the password from Secret Manager and resolves the connection parameters.
-    ///
-    /// The workload dials the binding's `host` (the Private Service Connect consumer
-    /// endpoint) and TLS is required (`sslmode=require`).
-    ///
-    /// Performs exactly one `accessSecretVersion`; a failure is returned to the caller,
-    /// which owns any retry policy.
-    pub async fn from_binding(
-        binding_name: &str,
-        binding: &CloudSqlPostgresBinding,
-        secrets: Arc<dyn SecretManagerApi>,
-    ) -> Result<Self> {
-        let secret_name = resolve_secret_locator(
-            binding_name,
-            "passwordSecretName",
-            &binding.password_secret_name,
-        )?;
-        let password = read_password(binding_name, &secret_name, secrets.as_ref()).await?;
-
-        Ok(Self {
-            params: resolve_params(
-                binding_name,
-                &binding.host,
-                &binding.port,
-                &binding.database,
-                &binding.username,
-                &password,
-                SslMode::Require,
-            )?,
-        })
-    }
+    resolve_params(
+        binding_name,
+        &binding.host,
+        &binding.port,
+        &binding.database,
+        &binding.username,
+        &password,
+        SslMode::Require,
+    )
 }
 
 /// Reads the raw password the GCP controller stored as the secret version's payload.
@@ -99,14 +89,6 @@ async fn read_password(
         .map_err(|error| AlienError::new(failed(format!("payload is not valid UTF-8: {error}"))))
 }
 
-impl Binding for CloudSqlPostgres {}
-
-impl Postgres for CloudSqlPostgres {
-    fn connection_params(&self) -> PostgresConnectionParams {
-        self.params.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,11 +131,10 @@ mod tests {
             .withf(|name| name == "pg-credentials/versions/latest")
             .returning(|_| Ok(response(Some("a!b*c'd(e)f@/"))));
 
-        let pg = CloudSqlPostgres::from_binding("db", &binding(), Arc::new(secrets))
+        let params = resolve("db", &binding(), Arc::new(secrets))
             .await
             .expect("cloud sql binding resolves");
 
-        let params = pg.connection_params();
         assert_eq!(params.host, "10.0.0.5");
         assert_eq!(params.port, 5432);
         assert_eq!(params.database, "app");
@@ -161,7 +142,7 @@ mod tests {
         assert_eq!(params.password, "a!b*c'd(e)f@/");
         assert_eq!(params.sslmode, SslMode::Require);
         assert_eq!(
-            pg.connection_string(),
+            params.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@10.0.0.5:5432/app?sslmode=require"
         );
     }
@@ -182,7 +163,7 @@ mod tests {
                 ))
             });
 
-        let error = CloudSqlPostgres::from_binding("db", &binding(), Arc::new(secrets))
+        let error = resolve("db", &binding(), Arc::new(secrets))
             .await
             .expect_err("a failed secret read must not resolve a connection");
 
@@ -206,7 +187,7 @@ mod tests {
                 .times(1)
                 .returning(move |_| Ok(response(stored)));
 
-            let error = CloudSqlPostgres::from_binding("db", &binding(), Arc::new(secrets))
+            let error = resolve("db", &binding(), Arc::new(secrets))
                 .await
                 .expect_err("an empty payload must not resolve a connection");
 
@@ -227,7 +208,7 @@ mod tests {
             "Fn::GetAtt": ["PgSecret", "Name"]
         }));
 
-        let error = CloudSqlPostgres::from_binding("db", &malformed, Arc::new(secrets))
+        let error = resolve("db", &malformed, Arc::new(secrets))
             .await
             .expect_err("an unresolved secret name must not resolve a connection");
 

@@ -27,7 +27,12 @@ export const container = factories.container
 /** Resolve the Postgres binding named `name`. */
 export const postgres = factories.postgres
 
-export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
+export {
+  AlienError,
+  BindingNotConfiguredError,
+  defineError,
+  UnknownPostgresSslModeError,
+} from "./errors.js"
 
 export type {
   Container,

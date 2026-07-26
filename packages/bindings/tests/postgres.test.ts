@@ -75,14 +75,6 @@ describe("postgres (inline-password providers)", () => {
     expect(connection.password).toBe(POSTGRES_FIXTURE.password)
   })
 
-  it("connectionString() matches the connection's connectionString", async () => {
-    const name = localName()
-
-    expect(await postgres(name).connectionString()).toBe(
-      (await postgres(name).connection()).connectionString,
-    )
-  })
-
   it("reports an unconfigured binding rather than resolving an empty connection", async () => {
     const error = await postgres("postgres-not-configured")
       .connection()

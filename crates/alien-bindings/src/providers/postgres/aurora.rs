@@ -9,50 +9,40 @@
 
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{resolve_params, resolve_secret_locator};
-use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
+use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_aws_clients::secrets_manager::{GetSecretValueRequest, SecretsManagerApi};
 use alien_core::bindings::AuroraPostgresBinding;
 use alien_error::{AlienError, Context};
 use std::sync::Arc;
 
-/// A resolved Aurora Postgres binding. Holds connection details only.
-#[derive(Debug)]
-pub struct AuroraPostgres {
-    params: PostgresConnectionParams,
-}
+/// Reads the password from Secrets Manager and resolves the connection parameters.
+///
+/// Aurora is dialed at the cluster **writer endpoint**, so `clusterEndpoint` — not a
+/// `host` field — becomes the connection host. TLS is required (`sslmode=require`).
+///
+/// Performs exactly one `GetSecretValue`; a failure is returned to the caller, which
+/// owns any retry policy.
+pub(crate) async fn resolve(
+    binding_name: &str,
+    binding: &AuroraPostgresBinding,
+    secrets: Arc<dyn SecretsManagerApi>,
+) -> Result<PostgresConnectionParams> {
+    let secret_arn = resolve_secret_locator(
+        binding_name,
+        "passwordSecretArn",
+        &binding.password_secret_arn,
+    )?;
+    let password = read_password(binding_name, &secret_arn, secrets.as_ref()).await?;
 
-impl AuroraPostgres {
-    /// Reads the password from Secrets Manager and resolves the connection parameters.
-    ///
-    /// Aurora is dialed at the cluster **writer endpoint**, so `clusterEndpoint` — not a
-    /// `host` field — becomes the connection host. TLS is required (`sslmode=require`).
-    ///
-    /// Performs exactly one `GetSecretValue`; a failure is returned to the caller, which
-    /// owns any retry policy.
-    pub async fn from_binding(
-        binding_name: &str,
-        binding: &AuroraPostgresBinding,
-        secrets: Arc<dyn SecretsManagerApi>,
-    ) -> Result<Self> {
-        let secret_arn = resolve_secret_locator(
-            binding_name,
-            "passwordSecretArn",
-            &binding.password_secret_arn,
-        )?;
-        let password = read_password(binding_name, &secret_arn, secrets.as_ref()).await?;
-
-        Ok(Self {
-            params: resolve_params(
-                binding_name,
-                &binding.cluster_endpoint,
-                &binding.port,
-                &binding.database,
-                &binding.username,
-                &password,
-                SslMode::Require,
-            )?,
-        })
-    }
+    resolve_params(
+        binding_name,
+        &binding.cluster_endpoint,
+        &binding.port,
+        &binding.database,
+        &binding.username,
+        &password,
+        SslMode::Require,
+    )
 }
 
 /// Reads the raw password the AWS controller stored as the secret's `SecretString`.
@@ -83,14 +73,6 @@ async fn read_password(
         .secret_string
         .filter(|password| !password.is_empty())
         .ok_or_else(|| AlienError::new(failed("secret has no SecretString value")))
-}
-
-impl Binding for AuroraPostgres {}
-
-impl Postgres for AuroraPostgres {
-    fn connection_params(&self) -> PostgresConnectionParams {
-        self.params.clone()
-    }
 }
 
 #[cfg(test)]
@@ -140,11 +122,10 @@ mod tests {
             })
             .returning(|_| Ok(response(Some("a!b*c'd(e)f@/"))));
 
-        let pg = AuroraPostgres::from_binding("db", &binding(), Arc::new(secrets))
+        let params = resolve("db", &binding(), Arc::new(secrets))
             .await
             .expect("aurora binding resolves");
 
-        let params = pg.connection_params();
         assert_eq!(
             params.host, "cluster.cluster-abc.us-east-1.rds.amazonaws.com",
             "Aurora dials the cluster writer endpoint, not a host field"
@@ -155,7 +136,7 @@ mod tests {
         assert_eq!(params.password, "a!b*c'd(e)f@/");
         assert_eq!(params.sslmode, SslMode::Require);
         assert_eq!(
-            pg.connection_string(),
+            params.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@\
              cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=require"
         );
@@ -174,7 +155,7 @@ mod tests {
             ))
         });
 
-        let error = AuroraPostgres::from_binding("db", &binding(), Arc::new(secrets))
+        let error = resolve("db", &binding(), Arc::new(secrets))
             .await
             .expect_err("a failed secret read must not resolve a connection");
 
@@ -196,7 +177,7 @@ mod tests {
                 .times(1)
                 .returning(move |_| Ok(response(stored)));
 
-            let error = AuroraPostgres::from_binding("db", &binding(), Arc::new(secrets))
+            let error = resolve("db", &binding(), Arc::new(secrets))
                 .await
                 .expect_err("an empty secret must not resolve a connection");
 
@@ -217,7 +198,7 @@ mod tests {
             "Fn::GetAtt": ["PgSecret", "Id"]
         }));
 
-        let error = AuroraPostgres::from_binding("db", &malformed, Arc::new(secrets))
+        let error = resolve("db", &malformed, Arc::new(secrets))
             .await
             .expect_err("an unresolved secret ARN must not resolve a connection");
 

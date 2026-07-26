@@ -13,7 +13,7 @@
  * correctly even when destructured off the handle (`const { get } = storage(x)`).
  */
 
-import { unwrapNapiError } from "./errors.js"
+import { AlienError, UnknownPostgresSslModeError, unwrapNapiError } from "./errors.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
@@ -186,12 +186,17 @@ const POSTGRES_SSL_MODES: readonly string[] = ["disable", "prefer", "require"]
  *
  * An unrecognized `sslmode` means the addon and this wrapper disagree about the
  * `SslMode` enum — a version skew that must fail loudly rather than produce a
- * connection with a silently wrong TLS posture.
+ * connection with a silently wrong TLS posture. It throws
+ * {@link UnknownPostgresSslModeError} so a caller can discriminate it by `code`;
+ * `guard` passes an `AlienError` through untouched.
  */
 function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
   if (!POSTGRES_SSL_MODES.includes(raw.sslmode)) {
-    throw new Error(
-      `@alienplatform/bindings received an unknown Postgres sslmode '${raw.sslmode}' from the native addon; expected one of ${POSTGRES_SSL_MODES.join(", ")}.`,
+    throw new AlienError(
+      UnknownPostgresSslModeError.create({
+        sslmode: raw.sslmode,
+        expected: [...POSTGRES_SSL_MODES],
+      }).toOptions(),
     )
   }
   const sslmode = raw.sslmode as PostgresSslMode
@@ -211,7 +216,6 @@ function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
   return {
     connection: (): Promise<PostgresConnection> =>
       guard(handle, async raw => toPostgresConnection(raw.connection())),
-    connectionString: () => guard(handle, async raw => raw.connection().connectionString),
   }
 }
 
