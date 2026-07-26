@@ -15,9 +15,13 @@
 //! without another secret read. A cloud handle therefore holds the password that was
 //! current when it was created; `BindingsProvider::load_postgres` deliberately does not
 //! cache it, so loading the binding again re-reads the secret and picks up a rotation.
+//! (The secret-store *client* is cached, so re-reading does not rebuild a connection
+//! pool — see `BindingsProvider::postgres_secret_client`.)
 
 #[cfg(feature = "aws")]
 pub(crate) mod aurora;
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+pub(crate) mod cloud;
 #[cfg(feature = "gcp")]
 pub(crate) mod cloud_sql;
 #[cfg(feature = "azure")]
@@ -28,35 +32,6 @@ use crate::error::{ErrorData, Result};
 use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_core::bindings::BindingValue;
 use alien_error::Context;
-
-/// A resolved cloud Postgres binding (Aurora, Cloud SQL, or Flexible Server).
-///
-/// The three backends differ only in *how* they reach their password — which secret
-/// store holds it and how its payload is decoded — never in what they hand back. Each
-/// module therefore exposes a `resolve` function returning the connection parameters,
-/// and they all share this one handle.
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-#[derive(Debug)]
-pub(crate) struct CloudPostgres {
-    params: PostgresConnectionParams,
-}
-
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-impl CloudPostgres {
-    pub(crate) fn new(params: PostgresConnectionParams) -> Self {
-        Self { params }
-    }
-}
-
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-impl crate::traits::Binding for CloudPostgres {}
-
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-impl crate::traits::Postgres for CloudPostgres {
-    fn connection_params(&self) -> PostgresConnectionParams {
-        self.params.clone()
-    }
-}
 
 /// Combines a binding's concrete connection fields with an already-resolved `password`.
 ///
@@ -101,28 +76,6 @@ pub(crate) fn resolve_params(
         password: password.to_string(),
         sslmode,
     })
-}
-
-/// Extracts a cloud variant's secret locator (ARN / name / URI) as a concrete string.
-///
-/// `field` is the camelCase binding field name, so the error names the key the user
-/// would actually look for in `ALIEN_<NAME>_BINDING`.
-///
-/// Gated on the cloud features because only the three cloud providers call it; a
-/// local-only build has no secret locator to resolve.
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub(crate) fn resolve_secret_locator(
-    binding_name: &str,
-    field: &str,
-    locator: &BindingValue<String>,
-) -> Result<String> {
-    locator
-        .clone()
-        .into_value(binding_name, field)
-        .context(ErrorData::config_invalid(
-            binding_name,
-            format!("Failed to extract '{field}' from Postgres binding"),
-        ))
 }
 
 #[cfg(test)]

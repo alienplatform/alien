@@ -5,7 +5,7 @@
 //! `postgres/data-access` permission set) and builds the connection parameters.
 
 use crate::error::{ErrorData, Result};
-use crate::providers::postgres::{resolve_params, resolve_secret_locator};
+use crate::providers::postgres::{cloud::resolve_secret_locator, resolve_params};
 use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_azure_clients::keyvault::KeyVaultSecretsApi;
 use alien_core::bindings::FlexibleServerPostgresBinding;

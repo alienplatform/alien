@@ -8,7 +8,7 @@
 //! client from the `vault` binding's `aws_parameter_store` provider.
 
 use crate::error::{ErrorData, Result};
-use crate::providers::postgres::{resolve_params, resolve_secret_locator};
+use crate::providers::postgres::{cloud::resolve_secret_locator, resolve_params};
 use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_aws_clients::secrets_manager::{GetSecretValueRequest, SecretsManagerApi};
 use alien_core::bindings::AuroraPostgresBinding;
