@@ -1937,7 +1937,7 @@ jobs:
         if: ${{ steps.verify_release.outputs.complete != 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: v${{ needs.prepare.outputs.version }}
           target_commitish: ${{ needs.prepare.outputs.release_commit }}
           name: Alien v${{ needs.prepare.outputs.version }}
