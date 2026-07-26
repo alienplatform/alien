@@ -22,6 +22,7 @@ import type {
   StorageEvent,
   StorageEventType,
 } from "@alienplatform/core"
+import { logSystemError } from "./system-log.js"
 
 // Re-export the canonical core event types for the facade to re-export.
 export type { StorageEvent, StorageEventType, ScheduledEvent, QueueMessage }
@@ -369,7 +370,7 @@ export function waitUntil(promise: Promise<unknown>): void {
   try {
     state.onTaskRegistered?.(tracker)
   } catch (error) {
-    console.error("[alien:wait-until] onTaskRegistered hook failed:", error)
+    logSystemError("[alien:wait-until] onTaskRegistered hook failed:", error)
   }
 }
 

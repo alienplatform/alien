@@ -175,7 +175,7 @@ impl OwnedOtlpLogger {
 
     /// Emits a captured stdout/stderr line through this logger's own provider.
     pub fn emit_log(&self, stream: &str, body: &str, timestamp_nanos: i64) {
-        emit_to_provider(&self.provider, stream, body, timestamp_nanos);
+        emit_to_provider(&self.provider, stream, body, timestamp_nanos, false);
     }
 
     /// Force-flushes this logger's own pending logs (used before shutdown).
@@ -301,6 +301,11 @@ pub fn init_otlp_logging_from_config(_config: OtlpConfig) -> Result<()> {
 /// This is used by embedded runtimes to send captured stdout/stderr from function processes.
 #[cfg(feature = "otlp")]
 pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
+    emit_captured_log(stream, body, timestamp_nanos, false);
+}
+
+#[cfg(feature = "otlp")]
+pub(crate) fn emit_captured_log(stream: &str, body: &str, timestamp_nanos: i64, is_system: bool) {
     // Get the global provider (initialized by init_otlp_logging)
     let provider = {
         let guard = OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned");
@@ -313,13 +318,19 @@ pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
         }
     };
 
-    emit_to_provider(&provider, stream, body, timestamp_nanos);
+    emit_to_provider(&provider, stream, body, timestamp_nanos, is_system);
 }
 
 /// Emits a single captured log line through a specific provider. Shared by the
 /// process-global [`emit_log`] and the per-caller [`OwnedOtlpLogger`].
 #[cfg(feature = "otlp")]
-fn emit_to_provider(provider: &SdkLoggerProvider, stream: &str, body: &str, timestamp_nanos: i64) {
+fn emit_to_provider(
+    provider: &SdkLoggerProvider,
+    stream: &str,
+    body: &str,
+    timestamp_nanos: i64,
+    is_system: bool,
+) {
     use opentelemetry::logs::{
         AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity,
     };
@@ -349,6 +360,12 @@ fn emit_to_provider(provider: &SdkLoggerProvider, stream: &str, body: &str, time
 
     // Add stream as attribute
     record.add_attribute("stream", AnyValue::String(stream.to_string().into()));
+    if is_system {
+        record.add_attribute(
+            alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE,
+            AnyValue::String("true".into()),
+        );
+    }
 
     // Emit the log record (batched by BatchLogProcessor)
     logger.emit(record);
@@ -358,6 +375,15 @@ fn emit_to_provider(provider: &SdkLoggerProvider, stream: &str, body: &str, time
 #[cfg(not(feature = "otlp"))]
 pub fn emit_log(_stream: &str, _body: &str, _timestamp_nanos: i64) {
     // No-op
+}
+
+#[cfg(not(feature = "otlp"))]
+pub(crate) fn emit_captured_log(
+    _stream: &str,
+    _body: &str,
+    _timestamp_nanos: i64,
+    _is_system: bool,
+) {
 }
 
 /// Flush all pending OTLP logs
