@@ -73,7 +73,7 @@ export class Worker {
   /**
    * Sets the memory allocated to the worker in megabytes (MB).
    * Constraints: 128‑32768 MB (platform-specific limits may apply).
-   * Default: 256 MB.
+   * Default: 512 MB.
    * @param mb The memory in MB.
    * @returns The Worker builder instance.
    */

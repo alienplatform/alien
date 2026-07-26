@@ -49,7 +49,7 @@ pub async fn test_queue(
     let payload =
         MessagePayload::Json(serde_json::json!({ "hello": "world", "binding": binding_name }));
     queue
-        .send(&binding_name, payload)
+        .send(payload)
         .await
         .into_alien_error()
         .context(ErrorData::QueueOperationFailed {
@@ -57,16 +57,17 @@ pub async fn test_queue(
         })?;
 
     // Receive up to 1 message
-    let messages = queue
-        .receive(&binding_name, 1)
-        .await
-        .into_alien_error()
-        .context(ErrorData::QueueOperationFailed {
-            operation: "Failed to receive message".to_string(),
-        })?;
+    let messages =
+        queue
+            .receive(1)
+            .await
+            .into_alien_error()
+            .context(ErrorData::QueueOperationFailed {
+                operation: "Failed to receive message".to_string(),
+            })?;
     if let Some(msg) = messages.into_iter().next() {
         queue
-            .ack(&binding_name, &msg.receipt_handle)
+            .ack(&msg.receipt_handle)
             .await
             .into_alien_error()
             .context(ErrorData::QueueOperationFailed {
@@ -122,7 +123,7 @@ pub async fn send_queue_message(
 
     let payload = MessagePayload::Json(serde_json::json!({ "marker": request.marker }));
     queue
-        .send(&binding_name, payload)
+        .send(payload)
         .await
         .into_alien_error()
         .context(ErrorData::QueueOperationFailed {

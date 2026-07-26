@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
-    runner::{RunnerPolicy, RunnerResult},
+    runner::{DelayStrategy, RunnerPolicy, RunnerResult},
     transport::DeploymentLoopTransport,
     ErrorData, Result,
 };
@@ -161,22 +161,20 @@ pub async fn run_setup_teardown_after_handoff(
         .await?;
 
         if let Some(delay_ms) = suggested_delay_ms {
-            if let Some(threshold) = policy.delay_threshold {
-                if Duration::from_millis(delay_ms) > threshold {
-                    debug!(
-                        deployment_id = %deployment_id,
-                        delay_ms = delay_ms,
-                        "Setup teardown step delay exceeds threshold; yielding"
-                    );
-                    return Ok(Some(RunnerResult {
-                        loop_result: LoopResult {
-                            stop_reason: LoopStopReason::Synced,
-                            outcome: LoopOutcome::Neutral,
-                            final_status: state.status,
-                        },
-                        steps_executed: step_count,
-                    }));
-                }
+            if policy.delay_strategy == DelayStrategy::Yield {
+                debug!(
+                    deployment_id = %deployment_id,
+                    delay_ms,
+                    "Setup teardown step requested a delay; yielding"
+                );
+                return Ok(Some(RunnerResult {
+                    loop_result: LoopResult {
+                        stop_reason: LoopStopReason::Delayed,
+                        outcome: LoopOutcome::Neutral,
+                        final_status: state.status,
+                    },
+                    steps_executed: step_count,
+                }));
             }
             sleep(Duration::from_millis(delay_ms)).await;
         }

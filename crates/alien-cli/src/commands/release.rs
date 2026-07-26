@@ -430,22 +430,6 @@ async fn release_task_core(
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
 
-            // Load push cache — maps content-hashed dir names to previously pushed URIs
-            let mut push_cache = load_push_cache(&output_dir, platform_str);
-
-            // Keep a copy of the stack before cache application so we can map
-            // original local paths → pushed URIs for cache updates later.
-            let pre_push_stack = built_stack.clone();
-
-            // Apply cached URIs to skip pushing already-pushed artifacts
-            let cache_hits = apply_push_cache(&mut built_stack, &push_cache);
-            if cache_hits > 0 {
-                info!(
-                    "   Skipping push for {} resource(s) (already pushed)",
-                    cache_hits
-                );
-            }
-
             // Get push settings per-platform — each cloud platform has its own
             // registry prefix (ECR, GAR, ACR, local Docker). In platform mode,
             // resolve_manager calls the platform API to get the per-project
@@ -458,6 +442,25 @@ async fn release_task_core(
                     .await?;
                 build_proxy_push_settings(&per_platform, &platform).await?
             };
+
+            // Load push cache — maps content-hashed dir names to previously pushed URIs.
+            // Cache entries are reusable only within the resolved destination repository;
+            // the same local build may be released to multiple managers or projects.
+            let mut push_cache = load_push_cache(&output_dir, platform_str);
+
+            // Keep a copy of the stack before cache application so we can map
+            // original local paths → pushed URIs for cache updates later.
+            let pre_push_stack = built_stack.clone();
+
+            // Apply cached URIs to skip pushing already-pushed artifacts.
+            let cache_hits =
+                apply_push_cache(&mut built_stack, &push_cache, &push_settings.repository);
+            if cache_hits > 0 {
+                info!(
+                    "   Skipping push for {} resource(s) (already pushed)",
+                    cache_hits
+                );
+            }
 
             info!("   Pushing images to {}...", push_settings.repository);
 
@@ -1632,7 +1635,7 @@ fn cache_key_from_path(path: &str) -> Option<String> {
 /// Apply cached push URIs to a stack, replacing local image paths with
 /// previously-pushed remote URIs where the content hash matches.
 /// Returns the number of cache hits.
-fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize {
+fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>, repository: &str) -> usize {
     if cache.is_empty() {
         return 0;
     }
@@ -1643,7 +1646,10 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
         if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
             if let WorkerCode::Image { ref image } = func.code {
                 if let Some(key) = cache_key_from_path(image) {
-                    if let Some(cached_uri) = cache.get(&key) {
+                    if let Some(cached_uri) = cache
+                        .get(&key)
+                        .filter(|uri| image_uri_belongs_to_repository(uri, repository))
+                    {
                         info!(
                             "Push cache hit for function '{}': {} → {}",
                             func.id, key, cached_uri
@@ -1658,7 +1664,10 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
         } else if let Some(container) = resource_entry.config.downcast_mut::<Container>() {
             if let ContainerCode::Image { ref image } = container.code {
                 if let Some(key) = cache_key_from_path(image) {
-                    if let Some(cached_uri) = cache.get(&key) {
+                    if let Some(cached_uri) = cache
+                        .get(&key)
+                        .filter(|uri| image_uri_belongs_to_repository(uri, repository))
+                    {
                         info!(
                             "Push cache hit for container '{}': {} → {}",
                             container.id, key, cached_uri
@@ -1673,7 +1682,10 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
         } else if let Some(daemon) = resource_entry.config.downcast_mut::<Daemon>() {
             if let DaemonCode::Image { ref image } = daemon.code {
                 if let Some(key) = cache_key_from_path(image) {
-                    if let Some(cached_uri) = cache.get(&key) {
+                    if let Some(cached_uri) = cache
+                        .get(&key)
+                        .filter(|uri| image_uri_belongs_to_repository(uri, repository))
+                    {
                         info!(
                             "Push cache hit for daemon '{}': {} → {}",
                             daemon.id, key, cached_uri
@@ -1689,6 +1701,12 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
     }
 
     hits
+}
+
+fn image_uri_belongs_to_repository(image_uri: &str, repository: &str) -> bool {
+    image_uri
+        .strip_prefix(repository)
+        .is_some_and(|suffix| suffix.starts_with(':') || suffix.starts_with('@'))
 }
 
 /// Collect pushed image URIs from the stack into the cache map.
@@ -1790,7 +1808,7 @@ mod tests {
             "operator-a1b2c3d4".to_string(),
             "registry.example.com/operator:tag".to_string(),
         )]);
-        let hits = apply_push_cache(&mut stack, &cache);
+        let hits = apply_push_cache(&mut stack, &cache, "registry.example.com/operator");
         assert_eq!(hits, 1, "daemon local path should hit the cache");
         let daemon = stack
             .resources()
@@ -1819,6 +1837,42 @@ mod tests {
             collected.get("operator-a1b2c3d4").map(String::as_str),
             Some("registry.example.com/operator:pushed")
         );
+    }
+
+    #[test]
+    fn push_cache_does_not_cross_destination_repositories() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let artifact_dir = local_dir.path().join("worker-a1b2c3d4");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let local_path = artifact_dir.to_string_lossy().into_owned();
+        let mut stack = Stack::new("cache-test".to_string())
+            .add(
+                Worker::new("worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: local_path.clone(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let cache = HashMap::from([(
+            "worker-a1b2c3d4".to_string(),
+            "manager.dev.example/artifacts-project-a:worker-tag".to_string(),
+        )]);
+
+        let hits = apply_push_cache(
+            &mut stack,
+            &cache,
+            "manager.prod.example/artifacts-project-b",
+        );
+
+        assert_eq!(hits, 0);
+        let worker = stack
+            .resources()
+            .find_map(|(_, entry)| entry.config.downcast_ref::<Worker>())
+            .expect("worker should exist");
+        assert_eq!(worker.code, WorkerCode::Image { image: local_path });
     }
 
     #[test]

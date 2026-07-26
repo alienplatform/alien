@@ -7,6 +7,7 @@ expression: stack
   "resources": {
     "my-bucket": {
       "config": {
+        "corsAllowedOrigins": [],
         "id": "my-bucket",
         "lifecycleRules": [],
         "publicRead": true,
@@ -33,7 +34,7 @@ expression: stack
             "type": "storage"
           }
         ],
-        "memoryMb": 256,
+        "memoryMb": 512,
         "permissions": "execution",
         "readinessProbe": null,
         "timeoutSeconds": 180,

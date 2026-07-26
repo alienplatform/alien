@@ -114,6 +114,14 @@ pub struct ReleaseRequest {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct RenewRequest {
+    pub deployment_id: String,
+    pub session: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentSyncRequest {
     pub deployment_id: String,
     /// Current deployment state as reported by the agent.
@@ -206,8 +214,52 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/sync/acquire", post(acquire))
         .route("/v1/sync/reconcile", post(reconcile))
+        .route("/v1/sync/renew", post(renew))
         .route("/v1/sync/release", post(release))
         .route("/v1/sync", post(agent_sync))
+}
+
+/// Renew an acquired deployment lease without writing deployment state.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/sync/renew",
+    tag = "sync",
+    request_body = RenewRequest,
+    responses(
+        (status = 200, description = "Deployment lease renewed")
+    ),
+    security(("bearer" = []))
+))]
+async fn renew(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RenewRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(error) => return error.into_response(),
+    };
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &req.deployment_id)
+        .await
+    {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if !state.authz.can_sync_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Access denied").into_response();
+    }
+
+    match state
+        .deployment_store
+        .renew_lease(&subject, &req.deployment_id, &req.session)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 /// Router for the `/v1/initialize` endpoint only.

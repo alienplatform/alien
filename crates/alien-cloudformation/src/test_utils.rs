@@ -144,7 +144,8 @@ where
 
 fn suppress_known_cfn_lint_false_positives(mut result: LinterRun) -> LinterRun {
     if matches!(result.status, LinterStatus::Failed(_))
-        && is_apigateway_tagresource_false_positive_only(&result.stdout)
+        && (is_apigateway_tagresource_false_positive_only(&result.stdout)
+            || is_nextgen_opensearch_schema_lag_only(&result.stdout))
     {
         result.status = LinterStatus::Passed;
     }
@@ -165,6 +166,30 @@ fn is_apigateway_tagresource_false_positive_only(stdout: &str) -> bool {
                 lines.next(),
                 Some(line) if line.starts_with("W3037 'tagresource' is not one of ")
             ) && matches!(lines.next(), Some(line) if line.contains("template.yaml:"))
+                && lines.next().is_none()
+        })
+}
+
+fn is_nextgen_opensearch_schema_lag_only(stdout: &str) -> bool {
+    let blocks = stdout
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>();
+
+    !blocks.is_empty()
+        && blocks.iter().all(|block| {
+            let mut lines = block.lines();
+            let known_error = matches!(
+                lines.next(),
+                Some(
+                    "E3006 Resource type 'AWS::OpenSearchServerless::CollectionGroup' does not exist in 'us-east-1'"
+                        | "E3002 Additional properties are not allowed ('CollectionGroupName' was unexpected)"
+                        | "E3002 Additional properties are not allowed ('EncryptionConfig' was unexpected)"
+                )
+            );
+            known_error
+                && matches!(lines.next(), Some(line) if line.contains("template.yaml:"))
                 && lines.next().is_none()
         })
 }
@@ -203,5 +228,22 @@ mod tests {
         });
 
         assert_eq!(result.status, LinterStatus::Failed(Some(4)));
+    }
+
+    #[test]
+    fn suppresses_only_nextgen_opensearch_schema_lag() {
+        let output = "E3006 Resource type 'AWS::OpenSearchServerless::CollectionGroup' does not exist in 'us-east-1'\n/tmp/.tmp123/template.yaml:12:5\n\n\
+E3002 Additional properties are not allowed ('CollectionGroupName' was unexpected)\n/tmp/.tmp123/template.yaml:24:7\n\n\
+E3002 Additional properties are not allowed ('EncryptionConfig' was unexpected)\n/tmp/.tmp123/template.yaml:27:7\n\n";
+
+        let result = suppress_known_cfn_lint_false_positives(LinterRun {
+            tool: "cfn-lint".to_string(),
+            command: "cfn-lint template.yaml".to_string(),
+            status: LinterStatus::Failed(Some(2)),
+            stdout: output.to_string(),
+            stderr: String::new(),
+        });
+
+        assert_eq!(result.status, LinterStatus::Passed);
     }
 }

@@ -133,15 +133,19 @@ async fn typescript_source_image_shapes_per_compute_type() {
     );
     install_sdk_package(&worker_dir);
 
-    // Container/Daemon: plain apps, compiled directly (no bootstrap, no SDK).
+    // Container/Daemon: direct-entrypoint apps. Link bindings explicitly so
+    // native-addon staging is deterministic even when Bun's global package
+    // cache happens to contain the package.
     let container_dir = src_root.path().join("container-app");
     write_project(
         &container_dir,
         "container-app",
         "console.log('container-app up');",
     );
+    install_bindings_package(&container_dir);
     let daemon_dir = src_root.path().join("daemon-app");
     write_project(&daemon_dir, "daemon-app", "console.log('daemon-app up');");
+    install_bindings_package(&daemon_dir);
 
     let worker = Worker::new("shape-worker".to_string())
         .code(WorkerCode::Source {
@@ -233,8 +237,14 @@ async fn typescript_source_image_shapes_per_compute_type() {
     );
     assert_eq!(
         worker_meta.cmd.as_deref(),
-        Some(&["--".to_string(), "./worker-bin".to_string()][..]),
-        "Worker CMD must be the -- separator plus the app binary"
+        Some(
+            &[
+                "--".to_string(),
+                "/usr/local/bin/bun".to_string(),
+                "./worker-bin.js".to_string(),
+            ][..]
+        ),
+        "TypeScript Worker CMD must run its bundle through Bun from the language base"
     );
 
     // Container/Daemon images: the compiled binary IS the entrypoint.
