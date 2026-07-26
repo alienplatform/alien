@@ -15,6 +15,10 @@
     "./native": {
       "types": "./dist/native.d.ts",
       "import": "./dist/native.js"
+    },
+    "./native-bindings": {
+      "types": "./dist/native-bindings.d.ts",
+      "import": "./dist/native-bindings.js"
     }
   },
   "scripts": {

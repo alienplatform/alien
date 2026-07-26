@@ -75,6 +75,11 @@ const WORKER_NATIVE_INSTALL_SNIPPET: &str =
     "import { installEmbeddedAddon } from \"@alienplatform/sdk/native\"\ninstallEmbeddedAddon()\n";
 const DIRECT_NATIVE_INSTALL_SNIPPET: &str =
     "import { installEmbeddedAddon } from \"@alienplatform/bindings/native\"\ninstallEmbeddedAddon()\n";
+/// A bundled Worker resolves its gateway launcher from the versioned base image,
+/// so it registers only the bindings addon: the SDK's `./native` bridge would also
+/// register a `.bin` asset path that no bundle packages, shadowing that lookup.
+const WORKER_BUNDLE_NATIVE_INSTALL_SNIPPET: &str =
+    "import { installEmbeddedAddon } from \"@alienplatform/sdk/native-bindings\"\ninstallEmbeddedAddon()\n";
 
 /// Rewrite a user entry point (relative to `src_dir`) into an import specifier
 /// usable from a generated file under `src_dir/.alien-build/`.
@@ -279,6 +284,7 @@ impl TypeScriptToolchain {
         user_entry_point: &str,
         output_dir: &Path,
         embed_native: bool,
+        bundle_for_worker_base: bool,
     ) -> Result<PathBuf> {
         // Create the bootstrap directory
         fs::create_dir_all(output_dir)
@@ -299,10 +305,10 @@ impl TypeScriptToolchain {
         // install line is present only when the binary embeds the addon, and a
         // Worker reaches it through the SDK's `./native` bridge (the Worker
         // cannot resolve `@alienplatform/bindings/native` directly).
-        let native_install = if embed_native {
-            WORKER_NATIVE_INSTALL_SNIPPET
-        } else {
-            ""
+        let native_install = match (embed_native, bundle_for_worker_base) {
+            (false, _) => "",
+            (true, true) => WORKER_BUNDLE_NATIVE_INSTALL_SNIPPET,
+            (true, false) => WORKER_NATIVE_INSTALL_SNIPPET,
         };
         let bootstrap_code = BOOTSTRAP_TEMPLATE
             .replace("__NATIVE_INSTALL__", native_install)
@@ -489,7 +495,13 @@ impl Toolchain for TypeScriptToolchain {
             // resolve node_modules; it is cleaned up after the build.
             let bootstrap_dir = src_dir.join(".alien-build");
             let bootstrap_path = self
-                .generate_bootstrap_wrapper(&src_dir, &entry_point, &bootstrap_dir, embed_native)
+                .generate_bootstrap_wrapper(
+                    &src_dir,
+                    &entry_point,
+                    &bootstrap_dir,
+                    embed_native,
+                    bundle_for_worker_base,
+                )
                 .await?;
             (bootstrap_path, Some(bootstrap_dir))
         } else if let Some(staged_addon) = &staged {

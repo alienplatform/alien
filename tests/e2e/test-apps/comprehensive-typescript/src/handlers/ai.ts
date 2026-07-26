@@ -76,7 +76,10 @@ app.get("/ai-test", async c => {
       results,
     })
   } catch (error) {
-    const alienErr = error instanceof AlienError ? error.toExternal() : { message: String(error) }
+    // toOptions(), not toExternal(): the harness reads this body to report why the
+    // check failed, and sanitizing an internal error to "Internal server error"
+    // leaves a cloud-only failure with no way to name itself.
+    const alienErr = error instanceof AlienError ? error.toOptions() : { message: String(error) }
     return c.json({ injected: false, error: alienErr }, 500)
   }
 })
