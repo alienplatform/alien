@@ -72,26 +72,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # gateway_target/gateway_artifact drive the alien-ai-gateway launcher
+          # binary built alongside the addon: darwin legs share the addon's
+          # target; linux legs build it statically against musl, so one binary
+          # (per arch) serves both the glibc and Alpine prebuild packages.
           - runner: depot-macos-15
             os: macos
             target: aarch64-apple-darwin
             triple: darwin-arm64
             expect_arch: arm64
+            gateway_target: aarch64-apple-darwin
+            gateway_artifact: darwin-arm64
           - runner: depot-macos-15
             os: macos
             target: x86_64-apple-darwin
             triple: darwin-x64
             expect_arch: x86_64
+            gateway_target: x86_64-apple-darwin
+            gateway_artifact: darwin-x64
           - runner: depot-ubuntu-24.04-16
             os: linux
             target: x86_64-unknown-linux-gnu
             triple: linux-x64-gnu
             expect_arch: x86-64
+            gateway_target: x86_64-unknown-linux-musl
+            gateway_artifact: linux-x64
           - runner: depot-ubuntu-24.04-arm-16
             os: linux
             target: aarch64-unknown-linux-gnu
             triple: linux-arm64-gnu
             expect_arch: aarch64
+            gateway_target: aarch64-unknown-linux-musl
+            gateway_artifact: linux-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -170,6 +182,28 @@ jobs:
           retention-days: 1
           path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
 
+      # The AI gateway ships as a standalone launcher binary, not an addon. It
+      # reuses this matrix (same runners/toolchains; it depends on
+      # alien-bindings' credential resolver, so protoc is already set up).
+      - name: Add gateway build target (${{ matrix.gateway_target }})
+        run: rustup target add ${{ matrix.gateway_target }}
+
+      - name: Build ai-gateway binary (${{ matrix.gateway_artifact }})
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          cargo build --release -p alien-ai-gateway --bin alien-ai-gateway \
+            --target ${{ matrix.gateway_target }}
+
+      - name: Assert ai-gateway binary architecture
+        run: file "target/${{ matrix.gateway_target }}/release/alien-ai-gateway" | grep -q "${{ matrix.expect_arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-dev-gateway-${{ matrix.gateway_artifact }}
+          retention-days: 1
+          path: target/${{ matrix.gateway_target }}/release/alien-ai-gateway
+
   pack-and-publish:
     needs: [prepare, build-addon]
     runs-on: depot-ubuntu-24.04-arm-4
@@ -217,10 +251,36 @@ jobs:
               "packages/bindings/npm/${triple}/alien-bindings-node.${triple}.node"
           done
 
+      - name: Restore gateway binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-dev-gateway-*
+          path: gateway-bins
+
+      # The linux binaries are static musl builds, so a triple's gnu and musl
+      # packages ship the same executable. Artifact download drops the execute
+      # bit; restore it so npm packs the binary runnable. Runs before the
+      # rewrite, which stamps these generated manifests with the dev version.
+      - name: Stage gateway binaries into prebuild packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          node packages/ai-gateway/scripts/generate-prebuilds.mjs
+          for pair in darwin-arm64:darwin-arm64 darwin-x64:darwin-x64 \
+                      linux-x64-gnu:linux-x64 linux-x64-musl:linux-x64 \
+                      linux-arm64-gnu:linux-arm64 linux-arm64-musl:linux-arm64; do
+            triple="${pair%%:*}"
+            source="${pair##*:}"
+            cp "gateway-bins/npm-dev-gateway-${source}/alien-ai-gateway" \
+              "packages/ai-gateway/npm/${triple}/alien-ai-gateway"
+            chmod 755 "packages/ai-gateway/npm/${triple}/alien-ai-gateway"
+          done
+
       - name: Rewrite package graph to immutable dev versions
         run: |
           node .npm-dev-tools/scripts/npm-dev-release.mjs rewrite "${{ needs.prepare.outputs.git_sha }}" | tee npm-dev-versions.json
           node packages/bindings/scripts/inject-optional-deps.mjs
+          node packages/ai-gateway/scripts/inject-optional-deps.mjs
           node .npm-dev-tools/scripts/npm-dev-release.mjs validate "${{ needs.prepare.outputs.git_sha }}"
           {
             echo '## npm dev package versions'
@@ -242,6 +302,7 @@ jobs:
           packages/core
           packages/commands
           packages/bindings
+          packages/ai-gateway
           packages/sdk
           packages/testing
           client-sdks/platform/typescript
@@ -250,6 +311,12 @@ jobs:
           packages/bindings/npm/darwin-x64
           packages/bindings/npm/linux-x64-gnu
           packages/bindings/npm/linux-arm64-gnu
+          packages/ai-gateway/npm/darwin-arm64
+          packages/ai-gateway/npm/darwin-x64
+          packages/ai-gateway/npm/linux-x64-gnu
+          packages/ai-gateway/npm/linux-x64-musl
+          packages/ai-gateway/npm/linux-arm64-gnu
+          packages/ai-gateway/npm/linux-arm64-musl
           EOF
           node .npm-dev-tools/scripts/npm-dev-release.mjs digest npm-dev-tarballs/*.tgz | tee npm-dev-digests.json
           {
@@ -266,12 +333,14 @@ jobs:
           consumer="$(mktemp -d)"
           npm init --yes --prefix "$consumer" >/dev/null
           case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) native_package_prefix=alienplatform-bindings-linux-x64-gnu ;;
-            Linux-aarch64) native_package_prefix=alienplatform-bindings-linux-arm64-gnu ;;
-            Darwin-x86_64) native_package_prefix=alienplatform-bindings-darwin-x64 ;;
-            Darwin-arm64) native_package_prefix=alienplatform-bindings-darwin-arm64 ;;
+            Linux-x86_64) host_triple=linux-x64-gnu ;;
+            Linux-aarch64) host_triple=linux-arm64-gnu ;;
+            Darwin-x86_64) host_triple=darwin-x64 ;;
+            Darwin-arm64) host_triple=darwin-arm64 ;;
             *) echo "Unsupported smoke-test platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
           esac
+          native_package_prefix="alienplatform-bindings-${host_triple}"
+          gateway_package_prefix="alienplatform-ai-gateway-${host_triple}"
           tarballs=("$GITHUB_WORKSPACE"/npm-dev-tarballs/*.tgz)
           install_tarballs=()
           for tarball in "${tarballs[@]}"; do
@@ -279,6 +348,11 @@ jobs:
             case "$filename" in
               alienplatform-bindings-darwin-arm64-*.tgz|alienplatform-bindings-darwin-x64-*.tgz|alienplatform-bindings-linux-x64-gnu-*.tgz|alienplatform-bindings-linux-arm64-gnu-*.tgz)
                 [[ "$filename" == "$native_package_prefix"-*.tgz ]] && install_tarballs+=("$tarball")
+                ;;
+              # Platform packages for other hosts carry os/cpu/libc selectors npm
+              # would refuse; install only the one this runner can execute.
+              alienplatform-ai-gateway-darwin-arm64-*.tgz|alienplatform-ai-gateway-darwin-x64-*.tgz|alienplatform-ai-gateway-linux-x64-gnu-*.tgz|alienplatform-ai-gateway-linux-x64-musl-*.tgz|alienplatform-ai-gateway-linux-arm64-gnu-*.tgz|alienplatform-ai-gateway-linux-arm64-musl-*.tgz)
+                [[ "$filename" == "$gateway_package_prefix"-*.tgz ]] && install_tarballs+=("$tarball")
                 ;;
               *) install_tarballs+=("$tarball") ;;
             esac
@@ -341,15 +415,32 @@ jobs:
           }
 
           # Native packages and leaf dependencies first; public entry points last.
+          published=()
           for pattern in \
             '*bindings-darwin-arm64*' '*bindings-darwin-x64*' \
             '*bindings-linux-x64-gnu*' '*bindings-linux-arm64-gnu*' \
-            '*core*' '*bindings-[0-9]*' '*commands*' '*sdk*' '*testing*' \
+            '*ai-gateway-darwin-arm64*' '*ai-gateway-darwin-x64*' \
+            '*ai-gateway-linux-x64-gnu*' '*ai-gateway-linux-x64-musl*' \
+            '*ai-gateway-linux-arm64-gnu*' '*ai-gateway-linux-arm64-musl*' \
+            '*core*' '*ai-gateway-[0-9]*' '*bindings-[0-9]*' '*commands*' '*sdk*' '*testing*' \
             '*platform-api*' '*manager-api*'; do
             mapfile -t matches < <(compgen -G "npm-dev-tarballs/${pattern}.tgz" || true)
             test "${#matches[@]}" -gt 0 || continue
-            for tarball in "${matches[@]}"; do publish_tarball "$tarball"; done
+            for tarball in "${matches[@]}"; do
+              publish_tarball "$tarball"
+              published+=("$(basename "$tarball")")
+            done
           done
+
+          # The pattern list above is an allowlist, so a package added to the pack step but
+          # not to it would be packed and then silently never published.
+          missing="$(comm -23 \
+            <(cd npm-dev-tarballs && ls -- *.tgz | sort) \
+            <(printf '%s\n' ${published[@]+"${published[@]}"} | sort -u))"
+          if [ -n "$missing" ]; then
+            echo "::error::packed but never published: $(tr '\n' ' ' <<< "$missing")"
+            exit 1
+          fi
 
       - name: Upload package evidence
         uses: actions/upload-artifact@v4
