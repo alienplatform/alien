@@ -108,8 +108,23 @@ jobs:
             exit 1
           fi
 
-          echo "Publishing merged release v${VERSION}"
+          RELEASE_COMMIT=""
+          while read -r COMMIT; do
+            COMMIT_VERSION=$(git show "${COMMIT}:Cargo.toml" | sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+            if [ "$COMMIT_VERSION" = "$VERSION" ]; then
+              RELEASE_COMMIT="$COMMIT"
+              break
+            fi
+          done < <(git rev-list --reverse "${LATEST_TAG}..HEAD")
+
+          if [ -z "$RELEASE_COMMIT" ]; then
+            echo "::error::Could not find the merged commit that introduced v${VERSION}"
+            exit 1
+          fi
+
+          echo "Publishing merged release v${VERSION} from ${RELEASE_COMMIT}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Set workspace Cargo version
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
@@ -212,6 +227,7 @@ jobs:
         env:
           VERSION: ${{ steps.merged_version.outputs.version }}
         run: |
+          git checkout --detach "${{ steps.merged_version.outputs.commit }}"
           for pkg in packages/core packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
@@ -228,7 +244,7 @@ jobs:
         if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
         run: |
           VERSION="${{ steps.merged_version.outputs.version }}"
-          git tag "v${VERSION}"
+          git tag "v${VERSION}" "${{ steps.merged_version.outputs.commit }}"
           git push origin "v${VERSION}"
 
       - name: Select downstream release state
