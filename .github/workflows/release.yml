@@ -498,20 +498,44 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p qualified/crates
+          crates_io_user_agent="Alien release workflow (https://github.com/alienplatform/alien)"
           wait_for_crates_io_index() {
             local crate=$1 expected_checksum=$2 index_path published_checksum
+            local index_response index_status
             case "${#crate}" in
               1) index_path="1/${crate}" ;;
               2) index_path="2/${crate}" ;;
               3) index_path="3/${crate:0:1}/${crate}" ;;
               *) index_path="${crate:0:2}/${crate:2:2}/${crate}" ;;
             esac
+            index_response="crates-io-index-${crate}.json"
             for attempt in $(seq 1 30); do
-              published_checksum=$(curl --fail --silent --show-error \
-                "https://index.crates.io/${index_path}" 2>/dev/null |
-                jq -s -r --arg version "$VERSION" \
-                  'map(select(.vers == $version)) | last | .cksum // empty' ||
-                true)
+              if ! index_status=$(curl \
+                --user-agent "$crates_io_user_agent" \
+                --silent --show-error \
+                --output "$index_response" \
+                --write-out '%{http_code}' \
+                "https://index.crates.io/${index_path}"); then
+                echo "crates.io index request failed for ${crate}; retrying"
+                sleep 10
+                continue
+              fi
+              if [ "$index_status" = "200" ]; then
+                if ! published_checksum=$(jq -s -e -r \
+                  --arg version "$VERSION" \
+                  'map(select(.vers == $version)) | last | .cksum // ""' \
+                  "$index_response"); then
+                  echo "crates.io index returned malformed data for ${crate}; retrying"
+                  sleep 10
+                  continue
+                fi
+              elif [ "$index_status" = "404" ]; then
+                published_checksum=""
+              else
+                echo "crates.io index returned HTTP ${index_status} for ${crate}; retrying"
+                sleep 10
+                continue
+              fi
               if [ "$published_checksum" = "$expected_checksum" ]; then
                 echo "${crate}@${VERSION} is available in the crates.io index"
                 return 0
@@ -573,9 +597,28 @@ jobs:
             depot cargo package -p "$crate" --no-verify
             package="target/package/${crate}-${VERSION}.crate"
             checksum=$(sha256sum "$package" | awk '{print $1}')
-            published_checksum=$(curl --fail --silent --show-error \
-              "https://crates.io/api/v1/crates/${crate}/${VERSION}" |
-              jq -r '.version.checksum // empty' 2>/dev/null || true)
+            metadata_response="crates-io-metadata-${crate}.json"
+            if ! metadata_status=$(curl \
+              --user-agent "$crates_io_user_agent" \
+              --silent --show-error \
+              --output "$metadata_response" \
+              --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/${crate}/${VERSION}"); then
+              echo "::error::Unable to query crates.io for ${crate}@${VERSION}"
+              exit 1
+            fi
+            if [ "$metadata_status" = "200" ]; then
+              if ! published_checksum=$(jq -e -r '.version.checksum' \
+                "$metadata_response"); then
+                echo "::error::crates.io returned malformed metadata for ${crate}@${VERSION}"
+                exit 1
+              fi
+            elif [ "$metadata_status" = "404" ]; then
+              published_checksum=""
+            else
+              echo "::error::crates.io returned HTTP ${metadata_status} for ${crate}@${VERSION}"
+              exit 1
+            fi
             if [ -n "$published_checksum" ]; then
               if [ "$published_checksum" != "$checksum" ]; then
                 echo "::error::${crate}@${VERSION} exists with a different checksum"
