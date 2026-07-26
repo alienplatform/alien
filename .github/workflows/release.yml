@@ -574,6 +574,7 @@ jobs:
                 exit 1
               fi
               echo "${crate}@${VERSION} already matches the qualified package"
+              wait_for_crates_io_index "$crate" "$checksum"
               continue
             fi
 
