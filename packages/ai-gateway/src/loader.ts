@@ -9,13 +9,15 @@
  *      we copy it to a real, executable temp file once.
  *   2. `ALIEN_AI_GATEWAY_BINARY_PATH`: an explicit path (dev/test escape hatch;
  *      never set in published installs).
- *   3. The per-platform prebuild package `@alienplatform/ai-gateway-<triple>`,
+ *   3. `./alien-ai-gateway` in the working directory: the versioned Worker base
+ *      stages it there for bundled Workers, which have no node_modules.
+ *   4. The per-platform prebuild package `@alienplatform/ai-gateway-<triple>`,
  *      which ships the executable (installed via `optionalDependencies`).
- *   4. Dev fallback: the locally-built binary under `target/{release,debug}`,
+ *   5. Dev fallback: the locally-built binary under `target/{release,debug}`,
  *      found by walking up from this module.
  */
 
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -114,6 +116,16 @@ export async function resolveGatewayBinary(): Promise<string> {
     return cached
   }
 
+  // A bundled Worker's cwd is where the base image stages the launcher (see the
+  // worker Dockerfile), and it has no node_modules for the prebuild route below.
+  // Size-checked: the base-image build substitutes an empty placeholder for a
+  // skipped architecture, and spawning that fails with a far worse error.
+  const staged = resolve(BINARY_NAME)
+  if (existsSync(staged) && statSync(staged).size > 0) {
+    cached = ensureExecutable(staged)
+    return cached
+  }
+
   const triple = platformTriple()
   const prebuild = await resolvePrebuild(triple)
   if (prebuild) {
@@ -130,7 +142,7 @@ export async function resolveGatewayBinary(): Promise<string> {
   throw new AlienError(
     GatewayBinaryUnavailableError.create({
       triple,
-      reason: `no embedded binary, no ALIEN_AI_GATEWAY_BINARY_PATH, no '@alienplatform/ai-gateway-${triple}' prebuild, and no locally-built target/{release,debug}/${BINARY_NAME}; build it with \`cargo build --bin ${BINARY_NAME} -p alien-ai-gateway\``,
+      reason: `no embedded binary, no ALIEN_AI_GATEWAY_BINARY_PATH, no ./${BINARY_NAME} staged by the worker base, no '@alienplatform/ai-gateway-${triple}' prebuild, and no locally-built target/{release,debug}/${BINARY_NAME}; build it with \`cargo build --bin ${BINARY_NAME} -p alien-ai-gateway\``,
     }),
   )
 }

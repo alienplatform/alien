@@ -518,6 +518,7 @@ jobs:
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-worker-runtime")
+            PACKAGES+=("-p" "alien-ai-gateway")
           fi
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
@@ -552,6 +553,13 @@ jobs:
         with:
           name: alien-worker-runtime-x86_64
           path: target/x86_64-unknown-linux-musl/release/alien-worker-runtime
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v6
+        if: needs.compute-matrix.outputs.build_base_image == 'true'
+        with:
+          name: alien-ai-gateway-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-ai-gateway
           retention-days: 1
 
       - uses: actions/upload-artifact@v6
@@ -608,6 +616,7 @@ jobs:
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-worker-runtime")
+            PACKAGES+=("-p" "alien-ai-gateway")
           fi
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
@@ -645,6 +654,13 @@ jobs:
           retention-days: 1
 
       - uses: actions/upload-artifact@v6
+        if: needs.compute-matrix.outputs.build_base_image == 'true'
+        with:
+          name: alien-ai-gateway-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-ai-gateway
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v6
         if: needs.compute-matrix.outputs.build_operator_image == 'true'
         with:
           name: alien-operator-aarch64
@@ -674,9 +690,21 @@ jobs:
           path: target/x86_64-unknown-linux-musl/release/
 
       - uses: actions/download-artifact@v7
+        if: needs.build-x86_64.result == 'success'
+        with:
+          name: alien-ai-gateway-x86_64
+          path: target/x86_64-unknown-linux-musl/release/
+
+      - uses: actions/download-artifact@v7
         if: needs.build-aarch64.result == 'success'
         with:
           name: alien-worker-runtime-aarch64
+          path: target/aarch64-unknown-linux-musl/release/
+
+      - uses: actions/download-artifact@v7
+        if: needs.build-aarch64.result == 'success'
+        with:
+          name: alien-ai-gateway-aarch64
           path: target/aarch64-unknown-linux-musl/release/
 
       - uses: actions/download-artifact@v7
@@ -698,6 +726,8 @@ jobs:
           # Create empty placeholder binaries for skipped architectures
           [ ! -f target/x86_64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-worker-runtime
           [ ! -f target/aarch64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-worker-runtime
+          [ ! -f target/x86_64-unknown-linux-musl/release/alien-ai-gateway ] && touch target/x86_64-unknown-linux-musl/release/alien-ai-gateway
+          [ ! -f target/aarch64-unknown-linux-musl/release/alien-ai-gateway ] && touch target/aarch64-unknown-linux-musl/release/alien-ai-gateway
           chmod +x target/*/release/alien-worker-runtime
 
       - name: Ensure Worker addon paths exist

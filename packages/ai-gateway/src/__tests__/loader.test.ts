@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -32,6 +34,18 @@ describe("resolveGatewayBinary", () => {
   it("uses ALIEN_AI_GATEWAY_BINARY_PATH when set", async () => {
     vi.stubEnv("ALIEN_AI_GATEWAY_BINARY_PATH", "/custom/alien-ai-gateway")
     expect(await resolveGatewayBinary()).toBe("/custom/alien-ai-gateway")
+  })
+
+  it("resolves a launcher staged in the working directory ahead of later routes", async () => {
+    const staged = mkdtempSync(join(tmpdir(), "alien-gw-staged-"))
+    writeFileSync(join(staged, "alien-ai-gateway"), "#!/bin/sh\nexit 0\n")
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(staged)
+    try {
+      expect(await resolveGatewayBinary()).toBe(join(staged, "alien-ai-gateway"))
+    } finally {
+      cwd.mockRestore()
+      rmSync(staged, { recursive: true, force: true })
+    }
   })
 
   it("extracts a registered embedded binary to a runnable file (compiled Worker path)", async () => {
