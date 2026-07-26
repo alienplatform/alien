@@ -13,6 +13,10 @@ on:
         type: choice
         default: prepare
         options: [prepare, publish]
+      release_branch:
+        description: Linear-derived branch name for the version PR (prepare only)
+        type: string
+        default: ""
       source_ref:
         description: Exact 40-character source commit for dev npm packages
         type: string
@@ -193,8 +197,13 @@ jobs:
         if: ${{ inputs.stable_action == 'prepare' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
+          if ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$RELEASE_BRANCH"; then
+            echo "::error::release_branch must be the Linear-derived branch for the release issue"
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml packages/core/package.json packages/commands/package.json \
@@ -204,7 +213,7 @@ jobs:
             packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
             packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json
           git commit -m "chore: release v${VERSION}"
-          BRANCH="release/v${VERSION}"
+          BRANCH="$RELEASE_BRANCH"
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url')
             if [ -z "$PR_URL" ]; then
