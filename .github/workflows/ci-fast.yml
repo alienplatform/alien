@@ -136,7 +136,7 @@ jobs:
           # it. Skip tests with `--filter-expr` instead: the package still compiles, so
           # a break in it fails this job. `alien-test-server` (the default app for the
           # manually dispatched e2e-cloud workflow, and so not built anywhere else) sat
-          # broken for over a month behind `--exclude` exactly this way — see ALIEN-335.
+          # broken behind `--exclude` exactly this way from #169 until ALIEN-335 found it.
           #
           # `alien-test-server` has no Rust unit tests; it is filtered out rather than
           # merely uncovered so that tests added to it later don't start running here by
