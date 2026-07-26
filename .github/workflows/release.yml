@@ -509,21 +509,33 @@ jobs:
             alien-sdk \
             alien-commands \
             alien-commands-client; do
-            echo "Packaging $crate..."
-            depot cargo package -p "$crate" --no-verify
-            package="target/package/${crate}-${VERSION}.crate"
-
             if [ "${{ inputs.stable_action }}" = "qualification" ]; then
-              cp "$package" qualified/crates/
+              echo "Recording package inputs for $crate..."
+              depot cargo package -p "$crate" --list |
+                LC_ALL=C sort > "qualified/crates/${crate}-${VERSION}.files"
               continue
             fi
 
-            checksum=$(sha256sum "$package" | awk '{print $1}')
-            qualified_checksum=$(sha256sum "qualified/crates/${crate}-${VERSION}.crate" | awk '{print $1}')
-            if [ "$checksum" != "$qualified_checksum" ]; then
-              echo "::error::${crate}@${VERSION} does not match its qualified package"
+            depot cargo package -p "$crate" --list |
+              LC_ALL=C sort > "${crate}-${VERSION}.files"
+            if ! cmp -s \
+              "${crate}-${VERSION}.files" \
+              "qualified/crates/${crate}-${VERSION}.files"; then
+              echo "::error::${crate}@${VERSION} package inputs differ from qualification"
+              diff -u \
+                "qualified/crates/${crate}-${VERSION}.files" \
+                "${crate}-${VERSION}.files" || true
               exit 1
             fi
+
+            # Cargo validates normalized registry dependencies while assembling
+            # the archive. A dependent crate cannot be packaged until the
+            # qualified prerequisite version exists in crates.io, so final
+            # assembly happens here in dependency order.
+            echo "Packaging $crate..."
+            depot cargo package -p "$crate" --no-verify
+            package="target/package/${crate}-${VERSION}.crate"
+            checksum=$(sha256sum "$package" | awk '{print $1}')
             published_checksum=$(curl --fail --silent --show-error \
               "https://crates.io/api/v1/crates/${crate}/${VERSION}" |
               jq -r '.version.checksum // empty' 2>/dev/null || true)
