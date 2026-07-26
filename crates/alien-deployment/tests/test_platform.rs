@@ -1455,7 +1455,11 @@ async fn test_deleted_is_noop() {
 /// F) Live gating flow tests
 
 /// A deployer-provided boolean gate input with a declared default of true.
-fn boolean_gate_input(id: &str, label: &str, description: &str) -> alien_core::StackInputDefinition {
+fn boolean_gate_input(
+    id: &str,
+    label: &str,
+    description: &str,
+) -> alien_core::StackInputDefinition {
     alien_core::StackInputDefinition::deployer_boolean(id, label, description, Some(true))
 }
 
@@ -1483,8 +1487,7 @@ fn create_live_gated_stack(stack_id: &str, store_id: &str, function_id: &str) ->
 
 fn config_with_store_enabled(enabled: bool) -> DeploymentConfig {
     let mut config = create_test_config("hash_v1", false);
-    config.input_values =
-        HashMap::from([("storeEnabled".to_string(), serde_json::json!(enabled))]);
+    config.input_values = HashMap::from([("storeEnabled".to_string(), serde_json::json!(enabled))]);
     config
 }
 

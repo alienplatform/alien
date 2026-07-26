@@ -1325,6 +1325,35 @@
         ]
       }
     },
+    "/v1/sync/renew": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Renew an acquired deployment lease without writing deployment state.",
+        "operationId": "renew",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment lease renewed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/whoami": {
       "get": {
         "tags": [
@@ -5460,6 +5489,11 @@
               "mode"
             ],
             "properties": {
+              "failure_domains": {
+                "$ref": "#/components/schemas/FailureDomainSelection",
+                "description": "Optional failure-domain policy. Absence preserves the existing aggregate layout.",
+                "nullable": true
+              },
               "machine": {
                 "type": "string",
                 "description": "Provider machine type selected for this deployment.",
@@ -5488,6 +5522,11 @@
               "mode"
             ],
             "properties": {
+              "failure_domains": {
+                "$ref": "#/components/schemas/FailureDomainSelection",
+                "description": "Optional failure-domain policy. Absence preserves the existing aggregate layout.",
+                "nullable": true
+              },
               "machine": {
                 "type": "string",
                 "description": "Provider machine type selected for this deployment.",
@@ -6279,6 +6318,28 @@
           "http",
           "tcp"
         ]
+      },
+      "FailureDomainSelection": {
+        "type": "object",
+        "description": "Failure-domain policy selected for a compute pool.",
+        "required": [
+          "spread"
+        ],
+        "properties": {
+          "selectedFailureDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Concrete provider domains selected during setup.\nEmpty delegates deterministic selection to the provider setup implementation."
+          },
+          "spread": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of distinct failure domains across which new stateful replicas may be spread.",
+            "minimum": 0
+          }
+        }
       },
       "GcpArtifactRegistryHeartbeatData": {
         "type": "object",
@@ -11724,6 +11785,21 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "RenewRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "session"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
           }
         }
       },

@@ -620,7 +620,7 @@ fn environment_collection_context(
 mod tests {
     use super::*;
     use alien_core::{
-        Kv, KubernetesClientConfig, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
+        KubernetesClientConfig, Kv, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
         StackInputDefinition, StackResourceState,
     };
 

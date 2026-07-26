@@ -3576,7 +3576,7 @@ pub async fn push_initial_setup(
         // The CLI drives Pending → InitialSetup → Provisioning, then stops.
         // The manager picks up from Provisioning and drives to Running.
         operation: LoopOperation::InitialSetup,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = shared_run_step_loop(
@@ -3840,7 +3840,7 @@ async fn run_runtime_deletion(
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = shared_run_step_loop(
@@ -3938,7 +3938,7 @@ async fn run_setup_deletion(
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = alien_deployment::setup_teardown::run_setup_teardown_after_handoff(

@@ -281,7 +281,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = match alien_deployment::runner::run_step_loop(

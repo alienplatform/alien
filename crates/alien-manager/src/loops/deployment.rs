@@ -42,8 +42,6 @@ const MAX_STEPS_PER_HEARTBEAT: usize = 1;
 pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Maximum acquire/process batches before yielding back to the interval sleep.
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
-/// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
-const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
 /// Google documents IAM policy changes as typically propagating within two
 /// minutes, but potentially taking seven minutes or longer. Keep the first
 /// target-side token exchange retryable for a bounded window after setup hands
@@ -750,7 +748,7 @@ impl DeploymentLoop {
         let policy = RunnerPolicy {
             max_steps: options.max_steps,
             operation,
-            delay_threshold: Some(Duration::from_millis(SUGGESTED_DELAY_THRESHOLD_MS)),
+            delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
         };
 
         let transport = ManagerTransport::new(

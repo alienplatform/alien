@@ -14,7 +14,7 @@ export const AwsEmailImportDataSchema = z.object({
 "domains": z.object({
     
     }).catchall(z.lazy(() => AwsEmailDomainImportDataSchema).describe("Per-domain import payload for an AWS Email resource.")).describe("Per-seed-domain DNS data, keyed by mail domain."),
-"ruleSetName": z.string().describe("SES receipt rule set name, present only when inbound mail is\nconfigured. Activating the rule set is a manual post-deploy step.").nullish()
+"ruleSetName": z.string().describe("SES receipt rule set name, present only when inbound mail is configured.").nullish()
     }).describe("AWS Email ImportData.\n\nMirrors the `emit_import_ref` payload of the AWS SES email emitter: the\nshared configuration set name, one entry per seed domain carrying its\nEasy-DKIM CNAME records, and — when inbound mail is configured — the\nreceipt rule set name. Identities created at runtime through the\n`email/manage-identities` grant are application data and never appear\nhere.")
 
 export type AwsEmailImportData = z.infer<typeof AwsEmailImportDataSchema>

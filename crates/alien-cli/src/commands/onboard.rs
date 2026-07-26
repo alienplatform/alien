@@ -429,7 +429,7 @@ async fn fetch_active_release_stack_inputs(
         });
     };
 
-    let Some(stack_by_platform) = release.stack.as_ref().and_then(|stack| stack.0.as_ref()) else {
+    let Some(stack_by_platform) = release.stack.as_ref() else {
         return Ok(ActiveReleaseStackInputs {
             supported_platforms: Vec::new(),
             inputs_by_platform: Vec::new(),
