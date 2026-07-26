@@ -191,9 +191,8 @@ async fn large_body_reaches_the_upstream_instead_of_413() {
     let base = serve(build_router(routes)).await;
     let client = reqwest::Client::new();
 
-    // A body larger than axum's 2 MB default limit — a single base64 vision image is
-    // already this big. Without DefaultBodyLimit::disable() axum answers 413 before the
-    // proxy runs; with it, the body reaches the upstream and comes back 200.
+    // Past axum's 2 MB default, which one base64 vision image already exceeds, but well
+    // under our own cap.
     let big_prompt = "x".repeat(3 * 1024 * 1024);
     let resp = client
         .post(format!("{base}/llm/v1/chat/completions"))
@@ -205,4 +204,50 @@ async fn large_body_reaches_the_upstream_instead_of_413() {
     assert_eq!(resp.status(), 200, "a >2 MB body must reach the upstream, not be rejected as 413");
     assert!(resp.text().await.unwrap().contains("pong"));
     upstream_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn body_past_the_cap_never_reaches_the_upstream() {
+    // The upstream would accept any size, so a 413 here can only come from our own cap.
+    let upstream = MockServer::start_async().await;
+    let upstream_mock = upstream
+        .mock_async(|when, then| {
+            when.method(POST).path("/openai/v1/chat/completions");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"ok","choices":[{"message":{"content":"pong"}}]}"#);
+        })
+        .await;
+
+    let routes = vec![GatewayRoute {
+        name: "llm".to_string(),
+        cloud: Platform::Aws,
+        region: Some("us-east-2".to_string()),
+        project: None,
+        azure_endpoint: None,
+        cred: aws_cred(),
+        upstream_base_override: Some(upstream.base_url()),
+    }];
+    let base = serve(build_router(routes)).await;
+    let client = reqwest::Client::new();
+
+    let past_cap = "x".repeat(33 * 1024 * 1024);
+    let resp = client
+        .post(format!("{base}/llm/v1/chat/completions"))
+        .json(&json!({"model":"gpt-oss-20b","messages":[{"role":"user","content":past_cap}]}))
+        .send()
+        .await
+        .expect("oversized request");
+
+    assert_eq!(resp.status(), 413, "a body past the cap must be rejected, not buffered");
+    let error: serde_json::Value = resp.json().await.expect("a structured error body");
+    assert_eq!(
+        error["code"], "GATEWAY_REQUEST_TOO_LARGE",
+        "the rejection must carry this crate's error envelope, not axum's plain text"
+    );
+    assert_eq!(
+        upstream_mock.hits_async().await,
+        0,
+        "the oversized body must be rejected before any upstream call"
+    );
 }

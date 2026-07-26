@@ -34,6 +34,17 @@ pub enum ErrorData {
     )]
     InvalidRequest { message: String },
 
+    /// The request body exceeded the gateway's buffering cap. Not internal: the limit is
+    /// the caller's to respect, and resending the same body cannot succeed.
+    #[error(
+        code = "GATEWAY_REQUEST_TOO_LARGE",
+        message = "AI request body exceeds the gateway's {limit_bytes} byte limit",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 413
+    )]
+    RequestTooLarge { limit_bytes: usize },
+
     /// The requested model is not in the catalog for this binding's cloud.
     #[error(
         code = "GATEWAY_MODEL_NOT_AVAILABLE",

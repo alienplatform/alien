@@ -11,7 +11,7 @@ use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::{
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, FromRequest, Path, Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -41,6 +41,37 @@ pub(crate) use vertex::vertex_host;
 pub(crate) use bedrock::ensure_block_content;
 #[cfg(test)]
 pub(crate) use eventstream::EventStreamToSse;
+
+/// Clears the largest upstream request limit we serve (Bedrock `InvokeModel`, 25 MB) so the
+/// upstream still owns rejecting its own oversized payloads, while keeping the buffer finite.
+/// It bounds one request, not total memory: parsing then re-serializing then SigV4-hashing a
+/// body costs several multiples of it, and nothing here caps concurrency.
+const MAX_REQUEST_BODY: usize = 32 * 1024 * 1024;
+
+/// Surfaces an oversized body as this crate's structured error. axum's own rejection is bare
+/// plain text, which would make this the one gateway failure a caller cannot parse as JSON.
+struct ProxyBody(Bytes);
+
+impl<S> FromRequest<S> for ProxyBody
+where
+    S: Send + Sync,
+{
+    type Rejection = AlienError<ErrorData>;
+
+    async fn from_request(req: Request, state: &S) -> std::result::Result<Self, Self::Rejection> {
+        match Bytes::from_request(req, state).await {
+            Ok(body) => Ok(Self(body)),
+            Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                Err(AlienError::new(ErrorData::RequestTooLarge {
+                    limit_bytes: MAX_REQUEST_BODY,
+                }))
+            }
+            Err(rejection) => Err(AlienError::new(ErrorData::InvalidRequest {
+                message: rejection.body_text(),
+            })),
+        }
+    }
+}
 
 /// One binding resolved into everything the proxy needs to serve it: the cloud (for
 /// catalog filtering and upstream selection), the location fields used to build the
@@ -89,10 +120,7 @@ pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
         .route("/{binding}/v1/messages", post(proxy))
         .route("/{binding}/v1/responses", post(proxy_responses))
         .route("/{binding}/v1/models", get(list_models))
-        // This is a pure proxy, so the upstream enforces its own body size. Without
-        // this, axum's 2 MB default rejects legitimate large requests (base64 vision
-        // images, long tool-heavy conversations) with 413 before they ever leave us.
-        .layer(DefaultBodyLimit::disable())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .with_state(state)
 }
 
@@ -180,7 +208,7 @@ async fn proxy(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    ProxyBody(body): ProxyBody,
 ) -> Result<Response> {
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
@@ -244,7 +272,7 @@ async fn proxy(
 async fn proxy_responses(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
-    body: Bytes,
+    ProxyBody(body): ProxyBody,
 ) -> Result<Response> {
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
