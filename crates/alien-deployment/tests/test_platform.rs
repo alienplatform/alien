@@ -1549,8 +1549,7 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
 }
 
 /// A frozen gate is answered once: the answer recorded at creation refuses
-/// every later conflicting input value, including on states from before the
-/// fixity-aware protocol, whose answers derive from the settled stack state.
+/// every later conflicting input value.
 #[tokio::test]
 async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -1608,23 +1607,6 @@ async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
     let mut state_matching = state.clone();
     state_matching = run_to_completion(state_matching, config_with_archive_enabled(true)).await;
     assert_eq!(state_matching.status, DeploymentStatus::Running);
-
-    // A state from before the fixity protocol (no recorded answers): the
-    // settled stack state derives them, and the conflict is still refused.
-    let mut legacy = state.clone();
-    if let Some(metadata) = legacy.runtime_metadata.as_mut() {
-        metadata.persisted_gate_answers = Default::default();
-    }
-    legacy.protocol_version = 1;
-    let error = alien_deployment::step(
-        legacy,
-        config_with_archive_enabled(false),
-        ClientConfig::Test,
-        None,
-    )
-    .await
-    .expect_err("derived answers refuse the conflict too");
-    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
 }
 
 /// The split-strip ordering guarantee on compute: declining a live worker on
@@ -1784,7 +1766,7 @@ async fn a_declined_gated_import_is_not_created_by_the_runner() {
 #[tokio::test]
 async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_dropping_it() {
     // The settled release has no gated resource at all, so nothing was ever
-    // asked and nothing was recorded — a legacy deployment's exact shape.
+    // asked and nothing was recorded.
     let settled_stack = create_test_stack("gate-refusal-stack", "test-function");
 
     let mut target_stack = create_test_stack("gate-refusal-stack", "test-function");

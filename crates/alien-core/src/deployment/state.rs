@@ -54,8 +54,8 @@ pub struct RuntimeMetadata {
     pub prepared_stack: Option<crate::Stack>,
 
     /// Canonical resolved answers for inputs that gate Frozen resources,
-    /// keyed by input id, recorded when the deployment is created (or derived
-    /// from the settled stack state on the first update of an older state).
+    /// keyed by input id, recorded when the deployment is created or its
+    /// setup import registers.
     ///
     /// A frozen gate's answer is fixed for the deployment's lifetime: the
     /// update path refuses input values that conflict with these, and a Live
@@ -193,8 +193,8 @@ pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 /// `persisted_gate_answers` on the runtime metadata stays at this version:
 /// the field is additive, an actor unaware of it still cannot flip a frozen
 /// resource (its strip resolves from state presence, so a changed input is
-/// ignored rather than applied), and a write-back that drops the field is
-/// rebuilt from the settled state. A bump would hard-refuse every
+/// ignored rather than applied), and the sync routes carry a recorded map
+/// through a write-back that drops the field. A bump would hard-refuse every
 /// customer-scheduled pull agent the moment a newer manager writes state.
 pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 

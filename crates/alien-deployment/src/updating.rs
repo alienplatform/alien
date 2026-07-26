@@ -68,24 +68,15 @@ pub async fn handle_update_pending(
         })
     })?;
 
-    // A frozen gate is answered once. States from before answers were
-    // recorded carry none, so reconstruct them from the settled state read
-    // against the release it settled under: that release is what was put to
-    // the deployer, so presence there is their answer. A gate only the target
-    // release declares was never asked and stays unrecorded, which leaves its
-    // resource in the stack for the frozen-compatibility check to refuse.
-    let mut persisted_gate_answers = current
+    // A frozen gate is answered once: the answers recorded at creation are
+    // what every later input value is held against. A gate with no recorded
+    // answer was never asked, which leaves its resource in the stack for the
+    // frozen-compatibility check to refuse.
+    let persisted_gate_answers = current
         .runtime_metadata
         .as_ref()
         .map(|metadata| metadata.persisted_gate_answers.clone())
         .unwrap_or_default();
-    if persisted_gate_answers.is_empty() {
-        persisted_gate_answers = crate::pending::derive_legacy_frozen_gate_answers(
-            current.current_release.as_ref().map(|release| &release.stack),
-            &target_stack,
-            &stack_state,
-        );
-    }
     let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
     crate::pending::enforce_frozen_gate_fixity(
         &persisted_gate_answers,
