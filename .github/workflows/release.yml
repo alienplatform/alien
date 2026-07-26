@@ -1399,23 +1399,75 @@ jobs:
             upload_exe "$binary" x86_64-pc-windows-msvc windows x86_64
           done
 
-          # Do not expose any mutable latest aliases until every immutable,
-          # versioned object has been uploaded and checksum-verified.
-          promote_latest() {
+          # Mutable latest URLs are retained for compatibility. S3 cannot
+          # atomically replace several keys, so snapshot the complete old set
+          # and compensate on failure instead of leaving a mixed release.
+          rollback_prefix="_release-rollback/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          latest_keys=()
+          latest_existed=()
+          promoted_count=0
+
+          add_latest() {
             local binary=$1 os=$2 arch=$3 extension=${4:-}
-            aws s3 cp \
-              "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}${extension}" \
-              "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}${extension}"
+            latest_keys+=("${binary}/latest/${os}-${arch}/${binary}${extension}")
           }
 
           for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
-            promote_latest "$binary" linux x86_64
-            promote_latest "$binary" linux aarch64
+            add_latest "$binary" linux x86_64
+            add_latest "$binary" linux aarch64
           done
           for binary in alien alien-deploy alien-operator; do
-            promote_latest "$binary" darwin aarch64
-            promote_latest "$binary" windows x86_64 .exe
+            add_latest "$binary" darwin aarch64
+            add_latest "$binary" windows x86_64 .exe
           done
+
+          for key in "${latest_keys[@]}"; do
+            if aws s3api head-object --bucket alien-releases-prod --key "$key" >/dev/null 2>&1; then
+              latest_existed+=(true)
+              aws s3 cp \
+                "s3://alien-releases-prod/${key}" \
+                "s3://alien-releases-prod/${rollback_prefix}/${key}"
+            else
+              latest_existed+=(false)
+            fi
+          done
+
+          rollback_latest() {
+            echo "::warning::Latest promotion failed; restoring the previous complete set"
+            local index rollback_failed=false
+            for ((index = 0; index < promoted_count; index++)); do
+              key="${latest_keys[$index]}"
+              if [ "${latest_existed[$index]}" = true ]; then
+                if ! aws s3 cp \
+                  "s3://alien-releases-prod/${rollback_prefix}/${key}" \
+                  "s3://alien-releases-prod/${key}"; then
+                  rollback_failed=true
+                fi
+              else
+                if ! aws s3 rm "s3://alien-releases-prod/${key}"; then
+                  rollback_failed=true
+                fi
+              fi
+            done
+            [ "$rollback_failed" = false ]
+          }
+
+          for key in "${latest_keys[@]}"; do
+            versioned_key="${key/latest/v${VERSION}}"
+            if ! aws s3 cp \
+              "s3://alien-releases-prod/${versioned_key}" \
+              "s3://alien-releases-prod/${key}"; then
+              if ! rollback_latest; then
+                echo "::error::Latest promotion and rollback both failed; rerun publication to reconcile aliases"
+              fi
+              exit 1
+            fi
+            promoted_count=$((promoted_count + 1))
+          done
+
+          aws s3 rm \
+            "s3://alien-releases-prod/${rollback_prefix}/" \
+            --recursive || true
 
       - name: Invalidate CloudFront cache
         run: |
