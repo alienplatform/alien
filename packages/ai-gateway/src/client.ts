@@ -9,9 +9,9 @@
  */
 
 import { AlienError } from "@alienplatform/core"
-// Types only (erased at build): OpenAI's canonical result shapes, so callers get
-// a typed completion without reinventing them. `@alienplatform/ai-gateway` keeps
-// `openai` a devDependency; its runtime dependency stays `@alienplatform/core`.
+// OpenAI's canonical result shapes, so callers get a typed completion without reinventing
+// them. These reach the emitted .d.ts, so `openai` is an optional peer dependency: nothing
+// is imported at runtime, but a consumer needs it installed to typecheck against us.
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions"
 import type {
   Response as OpenAIResponse,

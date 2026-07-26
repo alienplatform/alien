@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/ai-gateway",
-  "version": "2.1.6",
+  "version": "3.0.1",
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
@@ -52,5 +52,13 @@
   "dependencies": {
     "@alienplatform/core": "workspace:^",
     "zod": "4.3.2"
+  },
+  "peerDependencies": {
+    "openai": "^4"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": true
+    }
   }
 }
