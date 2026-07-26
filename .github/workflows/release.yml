@@ -1841,7 +1841,7 @@ jobs:
             .conditions.ref_name.include == ["refs/tags/v*"] and
             .conditions.ref_name.exclude == [] and
             ([.rules[].type] | index("deletion")) != null and
-            ([.rules[].type] | index("non_fast_forward")) != null and
+            ([.rules[].type] | index("update")) != null and
             (.bypass_actors | length) == 0
           ' <<< "$ruleset" >/dev/null; then
             echo "::error::Release tags must prohibit updates and deletion without bypasses"
