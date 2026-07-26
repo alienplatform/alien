@@ -13,7 +13,6 @@
 //! and a dependent of a gated resource looks up outputs that will not be there.
 
 use crate::error::Result;
-use crate::mutations::secrets_vault::SECRETS_VAULT_ID;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Platform, Stack, StackInputKind, StackInputProvider};
 use std::collections::HashMap;
@@ -41,54 +40,25 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
                 continue;
             };
 
-            // `SecretsVaultMutation` links this vault to Live Workers and compute clusters
-            // after every compile-time check has run, so `dependents_of_gated_resources`
-            // below reads a stack where those links do not exist yet and lets the gate pass.
-            if resource_id == SECRETS_VAULT_ID {
-                errors.push(format!(
-                    "Resource '{resource_id}' is enabled by input '{input_id}', but \
-                     '{SECRETS_VAULT_ID}' is the deployment secrets vault. Workers and compute \
-                     clusters are wired to it automatically after this check runs, so a deployer \
-                     who says no would leave them resolving a binding for a vault that was never \
-                     created. Its presence cannot be optional. Give a vault you want to gate a \
-                     different id"
-                ));
-            }
-
             let resource_type = entry.config.resource_type();
 
-            // Framework infrastructure Alien derives from the stack itself. A gate
-            // here is never a customer choice, and ServiceAccountMutation inserts
-            // profile-derived "{profile}-sa" entries unconditionally, which would
-            // silently overwrite a gated entry before any render guard could fire.
-            // The SDK does not offer .enabled() on these; this keeps hand-authored
-            // stacks to the same rule.
-            if matches!(
-                resource_type.as_ref(),
-                "build" | "artifact-registry" | "service-account" | "compute-cluster"
-            ) {
-                errors.push(format!(
-                    "Resource '{resource_id}' of type '{resource_type}' is enabled by input \
-                     '{input_id}', but Alien derives this resource from the stack itself, so \
-                     it cannot be optional"
-                ));
-                continue;
-            }
-
-            // Code-carrying compute ships with every release; whether it runs
-            // is a rollout question, not a data-plane opt-out, so gating it is
-            // a different feature than this one. Live-only ownership is the
-            // compute classification, read from the one table that defines it
-            // so a new compute type cannot silently become gateable.
-            if !alien_core::ownership_policy_for_resource_type(resource_type.as_ref())
-                .allows_frozen()
+            // The type/id rules live in `alien_core::gateability` so the setup
+            // generators enforce the same refusals for callers that render
+            // without preflights. Only the reserved-vault refusal falls
+            // through: `dependents_of_gated_resources` below reads a stack
+            // where the vault's auto-wired links do not exist yet, and the
+            // input rules further down still apply to it.
+            if let Some(refusal) =
+                alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
             {
                 errors.push(format!(
                     "Resource '{resource_id}' of type '{resource_type}' is enabled by input \
-                     '{input_id}', but code-carrying compute ships with every release, so it \
-                     cannot be optional"
+                     '{input_id}', but {}",
+                    refusal.reason()
                 ));
-                continue;
+                if refusal != alien_core::GateRefusal::ReservedSecretsVault {
+                    continue;
+                }
             }
 
             // `ServiceAccount::from_permission_profile` builds the runtime role from the
@@ -238,6 +208,7 @@ fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutations::secrets_vault::SECRETS_VAULT_ID;
     use alien_core::{
         permissions::PermissionProfile, Kv, ResourceLifecycle, StackInputDefinition, Storage,
         Vault, Worker, WorkerCode,

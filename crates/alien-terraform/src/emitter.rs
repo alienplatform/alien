@@ -24,6 +24,14 @@ pub struct TfFragment {
     /// Extra `locals { ... }` entries the emitter contributed. Merged across
     /// all emitters into a single `locals` block in `main.tf`.
     pub locals: IndexMap<String, Expression>,
+    /// Addresses (`type`, `label`) of blocks in [`Self::resource_blocks`] that
+    /// are shared support infrastructure rather than owned by this fragment's
+    /// resource — a project-wide custom role several resources reference.
+    /// Shared blocks outlive any single resource: the gating post-pass never
+    /// gates them, and the generator deduplicates body-identical copies across
+    /// fragments. Keyed by address, not index, so removals and reordering in
+    /// later passes cannot desynchronize the classification.
+    shared_addresses: std::collections::HashSet<(String, String)>,
 }
 
 impl TfFragment {
@@ -51,13 +59,42 @@ impl TfFragment {
         self
     }
 
+    /// Append a resource block classified as shared support infrastructure.
+    /// It renders in place like any other block, but the gating post-pass
+    /// leaves it ungated even when this fragment's resource is gated.
+    pub fn push_shared_resource(&mut self, block: Block) {
+        if let Some(address) = block_address(&block) {
+            self.shared_addresses.insert(address);
+        }
+        self.resource_blocks.push(block);
+    }
+
+    /// Whether a block of this fragment is shared support infrastructure.
+    pub fn is_shared(&self, block: &Block) -> bool {
+        block_address(block)
+            .map(|address| self.shared_addresses.contains(&address))
+            .unwrap_or(false)
+    }
+
     /// Merge another fragment into this one (used by the K8s identity overlay
     /// layer to append on top of cloud emitters).
     pub fn extend(&mut self, other: TfFragment) {
         self.resource_blocks.extend(other.resource_blocks);
         self.data_blocks.extend(other.data_blocks);
         self.locals.extend(other.locals);
+        self.shared_addresses.extend(other.shared_addresses);
     }
+}
+
+/// (`type`, `label`) address of a `resource` block, `None` for anything that
+/// is not a two-label resource block.
+fn block_address(block: &Block) -> Option<(String, String)> {
+    if block.identifier.as_str() != "resource" {
+        return None;
+    }
+    let provider_type = block.labels.first()?.as_str().to_string();
+    let label = block.labels.get(1)?.as_str().to_string();
+    Some((provider_type, label))
 }
 
 /// Generator-side trait \u2014 emit the raw `resource`/`data` blocks for one stack
@@ -84,18 +121,6 @@ pub trait TfEmitter: Send + Sync {
     /// per-resource output. Typically an HCL object built from `aws_x.y.z`
     /// references.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression>;
-
-    /// Whether this emitter renders correctly when its resource is gated on a
-    /// deployer input via `.enabled()`.
-    ///
-    /// Opting in means the emitter puts `count` on its blocks, indexes its own
-    /// references, and nulls out its import ref when the gate is off. The
-    /// generator refuses to render a gated resource whose emitter has not, so a
-    /// half-converted emitter fails loudly instead of silently creating the
-    /// resource the deployer declined.
-    fn supports_enabled_when(&self) -> bool {
-        false
-    }
 
     /// Apply-time expression that resolves to this resource's runtime binding
     /// payload. This is intentionally separate from [`Self::emit_import_ref`]:

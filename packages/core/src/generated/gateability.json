@@ -1,0 +1,42 @@
+{
+  "container": {
+    "frozen": false,
+    "live": false
+  },
+  "daemon": {
+    "frozen": false,
+    "live": false
+  },
+  "email": {
+    "frozen": false,
+    "live": false
+  },
+  "experimental/aws-opensearch": {
+    "frozen": false,
+    "live": false
+  },
+  "kv": {
+    "frozen": true,
+    "live": true
+  },
+  "postgres": {
+    "frozen": true,
+    "live": true
+  },
+  "queue": {
+    "frozen": true,
+    "live": true
+  },
+  "storage": {
+    "frozen": true,
+    "live": true
+  },
+  "vault": {
+    "frozen": true,
+    "live": true
+  },
+  "worker": {
+    "frozen": false,
+    "live": false
+  }
+}

@@ -256,7 +256,7 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         supports_custom_domain,
     )?;
-    add_stack_input_parameters(&mut template, &stack_inputs);
+    add_stack_input_parameters(&mut template, &stack_inputs)?;
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
@@ -299,14 +299,17 @@ pub fn generate_cloudformation_template(
 
         let enabled_when = resource.enabled_when.as_deref();
         let declared_condition = if let Some(input_id) = enabled_when {
-            if !emitter.supports_enabled_when() {
+            // The same policy the compile-time check enforces, re-checked at
+            // render time so a caller that skips preflights cannot gate what
+            // the policy refuses.
+            if let Some(refusal) =
+                alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
+            {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("enabled() on resource type '{resource_type}'"),
-                    reason: format!(
-                        "the CloudFormation emitter for '{resource_type}' does not render \
-                         conditionally yet, so resource '{resource_id}' would be created \
-                         regardless of the deployer's answer"
+                    operation: format!(
+                        "enabled() on resource '{resource_id}' of type '{resource_type}'"
                     ),
+                    reason: refusal.reason().to_string(),
                 }));
             }
             Some(declare_enabled_condition(
@@ -329,8 +332,9 @@ pub fn generate_cloudformation_template(
                 // and create the resource the deployer declined.
                 //
                 // No shipped emitter reaches this: the ones that set conditions
-                // (aws/network.rs, aws/kubernetes_cluster.rs) return false from
-                // `supports_enabled_when`, so they fail the check above first.
+                // (aws/network.rs, aws/kubernetes_cluster.rs) belong to types
+                // the gateability policy refuses, so they fail the check above
+                // first.
                 if let Some(existing) = &emitted.condition {
                     return Err(AlienError::new(ErrorData::OperationNotSupported {
                         operation: format!("enabled() on resource type '{resource_type}'"),
@@ -453,13 +457,32 @@ pub(crate) fn stack_input_parameter_name_for_id(input_id: &str) -> String {
     format!("Input{}", sanitize_logical_id(input_id))
 }
 
-fn add_stack_input_parameters(template: &mut CfTemplate, inputs: &[StackInputDefinition]) {
+fn add_stack_input_parameters(
+    template: &mut CfTemplate,
+    inputs: &[StackInputDefinition],
+) -> Result<()> {
     for input in inputs {
-        template.parameters.insert(
-            stack_input_parameter_name(input),
-            stack_input_parameter(input),
-        );
+        let parameter_name = stack_input_parameter_name(input);
+        // Distinct ids can sanitize to the same logical id (`fooBar` and
+        // `foo_bar` both become `InputFooBar`); a silent overwrite would make
+        // both inputs — gates and their conditions included — read one
+        // parameter.
+        if template.parameters.contains_key(&parameter_name) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "stack input '{}' normalizes to CloudFormation parameter \
+                     '{parameter_name}', which another input already claimed; rename one so \
+                     every input keeps its own parameter",
+                    input.id
+                ),
+            }));
+        }
+        template
+            .parameters
+            .insert(parameter_name, stack_input_parameter(input));
     }
+    Ok(())
 }
 
 fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {

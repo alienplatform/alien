@@ -198,6 +198,7 @@ pub fn generate_terraform_module(
     // drop declined resources from the registration list.
     let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
+    let mut gated = crate::gating::GatedAddresses::default();
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -217,14 +218,17 @@ pub fn generate_terraform_module(
         };
 
         if let Some(input_id) = resource.enabled_when.as_deref() {
-            if !emitter.supports_enabled_when() {
+            // The same policy the compile-time check enforces, re-checked at
+            // render time so a caller that skips preflights cannot gate what
+            // the policy refuses.
+            if let Some(refusal) =
+                alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
+            {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("enabled() on resource type '{resource_type}'"),
-                    reason: format!(
-                        "the {platform:?} Terraform emitter for '{resource_type}' does not render \
-                         conditionally yet, so resource '{resource_id}' would be created regardless \
-                         of the deployer's answer"
+                    operation: format!(
+                        "enabled() on resource '{resource_id}' of type '{resource_type}'"
                     ),
+                    reason: refusal.reason().to_string(),
                 }));
             }
             // Re-validated at render time like the CloudFormation generator:
@@ -248,6 +252,9 @@ pub fn generate_terraform_module(
         }
 
         let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
+        if let Some(input_id) = resource.enabled_when.as_deref() {
+            crate::gating::gate_fragment(&mut fragment, resource_id, input_id, &mut gated)?;
+        }
         // Split per-emitter `locals` out of the per-resource file \u2014 they
         // belong in `locals.tf` so reviewers see all locals together.
         let local_contributions = std::mem::take(&mut fragment.locals);
@@ -282,6 +289,23 @@ pub fn generate_terraform_module(
         emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
+    // Every fragment is emitted and every generator-injected block exists by
+    // now, so references to gated addresses — wherever they live — can be
+    // rewritten to index into the gate's count. `depends_on` is exempt inside
+    // the rewrite; the registration's own depends_on uses whole-resource
+    // references that stay valid on counted resources.
+    if !gated.is_empty() {
+        for fragment in per_resource.values_mut() {
+            crate::gating::rewrite_fragment_references(fragment, &gated);
+        }
+        for (_name, expression) in shared_locals.iter_mut() {
+            crate::gating::rewrite_expression(expression, &gated);
+        }
+        for (_gate, expression) in registration_resources.iter_mut() {
+            crate::gating::rewrite_expression(expression, &gated);
+        }
+    }
+
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
         gcp_iam_resource_addresses(&per_resource)
     } else {
@@ -420,6 +444,10 @@ pub fn generate_terraform_module(
             &stack_inputs,
         ),
     );
+
+    // Last net: a reference hidden in a raw string escapes the AST rewrite;
+    // catch it in the rendered output instead of shipping it.
+    crate::gating::scan_rendered_for_unindexed(&files, &gated)?;
 
     let mut module = ModuleFiles { files };
 
@@ -959,6 +987,26 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 }
 
 fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
+    // Distinct ids can normalize to the same variable name (`fooBar` and
+    // `foo_bar` both become `input_foo_bar`); the second declaration would
+    // silently shadow the first, so both values — gates included — would read
+    // from one variable.
+    let mut ids_by_variable: std::collections::HashMap<String, &str> =
+        std::collections::HashMap::new();
+    for input in inputs {
+        let variable = terraform_stack_input_variable_name(input);
+        if let Some(previous_id) = ids_by_variable.insert(variable.clone(), input.id.as_str()) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_terraform_module".to_string(),
+                reason: format!(
+                    "stack inputs '{previous_id}' and '{}' both normalize to Terraform \
+                     variable '{variable}'; rename one so every input keeps its own variable",
+                    input.id
+                ),
+            }));
+        }
+    }
+
     let secret_inputs: Vec<&str> = inputs
         .iter()
         .filter(|input| input.kind == StackInputKind::Secret)
@@ -2991,45 +3039,38 @@ mod tests {
         let mut per_resource = IndexMap::new();
         per_resource.insert(
             "queue".to_string(),
-            TfFragment {
-                resource_blocks: vec![
-                    resource_block(
-                        "google_project_iam_custom_role",
-                        "gcp_role_queue_heartbeat_part1",
-                        [
-                            attr("project", expr::raw("var.gcp_project")),
-                            attr("role_id", Expression::String("role_test".to_string())),
-                        ],
-                    ),
-                    resource_block(
-                        "google_pubsub_topic",
-                        "queue",
-                        [attr("name", Expression::String("queue".to_string()))],
-                    ),
-                ],
-                ..TfFragment::default()
-            },
+            TfFragment::default()
+                .with_resource(resource_block(
+                    "google_project_iam_custom_role",
+                    "gcp_role_queue_heartbeat_part1",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("role_id", Expression::String("role_test".to_string())),
+                    ],
+                ))
+                .with_resource(resource_block(
+                    "google_pubsub_topic",
+                    "queue",
+                    [attr("name", Expression::String("queue".to_string()))],
+                )),
         );
         per_resource.insert(
             "management".to_string(),
-            TfFragment {
-                resource_blocks: vec![resource_block(
-                    "google_project_iam_member",
-                    "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
-                    [
-                        attr("project", expr::raw("var.gcp_project")),
-                        attr(
-                            "role",
-                            expr::traversal([
-                                "google_project_iam_custom_role",
-                                "gcp_role_queue_heartbeat_part1",
-                                "name",
-                            ]),
-                        ),
-                    ],
-                )],
-                ..TfFragment::default()
-            },
+            TfFragment::default().with_resource(resource_block(
+                "google_project_iam_member",
+                "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
+                [
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "role",
+                        expr::traversal([
+                            "google_project_iam_custom_role",
+                            "gcp_role_queue_heartbeat_part1",
+                            "name",
+                        ]),
+                    ),
+                ],
+            )),
         );
 
         apply_resource_dependencies(&stack, &mut per_resource);
