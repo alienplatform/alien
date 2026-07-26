@@ -107,6 +107,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -118,6 +119,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -156,6 +158,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -167,6 +170,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
         new_resources.insert(
@@ -176,6 +180,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -220,6 +225,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -231,6 +237,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -270,6 +277,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -281,6 +289,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live, // Changed from Frozen to Live
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -320,6 +329,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

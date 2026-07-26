@@ -156,7 +156,7 @@ pub struct Worker {
     pub code: WorkerCode,
 
     /// Memory allocated to the worker in megabytes (MB).
-    /// Default: 256
+    /// Default: 512
     ///
     /// Platform-specific constraints:
     /// - **AWS Lambda**: 128–10240 MB in 1 MB increments
@@ -249,7 +249,7 @@ impl Worker {
 }
 
 fn default_memory_mb() -> u32 {
-    256
+    512
 }
 
 fn default_timeout_seconds() -> u32 {
@@ -766,7 +766,7 @@ mod tests {
         // Test that defaults are applied correctly
         assert!(worker.public_endpoints.is_empty());
         assert_eq!(worker.commands_enabled, false);
-        assert_eq!(worker.memory_mb, 256);
+        assert_eq!(worker.memory_mb, 512);
         assert_eq!(worker.timeout_seconds, 180);
     }
 

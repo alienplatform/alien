@@ -106,6 +106,43 @@ impl CfEmitter for AwsStorageEmitter {
             );
         }
 
+        if !storage.cors_allowed_origins.is_empty() {
+            bucket.properties.insert(
+                "CorsConfiguration".to_string(),
+                CfExpression::object([(
+                    "CorsRules",
+                    CfExpression::list([CfExpression::object([
+                        (
+                            "AllowedHeaders",
+                            CfExpression::list([CfExpression::from("*")]),
+                        ),
+                        (
+                            "AllowedMethods",
+                            CfExpression::list([
+                                CfExpression::from("GET"),
+                                CfExpression::from("HEAD"),
+                            ]),
+                        ),
+                        (
+                            "AllowedOrigins",
+                            CfExpression::list(
+                                storage
+                                    .cors_allowed_origins
+                                    .iter()
+                                    .cloned()
+                                    .map(CfExpression::from),
+                            ),
+                        ),
+                        (
+                            "ExposedHeaders",
+                            CfExpression::list([CfExpression::from("ETag")]),
+                        ),
+                        ("MaxAge", CfExpression::Integer(3600)),
+                    ])]),
+                )]),
+            );
+        }
+
         bucket.properties.insert("Tags".to_string(), tags(ctx));
         bucket.deletion_policy = Some("Retain".to_string());
         bucket.update_replace_policy = Some("Retain".to_string());
@@ -138,6 +175,13 @@ impl CfEmitter for AwsStorageEmitter {
             ("bucketName", CfExpression::ref_(bucket_id)),
             ("bucketArn", CfExpression::get_att(bucket_id, "Arn")),
         ]))
+    }
+
+    /// Every resource this emitter returns — bucket, policy, and the IAM
+    /// policies that name the bucket — is stamped with the gate's condition by
+    /// the generator, so they appear and disappear together.
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {

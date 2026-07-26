@@ -94,6 +94,7 @@ impl StackMutation for ServiceAccountMutation {
 
             // Add as a frozen resource (ServiceAccounts are infrastructure)
             let resource_entry = ResourceEntry {
+                enabled_when: None,
                 config: alien_core::Resource::new(service_account),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),

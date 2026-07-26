@@ -8,6 +8,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::enabled,
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
         permission_context, required_label, resource_prefix_template, role_expression_for_binding,
@@ -33,51 +34,67 @@ impl TfEmitter for GcpStorageEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let storage = downcast::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         let mut fragment = TfFragment::default();
 
-        fragment.resource_blocks.push(bucket(label, ctx, storage));
+        fragment
+            .resource_blocks
+            .push(bucket(label, ctx, storage, enabled_when)?);
 
         if storage.public_read {
-            fragment.resource_blocks.push(public_iam_binding(label));
+            fragment
+                .resource_blocks
+                .push(public_iam_binding(label, enabled_when)?);
         }
 
-        emit_storage_iam(ctx, &mut fragment, label)?;
+        emit_storage_iam(ctx, &mut fragment, label, enabled_when)?;
 
         Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             (
                 "bucketName",
-                expr::traversal(["google_storage_bucket", label, "name"]),
+                enabled::attribute(enabled_when, "google_storage_bucket", label, "name"),
             ),
             (
                 "bucketSelfLink",
-                expr::traversal(["google_storage_bucket", label, "self_link"]),
+                enabled::attribute(enabled_when, "google_storage_bucket", label, "self_link"),
             ),
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "location",
-                expr::traversal(["google_storage_bucket", label, "location"]),
+                enabled::attribute(enabled_when, "google_storage_bucket", label, "location"),
             ),
         ]))
     }
 
+    fn supports_enabled_when(&self) -> bool {
+        true
+    }
+
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(Some(expr::object([
             ("service", Expression::String("gcs".to_string())),
             (
                 "bucketName",
-                expr::traversal(["google_storage_bucket", label, "name"]),
+                enabled::attribute(enabled_when, "google_storage_bucket", label, "name"),
             ),
         ])))
     }
 }
 
-fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structure::Block {
+fn bucket(
+    label: &str,
+    ctx: &EmitContext<'_>,
+    storage: &Storage,
+    enabled_when: Option<&str>,
+) -> Result<hcl::structure::Block> {
     let mut body: Vec<hcl::structure::Structure> = vec![
         attr("name", resource_prefix_template(storage.id())),
         attr("project", expr::raw("var.gcp_project")),
@@ -107,7 +124,9 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         body.push(nested(lifecycle_rule_block(rule)));
     }
 
-    resource_block("google_storage_bucket", label, body)
+    let mut bucket = resource_block("google_storage_bucket", label, body);
+    enabled::gate(&mut bucket, enabled_when)?;
+    Ok(bucket)
 }
 
 fn lifecycle_rule_block(rule: &LifecycleRule) -> hcl::structure::Block {
@@ -133,29 +152,41 @@ fn lifecycle_rule_block(rule: &LifecycleRule) -> hcl::structure::Block {
     )
 }
 
-fn public_iam_binding(label: &str) -> hcl::structure::Block {
-    resource_block(
+fn public_iam_binding(label: &str, enabled_when: Option<&str>) -> Result<hcl::structure::Block> {
+    let mut binding = resource_block(
         "google_storage_bucket_iam_member",
         &format!("{label}_public_read"),
         [
-            attr(
-                "bucket",
-                expr::traversal(["google_storage_bucket", label, "name"]),
-            ),
+            attr("bucket", bucket_name(label, enabled_when)),
             attr(
                 "role",
                 Expression::String("roles/storage.objectViewer".to_string()),
             ),
             attr("member", Expression::String("allUsers".to_string())),
         ],
-    )
+    );
+    enabled::gate(&mut binding, enabled_when)?;
+    Ok(binding)
 }
 
-fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
+fn bucket_name(label: &str, enabled_when: Option<&str>) -> Expression {
+    enabled::attribute(enabled_when, "google_storage_bucket", label, "name")
+}
+
+fn emit_storage_iam(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    label: &str,
+    enabled_when: Option<&str>,
+) -> Result<()> {
     for (owner_label, permission_refs) in storage_permission_owners(ctx) {
         let member = service_account_member_for_label(&owner_label);
-        let context = permission_context(&owner_label, ctx.stack.id())
-            .with_resource_name(format!("${{google_storage_bucket.{label}.name}}"));
+        let bucket_ref = match enabled_when {
+            Some(_) => format!("${{google_storage_bucket.{label}[0].name}}"),
+            None => format!("${{google_storage_bucket.{label}.name}}"),
+        };
+        let context =
+            permission_context(&owner_label, ctx.stack.id()).with_resource_name(bucket_ref);
         let generator = GcpRuntimePermissionsGenerator::new();
 
         for permission_ref in permission_refs {
@@ -177,16 +208,18 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
                     ),
                 })?;
             let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+            // Custom roles carry their own `var.gcp_manage_custom_roles` count
+            // and are referenced through it, so the deployer's gate stays off
+            // them: a second `count` on one block is not renderable. A declined
+            // bucket then leaves a role definition that grants nothing, which is
+            // harmless.
             let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
             for (idx, binding) in bindings.into_iter().enumerate() {
                 let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
                 let role = role_expression_for_binding(&binding.role, &custom_roles)?;
                 let mut body = vec![
-                    attr(
-                        "bucket",
-                        expr::traversal(["google_storage_bucket", label, "name"]),
-                    ),
+                    attr("bucket", bucket_name(label, enabled_when)),
                     attr("role", role),
                     attr("member", member.clone()),
                 ];
@@ -200,11 +233,13 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
                         ],
                     )));
                 }
-                fragment.resource_blocks.push(resource_block(
+                let mut member_block = resource_block(
                     "google_storage_bucket_iam_member",
                     &format!("{role_label}_{label}_{owner_label}_storage_{idx}"),
                     body,
-                ));
+                );
+                enabled::gate(&mut member_block, enabled_when)?;
+                fragment.resource_blocks.push(member_block);
             }
         }
     }

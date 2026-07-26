@@ -144,7 +144,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 28] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 29] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -173,6 +173,7 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
+        Deployments::InputValues,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -243,6 +244,7 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(27, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
+            input_values: p.optional_json(28, "input_values")?.unwrap_or_default(),
         })
     }
 
@@ -340,6 +342,7 @@ mod tests {
         let now = Utc::now();
         DeploymentRecord {
             id: "dep_test".to_string(),
+            input_values: Default::default(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),
             name: "test".to_string(),
@@ -420,6 +423,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize environment_variables".to_string(),
             })?;
 
+        let input_values_json = serde_json::to_string(&params.input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
         // Build SQL in a block so sea_query types (which contain Rc and are !Send)
         // are dropped before the .await.
         let sql = {
@@ -433,6 +442,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::StackSettings,
                 Deployments::RetryRequested,
                 Deployments::CreatedAt,
+                Deployments::InputValues,
             ];
             let mut values: Vec<sea_query::SimpleExpr> = vec![
                 id.clone().into(),
@@ -444,6 +454,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 stack_settings_json.into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                input_values_json.into(),
             ];
 
             if let Some(ref ev_json) = env_vars_json {
@@ -495,6 +506,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint_version: None,
             user_environment_variables: params.environment_variables,
             deployment_token: params.deployment_token,
+            input_values: params.input_values,
             management_config: None,
             deployment_config: None,
             retry_requested: false,
@@ -552,6 +564,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize imported environment_info".to_string(),
             })?;
 
+        let input_values_json = serde_json::to_string(&params.input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
         let sql = {
             let mut columns = vec![
                 Deployments::Id,
@@ -570,6 +588,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::SetupFingerprintVersion,
                 Deployments::RetryRequested,
                 Deployments::CreatedAt,
+                Deployments::InputValues,
             ];
             let mut values: Vec<sea_query::SimpleExpr> = vec![
                 id.clone().into(),
@@ -595,6 +614,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 (params.setup_fingerprint_version as i64).into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                input_values_json.into(),
             ];
 
             if let Some(ref release_id) = params.current_release_id {
@@ -664,6 +684,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint_version: Some(params.setup_fingerprint_version),
             user_environment_variables: None,
             deployment_token: params.deployment_token,
+            input_values: params.input_values,
             management_config: params.management_config,
             deployment_config: None,
             retry_requested: false,
@@ -691,6 +712,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint,
             setup_fingerprint_version,
             schedule_reconciliation,
+            input_values,
         } = params;
         let mut merged_stack_state = stack_state;
         if let Some(existing) = self.get_deployment(caller, deployment_id).await? {
@@ -723,6 +745,14 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize imported environment_info".to_string(),
             })?;
 
+        // The re-import request carries the deployer's current answers, so it
+        // overwrites the stored map — that's the edit surface for gate flips.
+        let input_values_json = serde_json::to_string(&input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
         let now = Utc::now();
 
         let sql = {
@@ -736,6 +766,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Deployments::SetupMetadata,
                     setup_metadata.map(|metadata| metadata.to_string()),
                 )
+                .value(Deployments::InputValues, input_values_json)
                 .value(Deployments::SetupTarget, setup_target)
                 .value(Deployments::SetupFingerprint, setup_fingerprint)
                 .value(
@@ -749,7 +780,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 update.value(Deployments::CurrentReleaseId, release_id);
             }
             if schedule_reconciliation {
-                update.value(Deployments::Status, "update-pending");
+                update
+                    .value(Deployments::Status, "update-pending")
+                    .value(Deployments::NextStepAfter, Option::<String>::None);
             }
 
             update.to_string(SqliteQueryBuilder)
@@ -922,6 +955,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             .table(Deployments::Table)
             .value(Deployments::Status, "delete-pending")
             .value(Deployments::RuntimeMetadata, runtime_metadata_json)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -935,6 +969,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::RetryRequested, 1i64)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -948,6 +983,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "update-pending")
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -962,6 +998,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::DesiredReleaseId, release_id)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(deployment_id))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
@@ -982,6 +1019,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .table(Deployments::Table)
                 .value(Deployments::DesiredReleaseId, release_id)
                 .value(Deployments::Status, "update-pending")
+                .value(Deployments::NextStepAfter, Option::<String>::None)
                 .and_where(Expr::col(Deployments::Status).is_in(eligible_statuses));
 
             if let Some(p) = platform {
@@ -1027,6 +1065,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                         .add(Expr::col(Deployments::LockedBy).is_null())
                         .add(Expr::cust(stale_lock_condition.clone())),
                 );
+            query.cond_where(
+                sea_query::Cond::any()
+                    .add(Expr::col(Deployments::NextStepAfter).is_null())
+                    .add(Expr::col(Deployments::NextStepAfter).lte(now.to_rfc3339())),
+            );
 
             if let Some(dg_id) = &filter.deployment_group_id {
                 query.and_where(Expr::col(Deployments::DeploymentGroupId).eq(dg_id.as_str()));
@@ -1094,6 +1137,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                             .add(Expr::col(Deployments::LockedBy).is_null())
                             .add(Expr::cust(stale_lock_condition.clone())),
                     )
+                    .cond_where(
+                        sea_query::Cond::any()
+                            .add(Expr::col(Deployments::NextStepAfter).is_null())
+                            .add(Expr::col(Deployments::NextStepAfter).lte(now.to_rfc3339())),
+                    )
                     .to_string(SqliteQueryBuilder)
             };
 
@@ -1130,6 +1178,10 @@ impl DeploymentStore for SqliteDeploymentStore {
     ) -> Result<DeploymentRecord, AlienError> {
         let now = Utc::now();
         let state = &data.state;
+        let next_step_after = data.suggested_delay_ms.map(|delay_ms| {
+            let bounded_delay_ms = delay_ms.min(365 * 24 * 60 * 60 * 1_000);
+            now + chrono::Duration::milliseconds(bounded_delay_ms as i64)
+        });
 
         let stack_state_json: Option<String> = state
             .stack_state
@@ -1223,6 +1275,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Deployments::RetryRequested,
                     if retry_requested { 1i64 } else { 0i64 },
                 )
+                .value(
+                    Deployments::NextStepAfter,
+                    next_step_after.map(|value| value.to_rfc3339()),
+                )
                 .value(Deployments::UpdatedAt, now.to_rfc3339());
 
             // Nullable fields: set value or explicit NULL to clear stale data
@@ -1302,6 +1358,29 @@ impl DeploymentStore for SqliteDeploymentStore {
             .and_where(Expr::col(Deployments::LockedBy).eq(session))
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
+    }
+
+    async fn renew_lease(
+        &self,
+        _caller: &crate::auth::Subject,
+        deployment_id: &str,
+        session: &str,
+    ) -> Result<(), AlienError> {
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::LockedAt, Utc::now().to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(deployment_id))
+            .and_where(Expr::col(Deployments::LockedBy).eq(session))
+            .to_string(SqliteQueryBuilder);
+        let rows_affected = self.db.execute_returning_rows_affected(&sql).await?;
+        if rows_affected == 0 {
+            return Err(AlienError::new(crate::error::ErrorData::DeploymentLocked {
+                deployment_id: deployment_id.to_string(),
+                locked_by: None,
+            })
+            .into_generic());
+        }
+        Ok(())
     }
 
     // --- Deployment groups ---

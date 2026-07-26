@@ -1,6 +1,25 @@
 name: Release
 
 on:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        required: true
+      stable_action:
+        type: string
+        required: true
+      source_ref:
+        type: string
+        required: false
+        default: main
+      dry_run:
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      version:
+        value: ${{ jobs.prepare.outputs.version }}
   workflow_dispatch:
     inputs:
       mode:
@@ -8,6 +27,15 @@ on:
         type: choice
         default: stable
         options: [stable, dev]
+      stable_action:
+        description: Prepare a version PR or publish the qualified merged version
+        type: choice
+        default: prepare
+        options: [prepare, publish]
+      release_branch:
+        description: Linear-derived branch name for the version PR (prepare only)
+        type: string
+        default: ""
       source_ref:
         description: Exact 40-character source commit for dev npm packages
         type: string
@@ -41,7 +69,12 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     outputs:
-      version: ${{ steps.bump.outputs.version }}
+      version: ${{ steps.bump.outputs.version || steps.qualification_version.outputs.version || steps.merged_version.outputs.version }}
+      ready: ${{ steps.release_state.outputs.ready }}
+      source_ref: ${{ steps.release_source.outputs.ref }}
+      qualification_run_id: ${{ steps.verify_qualification.outputs.run_id }}
+      qualification_head_sha: ${{ steps.verify_qualification.outputs.head_sha }}
+      release_commit: ${{ steps.merged_version.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -50,6 +83,7 @@ jobs:
 
       - name: Compute next version
         id: bump
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
           LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
           if [ -z "$LATEST_TAG" ]; then
@@ -58,14 +92,20 @@ jobs:
           CURRENT_VERSION=${LATEST_TAG#v}
           echo "Latest tag: $LATEST_TAG"
 
+          WORKSPACE_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$WORKSPACE_VERSION" != "$CURRENT_VERSION" ]; then
+            echo "::error::main already contains unreleased version v${WORKSPACE_VERSION}; run the stable publish action instead"
+            exit 1
+          fi
+
           COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s%n%b")
 
           if echo "$COMMITS" | grep -qE "(BREAKING[- ]CHANGE|^[a-z]+(\([^)]+\))?!:)"; then
-            BUMP=major
+            BUMP="major"
           elif echo "$COMMITS" | grep -qE "^feat(\([^)]+\))?:"; then
-            BUMP=minor
+            BUMP="minor"
           else
-            BUMP=patch
+            BUMP="patch"
           fi
 
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
@@ -79,9 +119,79 @@ jobs:
           echo "New version: v${VERSION}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Set workspace Cargo version
+      - name: Read qualification version
+        id: qualification_version
+        if: ${{ inputs.stable_action == 'qualification' }}
         run: |
-          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
+          if [ "v${VERSION}" = "$LATEST_TAG" ]; then
+            echo "::error::Qualification requires an unreleased version commit"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate qualification package versions
+        if: ${{ inputs.stable_action == 'qualification' }}
+        env:
+          VERSION: ${{ steps.qualification_version.outputs.version }}
+        run: |
+          cargo metadata --format-version 1 --locked >/dev/null
+          for pkg in packages/core packages/commands packages/sdk packages/testing \
+            client-sdks/platform/typescript client-sdks/manager/typescript \
+            packages/bindings crates/alien-bindings-node \
+            packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
+            packages/bindings/npm/linux-x64-gnu packages/bindings/npm/linux-arm64-gnu; do
+            ACTUAL=$(node -p "require('./${pkg}/package.json').version")
+            if [ "$ACTUAL" != "$VERSION" ]; then
+              echo "::error::${pkg}/package.json has version ${ACTUAL}, expected ${VERSION}"
+              exit 1
+            fi
+          done
+
+      - name: Read merged release version
+        id: merged_version
+        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Stable publishing must run from main"
+            exit 1
+          fi
+
+          VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          VERSION_TAG="v${VERSION}"
+          if git rev-parse --verify --quiet "refs/tags/${VERSION_TAG}" >/dev/null; then
+            RELEASE_COMMIT=$(git rev-list -n1 "$VERSION_TAG")
+          else
+            LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
+            RELEASE_COMMIT=""
+            while read -r COMMIT; do
+              COMMIT_VERSION=$(git show "${COMMIT}:Cargo.toml" | sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+              if [ "$COMMIT_VERSION" = "$VERSION" ]; then
+                RELEASE_COMMIT="$COMMIT"
+                break
+              fi
+            done < <(git rev-list --reverse "${LATEST_TAG}..HEAD")
+          fi
+
+          if [ -z "$RELEASE_COMMIT" ]; then
+            echo "::error::Could not find the merged commit that introduced v${VERSION}"
+            exit 1
+          fi
+          COMMIT_VERSION=$(git show "${RELEASE_COMMIT}:Cargo.toml" |
+            sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+          if [ "$COMMIT_VERSION" != "$VERSION" ]; then
+            echo "::error::${VERSION_TAG} does not point to a v${VERSION} source tree"
+            exit 1
+          fi
+
+          echo "Publishing merged release v${VERSION} from ${RELEASE_COMMIT}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Set workspace Cargo version
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: |
           python3 - <<EOF
           import re, os
           v = os.environ['VERSION']
@@ -96,6 +206,7 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
 
       - name: Set npm package versions
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           # The bindings addon ships as a wrapper + per-platform prebuild packages
@@ -118,6 +229,10 @@ jobs:
             "
           done
 
+      - name: Regenerate Cargo lockfile
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: cargo metadata --format-version 1 >/dev/null
+
       # Dry-run build jobs start from the untagged commit, so carry the exact
       # versioned manifests that a real release would commit into those fresh
       # checkouts. This keeps the addon binary, wrapper, and platform packages
@@ -127,9 +242,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: release-version-manifests
-          retention-days: 1
+          retention-days: 30
           path: |
             Cargo.toml
+            Cargo.lock
             packages/core/package.json
             packages/commands/package.json
             packages/sdk/package.json
@@ -143,13 +259,20 @@ jobs:
             packages/bindings/npm/linux-x64-gnu/package.json
             packages/bindings/npm/linux-arm64-gnu/package.json
 
-      - name: Commit and tag
-        if: ${{ !inputs.dry_run }}
+      - name: Open release pull request
+        if: ${{ inputs.stable_action == 'prepare' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
+          if ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$RELEASE_BRANCH"; then
+            echo "::error::release_branch must be the Linear-derived branch for the release issue"
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml packages/core/package.json packages/commands/package.json \
+          git add Cargo.toml Cargo.lock packages/core/package.json packages/commands/package.json \
             packages/sdk/package.json packages/testing/package.json \
             client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
             packages/bindings/package.json crates/alien-bindings-node/package.json \
@@ -159,21 +282,163 @@ jobs:
             packages/ai-gateway/npm/darwin-arm64/package.json packages/ai-gateway/npm/darwin-x64/package.json \
             packages/ai-gateway/npm/linux-x64-gnu/package.json packages/ai-gateway/npm/linux-arm64-gnu/package.json
           git commit -m "chore: release v${VERSION}"
-          git tag "v${VERSION}"
-          git push
-          git push --tags
+          BRANCH="$RELEASE_BRANCH"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url')
+            if [ -z "$PR_URL" ]; then
+              echo "::error::${BRANCH} exists without an open release PR"
+              exit 1
+            fi
+            echo "Release PR already exists: ${PR_URL}"
+            exit 0
+          fi
+          git switch -c "$BRANCH"
+          git push --set-upstream origin "$BRANCH"
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: release v${VERSION}" \
+            --body "Version-only release PR generated by the stable release workflow. The **Release qualification** check builds and records the exact artifact set. After every required check passes and this merges, run the stable **publish** action from \`main\` to promote those qualified artifacts."
+
+      - name: Validate merged package versions
+        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.merged_version.outputs.version }}
+        run: |
+          git checkout --detach "${{ steps.merged_version.outputs.commit }}"
+          cargo metadata --format-version 1 --locked >/dev/null
+          for pkg in packages/core packages/commands packages/sdk packages/testing \
+            client-sdks/platform/typescript client-sdks/manager/typescript \
+            packages/bindings crates/alien-bindings-node \
+            packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
+            packages/bindings/npm/linux-x64-gnu packages/bindings/npm/linux-arm64-gnu; do
+            ACTUAL=$(node -p "require('./${pkg}/package.json').version")
+            if [ "$ACTUAL" != "$VERSION" ]; then
+              echo "::error::${pkg}/package.json has version ${ACTUAL}, expected ${VERSION}"
+              exit 1
+            fi
+          done
+
+      - name: Login to GHCR for qualification verification
+        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release qualification
+        id: verify_qualification
+        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
+          VERSION: ${{ steps.merged_version.outputs.version }}
+        run: |
+          PR_JSON=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/commits/${RELEASE_COMMIT}/pulls" \
+            --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last')
+          HEAD_SHA=$(jq -r '.head.sha // empty' <<< "$PR_JSON")
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::The release commit is not associated with a merged pull request"
+            exit 1
+          fi
+
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow release-qualification.yml \
+            --commit "$HEAD_SHA" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No successful release qualification exists for ${HEAD_SHA}"
+            exit 1
+          fi
+
+          mkdir -p qualification
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name release-qualification-manifest \
+            --dir qualification
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir qualification/artifacts
+
+          QUALIFIED_VERSION=$(jq -r '.version' qualification/manifest.json)
+          QUALIFIED_HEAD=$(jq -r '.headSha' qualification/manifest.json)
+          QUALIFIED_TREE=$(jq -r '.sourceTree' qualification/manifest.json)
+          RELEASE_TREE=$(git rev-parse "${RELEASE_COMMIT}^{tree}")
+          if [ "$QUALIFIED_VERSION" != "$VERSION" ] || \
+             [ "$QUALIFIED_HEAD" != "$HEAD_SHA" ] || \
+             [ "$QUALIFIED_TREE" != "$RELEASE_TREE" ]; then
+            echo "::error::Qualified artifact set does not match the merged release tree"
+            exit 1
+          fi
+
+          jq -r '.artifacts | to_entries[] | [.key, .value] | @tsv' \
+            qualification/manifest.json |
+            while IFS=$'\t' read -r qualified_path expected_checksum; do
+              relative_path=${qualified_path#qualified-artifacts/}
+              artifact_path="qualification/artifacts/${relative_path}"
+              if [ ! -f "$artifact_path" ]; then
+                echo "::error::Qualified artifact is missing: ${relative_path}"
+                exit 1
+              fi
+              actual_checksum=$(sha256sum "$artifact_path" | awk '{print $1}')
+              if [ "$actual_checksum" != "$expected_checksum" ]; then
+                echo "::error::Qualified artifact checksum changed: ${relative_path}"
+                exit 1
+              fi
+            done
+
+          jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
+            qualification/manifest.json |
+            while IFS=$'\t' read -r image expected_digest; do
+              ref="ghcr.io/alienplatform/${image}:qualification-${HEAD_SHA}"
+              actual_digest=$(docker buildx imagetools inspect "$ref" |
+                sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+              if [ "$actual_digest" != "$expected_digest" ]; then
+                echo "::error::Qualified image digest changed: ${image}"
+                exit 1
+              fi
+            done
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Select release source
+        id: release_source
+        run: |
+          if [ "${{ inputs.stable_action }}" = "qualification" ]; then
+            echo "ref=${{ inputs.source_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ steps.merged_version.outputs.commit }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select downstream release state
+        id: release_state
+        run: |
+          if [ "${{ inputs.stable_action }}" = "qualification" ] || \
+             [ "${{ inputs.stable_action }}" = "publish" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # ─── Changelog generation ──────────────────────────────────────────
 
   generate-changelog:
     needs: prepare
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
           fetch-depth: 0
 
       - name: Generate changelog
@@ -189,14 +454,14 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: changelog
-          retention-days: 1
+          retention-days: 30
           path: CHANGELOG-release.md
 
   # ─── Registry publishing (crates.io + npm) ──────────────────────────
 
   publish-crates:
     needs: [prepare]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     env:
@@ -204,7 +469,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -224,10 +489,50 @@ jobs:
           version: "27.x"
           repo-token: ${{ github.token }}
 
+      - name: Download qualified crates
+        if: ${{ inputs.stable_action == 'publish' }}
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-crates
+          path: qualified/crates
+
       - name: Publish crates
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          mkdir -p qualified/crates
+          wait_for_crates_io_index() {
+            local crate=$1 expected_checksum=$2 index_path published_checksum
+            case "${#crate}" in
+              1) index_path="1/${crate}" ;;
+              2) index_path="2/${crate}" ;;
+              3) index_path="3/${crate:0:1}/${crate}" ;;
+              *) index_path="${crate:0:2}/${crate:2:2}/${crate}" ;;
+            esac
+            for attempt in $(seq 1 30); do
+              published_checksum=$(curl --fail --silent --show-error \
+                "https://index.crates.io/${index_path}" 2>/dev/null |
+                jq -s -r --arg version "$VERSION" \
+                  'map(select(.vers == $version)) | last | .cksum // empty' ||
+                true)
+              if [ "$published_checksum" = "$expected_checksum" ]; then
+                echo "${crate}@${VERSION} is available in the crates.io index"
+                return 0
+              fi
+              if [ -n "$published_checksum" ]; then
+                echo "::error::${crate}@${VERSION} reached the index with a different checksum"
+                return 1
+              fi
+              echo "Waiting for ${crate}@${VERSION} index propagation (${attempt}/30)..."
+              sleep 10
+            done
+            echo "::error::Timed out waiting for ${crate}@${VERSION} in the crates.io index"
+            return 1
+          }
+
           for crate in \
             alien-error-derive \
             alien-macros \
@@ -247,20 +552,69 @@ jobs:
             alien-sdk \
             alien-commands \
             alien-commands-client; do
+            if [ "${{ inputs.stable_action }}" = "qualification" ]; then
+              echo "Recording package inputs for $crate..."
+              depot cargo package -p "$crate" --list |
+                LC_ALL=C sort > "qualified/crates/${crate}-${VERSION}.files"
+              continue
+            fi
+
+            depot cargo package -p "$crate" --list |
+              LC_ALL=C sort > "${crate}-${VERSION}.files"
+            if ! cmp -s \
+              "${crate}-${VERSION}.files" \
+              "qualified/crates/${crate}-${VERSION}.files"; then
+              echo "::error::${crate}@${VERSION} package inputs differ from qualification"
+              diff -u \
+                "qualified/crates/${crate}-${VERSION}.files" \
+                "${crate}-${VERSION}.files" || true
+              exit 1
+            fi
+
+            # Cargo validates normalized registry dependencies while assembling
+            # the archive. A dependent crate cannot be packaged until the
+            # qualified prerequisite version exists in crates.io, so final
+            # assembly happens here in dependency order.
+            echo "Packaging $crate..."
+            depot cargo package -p "$crate" --no-verify
+            package="target/package/${crate}-${VERSION}.crate"
+            checksum=$(sha256sum "$package" | awk '{print $1}')
+            published_checksum=$(curl --fail --silent --show-error \
+              "https://crates.io/api/v1/crates/${crate}/${VERSION}" |
+              jq -r '.version.checksum // empty' 2>/dev/null || true)
+            if [ -n "$published_checksum" ]; then
+              if [ "$published_checksum" != "$checksum" ]; then
+                echo "::error::${crate}@${VERSION} exists with a different checksum"
+                exit 1
+              fi
+              echo "${crate}@${VERSION} already matches the qualified package"
+              wait_for_crates_io_index "$crate" "$checksum"
+              continue
+            fi
+
             echo "Publishing $crate..."
             depot cargo publish -p "$crate" --no-verify
-            sleep 20
+            wait_for_crates_io_index "$crate" "$checksum"
           done
+
+      - name: Upload qualified crates
+        if: ${{ inputs.stable_action == 'qualification' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-crates
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified/crates/
 
   publish-npm:
     needs: [prepare]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -273,42 +627,87 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - uses: oven-sh/setup-bun@v2
+        if: ${{ inputs.stable_action == 'qualification' }}
         with:
           bun-version: "1.3.14"
 
       - name: Validate npm auth
+        if: ${{ inputs.stable_action == 'publish' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm whoami
 
       - name: Install dependencies
+        if: ${{ inputs.stable_action == 'qualification' }}
         run: pnpm install --frozen-lockfile
 
       - name: Build
+        if: ${{ inputs.stable_action == 'qualification' }}
         run: pnpm build
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
+
+      - name: Download qualified npm packages
+        if: ${{ inputs.stable_action == 'publish' }}
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-npm
+          path: qualified/npm
 
       - name: Publish npm packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          pnpm --filter @alienplatform/core publish --access public --no-git-checks
-          # commands must land before testing: @alienplatform/testing depends on it,
-          # and publish rewrites the workspace:* range to this release's version.
-          pnpm --filter @alienplatform/commands publish --access public --no-git-checks
-          pnpm --filter @alienplatform/sdk publish --access public --no-git-checks
-          pnpm --filter @alienplatform/testing publish --access public --no-git-checks
+          if [ "${{ inputs.stable_action }}" = "qualification" ]; then
+            mkdir -p qualified/npm
+            for package in core commands sdk testing; do
+              pnpm --filter "@alienplatform/${package}" pack --pack-destination qualified/npm
+            done
+            exit 0
+          fi
+
+          publish_tarball() {
+            local tarball="$1" package="$2"
+            local integrity
+            integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+            local published
+            published=$(npm view "${package}@${{ needs.prepare.outputs.version }}" dist.integrity 2>/dev/null || true)
+            if [ -n "$published" ]; then
+              if [ "$published" != "$integrity" ]; then
+                echo "::error::${package}@${{ needs.prepare.outputs.version }} exists with different contents"
+                exit 1
+              fi
+              echo "${package}@${{ needs.prepare.outputs.version }} already matches the qualified package"
+            else
+              npm publish "$tarball" --access public
+            fi
+          }
+
+          publish_tarball qualified/npm/alienplatform-core-${{ needs.prepare.outputs.version }}.tgz @alienplatform/core
+          publish_tarball qualified/npm/alienplatform-commands-${{ needs.prepare.outputs.version }}.tgz @alienplatform/commands
+          publish_tarball qualified/npm/alienplatform-sdk-${{ needs.prepare.outputs.version }}.tgz @alienplatform/sdk
+          publish_tarball qualified/npm/alienplatform-testing-${{ needs.prepare.outputs.version }}.tgz @alienplatform/testing
+
+      - name: Upload qualified npm packages
+        if: ${{ inputs.stable_action == 'qualification' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-npm
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified/npm/
 
   publish-client-sdks:
     needs: [prepare]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -320,28 +719,78 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
+        if: ${{ inputs.stable_action == 'publish' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm whoami
 
-      - name: Build and publish platform API SDK
+      - name: Build platform API SDK
+        if: ${{ inputs.stable_action == 'qualification' }}
         working-directory: client-sdks/platform/typescript
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           npm install
           npm run build
-          npm publish --access public
 
-      - name: Build and publish manager API SDK
+      - name: Build manager API SDK
+        if: ${{ inputs.stable_action == 'qualification' }}
         working-directory: client-sdks/manager/typescript
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm install
           npm run build
-          npm publish --access public
+
+      - name: Pack qualified client SDKs
+        if: ${{ inputs.stable_action == 'qualification' }}
+        run: |
+          mkdir -p qualified/client-sdks
+          destination="$PWD/qualified/client-sdks"
+          (cd client-sdks/platform/typescript && npm pack --pack-destination "$destination")
+          (cd client-sdks/manager/typescript && npm pack --pack-destination "$destination")
+
+      - name: Upload qualified client SDKs
+        if: ${{ inputs.stable_action == 'qualification' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-client-sdks
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified/client-sdks/
+
+      - name: Download qualified client SDKs
+        if: ${{ inputs.stable_action == 'publish' }}
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-client-sdks
+          path: qualified/client-sdks
+
+      - name: Publish qualified client SDKs
+        if: ${{ inputs.stable_action == 'publish' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          publish_tarball() {
+            local tarball="$1" package="$2"
+            local integrity
+            integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+            local published
+            published=$(npm view "${package}@${VERSION}" dist.integrity 2>/dev/null || true)
+            if [ -n "$published" ]; then
+              if [ "$published" != "$integrity" ]; then
+                echo "::error::${package}@${VERSION} exists with different contents"
+                exit 1
+              fi
+              echo "${package}@${VERSION} already matches the qualified package"
+            else
+              npm publish "$tarball" --access public
+            fi
+          }
+
+          publish_tarball "qualified/client-sdks/alienplatform-platform-api-${VERSION}.tgz" "@alienplatform/platform-api"
+          publish_tarball "qualified/client-sdks/alienplatform-manager-api-${VERSION}.tgz" "@alienplatform/manager-api"
 
   # ─── Native addon prebuilds (@alienplatform/bindings) ──────────────
   #
@@ -349,15 +798,13 @@ jobs:
   # packages (`@alienplatform/bindings-<triple>`) that carry a compiled `.node`,
   # so `npm install @alienplatform/bindings` needs no Rust toolchain. Each triple
   # builds on its native runner (darwin-x64 cross-builds on the arm mac — same
-  # toolchain via `--target`). Unlike the other build/publish jobs, build-addon
-  # and publish-bindings also run on dry_run (checking out the untagged HEAD and
-  # publishing with `--dry-run`) so a maintainer can validate the whole
-  # build → smoke → publish path — including the linux halves that can't run
-  # pre-merge — without cutting a real release.
+  # toolchain via `--target`). Qualification records the four native artifacts,
+  # runs the consumer smoke tests, then packs the exact npm tarballs that the
+  # publish action later promotes.
 
   build-addon:
     needs: prepare
-    if: inputs.mode == 'stable'
+    if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification'
     strategy:
       fail-fast: false
       matrix:
@@ -389,7 +836,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
@@ -468,7 +915,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: addon-${{ matrix.triple }}
-          retention-days: 1
+          retention-days: 30
           path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
 
       # The AI gateway addon reuses this matrix (same runners/toolchain) — it also
@@ -503,7 +950,7 @@ jobs:
   # installs with a real local-provider KV operation.
   smoke-addon:
     needs: [prepare, build-addon]
-    if: inputs.mode == 'stable'
+    if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification'
     strategy:
       fail-fast: false
       matrix:
@@ -525,7 +972,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
@@ -575,20 +1022,17 @@ jobs:
           if [ "$EXECUTE_NATIVE" = "true" ]; then args+=(--execute); fi
           bash scripts/smoke-addon-prebuild.sh "${args[@]}"
 
-  publish-bindings:
+  qualify-bindings:
     needs: [prepare, smoke-addon, publish-npm]
-    # publish-npm skips on dry_run, so a bare `needs` would cascade-skip the
-    # dry-run path this job deliberately supports. On a real release, wait for
-    # publish-npm to succeed: the wrapper's package.json pins
-    # `@alienplatform/core: ^<release>`, so publishing it while core's publish
-    # failed leaves every `npm install @alienplatform/bindings` ETARGET-broken.
-    if: inputs.mode == 'stable' && always() && needs.smoke-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    # The wrapper pins @alienplatform/core, so qualify it only after the core
+    # package has been packed successfully and every native smoke test passes.
+    if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' && always() && needs.smoke-addon.result == 'success' && needs.publish-npm.result == 'success'
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
@@ -617,15 +1061,10 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      - name: Validate npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Download addon artifacts
+      - name: Download qualification addon artifacts
         uses: actions/download-artifact@v7
         with:
           pattern: addon-*
@@ -642,31 +1081,11 @@ jobs:
       - name: Build wrapper
         run: pnpm --filter @alienplatform/bindings build
 
-      # Platform packages publish FIRST so an install of the wrapper can never
-      # race ahead of the optionalDependencies it pins.
-      - name: Publish platform prebuild packages (first)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+      - name: Pack platform prebuild packages
         run: |
+          mkdir -p qualified/bindings
           for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
-            package="@alienplatform/bindings-${triple}"
-            if [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "Dry-running ${package}@${VERSION}..."
-              ( cd "packages/bindings/npm/${triple}" && npm publish --access public --dry-run )
-              continue
-            fi
-
-            # npm has no multi-package transaction. Publishing every platform
-            # before the wrapper keeps incomplete releases unreachable, while
-            # this existence check makes a retry resume after a partial publish.
-            published="$(npm view "${package}@${VERSION}" version 2>/dev/null || true)"
-            if [ "$published" = "$VERSION" ]; then
-              echo "${package}@${VERSION} is already published; continuing"
-            else
-              echo "Publishing ${package}@${VERSION}..."
-              ( cd "packages/bindings/npm/${triple}" && npm publish --access public )
-            fi
+            npm pack "packages/bindings/npm/${triple}" --pack-destination "$PWD/qualified/bindings"
           done
 
       # Inject exact-version optionalDependencies explicitly (see the script) —
@@ -674,22 +1093,71 @@ jobs:
       - name: Inject optionalDependencies into the wrapper
         run: node packages/bindings/scripts/inject-optional-deps.mjs
 
-      - name: Publish wrapper (last)
+      - name: Pack bindings wrapper
+        run: npm pack ./packages/bindings --pack-destination "$PWD/qualified/bindings"
+
+      - name: Upload qualified bindings packages
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-bindings
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified/bindings/
+
+  publish-bindings:
+    needs: [prepare, publish-npm]
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Download qualified bindings packages
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-bindings
+          path: qualified/bindings
+
+      - name: Publish qualified bindings packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            pnpm --filter @alienplatform/bindings publish --access public --no-git-checks --dry-run
-            exit 0
-          fi
+          publish_tarball() {
+            local tarball="$1" package="$2"
+            local integrity
+            integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+            local published
+            published=$(npm view "${package}@${VERSION}" dist.integrity 2>/dev/null || true)
+            if [ -n "$published" ]; then
+              if [ "$published" != "$integrity" ]; then
+                echo "::error::${package}@${VERSION} exists with different contents"
+                exit 1
+              fi
+              echo "${package}@${VERSION} already matches the qualified package"
+            else
+              npm publish "$tarball" --access public
+            fi
+          }
 
-          published="$(npm view "@alienplatform/bindings@${VERSION}" version 2>/dev/null || true)"
-          if [ "$published" = "$VERSION" ]; then
-            echo "@alienplatform/bindings@${VERSION} is already published; continuing"
-          else
-            pnpm --filter @alienplatform/bindings publish --access public --no-git-checks
-          fi
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            publish_tarball \
+              "qualified/bindings/alienplatform-bindings-${triple}-${VERSION}.tgz" \
+              "@alienplatform/bindings-${triple}"
+          done
+          publish_tarball \
+            "qualified/bindings/alienplatform-bindings-${VERSION}.tgz" \
+            "@alienplatform/bindings"
 
   publish-ai-gateway:
     needs: [prepare, build-addon, publish-npm]
@@ -765,7 +1233,7 @@ jobs:
 
   build-binaries-linux-x86_64:
     needs: prepare
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 60
     env:
@@ -773,7 +1241,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
@@ -815,12 +1283,12 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: binaries-x86_64-unknown-linux-musl
-          retention-days: 1
+          retention-days: 30
           path: staged/x86_64-unknown-linux-musl/
 
   build-binaries-linux-aarch64:
     needs: prepare
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
     env:
@@ -828,7 +1296,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
@@ -870,14 +1338,14 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: binaries-aarch64-unknown-linux-musl
-          retention-days: 1
+          retention-days: 30
           path: staged/aarch64-unknown-linux-musl/
 
   # ─── macOS build (aarch64 only, native) ────────────────────────────
 
   build-binaries-darwin:
     needs: prepare
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-macos-15
     timeout-minutes: 60
     env:
@@ -885,7 +1353,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
@@ -940,14 +1408,14 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: binaries-aarch64-apple-darwin
-          retention-days: 1
+          retention-days: 30
           path: staged/aarch64-apple-darwin/
 
   # ─── Windows build (x86_64, native MSVC) ──────────────────────────
 
   build-binaries-windows:
     needs: prepare
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-windows-2025-16
     timeout-minutes: 60
     env:
@@ -955,7 +1423,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
@@ -1013,20 +1481,22 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: binaries-x86_64-pc-windows-msvc
-          retention-days: 1
+          retention-days: 30
           path: staged/x86_64-pc-windows-msvc/
 
   # ─── Upload binaries to S3 ──────────────────────────────────────────
 
   upload-binaries:
-    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    needs: prepare
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         with:
+          run-id: ${{ inputs.stable_action == 'publish' && needs.prepare.outputs.qualification_run_id || github.run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           pattern: binaries-*
           path: ./artifacts
           merge-multiple: false
@@ -1045,8 +1515,21 @@ jobs:
           upload() {
             local binary=$1 target=$2 os=$3 arch=$4
             local src="./artifacts/binaries-${target}/${binary}"
-            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
-            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
+            local versioned="s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}"
+            local checksum
+            checksum=$(sha256sum "$src" | awk '{print $1}')
+            local published
+            published=$(aws s3api head-object \
+              --bucket alien-releases-prod \
+              --key "${binary}/v${VERSION}/${os}-${arch}/${binary}" \
+              --query 'Metadata.sha256' --output text 2>/dev/null || true)
+            if [ -n "$published" ] && [ "$published" != "None" ] && [ "$published" != "$checksum" ]; then
+              echo "::error::${versioned} exists with different contents"
+              exit 1
+            fi
+            if [ "$published" != "$checksum" ]; then
+              aws s3 cp "$src" "$versioned" --metadata "sha256=${checksum}"
+            fi
           }
 
           for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
@@ -1061,25 +1544,32 @@ jobs:
           upload_exe() {
             local binary=$1 target=$2 os=$3 arch=$4
             local src="./artifacts/binaries-${target}/${binary}.exe"
-            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}.exe"
-            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}.exe"
+            local versioned="s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}.exe"
+            local checksum
+            checksum=$(sha256sum "$src" | awk '{print $1}')
+            local published
+            published=$(aws s3api head-object \
+              --bucket alien-releases-prod \
+              --key "${binary}/v${VERSION}/${os}-${arch}/${binary}.exe" \
+              --query 'Metadata.sha256' --output text 2>/dev/null || true)
+            if [ -n "$published" ] && [ "$published" != "None" ] && [ "$published" != "$checksum" ]; then
+              echo "::error::${versioned} exists with different contents"
+              exit 1
+            fi
+            if [ "$published" != "$checksum" ]; then
+              aws s3 cp "$src" "$versioned" --metadata "sha256=${checksum}"
+            fi
           }
 
           for binary in alien alien-deploy alien-operator; do
             upload_exe "$binary" x86_64-pc-windows-msvc windows x86_64
           done
 
-      - name: Invalidate CloudFront cache
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
-
   # ─── GitHub Release ────────────────────────────────────────────────
 
-  create-github-release:
+  qualify-github-release:
     needs: [prepare, generate-changelog, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
@@ -1127,34 +1617,33 @@ jobs:
           cd dist
           sha256sum alien-v${VERSION}-*.tar.gz alien-v${VERSION}-*.zip > "alien-v${VERSION}-checksums.txt"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload qualified GitHub release payload
+        uses: actions/upload-artifact@v6
         with:
-          tag_name: v${{ needs.prepare.outputs.version }}
-          name: Alien v${{ needs.prepare.outputs.version }}
-          body_path: CHANGELOG-release.md
-          files: |
-            dist/alien-v*-*.tar.gz
-            dist/alien-v*-*.zip
-            dist/alien-v*-checksums.txt
-          draft: false
-          prerelease: false
+          name: qualified-github-release
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            CHANGELOG-release.md
+            dist/
 
   # ─── Docker images + Helm chart ─────────────────────────────────────
 
-  publish-images:
-    needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+  qualify-images:
+    needs: [prepare, build-addon, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Download linux binaries
         uses: actions/download-artifact@v7
         with:
+          run-id: ${{ inputs.stable_action == 'publish' && needs.prepare.outputs.qualification_run_id || github.run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           pattern: binaries-*-unknown-linux-musl
           path: ./linux-bins
           merge-multiple: false
@@ -1168,6 +1657,22 @@ jobs:
               chmod +x "target/${target}/release/${binary}"
             done
           done
+
+      - name: Download Linux Worker addons
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ inputs.stable_action == 'publish' && needs.prepare.outputs.qualification_run_id || github.run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          pattern: addon-linux-*-gnu
+          path: ./linux-addons
+          merge-multiple: true
+
+      - name: Place Worker addons in Docker build context
+        run: |
+          cp ./linux-addons/alien-bindings-node.linux-x64-gnu.node \
+            crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+          cp ./linux-addons/alien-bindings-node.linux-arm64-gnu.node \
+            crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -1185,10 +1690,10 @@ jobs:
         with:
           images: ghcr.io/alienplatform/alien-base
           tags: |
-            type=raw,value=latest
-            type=raw,value=v${{ needs.prepare.outputs.version }}
+            type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-base
+        id: publish_base
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
@@ -1201,14 +1706,47 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Metadata (alien-worker-typescript)
+        id: meta_worker_typescript
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-worker-typescript
+          tags: |
+            type=raw,value=qualification-${{ inputs.source_ref }}
+
+      - name: Publish alien-worker-typescript
+        id: publish_worker_typescript
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-worker-typescript
+          build-args: |
+            ALIEN_WORKER_BASE=ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_worker_typescript.outputs.tags }}
+          labels: ${{ steps.meta_worker_typescript.outputs.labels }}
+          provenance: true
+          sbom: true
+
+      - name: Smoke-test Worker base images
+        env:
+          GENERIC_BASE: ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
+          TYPESCRIPT_BASE: ghcr.io/alienplatform/alien-worker-typescript@${{ steps.publish_worker_typescript.outputs.digest }}
+        run: |
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$GENERIC_BASE" \
+            -c 'test ! -e /usr/local/bin/bun && test -x /app/alien-worker-runtime'
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/bun "$TYPESCRIPT_BASE" \
+            -e 'const a=require("/app/alien-bindings.node"); if (!a.version()) throw new Error("native version() returned empty")'
+
       - name: Metadata (alien-builder)
         id: meta_builder
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/alienplatform/alien-builder
           tags: |
-            type=raw,value=latest
-            type=raw,value=v${{ needs.prepare.outputs.version }}
+            type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-builder
         uses: depot/build-push-action@v1
@@ -1229,8 +1767,7 @@ jobs:
         with:
           images: ghcr.io/alienplatform/alien-operator
           tags: |
-            type=raw,value=latest
-            type=raw,value=v${{ needs.prepare.outputs.version }}
+            type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-operator
         uses: depot/build-push-action@v1
@@ -1251,8 +1788,7 @@ jobs:
         with:
           images: ghcr.io/alienplatform/alien-manager
           tags: |
-            type=raw,value=latest
-            type=raw,value=v${{ needs.prepare.outputs.version }}
+            type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-manager
         uses: depot/build-push-action@v1
@@ -1267,11 +1803,142 @@ jobs:
           provenance: true
           sbom: true
 
+  publish-images:
+    needs: prepare
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download qualification manifest
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: release-qualification-manifest
+          path: qualification
+
+      - name: Promote qualified image manifests
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
+            qualification/manifest.json |
+            while IFS=$'\t' read -r name source_digest; do
+              image="ghcr.io/alienplatform/${name}"
+              if ! docker buildx imagetools inspect "${image}@${source_digest}" >/dev/null; then
+                echo "::error::Qualified image ${image}@${source_digest} is unavailable"
+                exit 1
+              fi
+
+              versioned="${image}:v${VERSION}"
+              published_digest=$(docker buildx imagetools inspect "$versioned" 2>/dev/null |
+                sed -n 's/^Digest:[[:space:]]*//p' | head -n1 || true)
+              if [ -n "$published_digest" ] && [ "$published_digest" != "$source_digest" ]; then
+                echo "::error::${versioned} exists with a different manifest"
+                exit 1
+              fi
+
+              docker buildx imagetools create \
+                --tag "$versioned" \
+                --tag "${image}:latest" \
+                "${image}@${source_digest}"
+            done
+
+  # Publish the GitHub release only after the registries and binary store have
+  # accepted their qualified artifacts. Homebrew follows because its formula
+  # references these release assets.
+  create-github-release:
+    needs:
+      - prepare
+      - publish-crates
+      - publish-npm
+      - publish-client-sdks
+      - publish-bindings
+      - upload-binaries
+      - publish-images
+      - publish-npm-cli-wrapper
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          ref: ${{ needs.prepare.outputs.release_commit }}
+          fetch-depth: 0
+
+      - name: Download qualified GitHub release payload
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-github-release
+          path: .
+
+      - name: Tag qualified release commit
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v${VERSION}"
+          COMMIT="${{ needs.prepare.outputs.release_commit }}"
+          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+            TAG_COMMIT=$(git rev-list -n1 "$TAG")
+            if [ "$TAG_COMMIT" != "$COMMIT" ]; then
+              echo "::error::${TAG} already points to ${TAG_COMMIT}, expected ${COMMIT}"
+              exit 1
+            fi
+            echo "${TAG} already points to the qualified release commit"
+          else
+            git tag "$TAG" "$COMMIT"
+            git push origin "$TAG"
+          fi
+
+      - name: Verify existing GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          assets=$(gh release view "v${VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets 2>/dev/null || echo '{"assets":[]}')
+          for file in dist/*; do
+            name=$(basename "$file")
+            published=$(jq -r --arg name "$name" \
+              '.assets[] | select(.name == $name) | .digest // empty' <<< "$assets")
+            if [ -z "$published" ]; then
+              continue
+            fi
+            checksum="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            if [ "$published" != "$checksum" ]; then
+              echo "::error::GitHub release asset ${name} exists with different contents"
+              exit 1
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: Alien v${{ needs.prepare.outputs.version }}
+          body_path: CHANGELOG-release.md
+          files: |
+            dist/alien-v*-*.tar.gz
+            dist/alien-v*-*.zip
+            dist/alien-v*-checksums.txt
+          draft: false
+          prerelease: false
+
   # ─── Homebrew tap ──────────────────────────────────────────────────
 
   publish-homebrew-tap:
     needs: [prepare, create-github-release]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
@@ -1290,9 +1957,11 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           FILE="alien-v${VERSION}-checksums.txt"
-          echo "linux_x64=$(grep 'x86_64-unknown-linux-musl' "$FILE" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "linux_arm64=$(grep 'aarch64-unknown-linux-musl' "$FILE" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "darwin_arm64=$(grep 'aarch64-apple-darwin' "$FILE" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          {
+            echo "linux_x64=$(grep 'x86_64-unknown-linux-musl' "$FILE" | awk '{print $1}')"
+            echo "linux_arm64=$(grep 'aarch64-unknown-linux-musl' "$FILE" | awk '{print $1}')"
+            echo "darwin_arm64=$(grep 'aarch64-apple-darwin' "$FILE" | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Generate Homebrew formula
         run: |
@@ -1344,6 +2013,15 @@ jobs:
         run: |
           git clone "https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/alienplatform/homebrew-tap.git" tap
           mkdir -p tap/Formula
+          if [ -f tap/Formula/alien.rb ] &&
+             grep -q "version \"${{ needs.prepare.outputs.version }}\"" tap/Formula/alien.rb; then
+            if ! cmp -s alien.rb tap/Formula/alien.rb; then
+              echo "::error::Homebrew already has v${{ needs.prepare.outputs.version }} with different contents"
+              exit 1
+            fi
+            echo "Homebrew formula already matches v${{ needs.prepare.outputs.version }}"
+            exit 0
+          fi
           cp alien.rb tap/Formula/alien.rb
           cd tap
           git config user.name "github-actions[bot]"
@@ -1352,31 +2030,53 @@ jobs:
           git diff --staged --quiet || git commit -m "Update alien to v${{ needs.prepare.outputs.version }}"
           git push
 
+  # A release channel is one atomic pointer. Consumers resolve it before
+  # downloading immutable versioned binaries; independent latest object copies
+  # cannot provide an atomic release boundary.
+  publish-stable-channel:
+    needs: [prepare, publish-homebrew-tap]
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 5
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
+          aws-region: us-east-1
+
+      - name: Publish stable channel
+        run: |
+          printf 'v%s\n' '${{ needs.prepare.outputs.version }}' > stable
+          published=$(aws s3 cp \
+            s3://alien-releases-prod/channels/stable - 2>/dev/null || true)
+          if [ "$published" = "$(cat stable)" ]; then
+            echo "Stable channel already points to ${published}"
+            exit 0
+          fi
+          aws s3 cp stable s3://alien-releases-prod/channels/stable \
+            --cache-control 'no-cache'
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.RELEASES_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths '/channels/stable'
+
   # ─── npm CLI wrapper ───────────────────────────────────────────────
 
-  publish-npm-cli-wrapper:
+  qualify-npm-cli-wrapper:
     needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ needs.prepare.outputs.version }}
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.11.0
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-
-      - name: Validate npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
+          package-manager-cache: false
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v7
@@ -1385,8 +2085,54 @@ jobs:
           path: ./artifacts
           merge-multiple: false
 
-      - name: Build and publish npm packages
+      - name: Build qualified npm CLI packages
+        env:
+          MODE: qualify
+          OUTPUT_DIR: ${{ github.workspace }}/qualified/cli
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/build-npm-packages.sh
+
+      - name: Upload qualified npm CLI packages
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-npm-cli
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified/cli/
+
+  publish-npm-cli-wrapper:
+    needs: prepare
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.release_commit }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Validate npm auth
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Download qualified npm CLI packages
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-npm-cli
+          path: qualified/cli
+
+      - name: Publish qualified npm CLI packages
+        env:
+          MODE: publish-existing
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OUTPUT_DIR: ${{ github.workspace }}/qualified/cli
           VERSION: ${{ needs.prepare.outputs.version }}
         run: bash scripts/build-npm-packages.sh

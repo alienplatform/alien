@@ -10,6 +10,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::TfFragment,
+    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -223,6 +224,36 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
         .with_project_number("${data.google_project.current.number}".to_string())
         .with_region("${var.gcp_region}".to_string())
         .with_service_account_name(label.to_string())
+}
+
+/// Gate the IAM bindings appended to `fragment` from `appended_from` on, and
+/// only those.
+///
+/// The calls that emit bindings also emit the custom roles those bindings
+/// reference. Custom roles are shared project-wide and carry their own
+/// `var.gcp_manage_custom_roles` count, so one resource's gate must not reach
+/// them: a second count conflicts, and declining this resource would delete
+/// roles its siblings still hold.
+///
+/// Every emitter that grants against a gated resource has to call this,
+/// including registered extension emitters outside this crate — which is why
+/// it is public. The generator coalesces duplicate cloud memberships only after
+/// every contributor carries the gate of the resource that needs it.
+pub fn gate_bindings(
+    fragment: &mut TfFragment,
+    appended_from: usize,
+    enabled_when: Option<&str>,
+) -> Result<()> {
+    for block in &mut fragment.resource_blocks[appended_from..] {
+        let is_custom_role = block
+            .labels
+            .first()
+            .is_some_and(|label| label.as_str() == "google_project_iam_custom_role");
+        if !is_custom_role {
+            enabled::gate(block, enabled_when)?;
+        }
+    }
+    Ok(())
 }
 
 /// Emit a GCP custom role plus IAM bindings for `permission_set`.

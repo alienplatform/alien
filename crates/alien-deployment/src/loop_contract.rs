@@ -22,6 +22,8 @@ pub enum LoopStopReason {
     Handoff,
     /// No work was available (no target release, no config, etc.).
     NoWork,
+    /// The next useful reconciliation is scheduled for later.
+    Delayed,
     /// Step budget exhausted without reaching a terminal state.
     BudgetExceeded,
     /// Loop was cancelled by an external signal.

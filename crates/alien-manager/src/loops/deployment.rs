@@ -42,8 +42,6 @@ const MAX_STEPS_PER_HEARTBEAT: usize = 1;
 pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Maximum acquire/process batches before yielding back to the interval sleep.
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
-/// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
-const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
 /// Google documents IAM policy changes as typically propagating within two
 /// minutes, but potentially taking seven minutes or longer. Keep the first
 /// target-side token exchange retryable for a bounded window after setup hands
@@ -580,6 +578,14 @@ impl DeploymentLoop {
             if config.monitoring.is_none() {
                 config.monitoring = monitoring;
             }
+            // A control plane that predates gate answers omits inputValues
+            // entirely; resolving gates from declared defaults instead of the
+            // stored answers would deprovision an enabled resource. Whenever
+            // gates exist their answers are materialized at install, so a
+            // legitimately supplied map is never empty.
+            if config.input_values.is_empty() {
+                config.input_values = deployment.input_values.clone();
+            }
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -590,6 +596,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
+                input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
                 management_config,
@@ -683,7 +690,7 @@ impl DeploymentLoop {
         let policy = RunnerPolicy {
             max_steps: options.max_steps,
             operation,
-            delay_threshold: Some(Duration::from_millis(SUGGESTED_DELAY_THRESHOLD_MS)),
+            delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
         };
 
         let transport = ManagerTransport::new(
@@ -1065,6 +1072,7 @@ mod tests {
             user_environment_variables: None,
             management_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             deployment_config: None,
             retry_requested: false,
             locked_by: None,

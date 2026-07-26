@@ -4,7 +4,7 @@ pub use controller::*;
 mod registry;
 pub use registry::*;
 mod executor;
-pub use executor::{PlanResult, StackExecutor, StepResult};
+pub use executor::{PlanResult, RunningResourcePolicy, StackExecutor, StepResult};
 
 mod service_provider;
 pub use service_provider::*;

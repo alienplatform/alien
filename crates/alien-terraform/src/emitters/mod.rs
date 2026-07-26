@@ -9,6 +9,7 @@
 
 pub mod aws;
 pub mod azure;
+pub mod enabled;
 pub mod gcp;
 pub mod kubernetes_cluster;
 pub mod worker_environment;

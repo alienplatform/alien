@@ -38,6 +38,22 @@ impl ManagerApiTransport {
 
 #[async_trait]
 impl DeploymentLoopTransport for ManagerApiTransport {
+    async fn renew_lease(&self, deployment_id: &str) -> Result<(), AlienError> {
+        self.client
+            .renew()
+            .body(alien_manager_api::types::RenewRequest {
+                deployment_id: deployment_id.to_string(),
+                session: self.session.clone(),
+            })
+            .send()
+            .await
+            .into_sdk_error()
+            .context(alien_error::GenericError {
+                message: "Failed to renew deployment lease via manager API".to_string(),
+            })?;
+        Ok(())
+    }
+
     async fn reconcile_step(
         &self,
         deployment_id: &str,

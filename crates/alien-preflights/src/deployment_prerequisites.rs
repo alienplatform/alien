@@ -555,6 +555,7 @@ mod tests {
                 hash: "empty".to_string(),
                 created_at: "2026-05-13T00:00:00Z".to_string(),
             },
+            input_values: Default::default(),
             allow_frozen_changes: false,
             compute_backend: None,
             external_bindings: Default::default(),
@@ -652,6 +653,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -684,6 +686,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -723,6 +726,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -744,6 +748,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -753,6 +758,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -762,6 +768,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 

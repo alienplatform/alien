@@ -382,6 +382,7 @@ impl ComputeClusterMutation {
         // The cluster boundary is setup-owned. Runtime management may still
         // scale or roll workers inside the setup-created boundary.
         let cluster_entry = ResourceEntry {
+            enabled_when: None,
             config: alien_core::Resource::new(cluster),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,
@@ -1574,6 +1575,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1631,6 +1633,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1659,6 +1662,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1705,6 +1709,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1760,6 +1765,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1838,6 +1844,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1904,6 +1911,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1955,6 +1963,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1981,6 +1990,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2036,6 +2046,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2092,6 +2103,7 @@ mod tests {
                     lifecycle: ResourceLifecycle::Live,
                     dependencies: Vec::new(),
                     remote_access: false,
+                    enabled_when: None,
                 },
             );
 
@@ -2178,6 +2190,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2207,6 +2220,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2316,6 +2330,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -2325,6 +2340,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2401,6 +2417,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2485,6 +2502,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -2494,6 +2512,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -2574,6 +2593,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -2583,6 +2603,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

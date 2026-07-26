@@ -63,6 +63,20 @@ where
     }))
 }
 
+/// Like [`traversal`], but indexes into the second segment: `root.label[0].attr`.
+/// Terraform renders a resource carrying `count` as a list, and a gate yields at
+/// most one instance, so the index is always zero.
+pub fn traversal_indexed(root: &str, label: &str, attribute: &str) -> Expression {
+    Expression::Traversal(Box::new(Traversal {
+        expr: Expression::Variable(Identifier::sanitized(root).into()),
+        operators: vec![
+            TraversalOperator::GetAttr(Identifier::sanitized(label)),
+            TraversalOperator::Index(Expression::Number(hcl::Number::from(0))),
+            TraversalOperator::GetAttr(Identifier::sanitized(attribute)),
+        ],
+    }))
+}
+
 /// Build an HCL object literal from `(key, value)` pairs. Identifier-shaped
 /// keys become unquoted; everything else becomes a quoted string key.
 pub fn object<I, K>(pairs: I) -> Expression

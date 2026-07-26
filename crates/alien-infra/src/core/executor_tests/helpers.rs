@@ -304,6 +304,7 @@ pub fn build_stack_with_deps(
                 lifecycle,
                 dependencies: deps,
                 remote_access: false,
+                enabled_when: None,
             },
         );
     }

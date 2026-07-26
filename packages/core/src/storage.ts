@@ -4,7 +4,7 @@ import {
   type Storage as StorageConfig,
   StorageSchema,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { LifecycleRule, StorageOutputs, Storage as StorageConfig } from "./generated/index.js"
 export { StorageSchema as StorageConfigSchema } from "./generated/index.js"
@@ -12,11 +12,12 @@ export { StorageSchema as StorageConfigSchema } from "./generated/index.js"
 /**
  * Represents an object storage bucket.
  */
-export class Storage {
+export class Storage extends ResourceBuilder {
   private _config: Partial<StorageConfig> = {
     publicRead: false,
     versioning: false,
     lifecycleRules: [],
+    corsAllowedOrigins: [],
   }
 
   /**
@@ -24,6 +25,7 @@ export class Storage {
    * @param id ID of the storage bucket. For names with dots, each dot-separated label must be ≤ 63 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -69,6 +71,18 @@ export class Storage {
   }
 
   /**
+   * Allows browser reads from the listed origins through signed URLs.
+   * Providers enable `GET` and `HEAD`; use `*` only when the signed URL itself
+   * is the credential and browser cookies are not involved.
+   * @param origins Allowed browser origins.
+   * @returns The Storage builder instance.
+   */
+  public corsAllowedOrigins(origins: string[]): this {
+    this._config.corsAllowedOrigins = origins
+    return this
+  }
+
+  /**
    * Builds and validates the storage configuration.
    * @returns An immutable Resource representing the configured storage bucket.
    * @throws Error if the storage configuration is invalid.
@@ -76,7 +90,7 @@ export class Storage {
   public build(): Resource {
     const config = StorageSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "storage",
       ...config,
     })

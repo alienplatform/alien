@@ -71,6 +71,7 @@ impl StackMutation for AzureContainerAppsEnvironmentMutation {
 
         // Add it to the stack as a frozen resource
         let env_entry = ResourceEntry {
+            enabled_when: None,
             config: alien_core::Resource::new(container_env),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,

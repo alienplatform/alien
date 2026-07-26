@@ -736,6 +736,13 @@ pub trait ResourceController: Send + Sync + Debug {
         Ok(false)
     }
 
+    /// Whether a Running resource must continue its controller state machine
+    /// during convergence phases. Most Ready resources are periodic health
+    /// checks and should only run in the dedicated Running pass.
+    fn requires_convergence_reconciliation(&self) -> bool {
+        false
+    }
+
     /// Derives the high-level ResourceStatus from the internal state.
     fn get_status(&self) -> ResourceStatus;
 

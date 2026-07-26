@@ -66,6 +66,10 @@ impl CfEmitter for AwsQueueEmitter {
         ]))
     }
 
+    fn supports_enabled_when(&self) -> bool {
+        true
+    }
+
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         let queue_id = required_logical_id(ctx)?;
         Ok(Some(CfExpression::object([

@@ -96,6 +96,7 @@ impl StackMutation for GcpServiceActivationMutation {
 
             // Add it to the stack as a frozen resource
             let service_entry = ResourceEntry {
+                enabled_when: None,
                 config: alien_core::Resource::new(service_activation),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(), // GCP service activations don't depend on other resources

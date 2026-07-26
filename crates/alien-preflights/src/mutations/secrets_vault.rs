@@ -25,6 +25,13 @@ use tracing::{debug, info};
 /// 4. Add vault/data-read and vault/data-write to management profile for the secrets vault
 pub struct SecretsVaultMutation;
 
+/// Resource id this mutation reserves for the deployment secrets vault.
+///
+/// `ResourceEnabledValidCheck` reads it to reject `.enabled()` on this vault:
+/// the links below are attached after every compile-time check has run, so no
+/// check can see that gating it would strand its dependents.
+pub const SECRETS_VAULT_ID: &str = "secrets";
+
 #[async_trait]
 impl StackMutation for SecretsVaultMutation {
     fn description(&self) -> &'static str {
@@ -38,8 +45,8 @@ impl StackMutation for SecretsVaultMutation {
         config: &DeploymentConfig,
     ) -> bool {
         if stack_state.platform == Platform::Machines {
-            return stack.resources.contains_key("secrets")
-                || config.external_bindings.has("secrets");
+            return stack.resources.contains_key(SECRETS_VAULT_ID)
+                || config.external_bindings.has(SECRETS_VAULT_ID);
         }
 
         // Always run to ensure required vault permissions are present
@@ -55,12 +62,13 @@ impl StackMutation for SecretsVaultMutation {
     ) -> Result<Stack> {
         info!("Adding deployment secrets vault and scoped runtime access");
 
-        let secrets_vault_id = "secrets";
+        let secrets_vault_id = SECRETS_VAULT_ID;
 
         // Step 1: Add vault resource if it doesn't already exist
         if !stack.resources.contains_key(secrets_vault_id) {
             let vault = Vault::new(secrets_vault_id.to_string()).build();
             let vault_entry = ResourceEntry {
+                enabled_when: None,
                 config: alien_core::Resource::new(vault),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
@@ -323,6 +331,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -338,6 +347,7 @@ mod tests {
                     lifecycle: ResourceLifecycle::Frozen,
                     dependencies: Vec::new(),
                     remote_access: false,
+                    enabled_when: None,
                 },
             )]),
             permissions: PermissionsConfig {
@@ -398,6 +408,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert("management".to_string(), remote_stack_management_entry());
@@ -544,6 +555,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -599,6 +611,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -657,6 +670,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -724,6 +738,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -733,6 +748,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -816,6 +832,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert("management".to_string(), remote_stack_management_entry());
@@ -886,6 +903,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert("management".to_string(), remote_stack_management_entry());
@@ -972,6 +990,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -1041,6 +1060,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

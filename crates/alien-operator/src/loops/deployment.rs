@@ -31,8 +31,6 @@ use tracing::{debug, error, info};
 
 use crate::error::{ErrorData, Result};
 
-const SUGGESTED_DELAY_YIELD_THRESHOLD: Duration = Duration::from_millis(500);
-
 /// Transport implementation that persists state to the operator's local DB
 /// and re-reads config each step to pick up sync loop changes.
 struct OperatorTransport {
@@ -242,7 +240,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
     let policy = RunnerPolicy {
         max_steps: 100,
         operation,
-        delay_threshold: Some(SUGGESTED_DELAY_YIELD_THRESHOLD),
+        delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
     };
 
     let transport = OperatorTransport {
@@ -477,6 +475,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            input_values: Default::default(),
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: None,

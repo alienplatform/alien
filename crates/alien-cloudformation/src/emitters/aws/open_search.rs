@@ -27,8 +27,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, AwsOpenSearch, AwsOpenSearchCollectionType, ErrorData, PermissionProfile,
-    PermissionSetReference, Result, ServiceAccount,
+    import::EmitContext, AwsOpenSearch, AwsOpenSearchCapacity, AwsOpenSearchCollectionType,
+    ErrorData, PermissionProfile, PermissionSetReference, Result, ServiceAccount,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -48,6 +48,7 @@ impl CfEmitter for AwsOpenSearchEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         let search = resource_config::<AwsOpenSearch>(ctx, AwsOpenSearch::RESOURCE_TYPE)?;
         validate_id(search.id())?;
+        search.validate_capacity()?;
         let logical_id = required_logical_id(ctx)?;
         let name = collection_name(search.id());
 
@@ -66,6 +67,11 @@ impl CfEmitter for AwsOpenSearchEmitter {
         group
             .properties
             .insert("Generation".to_string(), CfExpression::from("NEXTGEN"));
+        if let Some(capacity) = &search.capacity {
+            group
+                .properties
+                .insert("CapacityLimits".to_string(), capacity_limits(capacity));
+        }
         group.properties.insert("Tags".to_string(), tags(ctx));
         // The collection is retained on stack deletion (durable search
         // state), so the group that contains it must be retained too.
@@ -153,6 +159,39 @@ impl CfEmitter for AwsOpenSearchEmitter {
             ("collectionName", collection_name(search.id())),
         ])))
     }
+}
+
+fn capacity_limits(capacity: &AwsOpenSearchCapacity) -> CfExpression {
+    let mut limits = indexmap::IndexMap::new();
+    if let Some(indexing) = capacity.indexing {
+        if let Some(value) = indexing.min_ocu {
+            limits.insert(
+                "MinIndexingCapacityInOcu".to_string(),
+                CfExpression::Integer(i64::from(value)),
+            );
+        }
+        if let Some(value) = indexing.max_ocu {
+            limits.insert(
+                "MaxIndexingCapacityInOcu".to_string(),
+                CfExpression::Integer(i64::from(value)),
+            );
+        }
+    }
+    if let Some(search) = capacity.search {
+        if let Some(value) = search.min_ocu {
+            limits.insert(
+                "MinSearchCapacityInOcu".to_string(),
+                CfExpression::Integer(i64::from(value)),
+            );
+        }
+        if let Some(value) = search.max_ocu {
+            limits.insert(
+                "MaxSearchCapacityInOcu".to_string(),
+                CfExpression::Integer(i64::from(value)),
+            );
+        }
+    }
+    CfExpression::Object(limits)
 }
 
 /// Reject ids that cannot become a valid AOSS collection name. Checked here

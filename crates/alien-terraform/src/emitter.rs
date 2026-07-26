@@ -85,9 +85,27 @@ pub trait TfEmitter: Send + Sync {
     /// references.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression>;
 
+    /// Whether this emitter renders correctly when its resource is gated on a
+    /// deployer input via `.enabled()`.
+    ///
+    /// Opting in means the emitter puts `count` on its blocks, indexes its own
+    /// references, and nulls out its import ref when the gate is off. The
+    /// generator refuses to render a gated resource whose emitter has not, so a
+    /// half-converted emitter fails loudly instead of silently creating the
+    /// resource the deployer declined.
+    fn supports_enabled_when(&self) -> bool {
+        false
+    }
+
     /// Apply-time expression that resolves to this resource's runtime binding
     /// payload. This is intentionally separate from [`Self::emit_import_ref`]:
     /// import data feeds the manager, while binding data feeds user code.
+    ///
+    /// A gated resource's own references need the same `[0]` indexing they get
+    /// in [`Self::emit_import_ref`]. `ResourceEnabledValidCheck` currently keeps
+    /// a gated resource from reaching here — a Worker cannot be gated, and an
+    /// ungated Worker linking a gated resource is rejected outright — so this is
+    /// only reachable if that rule relaxes.
     fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         Ok(None)
     }

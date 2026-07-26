@@ -114,6 +114,14 @@ pub struct ReleaseRequest {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct RenewRequest {
+    pub deployment_id: String,
+    pub session: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentSyncRequest {
     pub deployment_id: String,
     /// Current deployment state as reported by the agent.
@@ -206,8 +214,52 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/sync/acquire", post(acquire))
         .route("/v1/sync/reconcile", post(reconcile))
+        .route("/v1/sync/renew", post(renew))
         .route("/v1/sync/release", post(release))
         .route("/v1/sync", post(agent_sync))
+}
+
+/// Renew an acquired deployment lease without writing deployment state.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/sync/renew",
+    tag = "sync",
+    request_body = RenewRequest,
+    responses(
+        (status = 200, description = "Deployment lease renewed")
+    ),
+    security(("bearer" = []))
+))]
+async fn renew(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RenewRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(error) => return error.into_response(),
+    };
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, &req.deployment_id)
+        .await
+    {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
+        Err(error) => return error.into_response(),
+    };
+    if !state.authz.can_sync_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Access denied").into_response();
+    }
+
+    match state
+        .deployment_store
+        .renew_lease(&subject, &req.deployment_id, &req.session)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 /// Router for the `/v1/initialize` endpoint only.
@@ -932,6 +984,62 @@ mod tests {
         assert_eq!(config.public_endpoints, Some(public_endpoints));
     }
 
+    /// Remote runners resolve gated live resources from the acquired config,
+    /// so the stored deployer answers must reach it — an empty map here would
+    /// flip gated resources back to their declared defaults.
+    #[test]
+    fn target_config_carries_stored_input_values() {
+        let stored_values =
+            HashMap::from([("enableAnalytics".to_string(), serde_json::json!(true))]);
+        let mut deployment = deployment_record_with_state("provisioning", None);
+        deployment.input_values = stored_values.clone();
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(config.input_values, stored_values);
+
+        // A control-plane-supplied config owns the values when present.
+        let control_plane_values =
+            HashMap::from([("enableAnalytics".to_string(), serde_json::json!(false))]);
+        deployment.deployment_config = Some(DeploymentConfig {
+            input_values: control_plane_values.clone(),
+            ..test_deployment_config()
+        });
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(config.input_values, control_plane_values);
+
+        // A config from a control plane that predates gate answers has an
+        // empty map; the stored answers must stand in, not the defaults.
+        deployment.deployment_config = Some(test_deployment_config());
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(config.input_values, stored_values);
+    }
+
     fn uninitialized_state() -> DeploymentState {
         DeploymentState {
             platform: Platform::Kubernetes,
@@ -949,6 +1057,7 @@ mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            input_values: Default::default(),
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: None,
@@ -1003,6 +1112,7 @@ mod tests {
             user_environment_variables: None,
             management_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             deployment_config: None,
             retry_requested: false,
             locked_by: None,
@@ -1347,6 +1457,15 @@ fn build_target_deployment_config(
     DeploymentConfig::builder()
         .deployment_name(deployment.name.clone())
         .stack_settings(stack_settings.clone())
+        .input_values(
+            // A stored config from a control plane that predates gate answers
+            // has an empty map; the record's persisted answers stand in so
+            // gates don't fall back to their declared defaults.
+            deployment_config
+                .map(|config| config.input_values.clone())
+                .filter(|values| !values.is_empty())
+                .unwrap_or_else(|| deployment.input_values.clone()),
+        )
         .maybe_management_config(management_config)
         .environment_variables(EnvironmentVariablesSnapshot {
             variables: env_vars,

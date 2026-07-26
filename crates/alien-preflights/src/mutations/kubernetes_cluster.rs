@@ -74,6 +74,7 @@ impl StackMutation for KubernetesClusterMutation {
                     lifecycle: ResourceLifecycle::Frozen,
                     dependencies,
                     remote_access: false,
+                    enabled_when: None,
                 },
             );
 
@@ -198,6 +199,7 @@ mod tests {
                 hash: "empty".to_string(),
                 created_at: "1970-01-01T00:00:00Z".to_string(),
             },
+            input_values: Default::default(),
             allow_frozen_changes: false,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),

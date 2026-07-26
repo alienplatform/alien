@@ -176,6 +176,107 @@ async fn create_and_get_deployment() {
     assert_eq!(fetched.status, "pending");
 }
 
+/// Gated live resources resolve against the deployer's stored answers on
+/// every reconcile, so losing them here would silently flip resources back
+/// to their declared defaults.
+#[tokio::test]
+async fn input_values_survive_create_import_and_reimport() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+
+    let values = HashMap::from([
+        ("enableAnalytics".to_string(), serde_json::json!(true)),
+        ("tier".to_string(), serde_json::json!("pro")),
+    ]);
+
+    let created = store
+        .create_deployment(
+            &test_subject(),
+            CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                name: "gated".to_string(),
+                deployment_group_id: group_id.clone(),
+                platform: Platform::Aws,
+                base_platform: None,
+                stack_settings: StackSettings::default(),
+                stack_state: None,
+                environment_variables: None,
+                public_subdomain: None,
+                input_values: values.clone(),
+                deployment_token: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.input_values, values);
+    let fetched = store
+        .get_deployment(&test_subject(), &created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.input_values, values);
+
+    let imported = store
+        .create_with_state(
+            &test_subject(),
+            CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                name: "gated-import".to_string(),
+                deployment_group_id: group_id,
+                platform: Platform::Aws,
+                base_platform: None,
+                stack_settings: StackSettings::default(),
+                stack_state: StackState::new(Platform::Aws),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "provisioning".to_string(),
+                current_release_id: None,
+                desired_release_id: None,
+                import_source: None,
+                setup_metadata: None,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                deployment_token: None,
+                management_config: None,
+                input_values: values.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let fetched = store
+        .get_deployment(&test_subject(), &imported.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.input_values, values);
+
+    // A re-import carries the deployer's edited answers and overwrites the
+    // stored map — that's the edit surface for flipping gates.
+    let edited = HashMap::from([("enableAnalytics".to_string(), serde_json::json!(false))]);
+    let updated = store
+        .update_imported_stack_state(
+            &test_subject(),
+            &imported.id,
+            UpdateImportedDeploymentParams {
+                stack_state: StackState::new(Platform::Aws),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                setup_metadata: None,
+                current_release_id: None,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                schedule_reconciliation: false,
+                input_values: edited.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.input_values, edited);
+}
+
 #[tokio::test]
 async fn list_by_status() {
     let db = fresh_db().await;
@@ -1017,6 +1118,94 @@ async fn reconcile_refreshes_owned_lock_lease() {
         fetched.locked_at.unwrap().to_rfc3339().as_str() > stale_time,
         "reconcile by the lock owner should move locked_at forward"
     );
+}
+
+#[tokio::test]
+async fn renew_lease_requires_the_active_session() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let deployment = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    store
+        .acquire(
+            &test_subject(),
+            "session-A",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("deployment should be acquired");
+    store
+        .renew_lease(&test_subject(), &deployment.id, "session-A")
+        .await
+        .expect("the active session should renew its lease");
+
+    let error = store
+        .renew_lease(&test_subject(), &deployment.id, "session-B")
+        .await
+        .expect_err("a different session must not renew the lease");
+    assert_eq!(error.code, "DEPLOYMENT_LOCKED");
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn suggested_delay_defers_reacquisition_until_external_work_wakes_it() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let deployment = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    store
+        .acquire(
+            &test_subject(),
+            "session-A",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("deployment should be acquired");
+    let mut reconcile = test_reconcile_data(
+        &deployment.id,
+        "session-A",
+        DeploymentStatus::InitialSetup,
+        None,
+    );
+    reconcile.suggested_delay_ms = Some(60_000);
+    store
+        .reconcile(&test_subject(), reconcile)
+        .await
+        .expect("checkpoint should persist the suggested schedule");
+    store
+        .release(&test_subject(), &deployment.id, "session-A")
+        .await
+        .expect("deployment lease should release");
+
+    let delayed = store
+        .acquire(
+            &test_subject(),
+            "session-B",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("acquire should succeed without returning delayed work");
+    assert!(delayed.is_empty());
+
+    store
+        .set_retry_requested(&test_subject(), &deployment.id)
+        .await
+        .expect("external retry should wake the deployment");
+    let woken = store
+        .acquire(
+            &test_subject(),
+            "session-B",
+            &DeploymentFilter::default(),
+            1,
+        )
+        .await
+        .expect("woken deployment should be acquirable");
+    assert_eq!(woken.len(), 1);
 }
 
 #[tokio::test]

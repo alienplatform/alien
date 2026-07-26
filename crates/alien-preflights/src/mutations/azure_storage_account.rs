@@ -74,6 +74,7 @@ impl StackMutation for AzureStorageAccountMutation {
 
         // Add it to the stack as a frozen resource
         let account_entry = ResourceEntry {
+            enabled_when: None,
             config: alien_core::Resource::new(storage_account),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,

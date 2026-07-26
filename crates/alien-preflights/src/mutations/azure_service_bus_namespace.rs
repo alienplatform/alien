@@ -83,6 +83,7 @@ impl StackMutation for AzureServiceBusNamespaceMutation {
 
         // Add it to the stack as a frozen resource
         let namespace_entry = ResourceEntry {
+            enabled_when: None,
             config: alien_core::Resource::new(service_bus_namespace),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies,

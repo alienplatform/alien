@@ -25,6 +25,7 @@ use crate::{
         downcast, permission_context, required_label, service_account_principal_id,
         setup_execution_role_label, setup_management_role_label,
     },
+    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -46,6 +47,7 @@ impl TfEmitter for AzureStorageEmitter {
         let storage = downcast::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let parent_label = parent_storage_account_label(ctx)?.to_string();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
 
         let mut fragment = TfFragment::default();
 
@@ -55,11 +57,13 @@ impl TfEmitter for AzureStorageEmitter {
             "private"
         };
 
-        fragment.resource_blocks.push(resource_block(
+        let mut container = resource_block(
             "azurerm_storage_container",
             label,
             [
                 attr("name", container_name_expr(storage.id())),
+                // The Storage account is a separate, ungated resource, so this
+                // reference stays unindexed even when the container is counted.
                 attr(
                     "storage_account_name",
                     expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
@@ -69,17 +73,20 @@ impl TfEmitter for AzureStorageEmitter {
                     Expression::String(access_type.to_string()),
                 ),
             ],
-        ));
+        );
+        enabled::gate(&mut container, enabled_when)?;
+        fragment.resource_blocks.push(container);
 
         if !storage.lifecycle_rules.is_empty() {
             fragment.resource_blocks.push(lifecycle_policy(
                 label,
                 &parent_label,
                 &storage.lifecycle_rules,
-            ));
+                enabled_when,
+            )?);
         }
 
-        emit_storage_permissions(ctx, label, &parent_label, &mut fragment)?;
+        emit_storage_permissions(ctx, label, &parent_label, &mut fragment, enabled_when)?;
 
         Ok(fragment)
     }
@@ -88,6 +95,7 @@ impl TfEmitter for AzureStorageEmitter {
         let _ = downcast::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let parent_label = parent_storage_account_label(ctx)?.to_string();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
@@ -97,24 +105,31 @@ impl TfEmitter for AzureStorageEmitter {
             ),
             (
                 "containerName",
-                expr::traversal(["azurerm_storage_container", label, "name"]),
+                enabled::attribute(enabled_when, "azurerm_storage_container", label, "name"),
             ),
         ]))
+    }
+
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let _ = downcast::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let parent_label = parent_storage_account_label(ctx)?.to_string();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(Some(expr::object([
             ("service", Expression::String("blob".to_string())),
+            // The storage account hosting the container is ungated; only the
+            // container below is counted.
             (
                 "accountName",
                 expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
             ),
             (
                 "containerName",
-                expr::traversal(["azurerm_storage_container", label, "name"]),
+                enabled::attribute(enabled_when, "azurerm_storage_container", label, "name"),
             ),
         ])))
     }
@@ -154,7 +169,8 @@ fn lifecycle_policy(
     storage_label: &str,
     parent_label: &str,
     rules: &[LifecycleRule],
-) -> hcl::structure::Block {
+    enabled_when: Option<&str>,
+) -> Result<hcl::structure::Block> {
     let rule_blocks: Vec<hcl::structure::Structure> = rules
         .iter()
         .enumerate()
@@ -167,7 +183,9 @@ fn lifecycle_policy(
     )];
     body.extend(rule_blocks);
 
-    resource_block("azurerm_storage_management_policy", storage_label, body)
+    let mut policy = resource_block("azurerm_storage_management_policy", storage_label, body);
+    enabled::gate(&mut policy, enabled_when)?;
+    Ok(policy)
 }
 
 fn emit_storage_permissions(
@@ -175,6 +193,7 @@ fn emit_storage_permissions(
     storage_label: &str,
     parent_label: &str,
     fragment: &mut TfFragment,
+    enabled_when: Option<&str>,
 ) -> Result<()> {
     for (profile_name, permission_set_refs) in storage_permission_owners(ctx) {
         let Some(principal_id_expr) = service_account_principal_id(ctx, &profile_name) else {
@@ -232,7 +251,8 @@ fn emit_storage_permissions(
                     expr::template(binding.scope.clone()),
                     role_definition_id,
                     principal_id_expr.clone(),
-                );
+                    enabled_when,
+                )?;
             }
         }
     }
@@ -296,7 +316,8 @@ fn emit_storage_permissions(
                 expr::template(binding.scope.clone()),
                 role_definition_id,
                 principal_id_expr.clone(),
-            );
+                enabled_when,
+            )?;
         }
     }
 
@@ -348,9 +369,10 @@ fn emit_role_assignment(
     scope: Expression,
     role_definition_id: Expression,
     principal_id_expr: Expression,
-) {
+    enabled_when: Option<&str>,
+) -> Result<()> {
     let role_label = sanitize_role_label(role_name);
-    fragment.resource_blocks.push(resource_block(
+    let mut assignment = resource_block(
         "azurerm_role_assignment",
         &format!("{storage_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
         [
@@ -364,7 +386,11 @@ fn emit_role_assignment(
             attr("role_definition_id", role_definition_id),
             attr("principal_id", principal_id_expr),
         ],
-    ));
+    );
+    // The grant exists only to reach this container, so it follows the same gate.
+    enabled::gate(&mut assignment, enabled_when)?;
+    fragment.resource_blocks.push(assignment);
+    Ok(())
 }
 
 fn storage_permission_owners<'a>(

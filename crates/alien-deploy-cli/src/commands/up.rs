@@ -291,6 +291,24 @@ mod tests {
     }
 
     #[test]
+    fn stable_channel_accepts_exact_semver_tag() {
+        assert_eq!(
+            parse_stable_channel("v3.1.4\n").expect("valid stable channel"),
+            "v3.1.4"
+        );
+    }
+
+    #[test]
+    fn stable_channel_rejects_non_semver_paths() {
+        for value in ["latest", "v3.1", "v3.1.4/alien", "v3.1.x", "3.1.4"] {
+            assert!(
+                parse_stable_channel(value).is_err(),
+                "{value} must not be accepted as a release path"
+            );
+        }
+    }
+
+    #[test]
     fn deployment_readiness_not_ready_blocks_with_check_codes() {
         let info = DeploymentInfoResponse {
             setup_config: None,
@@ -3137,6 +3155,64 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
 /// Default releases URL for downloading binaries.
 const DEFAULT_RELEASES_URL: &str = "https://releases.alien.dev";
 
+fn parse_stable_channel(channel: &str) -> Result<&str> {
+    let channel = channel.trim();
+    let Some(version) = channel.strip_prefix('v') else {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Stable release channel must contain a v-prefixed semantic version"
+                .to_string(),
+        }));
+    };
+    let mut components = version.split('.');
+    let valid = (0..3).all(|_| {
+        components.next().is_some_and(|component| {
+            !component.is_empty() && component.bytes().all(|b| b.is_ascii_digit())
+        })
+    }) && components.next().is_none();
+    if !valid {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Stable release channel contains invalid version '{channel}'"),
+        }));
+    }
+    Ok(channel)
+}
+
+async fn resolve_stable_binary_url(
+    releases_url: &str,
+    binary: &str,
+    os: &str,
+    arch: &str,
+) -> Result<String> {
+    let releases_url = releases_url.trim_end_matches('/');
+    let channel_url = format!("{releases_url}/channels/stable");
+    let response = reqwest::get(&channel_url)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to resolve stable release channel from {channel_url}"),
+        })?;
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to resolve stable release channel from {channel_url}: HTTP {}",
+                response.status()
+            ),
+        }));
+    }
+    let channel =
+        response
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to read stable release channel from {channel_url}"),
+            })?;
+    let version = parse_stable_channel(&channel)?;
+    Ok(format!(
+        "{releases_url}/{binary}/{version}/{os}-{arch}/{binary}"
+    ))
+}
+
 /// Find the alien-operator binary locally, or download it from the releases URL.
 async fn find_or_download_operator_binary(
     embedded_config: Option<&DeployCliConfig>,
@@ -3171,10 +3247,7 @@ async fn find_or_download_operator_binary(
     } else {
         let releases_url = std::env::var("ALIEN_RELEASES_URL")
             .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
-        format!(
-            "{}/alien-operator/latest/{}-{}/alien-operator",
-            releases_url, os, arch
-        )
+        resolve_stable_binary_url(&releases_url, "alien-operator", os, arch).await?
     };
 
     output::info(&format!("Downloading alien-operator from {}...", url));
@@ -3576,7 +3649,7 @@ pub async fn push_initial_setup(
         // The CLI drives Pending → InitialSetup → Provisioning, then stops.
         // The manager picks up from Provisioning and drives to Running.
         operation: LoopOperation::InitialSetup,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = shared_run_step_loop(
@@ -3840,7 +3913,7 @@ async fn run_runtime_deletion(
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = shared_run_step_loop(
@@ -3938,7 +4011,7 @@ async fn run_setup_deletion(
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
-        delay_threshold: None,
+        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
     };
 
     let runner_result = alien_deployment::setup_teardown::run_setup_teardown_after_handoff(

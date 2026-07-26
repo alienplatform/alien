@@ -87,6 +87,7 @@ impl StackMutation for RemoteStackManagementMutation {
 
         // Add it to the stack as a frozen resource (created once during setup)
         let remote_mgmt_entry = ResourceEntry {
+            enabled_when: None,
             config: alien_core::Resource::new(remote_stack_management),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(), // No dependencies on other resources
@@ -128,6 +129,7 @@ mod tests {
                 hash: "empty".to_string(),
                 created_at: "1970-01-01T00:00:00Z".to_string(),
             },
+            input_values: Default::default(),
             allow_frozen_changes: false,
             compute_backend: None,
             external_bindings: ExternalBindings::default(),

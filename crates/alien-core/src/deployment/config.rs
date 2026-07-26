@@ -32,6 +32,14 @@ pub struct DeploymentConfig {
     pub management_config: Option<ManagementConfig>,
     /// Environment variables snapshot
     pub environment_variables: EnvironmentVariablesSnapshot,
+    /// Deployer-provided stack input values, keyed by input id. A resource
+    /// gated with `.enabled(input)` and a Live lifecycle follows these
+    /// values; a missing key falls back to the input's declared boolean
+    /// default. Suppliers must not place secret-kind input values here:
+    /// this map serializes and debug-prints unredacted.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[builder(default)]
+    pub input_values: HashMap<String, serde_json::Value>,
     /// Allow frozen resource changes during updates
     /// When true, skips the frozen resources compatibility check.
     /// This requires running with elevated cloud credentials.
@@ -179,4 +187,33 @@ pub struct OtlpConfig {
     /// the runtime/exporter.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub resource_attributes: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod input_values_tests {
+    use super::*;
+
+    /// Older actors serialize configs without the field; it must deserialize
+    /// to an empty map, and an empty map must not serialize at all.
+    #[test]
+    fn input_values_default_to_empty_and_stay_off_the_wire() {
+        let json = serde_json::json!({
+            "stackSettings": serde_json::to_value(crate::StackSettings::default()).unwrap(),
+            "environmentVariables": {
+                "variables": [],
+                "hash": "hash",
+                "createdAt": "2026-01-01T00:00:00Z",
+            },
+            "externalBindings": {},
+        });
+        let config: DeploymentConfig =
+            serde_json::from_value(json).expect("old shape deserializes");
+        assert!(config.input_values.is_empty());
+
+        let round = serde_json::to_value(&config).expect("serializes");
+        assert!(
+            round.get("inputValues").is_none(),
+            "empty map must not serialize"
+        );
+    }
 }

@@ -14,9 +14,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
-        push_iam_member, required_label, role_expression_for_binding, service_account_id_template,
-        service_account_member_for_label,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, gate_bindings,
+        permission_context, push_iam_member, required_label, role_expression_for_binding,
+        service_account_id_template, service_account_member_for_label,
     },
     expr,
 };
@@ -87,8 +87,18 @@ impl TfEmitter for GcpServiceAccountEmitter {
                     }
                     let context = permission_context(label, ctx.stack.id())
                         .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
+                    // These grants name the target resource's namespace, so they
+                    // follow that resource's gate — not this account's. The
+                    // generator later coalesces project-wide grants shared by
+                    // multiple resources into one Terraform owner.
+                    let enabled_when = ctx
+                        .stack
+                        .resources
+                        .get(resource_id)
+                        .and_then(|entry| entry.enabled_when.as_deref());
                     for permission_set_ref in permission_set_refs {
                         if let Some(permission_set) = resolve_permission_set(permission_set_ref) {
+                            let appended_from = fragment.resource_blocks.len();
                             emit_project_bindings(
                                 &mut fragment,
                                 label,
@@ -98,6 +108,7 @@ impl TfEmitter for GcpServiceAccountEmitter {
                                 BindingTarget::Resource,
                                 resource_id,
                             )?;
+                            gate_bindings(&mut fragment, appended_from, enabled_when)?;
                         }
                     }
                 }

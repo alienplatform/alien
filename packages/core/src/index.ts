@@ -1,4 +1,7 @@
-export * from "./resource.js"
+// ResourceBuilder is internal glue shared by the builders, not an extension
+// point. Exporting it would commit us to its shape at the next publish.
+export { Resource, ResourceTypeSchema } from "./resource.js"
+export type { ResourceType } from "./resource.js"
 export * from "./storage.js"
 export * from "./worker.js"
 export * from "./container.js"

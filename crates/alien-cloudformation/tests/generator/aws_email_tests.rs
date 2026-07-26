@@ -121,6 +121,35 @@ fn aws_email_renders_ses_infrastructure() {
         rule["DependsOn"],
         serde_json::json!(["MailboxBucketPolicy"])
     );
+    let activation = &resources["MailerRuleSetActivation"];
+    assert_eq!(activation["Type"], "AWS::CloudFormation::CustomResource");
+    assert_eq!(
+        activation["Properties"]["RuleSetName"]["Ref"],
+        "MailerRuleSet"
+    );
+    assert_eq!(
+        activation["DependsOn"],
+        serde_json::json!(["MailerInboundRule"]),
+        "activation must happen only after the receipt rule is usable; CloudFormation reverses \
+         this dependency on delete so the set is deactivated before the rule is removed"
+    );
+    let activator_policy = &resources["MailerRuleSetActivatorRole"]["Properties"]["Policies"][0]
+        ["PolicyDocument"]["Statement"][0];
+    assert_eq!(
+        activator_policy["Action"],
+        serde_json::json!([
+            "ses:DescribeActiveReceiptRuleSet",
+            "ses:SetActiveReceiptRuleSet"
+        ])
+    );
+    let activator_code = resources["MailerRuleSetActivatorFunction"]["Properties"]["Code"]
+        ["ZipFile"]
+        .as_str()
+        .expect("inline custom-resource handler");
+    assert!(activator_code.contains("ses.set_active_receipt_rule_set(RuleSetName=desired)"));
+    assert!(activator_code.contains("if active == physical_id:"));
+    assert!(activator_code.contains("ses.set_active_receipt_rule_set()"));
+
     let bucket_statements = resources["MailboxBucketPolicy"]["Properties"]["PolicyDocument"]
         ["Statement"]
         .as_array()
@@ -307,6 +336,58 @@ fn aws_email_rejects_live_linked_queue() {
     assert!(error.to_string().contains("not emitted in setup"));
 }
 
+#[test]
+fn aws_email_rejects_multiple_inbound_rule_sets() {
+    let first_mailbox = Storage::new("first-mailbox".to_string()).build();
+    let second_mailbox = Storage::new("second-mailbox".to_string()).build();
+    let first_email = Email::new("first-mailer".to_string())
+        .inbound(EmailInbound {
+            storage: ResourceRef::from(&first_mailbox),
+        })
+        .build();
+    let second_email = Email::new("second-mailer".to_string())
+        .inbound(EmailInbound {
+            storage: ResourceRef::from(&second_mailbox),
+        })
+        .build();
+    let stack = Stack::new("multiple-inbound-email".to_string())
+        .add(first_mailbox, ResourceLifecycle::Frozen)
+        .add(second_mailbox, ResourceLifecycle::Frozen)
+        .add(first_email, ResourceLifecycle::Frozen)
+        .add(second_email, ResourceLifecycle::Frozen)
+        .build();
+    let (_, entry) = stack
+        .resources()
+        .find(|(id, _)| id.as_str() == "first-mailer")
+        .expect("first email resource");
+    let names: IndexMap<String, String> =
+        IndexMap::from([("first-mailer".to_string(), "FirstMailer".to_string())]);
+    let ctx = EmitContext {
+        stack: &stack,
+        resource: entry,
+        resource_id: "first-mailer",
+        platform: Platform::Aws,
+        stack_settings: &StackSettings::default(),
+        names: &names,
+    };
+    let registry = CfRegistry::built_in();
+    let emitter = registry
+        .require(&Email::RESOURCE_TYPE, Platform::Aws)
+        .expect("email emitter should be registered");
+
+    let error = emitter
+        .emit_resources_with_registry(&ctx, &registry)
+        .expect_err("multiple account-wide inbound rule sets must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("only one email resource with inbound delivery"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("first-mailer"));
+    assert!(error.to_string().contains("second-mailer"));
+}
+
 /// `emit_import_ref` and `AwsEmailImportData` are two halves of one contract:
 /// the manager-side importer deserializes exactly what the deployed setup
 /// stack resolves this expression to. Resolving every intrinsic to a
@@ -433,6 +514,13 @@ fn aws_email_resource_permissions_attach_to_service_account_role() {
         .filter_map(|action| action.as_str().map(str::to_string))
         .collect();
     assert!(identity_actions.contains(&"ses:CreateEmailIdentity".to_string()));
+    let identity_resources = identity_statements[0]["Resource"]
+        .as_array()
+        .expect("manage-identities statement should list resources");
+    assert!(identity_resources.contains(&serde_json::json!({
+        "Fn::Sub":
+            "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-mailer"
+    })));
 
     for policy in [send_policy, identities_policy] {
         assert_eq!(

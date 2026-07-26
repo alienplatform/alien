@@ -412,6 +412,87 @@ describe("Stack builder validation", () => {
   })
 })
 
+describe("Resource enablement", () => {
+  const stackInputs = alien.inputs({
+    storeEnabled: alien.boolean({
+      providedBy: "deployer",
+      required: true,
+      label: "Enable the store",
+      description: "Whether the deployment provisions the key-value store.",
+    }),
+    queueEnabled: alien.boolean({
+      providedBy: "deployer",
+      required: true,
+      label: "Enable the queue",
+      description: "Whether the deployment provisions the work queue.",
+    }),
+  })
+
+  it("lifts the gate from the resource onto the stack entry", () => {
+    const store = new alien.Kv("store").enabled(stackInputs.storeEnabled).build()
+
+    const stack = new alien.Stack("gated-stack").inputs(stackInputs).add(store, "frozen").build()
+
+    // Read back through StackSchema.parse, so this also proves the generated
+    // schema carries enabledWhen rather than silently stripping it.
+    const entry = stack.resources.store
+    expect(entry).toBeDefined()
+    expect(entry!.enabledWhen).toBe("storeEnabled")
+  })
+
+  it("gates resources from different builders independently", () => {
+    const store = new alien.Kv("store").enabled(stackInputs.storeEnabled).build()
+    const queue = new alien.Queue("jobs").enabled(stackInputs.queueEnabled).build()
+    const bucket = new alien.Storage("assets").build()
+
+    const stack = new alien.Stack("multi-gate-stack")
+      .inputs(stackInputs)
+      .add(store, "frozen")
+      .add(queue, "frozen")
+      .add(bucket, "frozen")
+      .build()
+
+    expect(stack.resources.store?.enabledWhen).toBe("storeEnabled")
+    expect(stack.resources.jobs?.enabledWhen).toBe("queueEnabled")
+    expect(stack.resources.assets?.enabledWhen).toBeUndefined()
+  })
+
+  it("does not let the gate leak into resource configuration", () => {
+    // Enablement is stack membership, not configuration: an enabled stack must
+    // serialize exactly like one that never used .enabled().
+    const gated = new alien.Kv("store").enabled(stackInputs.storeEnabled).build()
+    const ungated = new alien.Kv("store").build()
+
+    expect(gated.config).toStrictEqual(ungated.config)
+
+    const gatedStack = new alien.Stack("gated-stack")
+      .inputs(stackInputs)
+      .add(gated, "frozen")
+      .build()
+    const ungatedStack = new alien.Stack("gated-stack")
+      .inputs(stackInputs)
+      .add(ungated, "frozen")
+      .build()
+
+    expect(gatedStack.resources.store?.config).toStrictEqual(ungatedStack.resources.store?.config)
+  })
+
+  it("leaves an ungated resource without an enabledWhen key at all", () => {
+    const ungated = new alien.Kv("store").build()
+
+    // A defined-but-undefined field would materialise the key on every resource
+    // and change the serialized form of every existing stack.
+    expect(Object.keys(ungated)).toEqual(["config"])
+    expect("enabledWhen" in ungated).toBe(false)
+
+    const stack = new alien.Stack("ungated-stack").add(ungated, "frozen").build()
+
+    const entry = stack.resources.store
+    expect(entry).toBeDefined()
+    expect("enabledWhen" in entry!).toBe(false)
+  })
+})
+
 describe("Permissions system", () => {
   it("creates a stack with custom permission sets", () => {
     // Create a custom permission set
@@ -631,5 +712,38 @@ describe("Experimental AwsOpenSearch resource configuration", () => {
         .collectionType("timeseries")
         .build(),
     ).toThrow()
+  })
+})
+
+describe("which builders offer .enabled()", () => {
+  // Only customer-facing data resources are gateable. Framework infra (build,
+  // registry, service accounts, clusters) and live-only compute must not offer
+  // it: a gate there is either always wrong or can only fail later, and
+  // ServiceAccountMutation would silently overwrite a gated "{profile}-sa" entry,
+  // erasing the gate before any guard.
+  it("customer-facing data resources have it", () => {
+    for (const b of [
+      new alien.Kv("a"),
+      new alien.Storage("a"),
+      new alien.Queue("a"),
+      new alien.Vault("a"),
+      new alien.Postgres("a"),
+    ]) {
+      expect(typeof (b as { enabled?: unknown }).enabled).toBe("function")
+    }
+  })
+
+  it("framework-derived, live-only compute, and unconverted types do not", () => {
+    for (const b of [
+      new alien.Build("a"),
+      new alien.ServiceAccount("a"),
+      new alien.ComputeCluster("a"),
+      new alien.Worker("a"),
+      new alien.Container("a"),
+      new alien.Email("a"),
+      new alien.experimental.AwsOpenSearch("a"),
+    ]) {
+      expect((b as { enabled?: unknown }).enabled).toBeUndefined()
+    }
   })
 })

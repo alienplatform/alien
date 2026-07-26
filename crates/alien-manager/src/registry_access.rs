@@ -899,6 +899,7 @@ mod tests {
             management_config: None,
             deployment_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             retry_requested: false,
             locked_by: None,
             locked_at: None,

@@ -1,5 +1,5 @@
 import { type ResourceType, type Vault as VaultConfig, VaultSchema } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type { VaultOutputs, Vault as VaultConfig } from "./generated/index.js"
 export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
@@ -13,7 +13,7 @@ export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
  *
  * The vault acts as a namespace for secrets and controls access permissions for workers and services.
  */
-export class Vault {
+export class Vault extends ResourceBuilder {
   private _config: Partial<VaultConfig> = {}
 
   /**
@@ -21,6 +21,7 @@ export class Vault {
    * @param id Identifier for the vault. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -41,7 +42,7 @@ export class Vault {
   public build(): Resource {
     const config = VaultSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "vault",
       ...config,
     })
