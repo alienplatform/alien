@@ -998,7 +998,7 @@ jobs:
         run: node packages/bindings/scripts/inject-optional-deps.mjs
 
       - name: Pack bindings wrapper
-        run: npm pack packages/bindings --pack-destination "$PWD/qualified/bindings"
+        run: npm pack ./packages/bindings --pack-destination "$PWD/qualified/bindings"
 
       - name: Upload qualified bindings packages
         uses: actions/upload-artifact@v6
