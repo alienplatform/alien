@@ -498,6 +498,7 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p qualified/crates
+          crates_io_user_agent="Alien release workflow (https://github.com/alienplatform/alien)"
           wait_for_crates_io_index() {
             local crate=$1 expected_checksum=$2 index_path published_checksum
             case "${#crate}" in
@@ -507,7 +508,9 @@ jobs:
               *) index_path="${crate:0:2}/${crate:2:2}/${crate}" ;;
             esac
             for attempt in $(seq 1 30); do
-              published_checksum=$(curl --fail --silent --show-error \
+              published_checksum=$(curl \
+                --user-agent "$crates_io_user_agent" \
+                --fail --silent --show-error \
                 "https://index.crates.io/${index_path}" 2>/dev/null |
                 jq -s -r --arg version "$VERSION" \
                   'map(select(.vers == $version)) | last | .cksum // empty' ||
@@ -573,7 +576,9 @@ jobs:
             depot cargo package -p "$crate" --no-verify
             package="target/package/${crate}-${VERSION}.crate"
             checksum=$(sha256sum "$package" | awk '{print $1}')
-            published_checksum=$(curl --fail --silent --show-error \
+            published_checksum=$(curl \
+              --user-agent "$crates_io_user_agent" \
+              --fail --silent --show-error \
               "https://crates.io/api/v1/crates/${crate}/${VERSION}" |
               jq -r '.version.checksum // empty' 2>/dev/null || true)
             if [ -n "$published_checksum" ]; then
