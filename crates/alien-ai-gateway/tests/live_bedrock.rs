@@ -99,7 +99,7 @@ async fn live_bedrock_openai_chat() {
 }
 
 #[tokio::test]
-#[ignore = "Bedrock Claude via classic InvokeModel; reads .env.test but needs a Bedrock Claude model grant on alien-test-target (pending); un-ignore once granted"]
+#[ignore = "Bedrock Claude via classic InvokeModel; reads .env.test but needs a Bedrock Claude model grant on the target account"]
 async fn live_bedrock_claude_streaming() {
     load_test_env();
     // The end-to-end proof for the Claude path: classic Bedrock InvokeModel with
