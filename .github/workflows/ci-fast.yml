@@ -141,8 +141,40 @@ jobs:
           # `alien-test-server` has no Rust unit tests; it is filtered out rather than
           # merely uncovered so that tests added to it later don't start running here by
           # accident — it is exercised by the e2e-cloud workflow against real clouds.
-          cargo nextest run --workspace \
-            --filter-expr 'not package(alien-test-server) and not (package(alien-aws-clients) and kind(test)) and not (package(alien-gcp-clients) and kind(test)) and not (package(alien-azure-clients) and kind(test)) and not (package(alien-bindings) and kind(test)) and not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::cloudrun) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+          #
+          # One clause per line, joined with spaces into a single nextest filterset, so
+          # that a missing or mistyped clause is visible when reading the diff.
+          FILTER_CLAUSES=(
+            'not package(alien-test-server)'
+
+            # Cloud client and bindings crates: their `tests/` targets only — the unit
+            # tests under `src/` still run here. cloud-tests.yml runs these targets
+            # with real cloud credentials.
+            'and not (package(alien-aws-clients) and kind(test))'
+            'and not (package(alien-gcp-clients) and kind(test))'
+            'and not (package(alien-azure-clients) and kind(test))'
+            'and not (package(alien-bindings) and kind(test))'
+
+            # alien-build integration suites: they build real images, so they need
+            # Docker and network access to pull base images.
+            'and not binary_id(alien-build::build_integration_tests)'
+            'and not binary_id(alien-build::image_shape_tests)'
+            'and not binary_id(alien-build::rust_integration_tests)'
+            'and not binary_id(alien-build::typescript_integration_tests)'
+
+            # alien-worker-runtime platform transport suites (Lambda, Cloud Run).
+            'and not binary_id(alien-worker-runtime::cloudrun)'
+            'and not binary_id(alien-worker-runtime::lambda)'
+
+            # alien-test registry suites: e2e-cloud.yml runs them against real clouds.
+            'and not binary_id(alien-test::distribution)'
+            'and not binary_id(alien-test::pull)'
+            'and not binary_id(alien-test::push)'
+
+            # Manager registry proxy against a real cloud registry: cloud-tests.yml.
+            'and not binary_id(alien-manager::registry_proxy_cloud_test)'
+          )
+          cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
 
   typescript:
     name: TypeScript packages and CLIs
