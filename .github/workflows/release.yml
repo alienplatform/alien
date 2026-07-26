@@ -1810,7 +1810,7 @@ jobs:
 
       - name: Require immutable GitHub release protections
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
         run: |
           enabled=$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
