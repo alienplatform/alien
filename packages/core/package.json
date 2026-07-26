@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.0.0",
     "@kubb/cli": "^4.35.1",
     "@kubb/core": "^4.35.1",
     "@kubb/oas": "^4.35.1",
