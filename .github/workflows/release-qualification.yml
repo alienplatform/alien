@@ -1,0 +1,188 @@
+name: Release qualification
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact 40-character commit to requalify
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  detect:
+    runs-on: depot-ubuntu-24.04-arm
+    outputs:
+      is_release: ${{ steps.release.outputs.is_release }}
+      source_ref: ${{ steps.release.outputs.source_ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Detect version-only release pull request
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF_INPUT: ${{ inputs.source_ref || github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          SOURCE_REF="$SOURCE_REF_INPUT"
+          if ! grep -qE '^[0-9a-f]{40}$' <<< "$SOURCE_REF"; then
+            echo "::error::Release qualification requires an exact 40-character commit"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            HEAD_REPOSITORY="$PR_HEAD_REPOSITORY"
+            HEAD_REF="$PR_HEAD_REF"
+            BASE_SHA="$PR_BASE_SHA"
+          else
+            PR_JSON=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/commits/${SOURCE_REF}/pulls" \
+              --jq '[.[] | select(.base.ref == "main")] | sort_by(.updated_at) | last')
+            HEAD_REPOSITORY=$(jq -r '.head.repo.full_name // empty' <<< "$PR_JSON")
+            HEAD_REF=$(jq -r '.head.ref // empty' <<< "$PR_JSON")
+            BASE_SHA=$(jq -r '.base.sha // empty' <<< "$PR_JSON")
+          fi
+
+          CURRENT_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          BASE_VERSION=$(git show "${BASE_SHA}:Cargo.toml" |
+            sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+          if [ "$CURRENT_VERSION" != "$BASE_VERSION" ]; then
+            if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+              echo "::error::Release qualification only runs for repository-owned branches"
+              exit 1
+            fi
+            if ! grep -qE '^[a-z0-9][a-z0-9._-]*/alien-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$' <<< "$HEAD_REF"; then
+              echo "::error::Release qualification requires a Linear-derived branch"
+              exit 1
+            fi
+            allowed='^(Cargo.toml|Cargo.lock|packages/(core|commands|sdk|testing|bindings)/package.json|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/package.json|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json)$'
+            unexpected=$(git diff --name-only "$BASE_SHA" "$SOURCE_REF" | grep -Ev "$allowed" || true)
+            if [ -n "$unexpected" ]; then
+              echo "::error::Release PR contains non-version files:"
+              echo "$unexpected"
+              exit 1
+            fi
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+
+  qualify:
+    needs: detect
+    if: needs.detect.outputs.is_release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      mode: stable
+      stable_action: qualification
+      source_ref: ${{ needs.detect.outputs.source_ref }}
+    secrets: inherit
+
+  manifest:
+    needs: [detect, qualify]
+    if: needs.detect.outputs.is_release == 'true'
+    runs-on: depot-ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.detect.outputs.source_ref }}
+
+      - name: Download qualified artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: "*"
+          path: qualified-artifacts
+          merge-multiple: false
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record qualified source
+        env:
+          VERSION: ${{ needs.qualify.outputs.version }}
+          SOURCE_REF: ${{ needs.detect.outputs.source_ref }}
+        run: |
+          SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')
+          find qualified-artifacts -type f -print0 |
+            sort -z |
+            xargs -0 sha256sum > artifact-checksums.txt
+          ARTIFACTS=$(jq -Rn \
+            '[inputs | capture("^(?<sha>[0-9a-f]+)  (?<path>.*)$")] |
+             map({key: .path, value: .sha}) | from_entries' \
+            < artifact-checksums.txt)
+
+          IMAGES='{}'
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager; do
+            ref="ghcr.io/alienplatform/${name}:qualification-${SOURCE_REF}"
+            digest=$(docker buildx imagetools inspect "$ref" |
+              sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+            if [ -z "$digest" ]; then
+              echo "::error::Qualified image ${ref} has no manifest digest"
+              exit 1
+            fi
+            IMAGES=$(jq --arg name "$name" --arg digest "$digest" \
+              '. + {($name): $digest}' <<< "$IMAGES")
+          done
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg headSha "$SOURCE_REF" \
+            --arg sourceTree "$SOURCE_TREE" \
+            --argjson artifacts "$ARTIFACTS" \
+            --argjson images "$IMAGES" \
+            '{
+              schemaVersion: 1,
+              version: $version,
+              headSha: $headSha,
+              sourceTree: $sourceTree,
+              artifacts: $artifacts,
+              images: $images
+            }' \
+            > manifest.json
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-qualification-manifest
+          retention-days: 30
+          if-no-files-found: error
+          path: manifest.json
+
+  release-qualification:
+    name: Release qualification
+    needs: [detect, qualify, manifest]
+    if: always()
+    runs-on: depot-ubuntu-24.04-arm
+    steps:
+      - name: Require qualification for release pull requests
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          IS_RELEASE: ${{ needs.detect.outputs.is_release }}
+          QUALIFY_RESULT: ${{ needs.qualify.result }}
+          MANIFEST_RESULT: ${{ needs.manifest.result }}
+        run: |
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::Release qualification detection failed"
+            exit 1
+          fi
+          if [ "$IS_RELEASE" = "true" ] && \
+             { [ "$QUALIFY_RESULT" != "success" ] || [ "$MANIFEST_RESULT" != "success" ]; }; then
+            echo "::error::Release qualification did not complete successfully"
+            exit 1
+          fi
