@@ -47,4 +47,7 @@ action. Never prepare another version to recover a partial release.
 The immutable Git tag and GitHub release are created only after package
 registries, images, and versioned binary objects have accepted the qualified
 artifacts. Homebrew is updated last because its formula references the GitHub
-release assets.
+release assets. After every destination succeeds, the workflow atomically
+updates `channels/stable`; clients resolve that one pointer before downloading
+immutable versioned binaries. Stable releases never update a collection of
+independent `latest` objects.
