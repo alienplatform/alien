@@ -1952,6 +1952,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v7
@@ -1989,6 +1990,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Validate npm auth
         env:
