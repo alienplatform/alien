@@ -60,12 +60,7 @@ impl TfEmitter for GcpKvEmitter {
             ),
             (
                 "location",
-                enabled::self_attribute(
-                    ctx,
-                    "google_firestore_database",
-                    label,
-                    "location_id",
-                ),
+                enabled::self_attribute(ctx, "google_firestore_database", label, "location_id"),
             ),
         ]))
     }
