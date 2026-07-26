@@ -1852,18 +1852,33 @@ jobs:
           echo "${TAG} points to the qualified release commit"
 
       - name: Verify existing GitHub release assets
+        id: verify_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          assets=$(gh release view "v${VERSION}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json assets 2>/dev/null || echo '{"assets":[]}')
+          releases=$(gh api --paginate --slurp \
+            "/repos/${GITHUB_REPOSITORY}/releases" |
+            jq -c --arg tag "v${VERSION}" '[add[] | select(.tag_name == $tag)]')
+          release_count=$(jq 'length' <<< "$releases")
+          if [ "$release_count" -gt 1 ]; then
+            echo "::error::Multiple GitHub releases use v${VERSION}"
+            exit 1
+          fi
+
+          if [ "$release_count" = "1" ]; then
+            release=$(jq -c '.[0]' <<< "$releases")
+          else
+            release='{"assets":[],"draft":true}'
+          fi
+
+          complete=true
           for file in dist/*; do
             name=$(basename "$file")
             published=$(jq -r --arg name "$name" \
-              '.assets[] | select(.name == $name) | .digest // empty' <<< "$assets")
+              '.assets[] | select(.name == $name) | .digest // empty' <<< "$release")
             if [ -z "$published" ]; then
+              complete=false
               continue
             fi
             checksum="sha256:$(sha256sum "$file" | awk '{print $1}')"
@@ -1872,9 +1887,14 @@ jobs:
               exit 1
             fi
           done
+          if [ "$(jq -r '.draft' <<< "$release")" = "true" ]; then
+            complete=false
+          fi
+          echo "complete=${complete}" >> "$GITHUB_OUTPUT"
 
       - name: Stage GitHub Release
         id: stage_release
+        if: ${{ steps.verify_release.outputs.complete != 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -1886,7 +1906,7 @@ jobs:
             dist/alien-v*-*.tar.gz
             dist/alien-v*-*.zip
             dist/alien-v*-checksums.txt
-          draft: ${{ steps.verify_tag.outputs.exists != 'true' }}
+          draft: true
           prerelease: false
 
       - name: Verify published release tag
@@ -1925,7 +1945,7 @@ jobs:
           echo "${TAG} points to the qualified release commit"
 
       - name: Publish staged GitHub Release
-        if: ${{ steps.verify_tag.outputs.exists != 'true' }}
+        if: ${{ steps.verify_release.outputs.complete != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
