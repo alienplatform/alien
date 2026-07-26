@@ -366,16 +366,16 @@ pub fn frozen_gating_inputs(stack: &Stack) -> std::collections::HashSet<String> 
 
 /// Refuse an update whose input values conflict with a persisted frozen-gate
 /// answer, for inputs that still gate a frozen resource in the declared
-/// stack. Inputs the update does not mention keep their recorded answer.
+/// stack. Inputs the update does not mention keep their recorded answer, and
+/// a value for a gate with no recorded answer is refused outright — it has
+/// nothing to be held against, and acting on it would decide a frozen
+/// resource's existence outside setup.
 pub fn enforce_frozen_gate_fixity(
     persisted: &alien_core::GateAnswers,
     still_frozen_gating: &std::collections::HashSet<String>,
     input_values: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<()> {
-    for (input_id, persisted_answer) in persisted {
-        if !still_frozen_gating.contains(input_id) {
-            continue;
-        }
+    for input_id in still_frozen_gating {
         let Some(value) = input_values.get(input_id) else {
             continue;
         };
@@ -385,6 +385,14 @@ pub fn enforce_frozen_gate_fixity(
                     "Input '{input_id}' gates a setup-created resource but its value is not a \
                      boolean: {value}"
                 ),
+            }));
+        };
+        let Some(persisted_answer) = persisted.get(input_id) else {
+            return Err(AlienError::new(ErrorData::FrozenGateAnswerUnderivable {
+                input_id: input_id.clone(),
+                reason: "this deployment records no answer for it; a frozen gate is answered \
+                         through setup"
+                    .to_string(),
             }));
         };
         if requested != *persisted_answer {
@@ -892,6 +900,34 @@ mod tests {
         )
         .expect_err("a flipped answer is refused");
         assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
+    }
+
+    /// A value for a frozen gate with no recorded answer is refused, not
+    /// acted on: nothing exists to hold it against, and letting it through
+    /// would decide a frozen resource's existence outside setup. A gate the
+    /// update does not mention stays with the compatibility check.
+    #[test]
+    fn fixity_refuses_a_value_for_an_unrecorded_gate() {
+        let still_frozen =
+            std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+
+        enforce_frozen_gate_fixity(
+            &alien_core::GateAnswers::new(),
+            &still_frozen,
+            &Default::default(),
+        )
+        .expect("an unmentioned unrecorded gate falls to the compatibility check");
+
+        let error = enforce_frozen_gate_fixity(
+            &alien_core::GateAnswers::new(),
+            &still_frozen,
+            &std::collections::HashMap::from([(
+                "analyticsEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
+        )
+        .expect_err("a provided value with no recorded answer is refused");
+        assert_eq!(error.code, "FROZEN_GATE_ANSWER_UNDERIVABLE");
     }
 
     /// A release that removes the last frozen resource behind an input frees
