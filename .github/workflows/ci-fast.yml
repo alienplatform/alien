@@ -60,7 +60,7 @@ jobs:
       NEXTEST_TEST_THREADS: "12"
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:
@@ -186,7 +186,7 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_BUILD_JOBS: "6"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dorny/paths-filter@v4
         id: changes

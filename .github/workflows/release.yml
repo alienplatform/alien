@@ -76,7 +76,7 @@ jobs:
       qualification_head_sha: ${{ steps.verify_qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           fetch-depth: 0
@@ -422,7 +422,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
           fetch-depth: 0
@@ -453,7 +453,7 @@ jobs:
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -556,7 +556,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -649,7 +649,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -778,7 +778,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -884,7 +884,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -939,7 +939,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1073,7 +1073,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1128,7 +1128,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1185,7 +1185,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1255,7 +1255,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1469,7 +1469,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1702,7 +1702,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           ref: ${{ needs.prepare.outputs.release_commit }}
@@ -1902,7 +1902,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1939,7 +1939,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
 
