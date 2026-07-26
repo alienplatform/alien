@@ -1815,19 +1815,29 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="v${VERSION}"
           COMMIT="${{ needs.prepare.outputs.release_commit }}"
+          FULL_REF="refs/tags/${TAG}"
 
-          REF_JSON=$(gh api \
-            "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>/dev/null || true)
-          if [ -z "$REF_JSON" ]; then
-            gh api \
+          MATCHING_REFS=$(gh api --paginate --slurp \
+            "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
+            jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
+          if [ "$(jq 'length' <<< "$MATCHING_REFS")" = "0" ]; then
+            if ! gh api \
               --method POST \
               "/repos/${GITHUB_REPOSITORY}/git/refs" \
-              --raw-field "ref=refs/tags/${TAG}" \
-              --raw-field "sha=${COMMIT}" >/dev/null || true
-            REF_JSON=$(gh api \
-              "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")
+              --raw-field "ref=${FULL_REF}" \
+              --raw-field "sha=${COMMIT}" >/dev/null; then
+              echo "Tag creation failed; checking whether a concurrent release created it"
+            fi
+            MATCHING_REFS=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
+              jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
           fi
 
+          if [ "$(jq 'length' <<< "$MATCHING_REFS")" != "1" ]; then
+            echo "::error::Expected exactly one ${FULL_REF} after tag creation"
+            exit 1
+          fi
+          REF_JSON=$(jq -c '.[0]' <<< "$MATCHING_REFS")
           TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
           TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
           if [ "$TAG_TYPE" = "tag" ]; then
