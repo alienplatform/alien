@@ -1808,7 +1808,7 @@ jobs:
           name: qualified-github-release
           path: .
 
-      - name: Tag qualified release commit
+      - name: Verify existing release tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -1820,23 +1820,16 @@ jobs:
           MATCHING_REFS=$(gh api --paginate --slurp \
             "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
             jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
-          if [ "$(jq 'length' <<< "$MATCHING_REFS")" = "0" ]; then
-            if ! gh api \
-              --method POST \
-              "/repos/${GITHUB_REPOSITORY}/git/refs" \
-              --raw-field "ref=${FULL_REF}" \
-              --raw-field "sha=${COMMIT}" >/dev/null; then
-              echo "Tag creation failed; checking whether a concurrent release created it"
-            fi
-            MATCHING_REFS=$(gh api --paginate --slurp \
-              "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
-              jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
+          MATCH_COUNT=$(jq 'length' <<< "$MATCHING_REFS")
+          if [ "$MATCH_COUNT" = "0" ]; then
+            echo "${TAG} does not exist; GitHub Release creation will create it"
+            exit 0
           fi
-
-          if [ "$(jq 'length' <<< "$MATCHING_REFS")" != "1" ]; then
-            echo "::error::Expected exactly one ${FULL_REF} after tag creation"
+          if [ "$MATCH_COUNT" != "1" ]; then
+            echo "::error::Expected at most one exact ${FULL_REF}"
             exit 1
           fi
+
           REF_JSON=$(jq -c '.[0]' <<< "$MATCHING_REFS")
           TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
           TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
@@ -1878,9 +1871,10 @@ jobs:
           done
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ needs.prepare.outputs.release_commit }}
           name: Alien v${{ needs.prepare.outputs.version }}
           body_path: CHANGELOG-release.md
           files: |
@@ -1889,6 +1883,41 @@ jobs:
             dist/alien-v*-checksums.txt
           draft: false
           prerelease: false
+
+      - name: Verify published release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v${VERSION}"
+          COMMIT="${{ needs.prepare.outputs.release_commit }}"
+          FULL_REF="refs/tags/${TAG}"
+
+          MATCHING_REFS=$(gh api --paginate --slurp \
+            "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
+            jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
+          if [ "$(jq 'length' <<< "$MATCHING_REFS")" != "1" ]; then
+            echo "::error::Expected exactly one ${FULL_REF} after release creation"
+            exit 1
+          fi
+
+          REF_JSON=$(jq -c '.[0]' <<< "$MATCHING_REFS")
+          TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
+          TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
+          if [ "$TAG_TYPE" = "tag" ]; then
+            TAG_COMMIT=$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/git/tags/${TAG_COMMIT}" \
+              --jq '.object.sha')
+          elif [ "$TAG_TYPE" != "commit" ]; then
+            echo "::error::${TAG} points to unsupported Git object type ${TAG_TYPE}"
+            exit 1
+          fi
+
+          if [ "$TAG_COMMIT" != "$COMMIT" ]; then
+            echo "::error::${TAG} points to ${TAG_COMMIT}, expected ${COMMIT}"
+            exit 1
+          fi
+          echo "${TAG} points to the qualified release commit"
 
   # ─── Homebrew tap ──────────────────────────────────────────────────
 
