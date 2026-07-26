@@ -1754,7 +1754,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           ref: ${{ needs.prepare.outputs.release_commit }}
           fetch-depth: 0
 
@@ -1767,21 +1766,41 @@ jobs:
           path: .
 
       - name: Tag qualified release commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="v${VERSION}"
           COMMIT="${{ needs.prepare.outputs.release_commit }}"
-          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
-            TAG_COMMIT=$(git rev-list -n1 "$TAG")
-            if [ "$TAG_COMMIT" != "$COMMIT" ]; then
-              echo "::error::${TAG} already points to ${TAG_COMMIT}, expected ${COMMIT}"
-              exit 1
-            fi
-            echo "${TAG} already points to the qualified release commit"
-          else
-            git tag "$TAG" "$COMMIT"
-            git push origin "$TAG"
+
+          REF_JSON=$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>/dev/null || true)
+          if [ -z "$REF_JSON" ]; then
+            gh api \
+              --method POST \
+              "/repos/${GITHUB_REPOSITORY}/git/refs" \
+              --raw-field "ref=refs/tags/${TAG}" \
+              --raw-field "sha=${COMMIT}" >/dev/null || true
+            REF_JSON=$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")
           fi
+
+          TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
+          TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
+          if [ "$TAG_TYPE" = "tag" ]; then
+            TAG_COMMIT=$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/git/tags/${TAG_COMMIT}" \
+              --jq '.object.sha')
+          elif [ "$TAG_TYPE" != "commit" ]; then
+            echo "::error::${TAG} points to unsupported Git object type ${TAG_TYPE}"
+            exit 1
+          fi
+
+          if [ "$TAG_COMMIT" != "$COMMIT" ]; then
+            echo "::error::${TAG} already points to ${TAG_COMMIT}, expected ${COMMIT}"
+            exit 1
+          fi
+          echo "${TAG} points to the qualified release commit"
 
       - name: Verify existing GitHub release assets
         env:
