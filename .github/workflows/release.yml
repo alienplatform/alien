@@ -490,6 +490,35 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p qualified/crates
+          wait_for_crates_io_index() {
+            local crate=$1 expected_checksum=$2 index_path published_checksum
+            case "${#crate}" in
+              1) index_path="1/${crate}" ;;
+              2) index_path="2/${crate}" ;;
+              3) index_path="3/${crate:0:1}/${crate}" ;;
+              *) index_path="${crate:0:2}/${crate:2:2}/${crate}" ;;
+            esac
+            for attempt in $(seq 1 30); do
+              published_checksum=$(curl --fail --silent --show-error \
+                "https://index.crates.io/${index_path}" 2>/dev/null |
+                jq -s -r --arg version "$VERSION" \
+                  'map(select(.vers == $version)) | last | .cksum // empty' ||
+                true)
+              if [ "$published_checksum" = "$expected_checksum" ]; then
+                echo "${crate}@${VERSION} is available in the crates.io index"
+                return 0
+              fi
+              if [ -n "$published_checksum" ]; then
+                echo "::error::${crate}@${VERSION} reached the index with a different checksum"
+                return 1
+              fi
+              echo "Waiting for ${crate}@${VERSION} index propagation (${attempt}/30)..."
+              sleep 10
+            done
+            echo "::error::Timed out waiting for ${crate}@${VERSION} in the crates.io index"
+            return 1
+          }
+
           for crate in \
             alien-error-derive \
             alien-macros \
@@ -550,7 +579,7 @@ jobs:
 
             echo "Publishing $crate..."
             depot cargo publish -p "$crate" --no-verify
-            sleep 20
+            wait_for_crates_io_index "$crate" "$checksum"
           done
 
       - name: Upload qualified crates
