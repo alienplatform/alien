@@ -1,4 +1,5 @@
 {
   "triggerOnUpdates": true,
-  "ignorePatterns": "packages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**"
+  "ignorePatterns": "packages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**",
+  "customContext": "App-facing binding kinds are storage, kv, queue, vault, container, and postgres. Older docs list only storage/kv/queue/vault; that enumeration is stale.\n\nPostgres is connection-only. The binding carries connection details plus a pointer to the password in a cloud secret store, never the password itself, and the workload resolves that pointer with its own identity.\n\nCloud Postgres (Aurora, Cloud SQL, Flexible Server) intentionally uses ssl.rejectUnauthorized=false with sslmode=require: TLS on, certificate not verified against a pinned CA. Postgres is private-only on every cloud, so the network boundary is the primary control. This is an accepted and tracked posture, not an oversight."
 }
