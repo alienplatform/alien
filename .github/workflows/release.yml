@@ -990,7 +990,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ai-gateway-bin-${{ matrix.gateway_artifact }}
-          retention-days: 1
+          retention-days: 30
           path: target/${{ matrix.gateway_target }}/release/alien-ai-gateway
 
   # This job deliberately has no Rust compiler or protoc setup. It
@@ -1214,18 +1214,17 @@ jobs:
             "qualified/bindings/alienplatform-bindings-${VERSION}.tgz" \
             "@alienplatform/bindings"
 
-  publish-ai-gateway:
+  qualify-ai-gateway:
     needs: [prepare, build-addon, publish-npm]
-    # Same ordering rules as publish-bindings: the wrapper pins
-    # `@alienplatform/core: ^<release>`, so it publishes only after core, and
-    # its per-platform prebuilds publish before the wrapper that pins them.
-    if: inputs.mode == 'stable' && always() && needs.build-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    # Same ordering rules as qualify-bindings: the wrapper pins
+    # `@alienplatform/core: ^<release>`, so it is qualified only after core packs.
+    if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' && always() && needs.build-addon.result == 'success' && needs.publish-npm.result == 'success'
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+          ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
@@ -1248,11 +1247,6 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-
-      - name: Validate npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1285,51 +1279,88 @@ jobs:
       - name: Build wrapper
         run: pnpm --filter @alienplatform/ai-gateway build
 
-      # Prebuild packages publish FIRST so an install of the wrapper can never
-      # race ahead of the optionalDependencies it pins.
-      - name: Publish prebuild packages (first)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+      - name: Pack platform prebuild packages
         run: |
+          mkdir -p qualified/ai-gateway
           for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-x64-musl linux-arm64-gnu linux-arm64-musl; do
-            package="@alienplatform/ai-gateway-${triple}"
-            if [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "Dry-running ${package}@${VERSION}..."
-              ( cd "packages/ai-gateway/npm/${triple}" && npm publish --access public --dry-run )
-              continue
-            fi
-
-            # npm has no multi-package transaction; this existence check makes
-            # a retry resume after a partial publish.
-            published="$(npm view "${package}@${VERSION}" version 2>/dev/null || true)"
-            if [ "$published" = "$VERSION" ]; then
-              echo "${package}@${VERSION} is already published; continuing"
-            else
-              echo "Publishing ${package}@${VERSION}..."
-              ( cd "packages/ai-gateway/npm/${triple}" && npm publish --access public )
-            fi
+            npm pack "packages/ai-gateway/npm/${triple}" --pack-destination "$PWD/qualified/ai-gateway"
           done
 
+      # Pinned before the wrapper is packed, so the qualified tarball already
+      # carries the exact-version optionalDependencies it will publish with.
       - name: Inject optionalDependencies into the wrapper
         run: node packages/ai-gateway/scripts/inject-optional-deps.mjs
 
-      - name: Publish wrapper (last)
+      # pnpm, not npm: only pnpm rewrites the `workspace:` range on
+      # `@alienplatform/core` into the released version, and npm rejects a
+      # published package that still carries the protocol.
+      - name: Pack ai-gateway wrapper
+        run: pnpm --filter @alienplatform/ai-gateway pack --pack-destination "$PWD/qualified/ai-gateway"
+
+      - name: Upload qualified ai-gateway packages
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-ai-gateway
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified/ai-gateway/
+
+  publish-ai-gateway:
+    needs: [prepare, publish-npm]
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Download qualified ai-gateway packages
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-ai-gateway
+          path: qualified/ai-gateway
+
+      # Prebuild packages publish FIRST so an install of the wrapper can never
+      # race ahead of the optionalDependencies it pins.
+      - name: Publish qualified ai-gateway packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            pnpm --filter @alienplatform/ai-gateway publish --access public --no-git-checks --dry-run
-            exit 0
-          fi
+          publish_tarball() {
+            local tarball="$1" package="$2"
+            local integrity
+            integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+            local published
+            published=$(npm view "${package}@${VERSION}" dist.integrity 2>/dev/null || true)
+            if [ -n "$published" ]; then
+              if [ "$published" != "$integrity" ]; then
+                echo "::error::${package}@${VERSION} exists with different contents"
+                exit 1
+              fi
+              echo "${package}@${VERSION} already matches the qualified package"
+            else
+              npm publish "$tarball" --access public
+            fi
+          }
 
-          published="$(npm view "@alienplatform/ai-gateway@${VERSION}" version 2>/dev/null || true)"
-          if [ "$published" = "$VERSION" ]; then
-            echo "@alienplatform/ai-gateway@${VERSION} is already published; continuing"
-          else
-            pnpm --filter @alienplatform/ai-gateway publish --access public --no-git-checks
-          fi
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-x64-musl linux-arm64-gnu linux-arm64-musl; do
+            publish_tarball \
+              "qualified/ai-gateway/alienplatform-ai-gateway-${triple}-${VERSION}.tgz" \
+              "@alienplatform/ai-gateway-${triple}"
+          done
+          publish_tarball \
+            "qualified/ai-gateway/alienplatform-ai-gateway-${VERSION}.tgz" \
+            "@alienplatform/ai-gateway"
 
   # ─── Binary builds (4 targets, all parallel) ───────────────────────
 
@@ -1963,6 +1994,7 @@ jobs:
       - publish-npm
       - publish-client-sdks
       - publish-bindings
+      - publish-ai-gateway
       - upload-binaries
       - publish-images
       - publish-npm-cli-wrapper

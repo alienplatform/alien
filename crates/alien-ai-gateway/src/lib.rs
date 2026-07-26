@@ -83,6 +83,8 @@ pub async fn start_gateway_on(
     for binding in bindings {
         routes.push(config::resolve_route(binding, managed.as_ref()).await?);
     }
+    // Routes appended here sit outside the body cap `build_router` layers on, which is
+    // only safe while they read no body. A body-reading route belongs inside it.
     let router = build_router(routes).route(READY_PATH, get(ready));
 
     let listener = tokio::net::TcpListener::bind(addr)

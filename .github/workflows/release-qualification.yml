@@ -72,7 +72,7 @@ jobs:
               echo "::error::Release qualification requires a Linear-derived branch"
               exit 1
             fi
-            allowed='^(Cargo.toml|Cargo.lock|packages/(core|commands|sdk|testing|bindings)/package.json|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/package.json|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json)$'
+            allowed='^(Cargo.toml|Cargo.lock|packages/(core|commands|sdk|testing|bindings|ai-gateway)/package.json|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/package.json|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json)$'
             unexpected=$(git diff --name-only "$BASE_SHA" "$SOURCE_REF" | grep -Ev "$allowed" || true)
             if [ -n "$unexpected" ]; then
               echo "::error::Release PR contains non-version files:"
