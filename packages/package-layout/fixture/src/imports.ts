@@ -147,6 +147,7 @@ const BINDINGS_EXPORTS = [
   "container",
   "postgres",
   "BindingNotConfiguredError",
+  "UnknownPostgresSslModeError",
   "AlienError",
   "defineError",
 ] as const
