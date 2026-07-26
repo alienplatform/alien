@@ -490,6 +490,35 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p qualified/crates
+          wait_for_crates_io_index() {
+            local crate=$1 expected_checksum=$2 index_path published_checksum
+            case "${#crate}" in
+              1) index_path="1/${crate}" ;;
+              2) index_path="2/${crate}" ;;
+              3) index_path="3/${crate:0:1}/${crate}" ;;
+              *) index_path="${crate:0:2}/${crate:2:2}/${crate}" ;;
+            esac
+            for attempt in $(seq 1 30); do
+              published_checksum=$(curl --fail --silent --show-error \
+                "https://index.crates.io/${index_path}" 2>/dev/null |
+                jq -s -r --arg version "$VERSION" \
+                  'map(select(.vers == $version)) | last | .cksum // empty' ||
+                true)
+              if [ "$published_checksum" = "$expected_checksum" ]; then
+                echo "${crate}@${VERSION} is available in the crates.io index"
+                return 0
+              fi
+              if [ -n "$published_checksum" ]; then
+                echo "::error::${crate}@${VERSION} reached the index with a different checksum"
+                return 1
+              fi
+              echo "Waiting for ${crate}@${VERSION} index propagation (${attempt}/30)..."
+              sleep 10
+            done
+            echo "::error::Timed out waiting for ${crate}@${VERSION} in the crates.io index"
+            return 1
+          }
+
           for crate in \
             alien-error-derive \
             alien-macros \
@@ -509,21 +538,33 @@ jobs:
             alien-sdk \
             alien-commands \
             alien-commands-client; do
-            echo "Packaging $crate..."
-            depot cargo package -p "$crate" --no-verify
-            package="target/package/${crate}-${VERSION}.crate"
-
             if [ "${{ inputs.stable_action }}" = "qualification" ]; then
-              cp "$package" qualified/crates/
+              echo "Recording package inputs for $crate..."
+              depot cargo package -p "$crate" --list |
+                LC_ALL=C sort > "qualified/crates/${crate}-${VERSION}.files"
               continue
             fi
 
-            checksum=$(sha256sum "$package" | awk '{print $1}')
-            qualified_checksum=$(sha256sum "qualified/crates/${crate}-${VERSION}.crate" | awk '{print $1}')
-            if [ "$checksum" != "$qualified_checksum" ]; then
-              echo "::error::${crate}@${VERSION} does not match its qualified package"
+            depot cargo package -p "$crate" --list |
+              LC_ALL=C sort > "${crate}-${VERSION}.files"
+            if ! cmp -s \
+              "${crate}-${VERSION}.files" \
+              "qualified/crates/${crate}-${VERSION}.files"; then
+              echo "::error::${crate}@${VERSION} package inputs differ from qualification"
+              diff -u \
+                "qualified/crates/${crate}-${VERSION}.files" \
+                "${crate}-${VERSION}.files" || true
               exit 1
             fi
+
+            # Cargo validates normalized registry dependencies while assembling
+            # the archive. A dependent crate cannot be packaged until the
+            # qualified prerequisite version exists in crates.io, so final
+            # assembly happens here in dependency order.
+            echo "Packaging $crate..."
+            depot cargo package -p "$crate" --no-verify
+            package="target/package/${crate}-${VERSION}.crate"
+            checksum=$(sha256sum "$package" | awk '{print $1}')
             published_checksum=$(curl --fail --silent --show-error \
               "https://crates.io/api/v1/crates/${crate}/${VERSION}" |
               jq -r '.version.checksum // empty' 2>/dev/null || true)
@@ -533,12 +574,13 @@ jobs:
                 exit 1
               fi
               echo "${crate}@${VERSION} already matches the qualified package"
+              wait_for_crates_io_index "$crate" "$checksum"
               continue
             fi
 
             echo "Publishing $crate..."
             depot cargo publish -p "$crate" --no-verify
-            sleep 20
+            wait_for_crates_io_index "$crate" "$checksum"
           done
 
       - name: Upload qualified crates
@@ -998,7 +1040,7 @@ jobs:
         run: node packages/bindings/scripts/inject-optional-deps.mjs
 
       - name: Pack bindings wrapper
-        run: npm pack packages/bindings --pack-destination "$PWD/qualified/bindings"
+        run: npm pack ./packages/bindings --pack-destination "$PWD/qualified/bindings"
 
       - name: Upload qualified bindings packages
         uses: actions/upload-artifact@v6
@@ -1910,6 +1952,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v7
@@ -1947,6 +1990,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Validate npm auth
         env:

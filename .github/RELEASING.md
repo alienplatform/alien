@@ -41,6 +41,13 @@ Each destination is resumable:
 - an existing byte-for-byte match is accepted;
 - an existing same-version mismatch fails loudly.
 
+Cargo is the only format whose final archive cannot always be assembled during
+qualification: `cargo package` requires unpublished workspace dependency
+versions to already exist in crates.io. Qualification therefore records and
+hashes the exact source tree and each crate's package file list. Publication
+rechecks those inputs, assembles crates in dependency order, and accepts an
+existing version only when its crates.io checksum matches.
+
 If publication stops, fix the external failure and rerun the same publish
 action. Never prepare another version to recover a partial release.
 
