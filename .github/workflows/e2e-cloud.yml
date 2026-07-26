@@ -650,7 +650,8 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     outputs:
-      base_image: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+      base_image: ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
+      typescript_base_image: ${{ steps.publish_typescript_base.outputs.digest && format('ghcr.io/alienplatform/alien-worker-typescript@{0}', steps.publish_typescript_base.outputs.digest) || '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -666,6 +667,18 @@ jobs:
           name: alien-worker-runtime-aarch64
           path: target/aarch64-unknown-linux-musl/release/
 
+      - uses: actions/download-artifact@v7
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node/
+
+      - uses: actions/download-artifact@v7
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node/
+
       - name: Ensure binary dirs exist and make executable
         run: |
           # Create placeholder dirs for skipped architectures so Dockerfile COPY doesn't fail
@@ -674,6 +687,11 @@ jobs:
           [ ! -f target/x86_64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-worker-runtime
           [ ! -f target/aarch64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-worker-runtime
           chmod +x target/*/release/alien-worker-runtime
+
+      - name: Ensure Worker addon paths exist
+        run: |
+          touch crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+          touch crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
 
       - name: Compute Docker platforms
         id: platforms
@@ -697,6 +715,7 @@ jobs:
       - uses: depot/setup-action@v1
 
       - name: Build and push alien-base
+        id: publish_base
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
@@ -705,6 +724,23 @@ jobs:
           platforms: ${{ steps.platforms.outputs.platforms }}
           push: true
           tags: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+          provenance: false
+
+      - name: Build and push alien-worker-typescript
+        id: publish_typescript_base
+        if: |
+          needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true' ||
+          needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-worker-typescript
+          build-args: |
+            ALIEN_WORKER_BASE=ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
+          platforms: ${{ steps.platforms.outputs.platforms }}
+          push: true
+          tags: ghcr.io/alienplatform/alien-worker-typescript:${{ github.sha }}
           provenance: false
 
       - name: Verify alien-base runtime entrypoint
@@ -1230,6 +1266,7 @@ jobs:
           DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
           DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE: ${{ needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.typescript_base_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -1332,6 +1369,7 @@ jobs:
           DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
           DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE: ${{ needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.typescript_base_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -1533,6 +1571,7 @@ jobs:
           DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
           DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_OVERRIDE_TYPESCRIPT_WORKER_BASE: ${{ needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.typescript_base_image || '' }}
           ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE: ${{ inputs.operator_image_override || (needs.compute-matrix.outputs.build_operator_image == 'true' && needs.build-operator-image.outputs.operator_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
           ALIEN_TEST_GHCR_USERNAME: ${{ github.actor }}

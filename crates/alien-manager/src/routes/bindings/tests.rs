@@ -72,6 +72,7 @@ fn stack_state_with_resource(
                 public_read: false,
                 versioning: false,
                 lifecycle_rules: Vec::new(),
+                cors_allowed_origins: Vec::new(),
             }))
             .maybe_lifecycle(lifecycle)
             .maybe_remote_binding_params(remote_binding_params)
@@ -128,6 +129,7 @@ fn storage() -> Storage {
         public_read: false,
         versioning: false,
         lifecycle_rules: Vec::new(),
+        cors_allowed_origins: Vec::new(),
     }
 }
 

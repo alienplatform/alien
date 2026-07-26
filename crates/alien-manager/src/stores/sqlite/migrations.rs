@@ -35,6 +35,7 @@ pub(crate) enum Deployments {
     DeploymentToken,
     LockedBy,
     LockedAt,
+    NextStepAfter,
     CreatedAt,
     UpdatedAt,
     Error,
@@ -165,6 +166,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             )
             .col(ColumnDef::new(Deployments::LockedBy).text())
             .col(ColumnDef::new(Deployments::LockedAt).text())
+            .col(ColumnDef::new(Deployments::NextStepAfter).text())
             .col(
                 ColumnDef::new(Deployments::CreatedAt)
                     .text()
@@ -352,6 +354,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE commands ADD COLUMN target_resource_id TEXT",
         "ALTER TABLE commands ADD COLUMN target_resource_type TEXT",
         "ALTER TABLE deployments ADD COLUMN input_values TEXT",
+        "ALTER TABLE deployments ADD COLUMN next_step_after TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {
@@ -372,6 +375,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "CREATE INDEX IF NOT EXISTS idx_releases_project ON releases(workspace_id, project_id)",
         "CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(workspace_id, project_id)",
         "CREATE INDEX IF NOT EXISTS idx_deployment_groups_project ON deployment_groups(workspace_id, project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_deployments_next_step ON deployments(status, next_step_after)",
     ];
     for sql in post_index_statements {
         conn.execute(sql, ())

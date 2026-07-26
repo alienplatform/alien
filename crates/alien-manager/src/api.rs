@@ -60,6 +60,7 @@ impl Modify for BearerSecurity {
         // Sync
         crate::routes::sync::acquire,
         crate::routes::sync::reconcile,
+        crate::routes::sync::renew,
         crate::routes::sync::release,
         crate::routes::sync::agent_sync,
         crate::routes::sync::initialize,
@@ -100,6 +101,7 @@ impl Modify for BearerSecurity {
         crate::routes::sync::AcquiredDeploymentResponse,
         crate::routes::sync::ReconcileRequest,
         crate::routes::sync::ReconcileResponse,
+        crate::routes::sync::RenewRequest,
         crate::routes::sync::ReleaseRequest,
         crate::routes::sync::AgentSyncRequest,
         crate::routes::sync::AgentSyncResponse,

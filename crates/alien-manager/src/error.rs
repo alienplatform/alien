@@ -24,7 +24,7 @@ pub enum ErrorData {
     #[error(
         code = "DEPLOYMENT_LOCKED",
         message = "Deployment '{deployment_id}' is locked",
-        retryable = "true",
+        retryable = "false",
         internal = "false",
         http_status_code = 409
     )]

@@ -1,5 +1,5 @@
 use super::native_addon::{stage_native_addon, AddonResolutionRoute};
-use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput, WorkloadKind};
+use super::{cache_utils, FileSpec, Toolchain, ToolchainContext, ToolchainOutput, WorkloadKind};
 use crate::command_output::wait_with_captured_output;
 use crate::dependencies::install_dependencies;
 use crate::error::{ErrorData, Result};
@@ -101,13 +101,13 @@ fn src_dir_build_lock(src_dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
     guard.entry(src_dir.to_path_buf()).or_default().clone()
 }
 
-/// TypeScript toolchain implementation using `bun build --compile` to create single executables.
+/// TypeScript toolchain implementation.
 ///
 /// This toolchain:
 /// 1. Installs dependencies using the detected package manager (bun, pnpm, npm)
 /// 2. Generates a bootstrap wrapper that handles HTTP server registration
-/// 3. Compiles to a single executable using `bun build --compile`
-/// 4. Packages only the compiled binary (no node_modules, no dist/)
+/// 3. Bundles cloud Workers for the Bun runtime in the versioned Worker base
+/// 4. Compiles host-process and direct-entry workloads to standalone executables
 #[derive(Debug, Clone)]
 pub struct TypeScriptToolchain {
     /// Name of the compiled binary (e.g., "my-api"). If None, derived from package.json name.
@@ -408,7 +408,15 @@ impl Toolchain for TypeScriptToolchain {
     }
 
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
-        info!("Building TypeScript project with bun build --compile");
+        let bundle_for_worker_base = context.needs_worker_runtime_in_image();
+        info!(
+            build_kind = if bundle_for_worker_base {
+                "worker bundle"
+            } else {
+                "standalone executable"
+            },
+            "Building TypeScript project"
+        );
 
         let src_dir = Self::absolute_path(&context.src_dir)?;
         let build_dir = Self::absolute_path(&context.build_dir)?;
@@ -495,24 +503,38 @@ impl Toolchain for TypeScriptToolchain {
             (src_dir.join(entry_point.trim_start_matches("./")), None)
         };
 
-        // Binary is output directly to the proper build directory (not inside source).
-        // On Windows, bun appends .exe to the outfile path automatically.
-        let binary_filename = format!("{}{}", binary_name, context.build_target.binary_extension());
-        let binary_path = build_dir.join(&binary_filename);
-
-        // Build bun compile arguments based on target
+        // Cloud Workers reuse Bun from the immutable Worker base. Other
+        // workloads remain standalone executables because local Workers run as
+        // host processes and Containers/Daemons own their direct entrypoint.
+        let artifact_filename = if bundle_for_worker_base {
+            format!("{binary_name}.js")
+        } else {
+            format!("{}{}", binary_name, context.build_target.binary_extension())
+        };
+        let artifact_path = build_dir.join(&artifact_filename);
         let target_arg = context.build_target.bun_target();
 
-        info!(
-            "Compiling with: bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target {} --outfile {} {}",
-            target_arg,
-            binary_path.display(),
-            compile_entry.display()
-        );
+        if bundle_for_worker_base {
+            info!(
+                "Bundling with: bun build --target bun --minify --outdir {} --entry-naming {} {}",
+                build_dir.display(),
+                artifact_path.display(),
+                compile_entry.display()
+            );
+        } else {
+            info!(
+                "Compiling with: bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target {} --outfile {} {}",
+                target_arg,
+                artifact_path.display(),
+                compile_entry.display()
+            );
+        }
 
         // Clone values for use in async block
         let binary_name_clone = binary_name.clone();
-        let binary_path_clone = binary_path.clone();
+        let artifact_path_clone = artifact_path.clone();
+        let bundle_output_dir = build_dir.clone();
+        let bundle_entry_name = artifact_filename.clone();
         let target_arg_clone = target_arg.to_string();
         let compile_entry_str = compile_entry.to_string_lossy().to_string();
         let use_cjs_format = embed_native;
@@ -549,16 +571,30 @@ impl Toolchain for TypeScriptToolchain {
             progress: None,
         }
         .in_scope(|compilation_event| async move {
-            let mut args = vec![
-                "build",
-                "--compile",
-                // Disable automatic config loading for security and deterministic behavior
-                // See: https://bun.com/docs/bundler/executables#disabling-config-loading-at-runtime
-                "--no-compile-autoload-dotenv",
-                "--no-compile-autoload-bunfig",
-                "--target",
-                &target_arg_clone,
-            ];
+            let mut args = vec!["build".to_string()];
+            if bundle_for_worker_base {
+                args.extend([
+                    "--target".to_string(),
+                    "bun".to_string(),
+                    "--minify".to_string(),
+                    "--sourcemap=linked".to_string(),
+                    "--outdir".to_string(),
+                    bundle_output_dir.to_string_lossy().into_owned(),
+                    "--entry-naming".to_string(),
+                    bundle_entry_name,
+                    "--asset-naming".to_string(),
+                    "[name].[ext]".to_string(),
+                ]);
+            } else {
+                args.extend([
+                    "--compile".to_string(),
+                    // Disable automatic config loading for security and deterministic behavior.
+                    "--no-compile-autoload-dotenv".to_string(),
+                    "--no-compile-autoload-bunfig".to_string(),
+                    "--target".to_string(),
+                    target_arg_clone,
+                ]);
+            }
             // `bun build --compile` mis-generates the ESM loader shim for a
             // statically imported .node addon: the binary embeds the addon but
             // crashes on load with "ReferenceError: __require is not defined".
@@ -566,12 +602,13 @@ impl Toolchain for TypeScriptToolchain {
             // packages/package-layout/steps/compile.ts), applied only when
             // an addon is staged so plain apps keep the default ESM output.
             if use_cjs_format {
-                args.push("--format=cjs");
+                args.push("--format=cjs".to_string());
             }
-            args.push("--outfile");
-            let binary_path_str = binary_path_clone.to_string_lossy();
-            args.push(&binary_path_str);
-            args.push(&compile_entry_str);
+            if !bundle_for_worker_base {
+                args.push("--outfile".to_string());
+                args.push(artifact_path_clone.to_string_lossy().into_owned());
+            }
+            args.push(compile_entry_str);
 
             let mut child = Command::new("bun")
                 .args(&args)
@@ -590,7 +627,7 @@ impl Toolchain for TypeScriptToolchain {
                 &mut child,
                 &binary_name_clone,
                 "Failed to read bun build output",
-                "Failed to wait for bun build --compile",
+                "Failed to wait for bun build",
                 |line| {
                     let compilation_event = &compilation_event;
                     async move {
@@ -617,12 +654,12 @@ impl Toolchain for TypeScriptToolchain {
                 );
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
                     resource_name: binary_name_clone.clone(),
-                    reason: "bun build --compile failed".to_string(),
+                    reason: "bun build failed".to_string(),
                     build_output: Some(build_output),
                 }));
             }
 
-            info!("bun build --compile completed successfully");
+            info!("bun build completed successfully");
             Ok(())
         })
         .await;
@@ -633,31 +670,68 @@ impl Toolchain for TypeScriptToolchain {
         // Now propagate any build error
         build_result?;
 
-        // Verify binary was created
-        if !binary_path.exists() {
+        // Verify the requested output was created.
+        if !artifact_path.exists() {
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
                 resource_name: binary_name.clone(),
-                reason: format!("Compiled binary not found at {}", binary_path.display()),
+                reason: format!("Build artifact not found at {}", artifact_path.display()),
                 build_output: None,
             }));
         }
-        super::validate_executable_format(&binary_path, context.build_target, &binary_name)?;
-
-        info!(
-            "Successfully compiled TypeScript to single executable: {}",
-            binary_path.display()
-        );
+        if !bundle_for_worker_base {
+            super::validate_executable_format(&artifact_path, context.build_target, &binary_name)?;
+        }
 
         // Save updated cache
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
-        // Image shape (runtime for Workers, direct entrypoint for
-        // Containers/Daemons) is decided per workload kind in
-        // `image_output_for_binary`.
+        if bundle_for_worker_base {
+            let source_map_path = build_dir.join(format!("{artifact_filename}.map"));
+            if !source_map_path.is_file() {
+                return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                    resource_name: binary_name.clone(),
+                    reason: format!(
+                        "TypeScript Worker source map not found at {}",
+                        source_map_path.display()
+                    ),
+                    build_output: None,
+                }));
+            }
+            let files_to_package = vec![
+                FileSpec {
+                    host_path: artifact_path,
+                    container_path: format!("./{artifact_filename}"),
+                    mode: Some(0o644),
+                },
+                FileSpec {
+                    host_path: source_map_path,
+                    container_path: format!("./{artifact_filename}.map"),
+                    mode: Some(0o644),
+                },
+            ];
+            if staged.is_some() {
+                let bundled_addon = build_dir.join("alien-bindings.node");
+                if !bundled_addon.is_file() {
+                    return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                        resource_name: binary_name.clone(),
+                        reason: format!(
+                            "Bundled native addon not found at {}",
+                            bundled_addon.display()
+                        ),
+                        build_output: None,
+                    }));
+                }
+            }
+            return Ok(super::image_output_for_worker_files(
+                files_to_package,
+                &artifact_filename,
+            ));
+        }
+
         Ok(super::image_output_for_binary(
             context,
-            binary_path,
-            &binary_filename,
+            artifact_path,
+            &artifact_filename,
             vec![],
         ))
     }

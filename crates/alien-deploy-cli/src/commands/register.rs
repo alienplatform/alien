@@ -463,7 +463,7 @@ mod tests {
     fn outputs_with_resources(payload: &str) -> CfnOutputs {
         CfnOutputs {
             resources_chunks: vec![
-                parse_json_output("DeploymentResources", payload).expect("payload is JSON"),
+                parse_json_output("DeploymentResources", payload).expect("payload is JSON")
             ],
             ..base_outputs()
         }
@@ -481,7 +481,10 @@ mod tests {
 
         assert_eq!(request.resources.len(), 1);
         assert_eq!(request.resources[0].id, "jobs");
-        assert_eq!(request.resources[0].resource_type, ResourceType::from("queue"));
+        assert_eq!(
+            request.resources[0].resource_type,
+            ResourceType::from("queue")
+        );
     }
 
     /// The reason the payload has to be correct at the source: there is no

@@ -130,7 +130,10 @@ fn management_differs_outside_gates(
 ) -> bool {
     match (old_management, new_management) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
-        (ManagementPermissions::Extend(old_profile), ManagementPermissions::Extend(new_profile))
+        (
+            ManagementPermissions::Extend(old_profile),
+            ManagementPermissions::Extend(new_profile),
+        )
         | (
             ManagementPermissions::Override(old_profile),
             ManagementPermissions::Override(new_profile),
@@ -419,7 +422,10 @@ mod tests {
             .management(ManagementPermissions::Extend(
                 PermissionProfile::new().global(["kv/provision", "kv/data-write"]),
             ))
-            .add(Kv::new("cache".to_string()).build(), ResourceLifecycle::Live)
+            .add(
+                Kv::new("cache".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
             .build();
 
         let result = PermissionProfilesUnchangedCheck
@@ -437,7 +443,10 @@ mod tests {
             .management(ManagementPermissions::Extend(
                 PermissionProfile::new().resource("cache", ["kv/provision"]),
             ))
-            .add(Kv::new("cache".to_string()).build(), ResourceLifecycle::Live)
+            .add(
+                Kv::new("cache".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
             .build();
         let new_stack = Stack::new("s".to_string())
             .management(ManagementPermissions::Extend(PermissionProfile::new()))

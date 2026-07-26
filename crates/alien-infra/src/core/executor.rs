@@ -12,6 +12,7 @@
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
 use alien_error::{AlienError, Context, GenericError};
+use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,8 @@ use alien_core::{
     ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
     StackState,
 };
+
+const MAX_CONCURRENT_RESOURCE_STEPS: usize = 4;
 
 /// Represents the outcome of a planning phase, identifying necessary changes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -109,6 +112,14 @@ struct ResourceConfig {
     lifecycle: ResourceLifecycle,
 }
 
+/// Controls whether already-Running resources execute their Ready handlers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningResourcePolicy {
+    All,
+    OptIn,
+    None,
+}
+
 /// Drives the state machines inside a `Stack` for a particular platform.
 pub struct StackExecutor {
     // --- Derived during construction ---
@@ -118,7 +129,7 @@ pub struct StackExecutor {
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
     runtime_cleanup_filter: bool,
-    step_running_resources: bool,
+    running_resource_policy: RunningResourcePolicy,
     step_out_of_scope_resources: bool,
     desired_stack: Stack,
 
@@ -244,6 +255,10 @@ pub struct StackExecutorConfig<'a> {
     #[builder(default = true)]
     step_running_resources: bool,
 
+    /// Explicit policy for Running resources. When omitted, the legacy
+    /// `step_running_resources` boolean maps to `All`/`None`.
+    running_resource_policy: Option<RunningResourcePolicy>,
+
     /// Whether resources outside the lifecycle filter may be stepped to keep
     /// dependency discovery and health checks current.
     #[builder(default = true)]
@@ -324,7 +339,14 @@ impl StackExecutor {
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let runtime_cleanup_filter = config.runtime_cleanup_filter;
-        let step_running_resources = config.step_running_resources;
+        let running_resource_policy =
+            config
+                .running_resource_policy
+                .unwrap_or(if config.step_running_resources {
+                    RunningResourcePolicy::All
+                } else {
+                    RunningResourcePolicy::None
+                });
         let step_out_of_scope_resources = config.step_out_of_scope_resources;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
@@ -454,7 +476,7 @@ impl StackExecutor {
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
             runtime_cleanup_filter,
-            step_running_resources,
+            running_resource_policy,
             step_out_of_scope_resources,
             desired_stack: stack.clone(),
             client_config,
@@ -997,7 +1019,7 @@ impl StackExecutor {
         }
 
         if resource_view.status == ResourceStatus::Running {
-            return self.step_running_resources;
+            return self.running_resource_policy == RunningResourcePolicy::All;
         }
 
         resource_view.status != ResourceStatus::Pending
@@ -1418,8 +1440,14 @@ impl StackExecutor {
             // Lifecycle filters define mutation scope. Already-running managed
             // resources can still run Ready handlers because their health and
             // management work may be required by in-scope dependents.
-            let should_step_out_of_scope_resource =
-                self.should_step_out_of_scope_resource(resource_id, current_resource_view);
+            let opted_in_running_resource = self.running_resource_policy
+                == RunningResourcePolicy::OptIn
+                && current_resource_view.status == ResourceStatus::Running
+                && current_resource_view
+                    .get_internal_controller()?
+                    .is_some_and(|controller| controller.requires_convergence_reconciliation());
+            let should_step_out_of_scope_resource = opted_in_running_resource
+                || self.should_step_out_of_scope_resource(resource_id, current_resource_view);
 
             if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
                 let resource_in_scope = self.resources.contains_key(resource_id)
@@ -1448,7 +1476,11 @@ impl StackExecutor {
                 // Running resources should always be stepped to run their Ready handler.
                 // This is important for local platform where ephemeral state (ports, URLs)
                 // needs to be refreshed after restart, even if config hasn't changed.
-                self.step_running_resources
+                match self.running_resource_policy {
+                    RunningResourcePolicy::All => true,
+                    RunningResourcePolicy::None => false,
+                    RunningResourcePolicy::OptIn => opted_in_running_resource,
+                }
             } else if should_step_out_of_scope_resource {
                 true
             } else {
@@ -1469,14 +1501,21 @@ impl StackExecutor {
         }
 
         if !ready_resource_ids.is_empty() {
+            ready_resource_ids.sort();
             debug!("Ready resources for step: {:?}", ready_resource_ids);
         }
 
         // Process each ready resource by stepping its state machine
         let heartbeat_collector = HeartbeatCollector::default();
-        for resource_id in ready_resource_ids {
+        let step_state = &next_state;
+        let resource_results = stream::iter(ready_resource_ids)
+            .map(|resource_id| {
+                let heartbeat_collector = heartbeat_collector.clone();
+                async move {
+            let mut resource_min_delay: Option<Duration> = None;
+            let resource_step_started_at = std::time::Instant::now();
             // Get current resource state (may be updated during initialization)
-            let mut current_resource_state = next_state
+            let mut current_resource_state = step_state
                 .resources
                 .get(&resource_id)
                 .cloned()
@@ -1513,7 +1552,7 @@ impl StackExecutor {
                 // Get the controller for this resource type
                 let resource_type = context_resource.resource_type();
                 let controller_platform =
-                    controller_platform_for_state(next_state.platform, &current_resource_state);
+                    controller_platform_for_state(step_state.platform, &current_resource_state);
                 let controller = self
                     .resource_registry
                     .get_controller(resource_type, controller_platform)?;
@@ -1544,18 +1583,21 @@ impl StackExecutor {
                     // step. Reconcile the explicit publication gate directly.
                     self.validate_external_binding_remote_access(&resource_id)?;
                     current_resource_state.remote_binding_params = None;
-                    subsequent_state_updates.insert(resource_id.clone(), current_resource_state);
-                } else {
-                    warn!(
-                        "Resource '{}' has no controller state. Skipping step.",
-                        resource_id
-                    );
+                    return Ok(Some((
+                        resource_id,
+                        current_resource_state,
+                        resource_min_delay,
+                    )));
                 }
-                continue;
+                warn!(
+                    "Resource '{}' has no controller state. Skipping step.",
+                    resource_id
+                );
+                return Ok(None);
             }
 
             let controller_platform =
-                controller_platform_for_state(next_state.platform, &current_resource_state);
+                controller_platform_for_state(step_state.platform, &current_resource_state);
             let controller_client_config = self
                 .client_config
                 .config_for_platform(controller_platform)
@@ -1570,8 +1612,8 @@ impl StackExecutor {
                 desired_config: &context_resource,
                 platform: controller_platform,
                 client_config: controller_client_config,
-                state: &next_state,
-                resource_prefix: &next_state.resource_prefix,
+                state: step_state,
+                resource_prefix: &step_state.resource_prefix,
                 registry: &self.resource_registry,
                 desired_stack: &self.desired_stack,
                 service_provider: &self.service_provider,
@@ -1659,7 +1701,8 @@ impl StackExecutor {
                                 resource_id, new_retry_attempt, MAX_RETRIES, delay
                             );
                             // Update min_delay if this retry suggests a delay
-                            min_delay = Some(min_delay.map_or(delay, |d| d.min(delay)));
+                            resource_min_delay =
+                                Some(resource_min_delay.map_or(delay, |d| d.min(delay)));
                             (new_retry_attempt, error, None, false, false) // No step delay on error, use retry delay instead
                         }
                     }
@@ -1684,7 +1727,9 @@ impl StackExecutor {
             // zero.
             if next_error.is_none() {
                 let effective_delay = step_suggested_delay.unwrap_or(Duration::ZERO);
-                min_delay = Some(min_delay.map_or(effective_delay, |d| d.min(effective_delay)));
+                resource_min_delay = Some(
+                    resource_min_delay.map_or(effective_delay, |d| d.min(effective_delay)),
+                );
             }
 
             let (final_controller, next_status, next_outputs, next_binding_params) =
@@ -1774,7 +1819,29 @@ impl StackExecutor {
             });
 
             // Always record the resulting state from the step
-            subsequent_state_updates.insert(resource_id.clone(), next_state);
+            info!(
+                resource_id = %resource_id,
+                elapsed_ms = resource_step_started_at.elapsed().as_millis() as u64,
+                "Resource controller step completed"
+            );
+                    Ok::<_, AlienError<ErrorData>>(Some((
+                        resource_id,
+                        next_state,
+                        resource_min_delay,
+                    )))
+                }
+            })
+            .buffer_unordered(MAX_CONCURRENT_RESOURCE_STEPS)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut resource_results = resource_results.into_iter().flatten().collect::<Vec<_>>();
+        resource_results.sort_by(|left, right| left.0.cmp(&right.0));
+        for (resource_id, resource_state, resource_delay) in resource_results {
+            if let Some(delay) = resource_delay {
+                min_delay = Some(min_delay.map_or(delay, |current| current.min(delay)));
+            }
+            subsequent_state_updates.insert(resource_id, resource_state);
         }
         // --- Execution Phase End ---
 

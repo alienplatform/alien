@@ -82,6 +82,7 @@ async fn persist_remote_storage_state(fixture: &Fixture) {
                 public_read: false,
                 versioning: false,
                 lifecycle_rules: Vec::new(),
+                cors_allowed_origins: Vec::new(),
             }))
             .maybe_lifecycle(Some(ResourceLifecycle::Frozen))
             .maybe_remote_binding_params(Some(serde_json::json!({

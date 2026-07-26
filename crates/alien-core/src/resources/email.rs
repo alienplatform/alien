@@ -31,15 +31,14 @@ use std::fmt::Debug;
 /// When `inbound` is set, a SES receipt rule set is provisioned that writes
 /// raw incoming mail into the linked Storage bucket. The receipt rule is a
 /// catch-all (no recipient filter), so mail for identities verified at runtime
-/// lands in the bucket without any infrastructure change. Two caveats apply:
+/// lands in the bucket without any infrastructure change.
 ///
-/// * SES allows only **one active receipt rule set per AWS account**, and
-///   CloudFormation has no resource that activates a rule set. Activating the
-///   provisioned rule set is a documented post-deploy step:
-///   `aws ses set-active-receipt-rule-set --rule-set-name <ruleSetName>`.
-/// * SES email receiving is only available in a subset of AWS regions (see the
-///   SES endpoints documentation). Deploying `inbound` to an unsupported
-///   region fails at the CloudFormation layer.
+/// Alien activates the provisioned receipt rule set as part of setup. Because
+/// SES permits only one active receipt rule set per AWS account and region, an
+/// AWS stack may contain only one email resource with inbound delivery, and
+/// installing it makes its rule set the account's active rule set. SES email
+/// receiving is available only in a subset of AWS regions; deploying `inbound`
+/// to an unsupported region fails during setup.
 ///
 /// # Update semantics
 ///
@@ -144,8 +143,6 @@ pub struct EmailOutputs {
     /// The provisioned configuration set name (used when sending).
     pub configuration_set: String,
     /// The inbound receipt rule set name, when `inbound` is configured.
-    /// Activating it is a manual post-deploy step — CloudFormation cannot
-    /// activate a receipt rule set, and only one can be active per account.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_set_name: Option<String>,
 }

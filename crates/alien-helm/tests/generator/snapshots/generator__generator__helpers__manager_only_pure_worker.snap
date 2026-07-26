@@ -1994,7 +1994,7 @@ See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / 
         "environment": {},
         "id": "api",
         "links": [],
-        "memoryMb": 256,
+        "memoryMb": 512,
         "permissions": "runtime",
         "publicEndpoints": [
           {

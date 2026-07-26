@@ -11,14 +11,24 @@ pub struct TestStorageController {
     /// Number of Ready checks executed for this controller.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) ready_checks: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) convergence_reconciliation: bool,
 }
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 #[controller]
 impl TestStorageController {
+    fn requires_convergence_reconciliation(&self) -> bool {
+        self.convergence_reconciliation
+    }
+
     // ─────────────── CREATE FLOW ──────────────────────────────
     #[flow_entry(Create)]
     #[handler(

@@ -1967,6 +1967,7 @@ See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / 
   "resources": {
     "assets": {
       "config": {
+        "corsAllowedOrigins": [],
         "id": "assets",
         "lifecycleRules": [],
         "publicRead": false,

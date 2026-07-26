@@ -1365,6 +1365,35 @@
         ]
       }
     },
+    "/v1/sync/renew": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Renew an acquired deployment lease without writing deployment state.",
+        "operationId": "renew",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deployment lease renewed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/whoami": {
       "get": {
         "tags": [
@@ -14036,6 +14065,21 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "RenewRequest": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "session"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
           }
         }
       },

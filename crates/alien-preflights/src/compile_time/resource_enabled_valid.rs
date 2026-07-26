@@ -239,7 +239,7 @@ fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
 mod tests {
     use super::*;
     use alien_core::{
-        permissions::PermissionProfile, Kv, Storage, ResourceLifecycle, StackInputDefinition,
+        permissions::PermissionProfile, Kv, ResourceLifecycle, StackInputDefinition, Storage,
         Vault, Worker, WorkerCode,
     };
 
@@ -371,7 +371,10 @@ mod tests {
         input.default = None;
         let errors = errors_for(stack_with(input)).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("required or declare a default"), "{errors:?}");
+        assert!(
+            errors[0].contains("required or declare a default"),
+            "{errors:?}"
+        );
     }
 
     #[tokio::test]
@@ -520,9 +523,15 @@ mod tests {
     /// Two inputs mean two independent answers, and only one of them creates the store.
     #[tokio::test]
     async fn rejects_a_dependent_gated_on_a_different_input() {
-        let errors = errors_for(stack_with_bucket_depending_on_gated_store(Some("buildEnabled"))).await;
+        let errors = errors_for(stack_with_bucket_depending_on_gated_store(Some(
+            "buildEnabled",
+        )))
+        .await;
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("gated on different inputs"), "{errors:?}");
+        assert!(
+            errors[0].contains("gated on different inputs"),
+            "{errors:?}"
+        );
         assert!(
             errors[0].contains("'buildEnabled' and 'storeEnabled'"),
             "{errors:?}"
@@ -567,7 +576,10 @@ mod tests {
     #[tokio::test]
     async fn ungated_stacks_skip_the_check_entirely() {
         let stack = Stack::new("test-stack".to_string())
-            .add(Kv::new("store".to_string()).build(), ResourceLifecycle::Frozen)
+            .add(
+                Kv::new("store".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
             .build();
         assert!(!ResourceEnabledValidCheck.should_run(&stack, Platform::Aws));
     }

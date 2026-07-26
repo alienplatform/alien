@@ -2,7 +2,7 @@
 
 use super::helpers::*;
 use crate::core::state_utils::StackResourceStateExt;
-use crate::core::StackExecutor;
+use crate::core::{RunningResourcePolicy, StackExecutor};
 use crate::error::Result;
 use crate::storage::TestStorageController;
 use alien_core::{
@@ -149,6 +149,59 @@ async fn test_filtered_executor_steps_out_of_scope_running_resources() -> Result
         storage_controller.ready_checks, 1,
         "Out-of-scope running resources should run Ready handlers when enabled"
     );
+
+    Ok(())
+}
+
+/// Opt-in convergence handlers must remain eligible even when their lifecycle
+/// is outside the active provisioning phase.
+#[tokio::test]
+async fn test_filtered_executor_steps_only_opted_in_running_resources() -> Result<()> {
+    let store1 = test_storage("store1");
+    let func1 = test_function("func1");
+    let stack = Stack::new("opt-in-ready-test".to_owned())
+        .add(store1, ResourceLifecycle::Frozen)
+        .add(func1, ResourceLifecycle::Live)
+        .build();
+
+    let mut state = run_to_synced(
+        &new_executor_with_filter(&stack, vec![ResourceLifecycle::Frozen])?,
+        new_test_state(),
+    )
+    .await?;
+    let resource = state
+        .resources
+        .get_mut("store1")
+        .expect("frozen storage should be present");
+    let mut controller: TestStorageController = resource.get_internal_controller_typed()?;
+    controller.convergence_reconciliation = true;
+    resource.set_internal_controller(Some(Box::new(controller)))?;
+
+    let executor = StackExecutor::builder(&stack, alien_core::ClientConfig::Test)
+        .deployment_config(
+            &alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build(),
+        )
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .build()?;
+
+    let step_result = executor.step(state).await?;
+    let controller: TestStorageController = step_result
+        .next_state
+        .resources
+        .get("store1")
+        .expect("frozen storage should remain present")
+        .get_internal_controller_typed()?;
+    assert_eq!(controller.ready_checks, 1);
 
     Ok(())
 }
