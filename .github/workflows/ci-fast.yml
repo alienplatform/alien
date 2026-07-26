@@ -177,8 +177,7 @@ jobs:
             # Manager registry proxy against a real cloud registry: cloud-tests.yml.
             'and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
-            # AI gateway suites that call a real cloud model endpoint: they need
-            # provider credentials and per-model grants from .env.test.
+            # AI gateway suites that hit real model endpoints: they need .env.test creds.
             'and not binary_id(alien-ai-gateway::live_bedrock)'
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
