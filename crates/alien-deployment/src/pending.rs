@@ -134,10 +134,9 @@ pub fn strip_declined_resources(
         let Some(input_id) = entry.enabled_when.as_deref() else {
             continue;
         };
-        let setup_created = alien_core::ownership_policy_for_resource_type(
-            entry.config.resource_type().as_ref(),
-        )
-        .should_emit_in_setup(entry.lifecycle);
+        let setup_created =
+            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+                .should_emit_in_setup(entry.lifecycle);
 
         let is_declined = if setup_created {
             !stack_state.resources.is_empty()
@@ -249,7 +248,7 @@ fn environment_collection_context(
 mod tests {
     use super::*;
     use alien_core::{
-        Kv, KubernetesClientConfig, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
+        KubernetesClientConfig, Kv, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
         StackInputDefinition, StackResourceState,
     };
 
@@ -364,7 +363,10 @@ mod tests {
         let stripped = strip_declined_resources(
             live_gated_stack(Some(true)),
             &StackState::new(Platform::Aws),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
         )
         .expect("resolvable gate");
         assert!(!stripped.resources.contains_key("cache"));
@@ -375,7 +377,10 @@ mod tests {
         let stripped = strip_declined_resources(
             live_gated_stack(Some(false)),
             &StackState::new(Platform::Aws),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
         )
         .expect("resolvable gate");
         assert!(stripped.resources.contains_key("cache"));
@@ -420,7 +425,10 @@ mod tests {
         let error = strip_declined_resources(
             live_gated_stack(Some(true)),
             &StackState::new(Platform::Aws),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!("false"),
+            )]),
         )
         .expect_err("string values are not answers");
         assert!(error.message.contains("boolean"), "{}", error.message);
