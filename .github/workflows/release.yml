@@ -1808,6 +1808,19 @@ jobs:
           name: qualified-github-release
           path: .
 
+      - name: Require immutable GitHub releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          enabled=$(gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            --jq '.enabled')
+          if [ "$enabled" != "true" ]; then
+            echo "::error::Immutable GitHub releases must be enabled"
+            exit 1
+          fi
+
       - name: Verify existing release tag
         id: verify_tag
         env:
@@ -1949,11 +1962,45 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh api \
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v${VERSION}"
+          COMMIT="${{ needs.prepare.outputs.release_commit }}"
+          FULL_REF="refs/tags/${TAG}"
+
+          MATCHING_REFS=$(gh api --paginate --slurp \
+            "/repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" |
+            jq -c --arg ref "$FULL_REF" '[add[] | select(.ref == $ref)]')
+          if [ "$(jq 'length' <<< "$MATCHING_REFS")" != "1" ]; then
+            echo "::error::Expected exactly one ${FULL_REF} before publication"
+            exit 1
+          fi
+
+          REF_JSON=$(jq -c '.[0]' <<< "$MATCHING_REFS")
+          TAG_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
+          TAG_COMMIT=$(jq -r '.object.sha' <<< "$REF_JSON")
+          if [ "$TAG_TYPE" = "tag" ]; then
+            TAG_COMMIT=$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/git/tags/${TAG_COMMIT}" \
+              --jq '.object.sha')
+          elif [ "$TAG_TYPE" != "commit" ]; then
+            echo "::error::${TAG} points to unsupported Git object type ${TAG_TYPE}"
+            exit 1
+          fi
+          if [ "$TAG_COMMIT" != "$COMMIT" ]; then
+            echo "::error::${TAG} points to ${TAG_COMMIT}, expected ${COMMIT}"
+            exit 1
+          fi
+
+          published_release=$(gh api \
             --method PATCH \
             "/repos/${GITHUB_REPOSITORY}/releases/${{ steps.stage_release.outputs.id }}" \
             --field draft=false \
-            --raw-field make_latest=true >/dev/null
+            --raw-field make_latest=true)
+          if ! jq -e '.draft == false and .immutable == true' \
+            <<< "$published_release" >/dev/null; then
+            echo "::error::GitHub did not publish an immutable release"
+            exit 1
+          fi
 
   # ─── Homebrew tap ──────────────────────────────────────────────────
 
