@@ -15,6 +15,7 @@
 
 import { createClient } from "nice-grpc"
 import { getGrpcEndpointConfig, getOrCreateChannel } from "./channel.js"
+import { installWorkerConsole } from "./console.js"
 import { EventLoop } from "./event-loop.js"
 import { wrapGrpcCall } from "./grpc-utils.js"
 import {
@@ -22,6 +23,8 @@ import {
   getWaitUntilServiceDefinition,
 } from "./service-definitions.js"
 import { WaitUntilManager } from "./wait-until-manager.js"
+
+installWorkerConsole()
 
 // Minimal ambient declaration for the Bun runtime global. Worker binaries run
 // under Bun; the SDK is type-checked by tsc, which has no Bun types. We use
