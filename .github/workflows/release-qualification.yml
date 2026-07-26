@@ -11,7 +11,11 @@ on:
         required: true
 
 permissions:
-  contents: read
+  # The reusable release workflow also serves the prepare/publish entrypoint
+  # and declares contents: write. GitHub requires callers to grant at least the
+  # permissions declared by a called workflow, even when qualification itself
+  # only checks out source and uploads artifacts.
+  contents: write
   packages: write
   id-token: write
 
