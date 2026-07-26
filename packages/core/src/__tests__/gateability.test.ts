@@ -13,17 +13,32 @@ const manifest: Record<string, { frozen: boolean; live: boolean }> = JSON.parse(
   readFileSync(join(__dirname, "../generated/gateability.json"), "utf8"),
 )
 
-/** Builder factories for every manifest type the TypeScript SDK exposes. */
+/**
+ * Builder factories for every manifest type the TypeScript SDK exposes, each
+ * carrying the minimum config its schema requires so `.build()` succeeds —
+ * the gate is only proven by building the resource and reading the answer
+ * back off it.
+ */
+const IMAGE = "registry.example.com/fixture:latest"
+
 const builders: Record<string, () => object> = {
   kv: () => new alien.Kv("fixture"),
   storage: () => new alien.Storage("fixture"),
   queue: () => new alien.Queue("fixture"),
   vault: () => new alien.Vault("fixture"),
   postgres: () => new alien.Postgres("fixture"),
-  worker: () => new alien.Worker("fixture"),
-  daemon: () => new alien.Daemon("fixture"),
-  container: () => new alien.Container("fixture"),
+  worker: () =>
+    new alien.Worker("fixture").code({ type: "image", image: IMAGE }).permissions("execution"),
+  daemon: () =>
+    new alien.Daemon("fixture").code({ type: "image", image: IMAGE }).permissions("execution"),
+  container: () =>
+    new alien.Container("fixture")
+      .code({ type: "image", image: IMAGE })
+      .cpu(0.25)
+      .memory("256Mi")
+      .permissions("execution"),
   email: () => new alien.Email("fixture"),
+  "experimental/aws-opensearch": () => new alien.experimental.AwsOpenSearch("fixture"),
 }
 
 describe("gateability manifest", () => {
@@ -51,18 +66,31 @@ describe("gateability manifest", () => {
         ).toBe(false)
         return
       }
-      const builder = makeBuilder() as { enabled?: unknown }
-      if (gateable) {
-        expect(
-          typeof builder.enabled,
-          `the policy allows gating '${resourceType}', so its builder must expose .enabled()`,
-        ).toBe("function")
-      } else {
+      const builder = makeBuilder() as {
+        enabled?: (input: { id: string }) => unknown
+      }
+      if (!gateable) {
         expect(
           builder.enabled,
           `the policy refuses gating '${resourceType}', so its builder must not expose .enabled()`,
         ).toBeUndefined()
+        return
       }
+      expect(
+        typeof builder.enabled,
+        `the policy allows gating '${resourceType}', so its builder must expose .enabled()`,
+      ).toBe("function")
+
+      // Exposing the method is not enough: a builder that accepts the input
+      // and then drops it on the way into the Resource gates nothing, and
+      // the resource would be created against the deployer's answer.
+      const gated = (
+        builder.enabled!({ id: "fixtureEnabled" }) as { build(): { enabledWhen?: string } }
+      ).build()
+      expect(
+        gated.enabledWhen,
+        `'${resourceType}' accepts .enabled() but does not carry the answer into its Resource`,
+      ).toBe("fixtureEnabled")
     })
   }
 })

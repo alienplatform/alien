@@ -1173,4 +1173,631 @@ async fn a_declined_gated_resource_is_stripped_from_the_prepared_stack() {
          carry it into provisioning"
     );
     assert!(prepared_stack.resources.contains_key("assets"));
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&false),
+        "the declined answer is recorded at import, where the fixity check \
+         holds every later value against it"
+    );
+}
+
+/// A two-resource variant of `aws_s3_import_request`: the gated store was
+/// delivered alongside the ungated one.
+fn aws_two_store_import_request(
+    deployment_name: &str,
+    region: &str,
+    ungated_id: &str,
+    gated_id: &str,
+) -> StackImportRequest {
+    let mut request = aws_s3_import_request(deployment_name, region, ungated_id, "acme-imports");
+    request.resources.push(ImportedResource {
+        id: gated_id.to_string(),
+        resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
+        import_data: serde_json::to_value(AwsStorageImportData {
+            bucket_name: "acme-extras".to_string(),
+            bucket_arn: "arn:aws:s3:::acme-extras".to_string(),
+        })
+        .unwrap(),
+    });
+    request
+}
+
+/// An accepted answer is recorded too, and a re-registration that flips it is
+/// refused synchronously — the setup artifact's custom resource fails, which
+/// is what forces CloudFormation to roll the parameter edit back.
+#[tokio::test]
+async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+
+    // First install: the deployer accepted the gated store.
+    let accepted = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepted).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&true),
+        "the accepted answer is recorded at import"
+    );
+
+    // The deployment must be in a re-importable state before the flipped
+    // answer can even reach the fixity check.
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-reconcile".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_gated_storage("assets", "extras"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: persisted.runtime_metadata.clone(),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+
+    // A deployment from before answers were recorded: its settled state is
+    // the ground truth, so a flipped re-registration is still refused.
+    let mut legacy_metadata = persisted
+        .runtime_metadata
+        .clone()
+        .expect("runtime_metadata must be persisted");
+    legacy_metadata.persisted_gate_answers = Default::default();
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-legacy".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_gated_storage("assets", "extras"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: Some(legacy_metadata),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("legacy state should persist");
+    let declined_legacy = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined_legacy).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a legacy deployment's settled state still refuses the flip; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "body = {json:#}"
+    );
+
+    // The re-registration omits the gated store: a flipped answer.
+    let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a frozen gate is answered once; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "body = {json:#}"
+    );
+}
+
+/// A release that introduces a brand-new frozen gate must not inherit a
+/// fabricated declined answer on a legacy deployment: the gated resource is
+/// absent from the old settled state because it did not exist yet, not because
+/// the deployer said no. The legacy baseline derives from the release the
+/// state settled under, so the new gate's first answer is recorded, not
+/// refused.
+#[tokio::test]
+async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_legacy_reimport() {
+    // The old release has no gates anywhere, so nothing is ever recorded —
+    // exactly the legacy empty-answers shape.
+    let old_stack = Stack::new("imported".to_string())
+        .add(
+            Storage::new("assets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let fixture = make_fixture(Some(old_stack.clone())).await;
+
+    let first = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &first).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .is_empty(),
+        "a gateless release records no answers"
+    );
+
+    // Settle at Running under the old release so the deployment is
+    // re-importable and its baseline release is the one the state came from.
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-reconcile".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: old_stack,
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: persisted.runtime_metadata.clone(),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
+
+    // The new release introduces the gated store.
+    let new_release_id = fixture
+        .state
+        .release_store
+        .create_release(
+            &alien_manager::auth::Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(
+                    Platform::Aws,
+                    stack_with_gated_storage("assets", "extras"),
+                )]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+    // The re-registration delivers the new gated store: its first answer.
+    let mut accepted = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
+    accepted.release_id = Some(new_release_id);
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepted).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a brand-new gate records its first answer instead of colliding with \
+         fabricated history; body = {json:#}"
+    );
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    assert_eq!(
+        persisted
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime_metadata must be persisted")
+            .persisted_gate_answers
+            .get("extrasEnabled"),
+        Some(&true),
+        "the first answer for the new gate is recorded for later fixity"
+    );
+}
+
+/// The registration's input values must agree with what the template
+/// actually created: the gated store was delivered (the template's answer
+/// was true) while the payload claims false. A live resource sharing that
+/// gate would follow the contradicting value instead of the frozen answer,
+/// so the import is refused outright.
+#[tokio::test]
+async fn an_import_whose_input_values_contradict_the_delivered_resources_is_refused() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+
+    let mut body = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
+    body.input_values = HashMap::from([(
+        "extrasEnabled".to_string(),
+        serde_json::Value::Bool(false),
+    )]);
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "delivered resources are the template's answer; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "body = {json:#}"
+    );
+}
+
+/// A legacy deployment's settled state is enough on its own: the gated store
+/// exists there, which only acceptance explains, so a flipped re-import is
+/// still refused even when the release that installed it is gone.
+#[tokio::test]
+async fn a_legacy_reimport_is_refused_from_settled_state_without_any_release() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+
+    let accepted = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepted).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    // Settle at Running as a pre-fixity deployment whose recorded release no
+    // longer exists: no answers, and nothing to load a baseline stack from.
+    let mut legacy_metadata = persisted
+        .runtime_metadata
+        .clone()
+        .expect("runtime_metadata must be persisted");
+    legacy_metadata.persisted_gate_answers = Default::default();
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-legacy-pruned".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: Some("rel_pruned_baseline".to_string()),
+                        version: None,
+                        description: None,
+                        stack: stack_with_gated_storage("assets", "extras"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: Some(legacy_metadata),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("legacy state should persist");
+
+    let flipped = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &flipped).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the settled state alone proves the store was accepted; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "body = {json:#}"
+    );
+}
+
+/// Two independently gated stores, so a single import can carry both a
+/// contradiction and an ambiguity.
+fn stack_with_two_gated_stores(ungated_id: &str, first_id: &str, second_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .inputs(vec![
+            alien_core::StackInputDefinition::deployer_boolean(
+                "extrasEnabled",
+                "Enable extras",
+                "Whether to create the extras store.",
+                Some(true),
+            ),
+            alien_core::StackInputDefinition::deployer_boolean(
+                "archiveEnabled",
+                "Enable archive",
+                "Whether to create the archive store.",
+                Some(true),
+            ),
+        ])
+        .add(
+            Storage::new(ungated_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Storage::new(first_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "extrasEnabled",
+        )
+        .add_enabled_when(
+            Storage::new(second_id.to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "archiveEnabled",
+        )
+        .build()
+}
+
+/// `aws_s3_import_request` plus one delivered store per id in `gated_ids`.
+fn aws_import_request_delivering(
+    deployment_name: &str,
+    region: &str,
+    ungated_id: &str,
+    gated_ids: &[&str],
+) -> StackImportRequest {
+    let mut request = aws_s3_import_request(deployment_name, region, ungated_id, "acme-imports");
+    for id in gated_ids {
+        request.resources.push(ImportedResource {
+            id: (*id).to_string(),
+            resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(AwsStorageImportData {
+                bucket_name: format!("acme-{id}"),
+                bucket_arn: format!("arn:aws:s3:::acme-{id}"),
+            })
+            .unwrap(),
+        });
+    }
+    request
+}
+
+/// A contradiction the settled state proves outranks an ambiguity it can't. An
+/// import that both flips a proven acceptance and accepts an unprovable gate
+/// must name the offending input, not blame the unreadable release.
+#[tokio::test]
+async fn a_proven_flip_outranks_an_unreadable_release() {
+    let fixture = make_fixture(Some(stack_with_two_gated_stores(
+        "assets", "extras", "archive",
+    )))
+    .await;
+
+    // `extras` delivered and `archive` omitted, so the settled state proves one
+    // acceptance and carries no evidence either way for the other.
+    let first = aws_import_request_delivering("acme-prod", "us-east-1", "assets", &["extras"]);
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &first).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    let mut legacy_metadata = persisted
+        .runtime_metadata
+        .clone()
+        .expect("runtime_metadata must be persisted");
+    legacy_metadata.persisted_gate_answers = Default::default();
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-legacy-two-gate".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: Some("rel_pruned_baseline".to_string()),
+                        version: None,
+                        description: None,
+                        stack: stack_with_two_gated_stores("assets", "extras", "archive"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: Some(legacy_metadata),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("legacy state should persist");
+
+    // Flips `extras` to declined (contradicts the settled state) and accepts
+    // `archive` (unprovable). The proven contradiction must win.
+    let both = aws_import_request_delivering("acme-prod", "us-east-1", "assets", &["archive"]);
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &both).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("FROZEN_GATE_ANSWER_CHANGED"),
+        "the flipped gate is proven by the settled state, so it must be named \
+         instead of the unreadable release; body = {json:#}"
+    );
+    assert_eq!(
+        json.pointer("/context/input_id").and_then(|id| id.as_str()),
+        Some("extrasEnabled"),
+        "body = {json:#}"
+    );
+}
+
+/// No settled release plus an import that accepts a gate is refused: the
+/// decline it might overwrite can no longer be verified.
+#[tokio::test]
+async fn a_legacy_reimport_accepting_a_gate_is_refused_without_the_settled_release() {
+    let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
+
+    let declined = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &declined).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+
+    let mut legacy_metadata = persisted
+        .runtime_metadata
+        .clone()
+        .expect("runtime_metadata must be persisted");
+    legacy_metadata.persisted_gate_answers = Default::default();
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: persisted.id.clone(),
+                session: "test-legacy-pruned-decline".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: persisted.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: Some("rel_pruned_baseline".to_string()),
+                        version: None,
+                        description: None,
+                        stack: stack_with_gated_storage("assets", "extras"),
+                    }),
+                    target_release: None,
+                    stack_state: persisted.stack_state.clone(),
+                    error: None,
+                    environment_info: persisted.environment_info.clone(),
+                    runtime_metadata: Some(legacy_metadata),
+                    retry_requested: false,
+                    protocol_version: persisted.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("legacy state should persist");
+
+    let accepting = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &accepting).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "the release that offered the gate is gone, so accepting it now could \
+         overwrite a decline; body = {json:#}"
+    );
+    assert_eq!(
+        json.get("code").and_then(|code| code.as_str()),
+        Some("SETTLED_RELEASE_UNAVAILABLE"),
+        "body = {json:#}"
+    );
 }

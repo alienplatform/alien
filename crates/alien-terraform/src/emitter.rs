@@ -32,6 +32,17 @@ pub struct TfFragment {
     /// fragments. Keyed by address, not index, so removals and reordering in
     /// later passes cannot desynchronize the classification.
     shared_addresses: std::collections::HashSet<(String, String)>,
+    /// Blocks that carry ANOTHER resource's gate: a grant rendered on behalf
+    /// of a resource the deployer can decline, emitted by a shared emitter
+    /// (management role, service account) that is itself never gated. The
+    /// generator installs the count and records the address, so these blocks
+    /// land inside the same reference rewrite and rendered-output scan as
+    /// every other gated block. Address-keyed for the same reason
+    /// [`Self::shared_addresses`] is.
+    ///
+    /// Several inputs on one block means the block is one cloud object merged
+    /// from several contributors, and it exists while ANY of them is enabled.
+    gated_contributions: std::collections::HashMap<(String, String), Vec<String>>,
 }
 
 impl TfFragment {
@@ -69,6 +80,54 @@ impl TfFragment {
         self.resource_blocks.push(block);
     }
 
+    /// Append a resource block that exists on behalf of gated resources, and
+    /// declare whose gates it carries. An empty list appends it unchanged.
+    ///
+    /// The block is rendered plain here — the generator installs the count, so
+    /// it goes through the same checks and the same address bookkeeping as a
+    /// gated resource's own blocks.
+    pub fn push_gated_resource(&mut self, block: Block, input_ids: &[String]) {
+        if !input_ids.is_empty() {
+            if let Some(address) = block_address(&block) {
+                self.declare_contribution(address, input_ids);
+            }
+        }
+        self.resource_blocks.push(block);
+    }
+
+    /// Declare that every non-shared block appended since `from_index` carries
+    /// `input_id`'s gate. `None` declares nothing, so an ungated resource can
+    /// call the same shared emitters without threading a gate through them.
+    pub fn mark_gated_from(&mut self, from_index: usize, input_id: Option<&str>) {
+        let Some(input_id) = input_id else {
+            return;
+        };
+        let addresses: Vec<(String, String)> = self.resource_blocks[from_index..]
+            .iter()
+            .filter(|block| !self.is_shared(block))
+            .filter_map(block_address)
+            .collect();
+        for address in addresses {
+            self.declare_contribution(address, std::slice::from_ref(&input_id.to_string()));
+        }
+    }
+
+    fn declare_contribution(&mut self, address: (String, String), input_ids: &[String]) {
+        let gates = self.gated_contributions.entry(address).or_default();
+        for input_id in input_ids {
+            if !gates.contains(input_id) {
+                gates.push(input_id.clone());
+            }
+        }
+    }
+
+    /// The gates a contributed block carries, `None` when it is not one.
+    pub fn contribution_gates(&self, block: &Block) -> Option<&[String]> {
+        block_address(block)
+            .and_then(|address| self.gated_contributions.get(&address))
+            .map(Vec::as_slice)
+    }
+
     /// Whether a block of this fragment is shared support infrastructure.
     pub fn is_shared(&self, block: &Block) -> bool {
         block_address(block)
@@ -83,6 +142,9 @@ impl TfFragment {
         self.data_blocks.extend(other.data_blocks);
         self.locals.extend(other.locals);
         self.shared_addresses.extend(other.shared_addresses);
+        for (address, input_ids) in other.gated_contributions {
+            self.declare_contribution(address, &input_ids);
+        }
     }
 }
 
@@ -127,10 +189,11 @@ pub trait TfEmitter: Send + Sync {
     /// import data feeds the manager, while binding data feeds user code.
     ///
     /// A gated resource's own references need the same `[0]` indexing they get
-    /// in [`Self::emit_import_ref`]. `ResourceEnabledValidCheck` currently keeps
-    /// a gated resource from reaching here — a Worker cannot be gated, and an
-    /// ungated Worker linking a gated resource is rejected outright — so this is
-    /// only reachable if that rule relaxes.
+    /// in [`Self::emit_import_ref`]. A gated resource still cannot reach here:
+    /// compute is live-only, so a gated Worker never renders into setup
+    /// Terraform, and `ResourceEnabledValidCheck` rejects an ungated dependent
+    /// of a gated resource outright. This is only reachable if compute gains a
+    /// frozen lifecycle or that rule relaxes.
     fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         Ok(None)
     }

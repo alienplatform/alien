@@ -68,17 +68,45 @@ pub async fn handle_update_pending(
         })
     })?;
 
-    // Drop gated resources the deployer declined, BEFORE the preflights: the
-    // frozen-compatibility check compares against the previous prepared
-    // stack, which was stripped the same way, and an unstripped new stack
-    // would read as "frozen resource added" and refuse the update — or
-    // worse, resurrect the resource the deployer declined. For a live gate
-    // this strip is also what applies an input edit: the resource enters or
-    // leaves the desired stack here, and the executor's create/delete
-    // planning provisions or deprovisions it. Dependents share their
-    // dependency's gate, so the strip stays closed.
-    let target_stack =
-        crate::pending::strip_declined_resources(target_stack, &stack_state, &config.input_values)?;
+    // A frozen gate is answered once. States from before answers were
+    // recorded carry none, so reconstruct them from the settled state read
+    // against the release it settled under: that release is what was put to
+    // the deployer, so presence there is their answer. A gate only the target
+    // release declares was never asked and stays unrecorded, which leaves its
+    // resource in the stack for the frozen-compatibility check to refuse.
+    let mut persisted_gate_answers = current
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| metadata.persisted_gate_answers.clone())
+        .unwrap_or_default();
+    if persisted_gate_answers.is_empty() {
+        persisted_gate_answers = crate::pending::derive_legacy_frozen_gate_answers(
+            current.current_release.as_ref().map(|release| &release.stack),
+            &target_stack,
+            &stack_state,
+        );
+    }
+    let frozen_gating = crate::pending::frozen_gating_inputs(&target_stack);
+    crate::pending::enforce_frozen_gate_fixity(
+        &persisted_gate_answers,
+        &frozen_gating,
+        &config.input_values,
+    )?;
+
+    // Drop gated setup resources the deployer declined, BEFORE the
+    // preflights: the frozen-compatibility check compares against the
+    // previous prepared stack, which was stripped the same way, and an
+    // unstripped new stack would read as "frozen resource added" and refuse
+    // the update — or worse, resurrect the resource the deployer declined.
+    // Live declines apply AFTER the mutations instead, so a declined
+    // workload's derived baseline (service account, profile grants, capacity
+    // contribution) stays identical to the accepted render and the
+    // compatibility checks never see a difference.
+    let target_stack = crate::pending::strip_frozen_declines(
+        target_stack,
+        &persisted_gate_answers,
+        &frozen_gating,
+    );
 
     let runner = alien_preflights::runner::PreflightRunner::new();
 
@@ -121,9 +149,31 @@ pub async fn handle_update_pending(
 
     info!("Deployment-time preflight checks completed successfully");
 
+    // Drop gated live resources whose input says no — after the mutations,
+    // at the boundary where the executor's desired set is built. For a live
+    // gate this strip is what applies an input edit: the resource enters or
+    // leaves the desired stack here, and the executor's create/delete
+    // planning provisions or deprovisions it. Dependents share their
+    // dependency's gate, so the strip stays closed.
+    crate::pending::audit_live_gate_transitions(
+        &mutated_stack,
+        &stack_state,
+        &config.input_values,
+        &persisted_gate_answers,
+        &frozen_gating,
+        target_release_id,
+    );
+    let mutated_stack = crate::pending::strip_declined_live_resources(
+        mutated_stack,
+        &config.input_values,
+        &persisted_gate_answers,
+        &frozen_gating,
+    )?;
+
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
+    runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
     // Transition to Updating
     next.status = DeploymentStatus::Updating;

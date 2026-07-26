@@ -80,7 +80,7 @@ pub fn router() -> Router<AppState> {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Deployment group or release not found"),
-        (status = 409, description = "Deployment name conflict"),
+        (status = 409, description = "Deployment name conflict, or the current release cannot be read to resolve a gate answer"),
     )
 ))]
 pub async fn stack_import(
@@ -175,7 +175,53 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
-    let prepared_stack = match prepare_import_stack(source_stack.clone(), &req).await {
+    // A gated resource renders behind its input in the setup template, so its
+    // absence from the delivered resource ids IS the deployer's answer,
+    // resolved on the declared stack before anything else runs. The answers
+    // are recorded on the deployment, where the fixity check holds every
+    // later value against them — starting with this request's own input
+    // values, which must not contradict what the template actually created:
+    // a live resource sharing a frozen gate would otherwise follow the
+    // contradicting value instead of the frozen answer.
+    let delivered_resource_ids: std::collections::HashSet<String> = req
+        .resources
+        .iter()
+        .map(|resource| resource.id.clone())
+        .collect();
+    let imported_gate_answers =
+        match alien_deployment::resolve_frozen_gate_answers_from_presence(
+            source_stack,
+            &delivered_resource_ids,
+            &req.input_values,
+        ) {
+            Ok(answers) => answers,
+            Err(e) => return e.into_response(),
+        };
+    let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
+    // Held across the strips below: reconstructing a legacy deployment's
+    // answers needs every gate the release declares, including the ones this
+    // registration is about to decline.
+    let declared_stack = source_stack;
+    if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
+        &imported_gate_answers,
+        &frozen_gating,
+        &req.input_values,
+    ) {
+        return e.into_response();
+    }
+    // The strips run BEFORE the mutations, exactly like the deployment
+    // paths: a declined frozen resource never existed, so nothing may be
+    // derived from it — no service-account grants, no profile entries — and
+    // a live resource dominated by a declined frozen gate goes with it, or
+    // its links to the stripped sibling would dangle through the template
+    // preflights. Live-only gates resolve after the mutations, below.
+    let source_stack = alien_deployment::strip_frozen_declines(
+        source_stack.clone(),
+        &imported_gate_answers,
+        &frozen_gating,
+    );
+
+    let prepared_stack = match prepare_import_stack(source_stack, &req).await {
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
@@ -184,16 +230,11 @@ pub async fn stack_import(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    // A gated resource renders behind its input in the setup template, so its
-    // absence from the import IS the deployer's answer. Imported deployments
-    // enter the runner at InitialSetup with this prepared stack; leaving the
-    // declined entry in would make the runner create the very resource the
-    // deployer said no to. A live gated resource follows the request's input
-    // values here for the same reason.
-    let prepared_stack = match alien_deployment::strip_declined_resources(
+    let prepared_stack = match alien_deployment::strip_declined_live_resources(
         prepared_stack,
-        &stack_state,
         &req.input_values,
+        &imported_gate_answers,
+        &frozen_gating,
     ) {
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
@@ -285,8 +326,100 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
-            let runtime_metadata =
-                match reimport_runtime_metadata(&existing, &prepared_stack, &release.id, &req) {
+            // A frozen gate is answered once. Refusing a changed answer HERE
+            // — inside the registration the setup artifact calls
+            // synchronously — is what makes a CloudFormation parameter edit
+            // roll the whole stack update back: the custom resource fails,
+            // and CloudFormation restores whatever its conditionals just
+            // created or deleted.
+            let mut persisted_answers = existing
+                .runtime_metadata
+                .as_ref()
+                .map(|metadata| metadata.persisted_gate_answers.clone())
+                .unwrap_or_default();
+            // A deployment from before answers were recorded gets them
+            // reconstructed from its settled state read against the release it
+            // settled under — that release is what was put to the deployer, so
+            // presence there is their answer. A gate only the incoming release
+            // declares was never asked, so nothing is recorded and this
+            // registration is free to answer it for the first time.
+            // A decline is only legible against the release that offered the
+            // gate; acceptance isn't, since the resource is already settled.
+            let mut lost_settled_release: Option<(String, String)> = None;
+            if persisted_answers.is_empty() {
+                if let Some(existing_state) = existing.stack_state.as_ref() {
+                    let settled_stack = match existing.current_release_id.as_deref() {
+                        Some(settled_release_id) => match state
+                            .release_store
+                            .get_release(&subject, settled_release_id)
+                            .await
+                        {
+                            Ok(Some(settled_release)) => {
+                                match resolve_stack(&settled_release, req.platform) {
+                                    Ok(stack) => Some(stack.clone()),
+                                    Err(_) => {
+                                        lost_settled_release = Some((
+                                            settled_release_id.to_string(),
+                                            format!(
+                                                "it carries no stack for platform '{}'",
+                                                req.platform
+                                            ),
+                                        ));
+                                        None
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                lost_settled_release = Some((
+                                    settled_release_id.to_string(),
+                                    "it could not be read back".to_string(),
+                                ));
+                                None
+                            }
+                            Err(e) => return e.into_response(),
+                        },
+                        None => None,
+                    };
+                    persisted_answers = alien_deployment::derive_legacy_frozen_gate_answers(
+                        settled_stack.as_ref(),
+                        declared_stack,
+                        existing_state,
+                    );
+                }
+            }
+            // A contradiction the settled state proves outranks an ambiguity it
+            // can't, so this names the offending input before the check below
+            // falls back to blaming the unreadable release.
+            for (input_id, imported_answer) in &imported_gate_answers {
+                if let Some(persisted) = persisted_answers.get(input_id) {
+                    if persisted != imported_answer {
+                        return AlienError::new(
+                            alien_deployment::ErrorData::FrozenGateAnswerChanged {
+                                input_id: input_id.clone(),
+                                persisted: *persisted,
+                                requested: *imported_answer,
+                            },
+                        )
+                        .into_response();
+                    }
+                }
+            }
+            // Accepting a gate we can't prove wasn't declined would overwrite
+            // that decline.
+            if let Some((settled_release_id, reason)) = lost_settled_release {
+                if imported_gate_answers.iter().any(|(input_id, accepted)| {
+                    *accepted && !persisted_answers.contains_key(input_id)
+                }) {
+                    return settled_release_unavailable(&settled_release_id, reason);
+                }
+            }
+            let runtime_metadata = match reimport_runtime_metadata(
+                &existing,
+                &prepared_stack,
+                &release.id,
+                &req,
+                imported_gate_answers,
+            ) {
                     Ok(metadata) => metadata,
                     Err(error) => return error.into_response(),
                 };
@@ -345,7 +478,7 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     }
 
-    let runtime_metadata = import_runtime_metadata(&prepared_stack);
+    let runtime_metadata = import_runtime_metadata(&prepared_stack, imported_gate_answers);
 
     let create_ctx = crate::auth::DeploymentCreateCtx {
         workspace_id: &dg.workspace_id,
@@ -800,9 +933,13 @@ fn imported_resources_are_unchanged(
     })
 }
 
-fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
+fn import_runtime_metadata(
+    stack: &Stack,
+    persisted_gate_answers: alien_core::GateAnswers,
+) -> RuntimeMetadata {
     RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
+        persisted_gate_answers,
         ..RuntimeMetadata::default()
     }
 }
@@ -812,8 +949,19 @@ fn reimport_runtime_metadata(
     prepared_stack: &Stack,
     release_id: &str,
     req: &StackImportRequest,
+    imported_gate_answers: alien_core::GateAnswers,
 ) -> crate::error::Result<RuntimeMetadata> {
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    // The route refused conflicting answers before calling this, so what
+    // remains is bookkeeping: answers for inputs a new release introduces are
+    // recorded, recorded answers are never overwritten, and a pre-fixity
+    // deployment adopts the import's answers wholesale.
+    for (input_id, imported_answer) in &imported_gate_answers {
+        metadata
+            .persisted_gate_answers
+            .entry(input_id.clone())
+            .or_insert(*imported_answer);
+    }
     let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {
         AlienError::new(ErrorData::ImportedDeploymentConflict {
             reason: format!(
@@ -1004,6 +1152,18 @@ fn resolve_stack(
             ),
         })
     })
+}
+
+/// Refuse to reconstruct gate answers when the settled release they would be
+/// read against can no longer be resolved.
+fn settled_release_unavailable(release_id: &str, reason: String) -> Response {
+    AlienError::new(
+        alien_deployment::ErrorData::SettledReleaseUnavailable {
+            release_id: release_id.to_string(),
+            reason,
+        },
+    )
+    .into_response()
 }
 
 /// Run every `ImportedResource` through the [`alien_infra::ImporterRegistry`]
@@ -1282,6 +1442,7 @@ mod setup_update_authorization_tests {
                 &target,
                 "release",
                 &request(),
+                Default::default(),
             )
             .expect("stable setup import should succeed");
 
@@ -1299,7 +1460,13 @@ mod setup_update_authorization_tests {
         let baseline = stack("live", "frozen-a");
         let target = stack("live", "frozen-b");
         let metadata =
-            reimport_runtime_metadata(&record(baseline.clone()), &target, "release", &request())
+            reimport_runtime_metadata(
+                &record(baseline.clone()),
+                &target,
+                "release",
+                &request(),
+                Default::default(),
+            )
                 .expect("setup-owned update should succeed");
         let authorization = metadata
             .setup_update_authorization

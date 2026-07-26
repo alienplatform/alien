@@ -19,8 +19,8 @@ use tracing::{debug, error, info, warn};
 
 use alien_core::{
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_DEPLOYMENT_NAME,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, Stack,
+    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -203,9 +203,50 @@ pub struct DeploymentLoop {
     dev_status_tx: Option<watch::Sender<()>>,
     /// Keep local providers alive across ticks so runtime managers retain in-memory state.
     local_bindings_cache: Mutex<HashMap<String, Arc<LocalBindingsProvider>>>,
+    /// The settled release's stack, per deployment. An update re-reads it on
+    /// every tick until it finishes, and a release never changes once created,
+    /// so hold the last one instead of refetching and re-deserializing it.
+    /// One entry per deployment, replaced when it moves to another release.
+    settled_stack_cache: Mutex<HashMap<String, (String, Option<Stack>)>>,
 }
 
 impl DeploymentLoop {
+    /// The settled release's stack for a deployment, fetched once and then
+    /// held. Releases are immutable, so the only reason to refetch is the
+    /// deployment moving to a different one.
+    async fn settled_stack(
+        &self,
+        subject: &crate::auth::Subject,
+        deployment_id: &str,
+        release_id: &str,
+        platform: Platform,
+    ) -> Result<Option<Stack>, AlienError> {
+        if let Some((cached_release_id, stack)) = self
+            .settled_stack_cache
+            .lock()
+            .expect("settled_stack_cache poisoned")
+            .get(deployment_id)
+        {
+            if cached_release_id == release_id {
+                return Ok(stack.clone());
+            }
+        }
+
+        let stack = self
+            .release_store
+            .get_release(subject, release_id)
+            .await?
+            .and_then(|release| release.stacks.get(&platform).cloned());
+        self.settled_stack_cache
+            .lock()
+            .expect("settled_stack_cache poisoned")
+            .insert(
+                deployment_id.to_string(),
+                (release_id.to_string(), stack.clone()),
+            );
+        Ok(stack)
+    }
+
     pub fn new(
         config: Arc<ManagerConfig>,
         deployment_store: Arc<dyn DeploymentStore>,
@@ -222,6 +263,7 @@ impl DeploymentLoop {
             server_bindings,
             dev_status_tx,
             local_bindings_cache: Mutex::new(HashMap::new()),
+            settled_stack_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -500,18 +542,34 @@ impl DeploymentLoop {
             stack: deployment_stack.clone(),
         };
 
-        let mut state = DeploymentState {
-            status: parse_status(&deployment.status),
-            platform: deployment.platform.clone(),
-            current_release: deployment
-                .current_release_id
-                .as_ref()
-                .map(|id| ReleaseInfo {
+        // `current_release` is the release currently deployed, so its stack has
+        // to come from that release. During an update it differs from the
+        // target, and carrying the target's stack here would make anything
+        // that asks "what is deployed now?" compare the target against itself.
+        // The pull path hydrates it the same way.
+        let current_release = match deployment.current_release_id.as_ref() {
+            None => None,
+            Some(id) if id == target_release_id => Some(ReleaseInfo {
+                release_id: Some(id.clone()),
+                version: None,
+                description: None,
+                stack: deployment_stack.clone(),
+            }),
+            Some(id) => self
+                .settled_stack(&system, &deployment_id, id, deployment.platform)
+                .await?
+                .map(|stack| ReleaseInfo {
                     release_id: Some(id.clone()),
                     version: None,
                     description: None,
-                    stack: deployment_stack.clone(),
+                    stack,
                 }),
+        };
+
+        let mut state = DeploymentState {
+            status: parse_status(&deployment.status),
+            platform: deployment.platform.clone(),
+            current_release,
             target_release: Some(target_release),
             stack_state: deployment.stack_state.clone(),
             error: deployment_record_error(&deployment.error),

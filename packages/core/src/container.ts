@@ -10,7 +10,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type PublicEndpointOptions =
   | "http"
@@ -60,7 +60,7 @@ export interface PersistentStorageOptions {
  * by the managed container backend. They're designed for always-on workloads
  * like web services, APIs, databases, and background workers.
  */
-export class Container {
+export class Container extends ResourceBuilder {
   private _config: Partial<ContainerConfig> = {
     links: [],
     ports: [],
@@ -75,6 +75,7 @@ export class Container {
    * @param id Identifier for the container. Must be DNS-compatible: lowercase alphanumeric with hyphens.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -427,7 +428,7 @@ export class Container {
   public build(): Resource {
     const config = ContainerSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "container",
       ...config,
     })

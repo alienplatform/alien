@@ -57,6 +57,12 @@ pub fn gate(block: &mut Block, enabled_when: Option<&str>) -> Result<()> {
     let Some(count) = enabled_count(enabled_when) else {
         return Ok(());
     };
+    gate_with_count(block, count)
+}
+
+/// Shared tail of [`gate`] and [`gate_any`]: install `count` on a block that
+/// does not already declare one.
+fn gate_with_count(block: &mut Block, count: Expression) -> Result<()> {
     if block
         .body
         .attributes()
@@ -79,6 +85,31 @@ pub fn gate(block: &mut Block, enabled_when: Option<&str>) -> Result<()> {
     body.insert(0, attr("count", count));
     block.body = Body::from(body);
     Ok(())
+}
+
+/// Put a merged contribution's gate on a block: the grant exists when ANY of
+/// the resources that asked for it is enabled.
+///
+/// Some grants collapse several resources into one cloud object — Azure folds
+/// every resource-scoped management permission set into a single role
+/// assignment at one scope. Such a block cannot carry one resource's gate; it
+/// has to carry all of them, or declining one resource would revoke a grant a
+/// sibling still needs. Callers must pass gates for EVERY contributor, so an
+/// ungated contributor means the block stays ungated (there is no expression
+/// that can represent "always" alongside the others).
+pub fn gate_any(block: &mut Block, input_ids: &[String]) -> Result<()> {
+    match input_ids {
+        [] => Ok(()),
+        [input_id] => gate(block, Some(input_id)),
+        _ => {
+            let condition = input_ids
+                .iter()
+                .map(|input_id| gate_variable(input_id))
+                .collect::<Vec<_>>()
+                .join(" || ");
+            gate_with_count(block, expr::raw(format!("{condition} ? 1 : 0")))
+        }
+    }
 }
 
 /// The registration list the manager consumes, one entry per resource.

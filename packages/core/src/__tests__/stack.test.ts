@@ -716,32 +716,35 @@ describe("Experimental AwsOpenSearch resource configuration", () => {
 })
 
 describe("which builders offer .enabled()", () => {
-  // Only customer-facing data resources are gateable. Framework infra (build,
-  // registry, service accounts, clusters) and live-only compute must not offer
-  // it: a gate there is either always wrong or can only fail later, and
-  // ServiceAccountMutation would silently overwrite a gated "{profile}-sa" entry,
-  // erasing the gate before any guard.
-  it("customer-facing data resources have it", () => {
+  // Every user resource is gateable: data resources, compute (a live gate —
+  // declining deletes the workload, accepting recreates it), and setup-owned
+  // types like email. Framework infra (build, registry, service accounts,
+  // clusters) must not offer it: a gate there is never a customer choice, and
+  // ServiceAccountMutation would silently overwrite a gated "{profile}-sa"
+  // entry, erasing the gate before any guard. The exhaustive
+  // policy-vs-surface check lives in gateability.test.ts.
+  it("user resources have it", () => {
     for (const b of [
       new alien.Kv("a"),
       new alien.Storage("a"),
       new alien.Queue("a"),
       new alien.Vault("a"),
       new alien.Postgres("a"),
+      new alien.Worker("a"),
+      new alien.Daemon("a"),
+      new alien.Container("a"),
+      new alien.Email("a"),
+      new alien.experimental.AwsOpenSearch("a"),
     ]) {
       expect(typeof (b as { enabled?: unknown }).enabled).toBe("function")
     }
   })
 
-  it("framework-derived, live-only compute, and unconverted types do not", () => {
+  it("framework-derived types do not", () => {
     for (const b of [
       new alien.Build("a"),
       new alien.ServiceAccount("a"),
       new alien.ComputeCluster("a"),
-      new alien.Worker("a"),
-      new alien.Container("a"),
-      new alien.Email("a"),
-      new alien.experimental.AwsOpenSearch("a"),
     ]) {
       expect((b as { enabled?: unknown }).enabled).toBeUndefined()
     }
