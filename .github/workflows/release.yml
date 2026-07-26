@@ -1364,7 +1364,6 @@ jobs:
             if [ "$published" != "$checksum" ]; then
               aws s3 cp "$src" "$versioned" --metadata "sha256=${checksum}"
             fi
-            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
           }
 
           for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
@@ -1394,11 +1393,28 @@ jobs:
             if [ "$published" != "$checksum" ]; then
               aws s3 cp "$src" "$versioned" --metadata "sha256=${checksum}"
             fi
-            aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}.exe"
           }
 
           for binary in alien alien-deploy alien-operator; do
             upload_exe "$binary" x86_64-pc-windows-msvc windows x86_64
+          done
+
+          # Do not expose any mutable latest aliases until every immutable,
+          # versioned object has been uploaded and checksum-verified.
+          promote_latest() {
+            local binary=$1 os=$2 arch=$3 extension=${4:-}
+            aws s3 cp \
+              "s3://alien-releases-prod/${binary}/v${VERSION}/${os}-${arch}/${binary}${extension}" \
+              "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}${extension}"
+          }
+
+          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+            promote_latest "$binary" linux x86_64
+            promote_latest "$binary" linux aarch64
+          done
+          for binary in alien alien-deploy alien-operator; do
+            promote_latest "$binary" darwin aarch64
+            promote_latest "$binary" windows x86_64 .exe
           done
 
       - name: Invalidate CloudFront cache
