@@ -697,7 +697,7 @@ impl Toolchain for TypeScriptToolchain {
                     build_output: None,
                 }));
             }
-            let files_to_package = vec![
+            let mut files_to_package = vec![
                 FileSpec {
                     host_path: artifact_path,
                     container_path: format!("./{artifact_filename}"),
@@ -709,17 +709,40 @@ impl Toolchain for TypeScriptToolchain {
                     mode: Some(0o644),
                 },
             ];
+            // The bundle keeps each staged native addon as an external
+            // `require("./<addon>.node")` (bun does not inline `.node` files),
+            // so every staged addon must ship into the image next to the entry
+            // or the Worker crashes at load with "Cannot find module".
+            //
+            // `alien-bindings.node` is required whenever anything was staged
+            // (bindings is the primary addon). `alien-ai-gateway.node` is
+            // optional: staged only when the app resolves `@alienplatform/ai-gateway`
+            // (an app that calls `ai()`), so it is packaged only when present.
             if staged.is_some() {
-                let bundled_addon = build_dir.join("alien-bindings.node");
-                if !bundled_addon.is_file() {
+                let bindings_addon = build_dir.join(super::native_addon::BINDINGS_STAGED_FILE);
+                if !bindings_addon.is_file() {
                     return Err(AlienError::new(ErrorData::ImageBuildFailed {
                         resource_name: binary_name.clone(),
                         reason: format!(
                             "Bundled native addon not found at {}",
-                            bundled_addon.display()
+                            bindings_addon.display()
                         ),
                         build_output: None,
                     }));
+                }
+                files_to_package.push(FileSpec {
+                    host_path: bindings_addon,
+                    container_path: format!("./{}", super::native_addon::BINDINGS_STAGED_FILE),
+                    mode: Some(0o644),
+                });
+
+                let ai_gateway_addon = build_dir.join(super::native_addon::AI_GATEWAY_STAGED_FILE);
+                if ai_gateway_addon.is_file() {
+                    files_to_package.push(FileSpec {
+                        host_path: ai_gateway_addon,
+                        container_path: format!("./{}", super::native_addon::AI_GATEWAY_STAGED_FILE),
+                        mode: Some(0o644),
+                    });
                 }
             }
             return Ok(super::image_output_for_worker_files(

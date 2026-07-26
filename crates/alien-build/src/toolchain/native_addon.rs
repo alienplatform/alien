@@ -47,12 +47,18 @@ struct NativeAddonSpec {
     crate_dir: &'static str,
 }
 
+/// Staged filename for the bindings addon, next to the compiled entry
+/// (`require("./alien-bindings.node")`). Shared by staging and worker packaging.
+pub(super) const BINDINGS_STAGED_FILE: &str = "alien-bindings.node";
+/// Staged filename for the AI-gateway addon (`require("./alien-ai-gateway.node")`).
+pub(super) const AI_GATEWAY_STAGED_FILE: &str = "alien-ai-gateway.node";
+
 /// The bindings addon: required whenever the app resolves it (every consumer
 /// uses some binding), so a missing addon for the target fails the build.
 const BINDINGS: NativeAddonSpec = NativeAddonSpec {
     package: "@alienplatform/bindings",
     scoped_name: "bindings",
-    staged_file: "alien-bindings.node",
+    staged_file: BINDINGS_STAGED_FILE,
     crate_dir: "alien-bindings-node",
 };
 
@@ -64,7 +70,7 @@ const BINDINGS: NativeAddonSpec = NativeAddonSpec {
 const AI_GATEWAY: NativeAddonSpec = NativeAddonSpec {
     package: "@alienplatform/ai-gateway",
     scoped_name: "ai-gateway",
-    staged_file: "alien-ai-gateway.node",
+    staged_file: AI_GATEWAY_STAGED_FILE,
     crate_dir: "alien-ai-gateway-node",
 };
 
