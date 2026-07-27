@@ -159,7 +159,7 @@ impl CfEmitter for AwsStorageEmitter {
             bucket_policy_document(
                 bucket_id,
                 storage.public_read,
-                email_inbound_targets_bucket(ctx),
+                email_inbound_contribution(ctx).as_ref(),
             ),
         );
 
@@ -175,13 +175,6 @@ impl CfEmitter for AwsStorageEmitter {
             ("bucketName", CfExpression::ref_(bucket_id)),
             ("bucketArn", CfExpression::get_att(bucket_id, "Arn")),
         ]))
-    }
-
-    /// Every resource this emitter returns — bucket, policy, and the IAM
-    /// policies that name the bucket — is stamped with the gate's condition by
-    /// the generator, so they appear and disappear together.
-    fn supports_enabled_when(&self) -> bool {
-        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
@@ -220,30 +213,38 @@ fn public_access_block(block_public_access: bool) -> CfExpression {
     ])
 }
 
-/// True when a setup-emitted Email resource delivers inbound mail into this
-/// bucket. The SES write grant must live in this bucket policy — S3 supports
-/// only one bucket policy resource per bucket, so the email emitter cannot
-/// attach its own.
-fn email_inbound_targets_bucket(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack.resources().any(|(_id, entry)| {
+/// The setup-emitted Email resource delivering inbound mail into this bucket,
+/// if any, together with its gate. The SES write grant must live in this
+/// bucket policy — S3 supports only one bucket policy resource per bucket, so
+/// the email emitter cannot attach its own. That makes the grant a gated
+/// contribution: it belongs to the Email resource's gate, not the bucket's,
+/// and disappears with the Email when a deployer declines it.
+fn email_inbound_contribution(ctx: &EmitContext<'_>) -> Option<EmailInboundContribution> {
+    ctx.stack.resources().find_map(|(_id, entry)| {
         let ownership = ownership_policy_for_resource_type(entry.config.resource_type().as_ref());
         if !ownership.should_emit_in_setup(entry.lifecycle) {
-            return false;
+            return None;
         }
-        let Some(email) = entry.config.downcast_ref::<Email>() else {
-            return false;
-        };
+        let email = entry.config.downcast_ref::<Email>()?;
         email
             .inbound
             .as_ref()
             .is_some_and(|inbound| inbound.storage.id == ctx.resource_id)
+            .then(|| EmailInboundContribution {
+                enabled_when: entry.enabled_when.clone(),
+            })
     })
+}
+
+/// The Email contributor's gate, carried into the bucket policy statement.
+struct EmailInboundContribution {
+    enabled_when: Option<String>,
 }
 
 fn bucket_policy_document(
     bucket_id: &str,
     public_read: bool,
-    allow_ses_inbound: bool,
+    ses_inbound: Option<&EmailInboundContribution>,
 ) -> CfExpression {
     let bucket_arn = CfExpression::get_att(bucket_id, "Arn");
     let bucket_objects_arn =
@@ -277,10 +278,10 @@ fn bucket_policy_document(
         ]));
     }
 
-    if allow_ses_inbound {
+    if let Some(contribution) = ses_inbound {
         // SES delivers received mail via its service principal; scope the
         // grant to this account per the SES receiving documentation.
-        statements.push(CfExpression::object([
+        let statement = CfExpression::object([
             ("Sid", CfExpression::from("AllowSesInboundDelivery")),
             ("Effect", CfExpression::from("Allow")),
             (
@@ -299,7 +300,15 @@ fn bucket_policy_document(
                     )]),
                 )]),
             ),
-        ]));
+        ]);
+        // The grant follows the Email contributor's gate: a declined Email
+        // must not leave SES able to write into the bucket. `Fn::If` with
+        // `AWS::NoValue` removes the statement from the list outright.
+        statements.push(crate::emitters::enabled::when_enabled(
+            contribution.enabled_when.as_deref(),
+            statement,
+            CfExpression::no_value(),
+        ));
     }
 
     CfExpression::object([

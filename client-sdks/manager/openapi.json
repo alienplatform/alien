@@ -1223,7 +1223,7 @@
             "description": "Deployment group or release not found"
           },
           "409": {
-            "description": "Deployment name conflict"
+            "description": "Deployment name conflict, or the current release cannot be read to resolve a gate answer"
           }
         }
       }

@@ -1,10 +1,11 @@
 use super::helpers::{
-    assert_terraform_valid, assert_ungated_registration_list_is_a_plain_array, gate_input,
-    normalized, render, snapshot_module, try_render,
+    assert_terraform_valid, assert_ungated_registration_list_is_a_plain_array, declared_block_types,
+    gate_input, gated_block_types, normalized, render, snapshot_module, try_render,
 };
 use alien_core::{
-    AzureResourceGroup, AzureStorageAccount, Kv, PermissionProfile, ResourceLifecycle,
-    ServiceAccount, Stack, StackBuilder, StackSettings,
+    AzureResourceGroup, AzureStorageAccount, Kv, ManagementPermissions, PermissionProfile,
+    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackBuilder,
+    StackSettings, Storage,
 };
 use alien_terraform::TerraformTarget;
 
@@ -426,6 +427,79 @@ fn gcp_shared_project_grant_combines_independent_gates() {
     assert_terraform_valid(&module, "gated GCP kv stores with a shared project grant");
 }
 
+/// A remote-access (externally bound) bucket is the one resource whose
+/// management grants the storage emitter renders into the bucket's own
+/// fragment. Gating is a post-pass over that fragment, so the grant inherits
+/// the gate along with the bucket, with no remote-storage-specific gating
+/// code. Worth pinning: a grant that outlived a declined bucket would leave
+/// the management identity holding data-write on a resource the deployer said
+/// no to, and the bucket's own reference would go unindexed.
+fn gated_remote_access_storage_stack() -> Stack {
+    let mut stack = Stack::new("gated-stack".to_string())
+        .inputs(vec![gate_input(
+            "filesEnabled",
+            "Enable remote files",
+            "Whether to create the externally bound bucket.",
+        )])
+        .management(ManagementPermissions::override_(
+            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
+        ))
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
+        )
+        .build();
+    // `add_with_remote_access` and `add_enabled_when` each vary one field of
+    // the entry, while the SDK's
+    // `stack.add(resource.enabled(input), lifecycle, { remoteAccess: true })`
+    // sets both. No single builder call spells that combination, so set the
+    // gate on the built entry.
+    stack
+        .resources
+        .get_mut("files")
+        .expect("the files entry should exist")
+        .enabled_when = Some("filesEnabled".to_string());
+    stack
+}
+
+#[test]
+fn a_gated_remote_access_bucket_gates_its_management_grant() {
+    let module = render(
+        &gated_remote_access_storage_stack(),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    let main = normalized(&module);
+    let gated = gated_block_types(&main, "count = var.input_files_enabled ? 1 : 0");
+
+    assert!(
+        declared_block_types(&main).contains(&"google_project_iam_custom_role".to_string()),
+        "the shared custom role must render for the exclusion below to mean anything:\n{main}"
+    );
+    assert!(
+        gated.contains(&"google_storage_bucket".to_string()),
+        "the bucket itself must be conditional:\n{main}"
+    );
+    assert!(
+        gated.contains(&"google_storage_bucket_iam_member".to_string()),
+        "the management identity's remote-data-write grant must go with the bucket:\n{main}"
+    );
+    assert!(
+        !gated.contains(&"google_project_iam_custom_role".to_string()),
+        "the shared custom role outlives any one resource and stays ungated:\n{main}"
+    );
+    assert!(
+        main.contains("google_storage_bucket.files[0]"),
+        "references to the counted bucket must be indexed:\n{main}"
+    );
+    assert_terraform_valid(&module, "gated remote-access storage");
+}
+
 #[test]
 fn gcp_shared_project_grant_stays_ungated_when_any_resource_is_ungated() {
     let module = render(
@@ -452,12 +526,11 @@ fn gcp_shared_project_grant_stays_ungated_when_any_resource_is_ungated() {
     );
 }
 
-/// Rendering a gated resource through an emitter that ignores the gate would
-/// create exactly what the deployer declined. ServiceAccount stays a safe
-/// stand-in for "unconverted": the compile-time check forbids gating
-/// framework-derived types, so its emitter never needs to convert.
+/// The generator re-checks the gateability policy, so a caller that skips
+/// preflights cannot render a gate the policy refuses. ServiceAccount is a
+/// framework-derived type the policy always refuses.
 #[test]
-fn a_gate_on_an_unconverted_emitter_fails() {
+fn a_gate_on_a_policy_refused_type_fails_at_render() {
     let stack = Stack::new("gated-stack".to_string())
         .inputs(vec![gate_input(
             "storeEnabled",

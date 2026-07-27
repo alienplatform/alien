@@ -879,17 +879,22 @@ async fn stream_output(
 
             while let Ok(Some(line)) = lines.next_line().await {
                 let timestamp_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+                let captured = crate::log_text::decode_log_line(&line);
 
                 // Print to local stdout/stderr for debugging
                 if is_stdout {
-                    println!("{}", line);
+                    println!("{}", captured.body);
                 } else {
-                    eprintln!("{}", line);
+                    eprintln!("{}", captured.body);
                 }
 
                 // Emit normalized text via OpenTelemetry SDK (batched, proper protobuf format).
-                let body = crate::log_text::normalize_log_body(&line);
-                crate::otlp::emit_log(stream_name, &body, timestamp_nanos);
+                crate::otlp::emit_captured_log(
+                    stream_name,
+                    &captured.body,
+                    timestamp_nanos,
+                    captured.is_system,
+                );
             }
 
             tracing::debug!("OTLP log streaming ended");
@@ -900,10 +905,11 @@ async fn stream_output(
             tracing::debug!("Starting forwarded log streaming");
 
             while let Ok(Some(line)) = lines.next_line().await {
+                let (body, _) = crate::log_text::strip_system_log_prefix(&line);
                 if is_stdout {
-                    println!("{}", line);
+                    println!("{}", body);
                 } else {
-                    eprintln!("{}", line);
+                    eprintln!("{}", body);
                 }
             }
 

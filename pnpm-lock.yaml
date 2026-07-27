@@ -333,6 +333,28 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  tests/e2e/test-apps/enabled-demo:
+    dependencies:
+      '@alienplatform/core':
+        specifier: link:../../../../packages/core
+        version: link:../../../../packages/core
+      '@alienplatform/sdk':
+        specifier: link:../../../../packages/sdk
+        version: link:../../../../packages/sdk
+      hono:
+        specifier: ^4.0.0
+        version: 4.11.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.13
+      tsdown:
+        specifier: ^0.13.0
+        version: 0.13.5(typescript@5.8.3)
+      typescript:
+        specifier: ^5.7.3
+        version: 5.8.3
+
   tests/e2e/test-apps/runtime-less-mixed:
     dependencies:
       '@alienplatform/bindings':

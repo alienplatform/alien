@@ -451,7 +451,7 @@ pub fn emit_iam_managed_policy_chunks(
     Ok(())
 }
 
-fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
+pub(crate) fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
     let mut used = HashSet::new();
 
     for statement in statements {
@@ -524,7 +524,7 @@ fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {
         .map(|policy| policy.len())
 }
 
-fn policy_document_expr(statements: Vec<AwsIamStatement>) -> Result<Expression> {
+pub(crate) fn policy_document_expr(statements: Vec<AwsIamStatement>) -> Result<Expression> {
     Ok(jsonencode_policy_value(policy_document_json(&statements)?))
 }
 

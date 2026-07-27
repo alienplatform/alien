@@ -5,7 +5,7 @@ import {
   AwsOpenSearchSchema,
   type ResourceType,
 } from "../generated/index.js"
-import { Resource } from "../resource.js"
+import { type Resource, ResourceBuilder } from "../resource.js"
 
 export type {
   AwsOpenSearch as AwsOpenSearchConfig,
@@ -35,7 +35,7 @@ export { AwsOpenSearchSchema as AwsOpenSearchConfigSchema } from "../generated/i
  * lowercase letter, contain only lowercase letters, digits, and hyphens, and
  * be at most 23 characters.
  */
-export class AwsOpenSearch {
+export class AwsOpenSearch extends ResourceBuilder {
   private _config: Partial<AwsOpenSearchConfig> = {
     collectionType: "search",
   }
@@ -45,6 +45,7 @@ export class AwsOpenSearch {
    * @param id Identifier for the collection (lowercase letters, digits, and hyphens; max 23 characters).
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -92,7 +93,7 @@ export class AwsOpenSearch {
   public build(): Resource {
     const config = AwsOpenSearchSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "experimental/aws-opensearch",
       ...config,
     })

@@ -226,34 +226,32 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
         .with_service_account_name(label.to_string())
 }
 
-/// Gate the IAM bindings appended to `fragment` from `appended_from` on, and
-/// only those.
+/// Declare that the IAM bindings appended to `fragment` from `appended_from`
+/// on carry `enabled_when`'s gate, and only those.
 ///
 /// The calls that emit bindings also emit the custom roles those bindings
 /// reference. Custom roles are shared project-wide and carry their own
 /// `var.gcp_manage_custom_roles` count, so one resource's gate must not reach
 /// them: a second count conflicts, and declining this resource would delete
-/// roles its siblings still hold.
+/// roles its siblings still hold. The fragment's own shared classification is
+/// what keeps them out.
 ///
 /// Every emitter that grants against a gated resource has to call this,
 /// including registered extension emitters outside this crate — which is why
-/// it is public. The generator coalesces duplicate cloud memberships only after
-/// every contributor carries the gate of the resource that needs it.
+/// it is public. Declaring by range rather than threading a gate through every
+/// shared IAM helper is what lets ungated resources call the same helpers.
+///
+/// The generator installs the count and records the addresses, so these
+/// bindings sit inside the same reference rewrite and rendered-output scan as
+/// any other gated block — they no longer depend on nothing ever referencing
+/// them. It does so before coalescing duplicate cloud memberships, which needs
+/// every contributor's gate already in place.
 pub fn gate_bindings(
     fragment: &mut TfFragment,
     appended_from: usize,
     enabled_when: Option<&str>,
-) -> Result<()> {
-    for block in &mut fragment.resource_blocks[appended_from..] {
-        let is_custom_role = block
-            .labels
-            .first()
-            .is_some_and(|label| label.as_str() == "google_project_iam_custom_role");
-        if !is_custom_role {
-            enabled::gate(block, enabled_when)?;
-        }
-    }
-    Ok(())
+) {
+    fragment.mark_gated_from(appended_from, enabled_when);
 }
 
 /// Emit a GCP custom role plus IAM bindings for `permission_set`.
@@ -324,7 +322,11 @@ fn emit_selected_custom_roles(fragment: &mut TfFragment, custom_roles: &[GcpCust
         let role_label = custom_role_label(custom_role);
         let role_id = custom_role_id_template(custom_role);
 
-        fragment.resource_blocks.push(resource_block(
+        // Shared: the role is project-wide and carries its own
+        // `gcp_manage_custom_roles` count, so a resource's gate must never
+        // reach it — declining one resource would delete a role its siblings
+        // still hold.
+        fragment.push_shared_resource(resource_block(
             "google_project_iam_custom_role",
             &role_label,
             [

@@ -13,7 +13,6 @@
 //! and a dependent of a gated resource looks up outputs that will not be there.
 
 use crate::error::Result;
-use crate::mutations::secrets_vault::SECRETS_VAULT_ID;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{Platform, Stack, StackInputKind, StackInputProvider};
 use std::collections::HashMap;
@@ -41,54 +40,25 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
                 continue;
             };
 
-            // `SecretsVaultMutation` links this vault to Live Workers and compute clusters
-            // after every compile-time check has run, so `dependents_of_gated_resources`
-            // below reads a stack where those links do not exist yet and lets the gate pass.
-            if resource_id == SECRETS_VAULT_ID {
-                errors.push(format!(
-                    "Resource '{resource_id}' is enabled by input '{input_id}', but \
-                     '{SECRETS_VAULT_ID}' is the deployment secrets vault. Workers and compute \
-                     clusters are wired to it automatically after this check runs, so a deployer \
-                     who says no would leave them resolving a binding for a vault that was never \
-                     created. Its presence cannot be optional. Give a vault you want to gate a \
-                     different id"
-                ));
-            }
-
             let resource_type = entry.config.resource_type();
 
-            // Framework infrastructure Alien derives from the stack itself. A gate
-            // here is never a customer choice, and ServiceAccountMutation inserts
-            // profile-derived "{profile}-sa" entries unconditionally, which would
-            // silently overwrite a gated entry before any render guard could fire.
-            // The SDK does not offer .enabled() on these; this keeps hand-authored
-            // stacks to the same rule.
-            if matches!(
-                resource_type.as_ref(),
-                "build" | "artifact-registry" | "service-account" | "compute-cluster"
-            ) {
-                errors.push(format!(
-                    "Resource '{resource_id}' of type '{resource_type}' is enabled by input \
-                     '{input_id}', but Alien derives this resource from the stack itself, so \
-                     it cannot be optional"
-                ));
-                continue;
-            }
-
-            // Code-carrying compute ships with every release; whether it runs
-            // is a rollout question, not a data-plane opt-out, so gating it is
-            // a different feature than this one. Live-only ownership is the
-            // compute classification, read from the one table that defines it
-            // so a new compute type cannot silently become gateable.
-            if !alien_core::ownership_policy_for_resource_type(resource_type.as_ref())
-                .allows_frozen()
+            // The type/id rules live in `alien_core::gateability` so the setup
+            // generators enforce the same refusals for callers that render
+            // without preflights. Only the reserved-vault refusal falls
+            // through: `dependents_of_gated_resources` below reads a stack
+            // where the vault's auto-wired links do not exist yet, and the
+            // input rules further down still apply to it.
+            if let Some(refusal) =
+                alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
             {
                 errors.push(format!(
                     "Resource '{resource_id}' of type '{resource_type}' is enabled by input \
-                     '{input_id}', but code-carrying compute ships with every release, so it \
-                     cannot be optional"
+                     '{input_id}', but {}",
+                    refusal.reason()
                 ));
-                continue;
+                if refusal != alien_core::GateRefusal::ReservedSecretsVault {
+                    continue;
+                }
             }
 
             // `ServiceAccount::from_permission_profile` builds the runtime role from the
@@ -238,6 +208,7 @@ fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutations::secrets_vault::SECRETS_VAULT_ID;
     use alien_core::{
         permissions::PermissionProfile, Kv, ResourceLifecycle, StackInputDefinition, Storage,
         Vault, Worker, WorkerCode,
@@ -308,10 +279,11 @@ mod tests {
         assert!(errors_for(stack).await.is_empty());
     }
 
-    /// Compute stays out: gating code-carrying resources is a rollout
-    /// question, not a data-plane opt-out.
+    /// Compute gates as an existence choice: declining a live workload rides
+    /// the same removal path as deleting it from a release, so the gate
+    /// passes the same rules as any live data resource.
     #[tokio::test]
-    async fn rejects_a_gated_compute_resource() {
+    async fn accepts_a_gated_compute_resource() {
         let stack = Stack::new("test-stack".to_string())
             .inputs(vec![boolean_input()])
             .add_enabled_when(
@@ -326,9 +298,68 @@ mod tests {
             )
             .build();
 
+        assert!(errors_for(stack).await.is_empty());
+    }
+
+    /// Pausing the sole consumer is the point of gating compute: the worker
+    /// is the dependent of the ungated queue, so nothing dangles — producers
+    /// keep enqueuing and the queue's retention policy governs the backlog
+    /// until the deployer accepts the worker again.
+    #[tokio::test]
+    async fn accepts_a_gated_worker_consuming_an_ungated_queue() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let worker = Worker::new("consumer".to_string())
+            .permissions("consumer".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/consumer:latest".to_string(),
+            })
+            .trigger(alien_core::WorkerTrigger::Queue {
+                queue: alien_core::ResourceRef {
+                    resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
+                    id: "jobs".to_string(),
+                },
+            })
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add(queue, ResourceLifecycle::Frozen)
+            .add_enabled_when(worker, ResourceLifecycle::Live, "storeEnabled")
+            .build();
+
+        assert!(errors_for(stack).await.is_empty());
+    }
+
+    /// The reverse stays closed: an ungated worker consuming a gated queue
+    /// would resolve a binding for a queue that may never exist.
+    #[tokio::test]
+    async fn rejects_an_ungated_worker_consuming_a_gated_queue() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let worker = Worker::new("consumer".to_string())
+            .permissions("consumer".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/consumer:latest".to_string(),
+            })
+            .trigger(alien_core::WorkerTrigger::Queue {
+                queue: alien_core::ResourceRef {
+                    resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
+                    id: "jobs".to_string(),
+                },
+            })
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(queue, ResourceLifecycle::Frozen, "storeEnabled")
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
         let errors = errors_for(stack).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("cannot be optional"), "{errors:?}");
+        assert!(
+            errors[0].contains("depends on 'jobs'"),
+            "{errors:?}"
+        );
     }
 
     #[tokio::test]

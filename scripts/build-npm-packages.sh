@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build and publish @alienplatform/cli npm packages.
+# Build, qualify, or publish @alienplatform/cli npm packages.
 #
 # Uses the Codex-style single-package pattern: platform variants are published
 # as @alienplatform/cli@{VERSION}-{platform} and the main package at
@@ -8,7 +8,9 @@
 #
 # Required env vars:
 #   VERSION          - Release version (e.g., 1.3.2)
-#   NODE_AUTH_TOKEN  - npm auth token
+#   MODE              - qualify, publish, or publish-existing (default: publish)
+#   OUTPUT_DIR        - qualified tarball directory (required outside publish)
+#   NODE_AUTH_TOKEN   - npm auth token (publish modes only)
 #
 # Expected artifacts layout (from GitHub Actions download-artifact):
 #   ./artifacts/binaries-x86_64-unknown-linux-musl/{alien,alien-deploy,...}
@@ -19,7 +21,15 @@
 set -euo pipefail
 
 : "${VERSION:?VERSION is required}"
-: "${NODE_AUTH_TOKEN:?NODE_AUTH_TOKEN is required}"
+MODE="${MODE:-publish}"
+if [[ "$MODE" != "qualify" ]]; then
+  : "${NODE_AUTH_TOKEN:?NODE_AUTH_TOKEN is required}"
+fi
+if [[ "$MODE" != "publish" ]]; then
+  : "${OUTPUT_DIR:?OUTPUT_DIR is required}"
+  mkdir -p "$OUTPUT_DIR"
+  OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -31,13 +41,47 @@ publish_if_missing() {
   local tarball="$2"
   local tag="$3"
 
-  if npm view "$package_spec" version >/dev/null 2>&1; then
-    echo "Skipping $package_spec; already published"
+  local integrity
+  integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+  local published
+  published="$(npm view "$package_spec" dist.integrity 2>/dev/null || true)"
+  if [[ -n "$published" ]]; then
+    if [[ "$published" != "$integrity" ]]; then
+      echo "error: $package_spec exists with different contents" >&2
+      exit 1
+    fi
+    echo "Skipping $package_spec; qualified contents are already published"
     return
   fi
 
   npm publish "$tarball" --tag "$tag"
 }
+
+qualify_or_publish() {
+  local package_spec="$1"
+  local tarball="$2"
+  local tag="$3"
+
+  if [[ "$MODE" == "qualify" ]]; then
+    cp "$tarball" "$OUTPUT_DIR/"
+  else
+    publish_if_missing "$package_spec" "$tarball" "$tag"
+  fi
+}
+
+if [[ "$MODE" == "publish-existing" ]]; then
+  for npm_suffix in linux-x64 linux-arm64 darwin-arm64 win32-x64; do
+    qualify_or_publish \
+      "@alienplatform/cli@${VERSION}-${npm_suffix}" \
+      "${OUTPUT_DIR}/alienplatform-cli-${VERSION}-${npm_suffix}.tgz" \
+      "$npm_suffix"
+  done
+  qualify_or_publish \
+    "@alienplatform/cli@${VERSION}" \
+    "${OUTPUT_DIR}/alienplatform-cli-${VERSION}.tgz" \
+    latest
+  exit 0
+fi
 
 # Platform definitions: npm_suffix target_triple os cpu binary_ext
 PLATFORMS=(
@@ -85,7 +129,7 @@ EOF
 
   # Pack and publish with platform-specific tag
   (cd "$pkg_dir" && npm pack)
-  publish_if_missing "@alienplatform/cli@${VERSION}-${npm_suffix}" "${pkg_dir}/"*.tgz "${npm_suffix}"
+  qualify_or_publish "@alienplatform/cli@${VERSION}-${npm_suffix}" "${pkg_dir}/"*.tgz "${npm_suffix}"
 done
 
 # ── Step 2: Build the main package ───────────────────────────────────
@@ -132,7 +176,7 @@ cat > "${main_dir}/package.json" << EOF
 EOF
 
 (cd "$main_dir" && npm pack)
-publish_if_missing "@alienplatform/cli@${VERSION}" "${main_dir}/"*.tgz latest
+qualify_or_publish "@alienplatform/cli@${VERSION}" "${main_dir}/"*.tgz latest
 
 echo ""
-echo "==> Done! Published @alienplatform/cli@${VERSION}"
+echo "==> Done! ${MODE} @alienplatform/cli@${VERSION}"

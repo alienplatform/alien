@@ -92,7 +92,11 @@ pub(super) fn generate_management_grant_plan(
     };
 
     let generator = AzureRuntimePermissionsGenerator::new();
-    let grant_plan = generate_stack_management_grant_plan(management_profile, &permission_context)?;
+    let grant_plan = generate_stack_management_grant_plan(
+        management_profile,
+        &permission_context,
+        &ctx.desired_stack.resources.keys().cloned().collect(),
+    )?;
     custom_roles.extend(grant_plan.custom_roles);
     bindings.extend(grant_plan.bindings);
 

@@ -19,6 +19,65 @@ pub enum ErrorData {
         repair: String,
     },
 
+    /// An update supplied a value for an input whose frozen-gate answer is
+    /// already fixed for the deployment's lifetime.
+    #[error(
+        code = "FROZEN_GATE_ANSWER_CHANGED",
+        message = "Input '{input_id}' gates a setup-created resource and its answer was fixed at \
+                   {persisted} when this deployment was created; the update supplies {requested}. \
+                   A frozen gate cannot be re-answered — create a new deployment for a different \
+                   answer",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    FrozenGateAnswerChanged {
+        /// The input whose answer the update tried to change
+        input_id: String,
+        /// The answer recorded when the deployment was created
+        persisted: bool,
+        /// The conflicting answer the update supplied
+        requested: bool,
+    },
+
+    /// A frozen gate's answer could not be resolved from its sources — the
+    /// import's state presence, the provided input values, or the declared
+    /// default — wherever answers are recorded or re-derived: deployment
+    /// creation, setup import, and legacy states with no recorded answers.
+    #[error(
+        code = "FROZEN_GATE_ANSWER_UNDERIVABLE",
+        message = "Cannot derive the recorded answer for input '{input_id}': {reason}. Refusing \
+                   the update rather than guessing a frozen resource's existence",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    FrozenGateAnswerUnderivable {
+        /// The input whose answer could not be derived
+        input_id: String,
+        /// Why derivation failed
+        reason: String,
+    },
+
+    /// The settled release can't be read, so a declined gate can't be told
+    /// apart from an unoffered one.
+    #[error(
+        code = "SETTLED_RELEASE_UNAVAILABLE",
+        message = "This deployment's current release '{release_id}' cannot be read ({reason}), so \
+                   a resource the deployer declined cannot be told apart from one that was never \
+                   offered. Restore that release, or run setup again without the resource, so an \
+                   earlier decline is not overwritten",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SettledReleaseUnavailable {
+        /// The settled release the deployment names
+        release_id: String,
+        /// Why that release's stack could not be read
+        reason: String,
+    },
+
     /// Environment information collection failed.
     #[error(
         code = "ENVIRONMENT_INFO_COLLECTION_FAILED",
