@@ -26,7 +26,8 @@ pub struct PostgresConnectionJs {
     pub username: String,
     /// Connection password, already resolved from the cloud secret store where applicable.
     pub password: String,
-    /// `disable` (local), `prefer` (external/BYO), or `require` (every managed cloud).
+    /// `disable` (local or explicit BYO plaintext), `verify-full` (BYO default), or
+    /// `require` (every managed cloud).
     pub sslmode: String,
 }
 
@@ -102,7 +103,7 @@ mod tests {
     fn connection_to_js_reports_each_sslmode_as_its_wire_string() {
         for (mode, expected) in [
             (SslMode::Disable, "disable"),
-            (SslMode::Prefer, "prefer"),
+            (SslMode::VerifyFull, "verify-full"),
             (SslMode::Require, "require"),
         ] {
             let params = PostgresConnectionParams {

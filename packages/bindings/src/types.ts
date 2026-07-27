@@ -153,11 +153,12 @@ export interface Container {
 }
 
 /**
- * TLS mode for a Postgres connection: `disable` for the local developer backend,
- * `prefer` for an external (BYO) database, `require` for every managed cloud
+ * TLS mode for a Postgres connection: `disable` for the local developer backend
+ * or an explicit BYO plaintext opt-out, `verify-full` for a BYO database with
+ * certificate and hostname verification, and `require` for every managed cloud
  * backend (Aurora, Cloud SQL, Flexible Server).
  */
-export type PostgresSslMode = "disable" | "prefer" | "require"
+export type PostgresSslMode = "disable" | "verify-full" | "require"
 
 /** Everything a Postgres driver needs to connect. */
 export interface PostgresConnection {
@@ -169,8 +170,9 @@ export interface PostgresConnection {
   connectionString: string
   /**
    * The TLS setting for drivers that take one, derived from {@link sslmode}:
+   * `{ rejectUnauthorized: true }` for a BYO database using `verify-full`,
    * `{ rejectUnauthorized: false }` for the managed clouds (TLS on, certificate not
-   * verified against a pinned CA), `false` otherwise.
+   * verified against a pinned CA), and `false` for `disable`.
    *
    * For node-postgres, pass this with the individual fields —
    * `new Client({ host, port, ..., ssl })` — NOT with `connectionString`.
@@ -183,17 +185,10 @@ export interface PostgresConnection {
    * boundary is the primary control. Verified TLS against provider CAs is
    * defense-in-depth to add later.
    *
-   * For the external (BYO) backend this is `false`, and that means a **plaintext
-   * connection**: node-postgres has no `prefer` mode, so it skips TLS negotiation
-   * entirely rather than attempting TLS and falling back. Credentials and queries
-   * cross the wire unencrypted even against a server that would have accepted TLS.
-   * `connectionString` still carries `sslmode=prefer`, so sslmode-aware consumers
-   * such as `psql` do upgrade — the two disagree.
-   *
-   * Unlike the managed clouds, a BYO database is not necessarily on a private
-   * network, so that gap is not covered by a network boundary. If yours is
-   * reachable over an untrusted network, do not pass this field as-is: set
-   * `ssl` explicitly, having confirmed the server supports TLS.
+   * External (BYO) bindings default to `verify-full`, so the connection string and
+   * this field both require encrypted transport plus certificate and hostname
+   * verification. A plaintext-only legacy server must be configured explicitly
+   * with `sslMode: "disable"` in its external binding.
    */
   ssl: false | { rejectUnauthorized: boolean }
   /** Address to dial — the cluster writer endpoint for Aurora, the host elsewhere. */

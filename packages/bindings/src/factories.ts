@@ -177,7 +177,7 @@ function makeVault(handle: () => Promise<RawVaultHandle>): Vault {
  * The set of `sslmode` values the Rust `SslMode` can emit. Used to reject anything
  * else at the addon boundary rather than widening the public union by assertion.
  */
-const POSTGRES_SSL_MODES: readonly string[] = ["disable", "prefer", "require"]
+const POSTGRES_SSL_MODES: readonly string[] = ["disable", "verify-full", "require"]
 
 /**
  * Widen the raw addon connection into the public shape, deriving `ssl` from
@@ -202,7 +202,12 @@ function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
   const sslmode = raw.sslmode as PostgresSslMode
   return {
     connectionString: raw.connectionString,
-    ssl: sslmode === "require" ? { rejectUnauthorized: false } : false,
+    ssl:
+      sslmode === "verify-full"
+        ? { rejectUnauthorized: true }
+        : sslmode === "require"
+          ? { rejectUnauthorized: false }
+          : false,
     host: raw.host,
     port: raw.port,
     database: raw.database,

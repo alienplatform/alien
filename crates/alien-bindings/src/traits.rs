@@ -415,10 +415,10 @@ pub trait Vault: Binding {
 /// TLS mode used when building a Postgres connection string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SslMode {
-    /// Plain TCP, no TLS (Local).
+    /// Plain TCP, no TLS (Local or an explicit BYO opt-out).
     Disable,
-    /// Use TLS if the server offers it, otherwise plain (BYO / External default).
-    Prefer,
+    /// Require TLS and verify the server certificate and hostname (BYO / External default).
+    VerifyFull,
     /// Require TLS (cloud).
     Require,
 }
@@ -429,7 +429,7 @@ impl SslMode {
     pub fn as_str(self) -> &'static str {
         match self {
             SslMode::Disable => "disable",
-            SslMode::Prefer => "prefer",
+            SslMode::VerifyFull => "verify-full",
             SslMode::Require => "require",
         }
     }

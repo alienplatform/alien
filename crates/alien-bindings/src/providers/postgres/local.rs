@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::resolve_params;
 use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
-use alien_core::bindings::PostgresBinding;
+use alien_core::bindings::{ExternalPostgresSslMode, PostgresBinding};
 use alien_error::AlienError;
 
 /// A resolved Postgres binding. Holds connection details only — it never opens or
@@ -35,15 +35,21 @@ impl LocalPostgres {
                 &b.password,
                 SslMode::Disable,
             )?,
-            PostgresBinding::External(b) => resolve_params(
-                binding_name,
-                &b.host,
-                &b.port,
-                &b.database,
-                &b.username,
-                &b.password,
-                SslMode::Prefer,
-            )?,
+            PostgresBinding::External(b) => {
+                let sslmode = match b.ssl_mode {
+                    ExternalPostgresSslMode::VerifyFull => SslMode::VerifyFull,
+                    ExternalPostgresSslMode::Disable => SslMode::Disable,
+                };
+                resolve_params(
+                    binding_name,
+                    &b.host,
+                    &b.port,
+                    &b.database,
+                    &b.username,
+                    &b.password,
+                    sslmode,
+                )?
+            }
             // Listed explicitly rather than via a catch-all so a future `PostgresBinding`
             // variant forces a compile error to route it somewhere. Reaching this arm means
             // `load_postgres` dispatched a cloud binding to the wrong provider — a bug here,
@@ -91,14 +97,35 @@ mod tests {
     }
 
     #[test]
-    fn external_binding_resolves_to_prefer_sslmode_connection_string() {
+    fn external_binding_defaults_to_verify_full_sslmode() {
         let binding = PostgresBinding::external("db.internal", 5432, "app", "alien", "p@ss/word");
         let pg = LocalPostgres::from_binding("db", &binding).expect("external binding resolves");
 
-        assert_eq!(pg.connection_params().sslmode, SslMode::Prefer);
+        assert_eq!(pg.connection_params().sslmode, SslMode::VerifyFull);
         assert_eq!(
             pg.connection_string(),
-            "postgres://alien:p%40ss%2Fword@db.internal:5432/app?sslmode=prefer"
+            "postgres://alien:p%40ss%2Fword@db.internal:5432/app?sslmode=verify-full"
+        );
+    }
+
+    #[test]
+    fn external_binding_allows_explicit_plaintext_opt_out() {
+        let binding: PostgresBinding = serde_json::from_value(serde_json::json!({
+            "service": "external",
+            "host": "db.internal",
+            "port": 5432,
+            "database": "app",
+            "username": "alien",
+            "password": "secret",
+            "sslMode": "disable",
+        }))
+        .expect("external plaintext binding deserializes");
+        let pg = LocalPostgres::from_binding("db", &binding).expect("external binding resolves");
+
+        assert_eq!(pg.connection_params().sslmode, SslMode::Disable);
+        assert_eq!(
+            pg.connection_string(),
+            "postgres://alien:secret@db.internal:5432/app?sslmode=disable"
         );
     }
 

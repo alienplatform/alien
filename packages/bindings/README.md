@@ -51,6 +51,13 @@ await client.connect()
 `conn.connectionString` is the same details as a `postgres://` URL, with the
 credentials percent-encoded, for drivers that take one.
 
+External (BYO) Postgres bindings use verified TLS by default. Their `sslMode`
+policy is deliberately limited to `"verify-full"` and `"disable"` because
+node-postgres cannot represent libpq's opportunistic `prefer` fallback without
+owning the connection attempt. Use `"disable"` only as an explicit compatibility
+opt-out for a plaintext-only server; missing legacy configuration defaults to
+`"verify-full"`.
+
 ## Native addon resolution
 
 The addon is loaded lazily on the first binding operation (never at import — the

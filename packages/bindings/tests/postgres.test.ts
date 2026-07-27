@@ -51,16 +51,14 @@ describe("postgres (inline-password providers)", () => {
     expect(connection.ssl).toBe(false)
   })
 
-  it("resolves an external binding to a sslmode=prefer connection", async () => {
+  it("resolves an external binding to verified TLS", async () => {
     const connection = await postgres(externalName()).connection()
 
     expect(connection.connectionString).toBe(
-      "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@db.internal:5432/app?sslmode=prefer",
+      "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@db.internal:5432/app?sslmode=verify-full",
     )
-    expect(connection.sslmode).toBe("prefer")
-    // node-postgres has no `prefer` mode, so the driver field stays plaintext while the
-    // URL keeps `sslmode=prefer` for sslmode-aware consumers such as psql.
-    expect(connection.ssl).toBe(false)
+    expect(connection.sslmode).toBe("verify-full")
+    expect(connection.ssl).toEqual({ rejectUnauthorized: true })
   })
 
   // The individual fields are what a driver taking separate arguments gets, so they must

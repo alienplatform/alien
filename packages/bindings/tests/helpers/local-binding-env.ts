@@ -181,8 +181,7 @@ export function localVaultBindingEnv(
 
 /**
  * The connection fields every Postgres fixture uses. Shared by the `local-postgres`
- * and `external` builders below so the two backends differ only in `service` (and
- * therefore only in the resolved `sslmode`).
+ * and `external` builders below.
  *
  * `password` deliberately contains every character the connection string must
  * percent-encode: the RFC 3986 sub-delims `! * ' ( )` plus `@` and `/`, which would
@@ -212,13 +211,14 @@ export function localPostgresBindingEnv(bindingName: string): void {
   })
 }
 
-/** Build the env for an `external` (BYO) Postgres binding (resolves to `sslmode=prefer`). */
+/** Build the env for an `external` (BYO) Postgres binding using verified TLS. */
 export function externalPostgresBindingEnv(bindingName: string): void {
   installBindingEnv({
     ...LOCAL_DEPLOYMENT_ENV,
     [bindingEnvVarName(bindingName)]: JSON.stringify({
       service: "external",
       ...POSTGRES_FIXTURE,
+      sslMode: "verify-full",
     }),
   })
 }

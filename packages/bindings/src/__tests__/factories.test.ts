@@ -329,10 +329,10 @@ describe("createFactories postgres surface", () => {
   })
 
   // `ssl` is what a node-postgres caller actually passes to the driver, so the mapping
-  // from the Rust SslMode has to be exact: only the managed clouds (`require`) get TLS.
+  // must preserve the exact policy chosen by the Rust resolver.
   it.each([
     ["disable", false],
-    ["prefer", false],
+    ["verify-full", { rejectUnauthorized: true }],
     ["require", { rejectUnauthorized: false }],
   ] as const)("derives ssl from sslmode %s", async (sslmode, expected) => {
     const { postgres } = createFactories(() => addonForPostgres(rawConnection(sslmode)))
@@ -346,7 +346,7 @@ describe("createFactories postgres surface", () => {
   // An sslmode this wrapper doesn't know means wrapper/addon version skew. Silently
   // defaulting would hand back a connection with the wrong TLS posture, so it must throw.
   it("rejects an unknown sslmode from the addon rather than guessing a TLS posture", async () => {
-    const { postgres } = createFactories(() => addonForPostgres(rawConnection("verify-full")))
+    const { postgres } = createFactories(() => addonForPostgres(rawConnection("prefer")))
 
     const error = await postgres("db")
       .connection()
@@ -357,7 +357,7 @@ describe("createFactories postgres surface", () => {
     expect(error).toBeInstanceOf(AlienError)
     expect((error as AlienError).code).toBe("UNKNOWN_POSTGRES_SSLMODE")
     expect((error as AlienError).retryable).toBe(false)
-    expect((error as AlienError).message).toContain("verify-full")
-    expect((error as AlienError).message).toContain("disable, prefer, require")
+    expect((error as AlienError).message).toContain("prefer")
+    expect((error as AlienError).message).toContain("disable, verify-full, require")
   })
 })

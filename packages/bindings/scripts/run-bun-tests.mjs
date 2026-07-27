@@ -71,6 +71,7 @@ env[bindingEnvName("bun-postgres-local")] = JSON.stringify({
 env[bindingEnvName("bun-postgres-external")] = JSON.stringify({
   service: "external",
   ...postgresFixture,
+  sslMode: "verify-full",
 })
 const testFiles = readdirSync("tests")
   .filter(file => file.endsWith(".test.ts") && file !== "errors.test.ts")

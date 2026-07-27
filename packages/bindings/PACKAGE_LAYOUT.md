@@ -28,7 +28,7 @@ its own.
 | `queue` | function | `queue(name: string): Queue` | Factory. |
 | `vault` | function | `vault(name: string): Vault` | Factory. |
 | `container` | function | `container(name: string): Container` | Lazy, read-only linked-service discovery. |
-| `postgres` | function | `postgres(name: string): Postgres` | Connection-only. Resolving a managed cloud backend reads its password from that cloud's secret store with the workload's own identity. |
+| `postgres` | function | `postgres(name: string): Postgres` | Connection-only. Resolving a managed cloud backend reads its password from that cloud's secret store with the workload's own identity. External/BYO bindings default to certificate- and hostname-verified TLS; plaintext requires an explicit `sslMode: "disable"` policy. |
 | `Storage` | type | resource handle | Instance type returned by `storage()`. Operation method signatures mirror the Rust `alien-bindings` storage handle. |
 | `Kv` | type | resource handle | Instance type returned by `kv()`. Method signatures mirror the Rust handle. |
 | `Queue` | type | resource handle | Instance type returned by `queue()`. Method signatures mirror the Rust handle. |
