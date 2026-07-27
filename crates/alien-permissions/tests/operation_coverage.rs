@@ -235,11 +235,7 @@ fn critical_e2e_provider_operations_are_declared() {
         },
         OperationCoverage {
             permission_set_id: "observe/observe",
-            aws_actions: &[
-                "tag:GetResources",
-                "cloudwatch:GetMetricData",
-                "cloudwatch:ListMetrics",
-            ],
+            aws_actions: &["tag:GetResources", "cloudwatch:ListMetrics"],
             gcp_permissions: &[
                 "cloudasset.assets.searchAllResources",
                 "monitoring.timeSeries.list",
