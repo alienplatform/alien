@@ -23,11 +23,19 @@ const dataset = new alien.Storage("finetune-training-data").build()
 // model under `servedModelId` once it completes. Base models remain callable too.
 //
 // `baseModel` is a provider-native id; pick the one that matches the cloud you
-// deploy to (see the README's per-provider table). The default here targets
-// AWS Bedrock (Amazon Nova).
+// deploy to (see the README's per-provider table). The default targets AWS
+// Bedrock (Amazon Nova).
+//
+// IMPORTANT for Bedrock: the customization base-model id is NOT the inference id
+// (`amazon.nova-lite-v1:0`) — CreateModelCustomizationJob rejects that as "invalid
+// model identifier". It requires the full foundation-model ARN with the model's
+// customization context-length suffix, which is PER-MODEL (per the Nova fine-tuning
+// docs' `model_type` table): Nova Micro is `:0:128k`, Nova Lite and Nova Pro are
+// `:0:300k`. Using the wrong suffix (e.g. `:0:128k` for Lite) is the "invalid model
+// identifier" error.
 const llm = new alien.AI("llm")
   .finetune({
-    baseModel: "amazon.nova-lite-v1:0",
+    baseModel: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0:300k",
     trainingData: dataset,
     trainingKey: "training.jsonl",
     servedModelId: "support-tuned",

@@ -214,19 +214,16 @@ impl ResourceDefinition for Ai {
             }));
         }
 
-        // The tuned artifact is derived from the training data + base model, so
-        // repointing them would silently serve a different model under the same
-        // served id. Require a new resource id (hence a fresh tuning job) instead.
-        if let (Some(old), Some(new)) = (&self.finetune, &new_ai.finetune) {
-            if old.base_model != new.base_model || old.training_data != new.training_data {
-                return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                    resource_id: self.id.clone(),
-                    reason: "finetune 'baseModel' and 'trainingData' are immutable; \
-                             create a new AI resource to retrain"
-                        .to_string(),
-                }));
-            }
-        }
+        // `finetune.base_model`, `training_data`, and the rest of the spec are
+        // *inputs* to a runtime-triggered tuning job, not deploy-time artifacts:
+        // the resource provisions Ready immediately and runs no job at deploy, so
+        // editing the spec only changes what the NEXT `ai("<id>").finetune(...)`
+        // call submits. Nothing already tuned is retroactively affected, so the
+        // spec is freely mutable — correcting a base-model id (e.g. a wrong context
+        // suffix) is an ordinary update, not a resource recreation.
+        //
+        // Only the resource `id` is immutable (checked above): it keys the gateway
+        // binding and the tuned model's rediscovery convention.
         Ok(())
     }
 
@@ -327,10 +324,17 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_finetune_immutable_fields_rejected() {
+    fn test_ai_finetune_spec_is_mutable() {
+        // The finetune spec is an input to a runtime-triggered job, not a
+        // deploy-time artifact, so every spec field is mutable in place — only the
+        // resource `id` is immutable. In particular, correcting `base_model` (e.g.
+        // a wrong Bedrock context suffix) must be an ordinary update, not a
+        // resource recreation. This is the exact edit that previously failed the
+        // rollout with INVALID_RESOURCE_UPDATE.
         let original = Ai::new("llm".to_string())
             .finetune(FinetuneSpec {
-                base_model: "amazon.nova-lite-v1:0".to_string(),
+                base_model: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0:128k"
+                    .to_string(),
                 training_data: "set-a".to_string(),
                 training_key: "training.jsonl".to_string(),
                 served_model_id: None,
@@ -338,31 +342,29 @@ mod tests {
             })
             .build();
 
-        // Same base + data, changed method: allowed.
-        let ok = Ai::new("llm".to_string())
+        // Corrected base model (the :128k -> :300k fix), repointed training data,
+        // and a changed method — all on the same resource id. All allowed.
+        let corrected = Ai::new("llm".to_string())
             .finetune(FinetuneSpec {
-                base_model: "amazon.nova-lite-v1:0".to_string(),
-                training_data: "set-a".to_string(),
+                base_model: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0:300k"
+                    .to_string(),
+                training_data: "set-b".to_string(),
                 training_key: "training.jsonl".to_string(),
                 served_model_id: None,
                 method: FinetuneMethod::Dpo,
             })
             .build();
-        assert!(original.validate_update(&ok).is_ok());
+        original
+            .validate_update(&corrected)
+            .expect("editing the finetune spec on the same resource id must be allowed");
 
-        // Changed training data: rejected.
-        let repoint = Ai::new("llm".to_string())
-            .finetune(FinetuneSpec {
-                base_model: "amazon.nova-lite-v1:0".to_string(),
-                training_data: "set-b".to_string(),
-                training_key: "training.jsonl".to_string(),
-                served_model_id: None,
-                method: FinetuneMethod::Sft,
-            })
+        // Only the resource id remains immutable.
+        let renamed = Ai::new("llm2".to_string())
+            .finetune(original.finetune.clone().unwrap())
             .build();
         let err = original
-            .validate_update(&repoint)
-            .expect_err("repointing training data must be rejected");
+            .validate_update(&renamed)
+            .expect_err("changing the resource id must be rejected");
         assert_eq!(err.code, "INVALID_RESOURCE_UPDATE");
     }
 
