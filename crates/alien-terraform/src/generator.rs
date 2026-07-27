@@ -198,6 +198,7 @@ pub fn generate_terraform_module(
     // drop declined resources from the registration list.
     let mut registration_resources: Vec<(Option<String>, Expression)> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
+    let mut gated = crate::gating::GatedAddresses::default();
 
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
@@ -217,14 +218,17 @@ pub fn generate_terraform_module(
         };
 
         if let Some(input_id) = resource.enabled_when.as_deref() {
-            if !emitter.supports_enabled_when() {
+            // The same policy the compile-time check enforces, re-checked at
+            // render time so a caller that skips preflights cannot gate what
+            // the policy refuses.
+            if let Some(refusal) =
+                alien_core::gate_refusal(resource_type.as_ref(), resource_id.as_str())
+            {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
-                    operation: format!("enabled() on resource type '{resource_type}'"),
-                    reason: format!(
-                        "the {platform:?} Terraform emitter for '{resource_type}' does not render \
-                         conditionally yet, so resource '{resource_id}' would be created regardless \
-                         of the deployer's answer"
+                    operation: format!(
+                        "enabled() on resource '{resource_id}' of type '{resource_type}'"
                     ),
+                    reason: refusal.reason().to_string(),
                 }));
             }
             // Re-validated at render time like the CloudFormation generator:
@@ -248,6 +252,13 @@ pub fn generate_terraform_module(
         }
 
         let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
+        if let Some(input_id) = resource.enabled_when.as_deref() {
+            crate::gating::gate_fragment(&mut fragment, resource_id, input_id, &mut gated)?;
+        }
+        // Grants this fragment renders on behalf of OTHER resources' gates.
+        // Applied here, in the emit loop, because the GCP dedup pass below
+        // folds sibling counts together and has to see them already installed.
+        crate::gating::apply_gated_contributions(&mut fragment, &mut gated)?;
         // Split per-emitter `locals` out of the per-resource file \u2014 they
         // belong in `locals.tf` so reviewers see all locals together.
         let local_contributions = std::mem::take(&mut fragment.locals);
@@ -282,6 +293,23 @@ pub fn generate_terraform_module(
         emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
+    // Every fragment is emitted and every generator-injected block exists by
+    // now, so references to gated addresses — wherever they live — can be
+    // rewritten to index into the gate's count. `depends_on` is exempt inside
+    // the rewrite; the registration's own depends_on uses whole-resource
+    // references that stay valid on counted resources.
+    if !gated.is_empty() {
+        for fragment in per_resource.values_mut() {
+            crate::gating::rewrite_fragment_references(fragment, &gated);
+        }
+        for (_name, expression) in shared_locals.iter_mut() {
+            crate::gating::rewrite_expression(expression, &gated);
+        }
+        for (_gate, expression) in registration_resources.iter_mut() {
+            crate::gating::rewrite_expression(expression, &gated);
+        }
+    }
+
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
         gcp_iam_resource_addresses(&per_resource)
     } else {
@@ -406,7 +434,11 @@ pub fn generate_terraform_module(
     }
     files.insert(
         "outputs.tf".to_string(),
-        render_body(outputs_body(target, options.registration.as_ref()))?,
+        render_body(outputs_body(
+            target,
+            options.registration.as_ref(),
+            &stack_inputs,
+        ))?,
     );
     files.insert(
         "README.md".to_string(),
@@ -420,6 +452,10 @@ pub fn generate_terraform_module(
             &stack_inputs,
         ),
     );
+
+    // Last net: a reference hidden in a raw string escapes the AST rewrite;
+    // catch it in the rendered output instead of shipping it.
+    crate::gating::scan_rendered_for_unindexed(&files, &gated)?;
 
     let mut module = ModuleFiles { files };
 
@@ -844,7 +880,7 @@ fn format_with_terraform(module: &mut ModuleFiles) -> std::io::Result<()> {
     Ok(())
 }
 
-fn render_body(body: Body) -> Result<String> {
+pub(crate) fn render_body(body: Body) -> Result<String> {
     hcl::format::to_string(&body)
         .into_alien_error()
         .map_err(|err| {
@@ -959,6 +995,26 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 }
 
 fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Result<()> {
+    // Distinct ids can normalize to the same variable name (`fooBar` and
+    // `foo_bar` both become `input_foo_bar`); the second declaration would
+    // silently shadow the first, so both values — gates included — would read
+    // from one variable.
+    let mut ids_by_variable: std::collections::HashMap<String, &str> =
+        std::collections::HashMap::new();
+    for input in inputs {
+        let variable = terraform_stack_input_variable_name(input);
+        if let Some(previous_id) = ids_by_variable.insert(variable.clone(), input.id.as_str()) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_terraform_module".to_string(),
+                reason: format!(
+                    "stack inputs '{previous_id}' and '{}' both normalize to Terraform \
+                     variable '{variable}'; rename one so every input keeps its own variable",
+                    input.id
+                ),
+            }));
+        }
+    }
+
     let secret_inputs: Vec<&str> = inputs
         .iter()
         .filter(|input| input.kind == StackInputKind::Secret)
@@ -975,6 +1031,22 @@ fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Resul
             secret_inputs.join(", ")
         ),
     }))
+}
+
+fn stack_input_description(label: &str, description: &str) -> String {
+    let label = label.trim_end();
+    if label.is_empty() {
+        return description.to_string();
+    }
+    if description.is_empty() {
+        return label.to_string();
+    }
+    let separator = if label.ends_with(['.', '!', '?', ':']) {
+        " "
+    } else {
+        ". "
+    };
+    format!("{label}{separator}{description}")
 }
 
 fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
@@ -1705,7 +1777,9 @@ fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
         attr("type", stack_input_terraform_type(input)),
         attr(
             "description",
-            Expression::String(format!("{} {}", input.label, input.description)),
+            // The label is a heading, not a sentence, so give it a stop of its
+            // own — a customer reads these two joined in `variables.tf`.
+            Expression::String(stack_input_description(&input.label, &input.description)),
         ),
     ];
     if let Some(default) = input.default.as_ref().map(stack_input_default_expression) {
@@ -2511,8 +2585,18 @@ fn registration_body(
 }
 
 fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Expression {
+    match terraform_input_values_source(inputs) {
+        Some(source) => expr::raw(source),
+        None => expr::raw("{}"),
+    }
+}
+
+/// The HCL source of the deployer input-value map, `None` for a stack without
+/// inputs — shared by the registration resource and the module output so both
+/// carry the same map.
+fn terraform_input_values_source(inputs: &[StackInputDefinition]) -> Option<String> {
     if inputs.is_empty() {
-        return expr::raw("{}");
+        return None;
     }
 
     let mut required_entries = Vec::new();
@@ -2529,11 +2613,11 @@ fn terraform_input_values_expression(inputs: &[StackInputDefinition]) -> Express
 
     let required_map = format!("{{ {} }}", required_entries.join(", "));
     if optional_maps.is_empty() {
-        expr::raw(required_map)
+        Some(required_map)
     } else {
         let mut maps = vec![required_map];
         maps.extend(optional_maps);
-        expr::raw(format!("merge({})", maps.join(", ")))
+        Some(format!("merge({})", maps.join(", ")))
     }
 }
 
@@ -2572,7 +2656,11 @@ fn helm_install_body(
     ))])
 }
 
-fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistration>) -> Body {
+fn outputs_body(
+    target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
+    stack_inputs: &[StackInputDefinition],
+) -> Body {
     let mut outputs = vec![
         (
             "deployment_target",
@@ -2644,6 +2732,17 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Deployment registration resource metadata JSON.",
         ),
     ];
+    // Registration flows managed outside Terraform rebuild the import request
+    // from these outputs, so the deployer's input answers must ride along —
+    // without them a live `.enabled(input)` gate falls back to its declared
+    // default at import and an accepted workload never provisions.
+    if let Some(source) = terraform_input_values_source(stack_inputs) {
+        outputs.push((
+            "deployment_input_values",
+            expr::raw(format!("jsonencode({source})")),
+            "Deployer input values JSON for registration flows managed outside Terraform.",
+        ));
+    }
     if let Some(registration) = registration {
         outputs.push((
             "deployment_id",
@@ -2742,7 +2841,7 @@ fn readme_md(
             "Terraform registers the deployment after the setup resources are ready. The registration step consumes `local.deployment_management_config`, `local.deployment_settings`, and `local.deployment_resources`; keep those values intact if your organization wraps this module.\n".to_string()
         })
         .unwrap_or_else(|| {
-            "This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.\n".to_string()
+            "This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.\n".to_string()
         });
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
@@ -2792,6 +2891,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
 {kubernetes_operations}",
         display_name = display_name,
@@ -2956,9 +3056,10 @@ mod tests {
         assert!(registration_body
             .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
-        let outputs =
-            render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");
+        let outputs = render_body(outputs_body(TerraformTarget::Aws, Some(&registration), &[]))
+            .expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
+        assert!(!outputs.contains("deployment_input_values"));
     }
 
     #[test]
@@ -2991,45 +3092,38 @@ mod tests {
         let mut per_resource = IndexMap::new();
         per_resource.insert(
             "queue".to_string(),
-            TfFragment {
-                resource_blocks: vec![
-                    resource_block(
-                        "google_project_iam_custom_role",
-                        "gcp_role_queue_heartbeat_part1",
-                        [
-                            attr("project", expr::raw("var.gcp_project")),
-                            attr("role_id", Expression::String("role_test".to_string())),
-                        ],
-                    ),
-                    resource_block(
-                        "google_pubsub_topic",
-                        "queue",
-                        [attr("name", Expression::String("queue".to_string()))],
-                    ),
-                ],
-                ..TfFragment::default()
-            },
+            TfFragment::default()
+                .with_resource(resource_block(
+                    "google_project_iam_custom_role",
+                    "gcp_role_queue_heartbeat_part1",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("role_id", Expression::String("role_test".to_string())),
+                    ],
+                ))
+                .with_resource(resource_block(
+                    "google_pubsub_topic",
+                    "queue",
+                    [attr("name", Expression::String("queue".to_string()))],
+                )),
         );
         per_resource.insert(
             "management".to_string(),
-            TfFragment {
-                resource_blocks: vec![resource_block(
-                    "google_project_iam_member",
-                    "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
-                    [
-                        attr("project", expr::raw("var.gcp_project")),
-                        attr(
-                            "role",
-                            expr::traversal([
-                                "google_project_iam_custom_role",
-                                "gcp_role_queue_heartbeat_part1",
-                                "name",
-                            ]),
-                        ),
-                    ],
-                )],
-                ..TfFragment::default()
-            },
+            TfFragment::default().with_resource(resource_block(
+                "google_project_iam_member",
+                "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
+                [
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "role",
+                        expr::traversal([
+                            "google_project_iam_custom_role",
+                            "gcp_role_queue_heartbeat_part1",
+                            "name",
+                        ]),
+                    ),
+                ],
+            )),
         );
 
         apply_resource_dependencies(&stack, &mut per_resource);

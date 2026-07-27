@@ -399,25 +399,9 @@ async fn run_step_loop_body(
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
         let heartbeats = step_result.heartbeats.clone();
-        let mut observed_inventory_batches = step_result.observed_inventory_batches.clone();
+        let observed_inventory_batches = step_result.observed_inventory_batches.clone();
 
         *state = step_result.state;
-
-        if state.status == DeploymentStatus::Running {
-            let observe_service_provider = service_provider.clone().unwrap_or_else(|| {
-                Arc::new(alien_infra::DefaultPlatformServiceProvider::default())
-            });
-            let observe_report = run_observe_pass(
-                state.platform,
-                client_config,
-                &observe_service_provider,
-                deployment_id,
-                config.observe_label_selector.as_deref(),
-                config.observe_all_namespaces,
-            )
-            .await?;
-            observed_inventory_batches.extend(observe_report.inventory_batches);
-        }
 
         // Checkpoint after every step. This is a durability barrier: once a
         // cloud/API step has produced new state, the runner must not execute

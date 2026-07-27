@@ -1548,6 +1548,159 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
     assert_eq!(store.status, alien_core::ResourceStatus::Running);
 }
 
+/// A frozen gate is answered once: the answer recorded at creation refuses
+/// every later conflicting input value.
+#[tokio::test]
+async fn a_frozen_gate_answer_is_fixed_for_the_deployment_lifetime() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    // A frozen store gated with a declared default of true.
+    let mut stack = create_test_stack("fixed-stack", "test-function");
+    stack.resources.insert(
+        "archive".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: Some("archiveEnabled".to_string()),
+        },
+    );
+    stack.inputs = vec![boolean_gate_input(
+        "archiveEnabled",
+        "Enable the archive",
+        "Whether to create the archive store.",
+    )];
+
+    fn config_with_archive_enabled(enabled: bool) -> DeploymentConfig {
+        let mut config = create_test_config("hash_v1", false);
+        config.input_values =
+            HashMap::from([("archiveEnabled".to_string(), serde_json::json!(enabled))]);
+        config
+    }
+
+    let mut state = create_initial_state(stack.clone());
+    state = run_to_completion(state, config_with_archive_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert_eq!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.persisted_gate_answers.get("archiveEnabled")),
+        Some(&true),
+        "the answer is recorded at creation"
+    );
+
+    // A conflicting answer on an update is refused, not applied.
+    start_update(&mut state, release_of("rel_v2", stack.clone()));
+    let error = alien_deployment::step(
+        state.clone(),
+        config_with_archive_enabled(false),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect_err("a flipped frozen answer must refuse the update");
+    assert_eq!(error.code, "FROZEN_GATE_ANSWER_CHANGED");
+
+    // The same answer passes and the update completes.
+    let mut state_matching = state.clone();
+    state_matching = run_to_completion(state_matching, config_with_archive_enabled(true)).await;
+    assert_eq!(state_matching.status, DeploymentStatus::Running);
+}
+
+/// The split-strip ordering guarantee on compute: declining a live worker on
+/// an update removes the workload but keeps its derived baseline — the
+/// profile-derived service account stays in the prepared stack, so the
+/// frozen-compatibility check never fires and a later acceptance recreates
+/// the worker.
+#[tokio::test]
+async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let mut stack = create_test_stack("gated-stack", "proxy");
+    stack
+        .resources
+        .get_mut("proxy")
+        .expect("worker entry")
+        .enabled_when = Some("proxyEnabled".to_string());
+    stack.inputs = vec![boolean_gate_input(
+        "proxyEnabled",
+        "Enable the proxy",
+        "Whether to run the proxy worker.",
+    )];
+
+    fn config_with_proxy_enabled(enabled: bool) -> DeploymentConfig {
+        let mut config = create_test_config("hash_v1", false);
+        config.input_values =
+            HashMap::from([("proxyEnabled".to_string(), serde_json::json!(enabled))]);
+        config
+    }
+
+    fn prepared_stack_of(state: &DeploymentState) -> &Stack {
+        state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .expect("a completed deployment stores its prepared stack")
+    }
+
+    let mut state = create_initial_state(stack.clone());
+
+    // Accepted (default true): the worker runs and the mutations derived its
+    // service account into the prepared stack.
+    state = run_to_completion(state, config_with_proxy_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("proxy"));
+    assert!(
+        prepared_stack_of(&state).resources.contains_key("default-sa"),
+        "the profile-derived service account belongs to the prepared stack: {:?}",
+        prepared_stack_of(&state).resources.keys().collect::<Vec<_>>()
+    );
+
+    // Declined on an update: the worker is deprovisioned, the deployment
+    // converges, and the derived service account is still in the prepared
+    // stack — the mutations saw the declined worker, only the executor's
+    // desired set lost it.
+    start_update(&mut state, release_of("rel_v2", stack.clone()));
+    state = run_to_completion(state, config_with_proxy_enabled(false)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(!state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("proxy"));
+    assert!(
+        prepared_stack_of(&state).resources.contains_key("default-sa"),
+        "declining the worker must not strip its derived baseline: {:?}",
+        prepared_stack_of(&state).resources.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !prepared_stack_of(&state).resources.contains_key("proxy"),
+        "the declined worker itself leaves the prepared stack"
+    );
+
+    // Accepted again: the worker comes back without any compatibility
+    // refusal, because nothing derived ever changed.
+    start_update(&mut state, release_of("rel_v3", stack));
+    state = run_to_completion(state, config_with_proxy_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let proxy = state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("proxy")
+        .expect("an accepted gate must recreate the worker");
+    assert_eq!(proxy.status, alien_core::ResourceStatus::Running);
+}
+
 /// A setup import that omitted a gated frozen resource: the runner must not
 /// create the resource the deployer declined, while the delivered sibling
 /// and the live function still deploy.
@@ -1600,4 +1753,77 @@ async fn a_declined_gated_import_is_not_created_by_the_runner() {
     );
     assert!(resources.contains_key("assets"));
     assert!(resources.contains_key("test-function"));
+}
+
+/// A release that introduces a gated frozen resource must fail the update
+/// loudly, not drop the resource and report success.
+///
+/// Frozen resources are setup-owned: only a setup run creates them. The gate
+/// has therefore never been answered, and the decline strip must leave the
+/// resource alone so the frozen-compatibility check can say what the operator
+/// needs to hear — rerun setup. Silently stripping it would converge a
+/// deployment that is missing the release's new resource, with nothing said.
+#[tokio::test]
+async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_dropping_it() {
+    // The settled release has no gated resource at all, so nothing was ever
+    // asked and nothing was recorded.
+    let settled_stack = create_test_stack("gate-refusal-stack", "test-function");
+
+    let mut target_stack = create_test_stack("gate-refusal-stack", "test-function");
+    target_stack.inputs = vec![alien_core::StackInputDefinition::deployer_boolean(
+        "archiveEnabled",
+        "Enable the archive",
+        "Whether to create the archive store.",
+        Some(true),
+    )];
+    target_stack.resources.insert(
+        "archive".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: Some("archiveEnabled".to_string()),
+        },
+    );
+
+    let state = DeploymentState {
+        status: DeploymentStatus::UpdatePending,
+        platform: Platform::Test,
+        current_release: Some(ReleaseInfo {
+            release_id: Some("rel_v1".to_string()),
+            version: Some("1.0.0".to_string()),
+            description: None,
+            stack: settled_stack.clone(),
+        }),
+        target_release: Some(ReleaseInfo {
+            release_id: Some("rel_v2".to_string()),
+            version: Some("2.0.0".to_string()),
+            description: None,
+            stack: target_stack,
+        }),
+        stack_state: Some(StackState::new(Platform::Test)),
+        error: None,
+        environment_info: None,
+        runtime_metadata: Some(RuntimeMetadata {
+            prepared_stack: Some(settled_stack),
+            ..Default::default()
+        }),
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+
+    let error = alien_deployment::step(
+        state,
+        create_test_config("hash_v1", false),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect_err("adding a frozen resource must refuse until setup runs again");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("archive"),
+        "the refusal should name the resource that needs setup: {rendered}"
+    );
 }

@@ -9,7 +9,7 @@ import {
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   Daemon as DaemonConfig,
@@ -42,7 +42,7 @@ export type DaemonPublicEndpointOptions =
  * Daemons are intended for long-lived background processes such as endpoint
  * agents and local side services.
  */
-export class Daemon {
+export class Daemon extends ResourceBuilder {
   private _config: Partial<DaemonConfig> = {
     links: [],
     publicEndpoints: [],
@@ -56,6 +56,7 @@ export class Daemon {
    * @param id Identifier for the daemon. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -251,7 +252,7 @@ export class Daemon {
   public build(): Resource {
     const config = DaemonSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "daemon",
       ...config,
     })

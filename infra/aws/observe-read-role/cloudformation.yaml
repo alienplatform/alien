@@ -46,27 +46,11 @@ Resources:
             Effect: Allow
             Action:
               - tag:GetResources
-              - tag:GetTagKeys
-              - tag:GetTagValues
             Resource: "*"
           - Sid: HealthMetrics
             Effect: Allow
             Action:
-              - cloudwatch:GetMetricData
               - cloudwatch:ListMetrics
-            Resource: "*"
-          - Sid: DescribeReadOnly
-            Effect: Allow
-            Action:
-              - ec2:Describe*
-              - rds:Describe*
-              - ecs:Describe*
-              - ecs:List*
-              - elasticloadbalancing:Describe*
-              - s3:ListAllMyBuckets
-              - s3:GetBucketLocation
-              - lambda:List*
-              - lambda:GetFunctionConfiguration
             Resource: "*"
 
 Outputs:

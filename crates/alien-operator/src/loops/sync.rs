@@ -137,7 +137,7 @@ async fn sync_with_manager(
         .expect("deployment_id must be set in online mode");
     let heartbeats = state.db.get_pending_heartbeats().await?;
     let mut observed_inventory_batches = state.db.get_pending_observed_inventory_batches().await?;
-    if deployment_state.status == DeploymentStatus::Running {
+    if deployment_state.status == DeploymentStatus::Running && state.config.observes_environment() {
         observed_inventory_batches.extend(observe_running_deployment(state, &deployment_id).await?);
     }
 
@@ -147,7 +147,7 @@ async fn sync_with_manager(
     // uses (where the deploy loop sets `current_release.release_id`). The version is
     // the vendor-configured override if set, else the single version observed on the
     // workloads (e.g. `app.kubernetes.io/version`), so it tracks upgrades.
-    if deployment_state.current_release.is_none() {
+    if state.config.observes_environment() && deployment_state.current_release.is_none() {
         let app_version = state
             .config
             .app_version

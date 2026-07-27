@@ -1,4 +1,27 @@
-pub(crate) fn normalize_log_body(input: &str) -> String {
+const SYSTEM_LOG_PREFIX: &str = "\u{1e}ALIEN_SYSTEM\u{1f}";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CapturedLogLine {
+    pub(crate) body: String,
+    pub(crate) is_system: bool,
+}
+
+pub(crate) fn decode_log_line(input: &str) -> CapturedLogLine {
+    let (body, is_system) = strip_system_log_prefix(input);
+
+    CapturedLogLine {
+        body: normalize_log_body(body),
+        is_system,
+    }
+}
+
+pub(crate) fn strip_system_log_prefix(input: &str) -> (&str, bool) {
+    input
+        .strip_prefix(SYSTEM_LOG_PREFIX)
+        .map_or((input, false), |body| (body, true))
+}
+
+fn normalize_log_body(input: &str) -> String {
     let prepared = input.replace('\t', "\u{e000}").replace(['\r', '\n'], " ");
     let stripped = strip_ansi_escapes::strip_str(prepared);
     let mut normalized = String::with_capacity(stripped.len());
@@ -16,7 +39,39 @@ pub(crate) fn normalize_log_body(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_log_body;
+    use super::{
+        decode_log_line, normalize_log_body, strip_system_log_prefix, CapturedLogLine,
+    };
+
+    #[test]
+    fn decodes_and_removes_system_marker() {
+        assert_eq!(
+            decode_log_line("\u{1e}ALIEN_SYSTEM\u{1f}[alien:event-loop] failed"),
+            CapturedLogLine {
+                body: "[alien:event-loop] failed".to_string(),
+                is_system: true,
+            }
+        );
+    }
+
+    #[test]
+    fn leaves_application_lines_unclassified() {
+        assert_eq!(
+            decode_log_line("application ready"),
+            CapturedLogLine {
+                body: "application ready".to_string(),
+                is_system: false,
+            }
+        );
+    }
+
+    #[test]
+    fn strips_only_the_marker_for_unstructured_forwarding() {
+        assert_eq!(
+            strip_system_log_prefix("\u{1e}ALIEN_SYSTEM\u{1f}\u{1b}[31mfailed\u{1b}[0m"),
+            ("\u{1b}[31mfailed\u{1b}[0m", true)
+        );
+    }
 
     #[test]
     fn strips_sgr_color_sequences() {

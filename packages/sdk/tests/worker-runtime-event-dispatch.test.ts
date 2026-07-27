@@ -1,5 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { physicalSourceNames, sourceMatches } from "../src/worker-runtime/event-loop.js"
+import {
+  formatEventLoopError,
+  physicalSourceNames,
+  sourceMatches,
+} from "../src/worker-runtime/event-loop.js"
+
+describe("event-loop error formatting", () => {
+  it("keeps error logs on one bounded line", () => {
+    const formatted = formatEventLoopError(new TypeError(`first\nsecond ${"x".repeat(2_000)}`))
+
+    expect(formatted).not.toContain("\n")
+    expect(formatted.startsWith("TypeError: first second ")).toBe(true)
+    expect(formatted).toHaveLength(1_001)
+    expect(formatted.endsWith("…")).toBe(true)
+  })
+
+  it("formats non-Error throws", () => {
+    expect(formatEventLoopError("failed\nbadly")).toBe("failed badly")
+  })
+
+  it("never throws while formatting a thrown value", () => {
+    const value = {
+      [Symbol.toPrimitive]() {
+        throw new Error("coercion failed")
+      },
+    }
+
+    expect(formatEventLoopError(value)).toBe("Unformattable thrown value")
+  })
+})
 
 // Cloud transports deliver tasks keyed by the provider's physical identifier
 // (S3 bucket name, SQS queue name) while handlers register by the resource's

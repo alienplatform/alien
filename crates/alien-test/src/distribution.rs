@@ -86,7 +86,10 @@ impl DistributionArtifactCleanup {
         }
     }
 
-    fn command_env(&self) -> &[(String, String)] {
+    /// Target-scoped credentials/region the artifact was applied with. Exposed
+    /// so distribution tests can make read-only cloud assertions against the
+    /// same account the setup artifact provisioned into.
+    pub fn command_env(&self) -> &[(String, String)] {
         match self {
             DistributionArtifactCleanup::CloudFormation { env, .. }
             | DistributionArtifactCleanup::Terraform { env, .. }
@@ -2730,6 +2733,16 @@ fn terraform_import_request_from_outputs(
     let setup_fingerprint = terraform_output_string(output, "deployment_setup_fingerprint")?;
     let setup_fingerprint_version =
         terraform_output_u32(output, "deployment_setup_fingerprint_version")?;
+    // Emitted only when the stack declares deployer inputs; without it a live
+    // `.enabled(input)` answer would fall back to the input's default at
+    // import. Only true absence defaults — a present-but-malformed output
+    // must fail, or it silently loses the very answers it exists to carry.
+    let input_values = if output.get("deployment_input_values").is_some() {
+        let json = terraform_output_string(output, "deployment_input_values")?;
+        serde_json::from_str(&json).context("Failed to parse deployment_input_values")?
+    } else {
+        Default::default()
+    };
 
     Ok(StackImportRequest {
         setup_import_format_version: 1,
@@ -2747,7 +2760,7 @@ fn terraform_import_request_from_outputs(
         setup_fingerprint_version,
         stack_settings,
         management_config,
-        input_values: Default::default(),
+        input_values,
         resources,
     })
 }
@@ -3207,6 +3220,28 @@ fn terraform_output_u32(outputs: &Value, key: &str) -> anyhow::Result<u32> {
     anyhow::bail!("terraform output {key} is not a number or string")
 }
 
+/// The gate answers the enabled-demo e2e applies: every `*On` input true,
+/// every `*Off` input false. Tuple keys are the Terraform variable names the
+/// generator emits for each input id (`input_` + snake_case), so a change to
+/// `stack_input_variable_name` must be mirrored here. Empty for every other app.
+fn enabled_demo_gate_answers(app: TestApp) -> &'static [(&'static str, bool)] {
+    match app {
+        TestApp::EnabledDemo => &[
+            ("input_kv_on", true),
+            ("input_kv_off", false),
+            ("input_storage_on", true),
+            ("input_storage_off", false),
+            ("input_queue_on", true),
+            ("input_queue_off", false),
+            ("input_vault_on", true),
+            ("input_vault_off", false),
+            ("input_worker_on", true),
+            ("input_worker_off", false),
+        ],
+        _ => &[],
+    }
+}
+
 fn terraform_tfvars(
     prepared: &DistributionPrepared,
     target: alien_terraform::TerraformTarget,
@@ -3229,6 +3264,13 @@ fn terraform_tfvars(
         "manager_url".to_string(),
         Value::String(prepared.manager.url.clone()),
     );
+
+    // Answer deployer gate inputs at apply time. Terraform auto-loads
+    // terraform.tfvars.json, so a `input_<snake(id)>` key here is how the
+    // harness threads a `.enabled(input)` answer into the applied artifact.
+    for (tfvar, answer) in enabled_demo_gate_answers(prepared.app) {
+        vars.insert(tfvar.to_string(), Value::Bool(*answer));
+    }
 
     match target.cloud_platform() {
         Platform::Aws => {
@@ -4534,7 +4576,6 @@ mod tests {
             "azure-resource-group/heartbeat",
             "azure-storage-account/heartbeat",
             "azure-service-bus-namespace/heartbeat",
-            "observe/observe",
             "service-account/heartbeat",
             "service-activation/heartbeat",
         ] {

@@ -3,6 +3,7 @@
 use crate::{ObservedInventoryBatch, Platform, ResourceHeartbeat, StackState};
 use alien_error::AlienError;
 use bon::Builder;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
@@ -51,6 +52,16 @@ pub struct RuntimeMetadata {
     /// Used for compatibility checks during updates to compare mutated stacks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepared_stack: Option<crate::Stack>,
+
+    /// Canonical resolved answers for inputs that gate Frozen resources,
+    /// keyed by input id, recorded when the deployment is created or its
+    /// setup import registers.
+    ///
+    /// A frozen gate's answer is fixed for the deployment's lifetime: the
+    /// update path refuses input values that conflict with these, and a Live
+    /// resource sharing such an input resolves the persisted answer forever.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub persisted_gate_answers: GateAnswers,
 
     /// Prepared target for an update that has not reached Running yet. Keeping
     /// it separate preserves the last successful baseline across retries.
@@ -170,11 +181,21 @@ pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Answers for inputs gating Frozen resources, keyed by input id.
+pub type GateAnswers = IndexMap<String, bool>;
+
 /// Oldest deployment protocol version this binary can read.
 pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
 /// Deployment protocol version this binary writes.
 /// Bump when making incompatible changes to DeploymentState semantics.
+///
+/// `persisted_gate_answers` on the runtime metadata stays at this version:
+/// the field is additive, an actor unaware of it still cannot flip a frozen
+/// resource (its strip resolves from state presence, so a changed input is
+/// ignored rather than applied), and the sync routes carry a recorded map
+/// through a write-back that drops the field. A bump would hard-refuse every
+/// customer-scheduled pull agent the moment a newer manager writes state.
 pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
 /// Backwards-compatible alias for older call sites.

@@ -24,6 +24,22 @@ import {
   runCommand,
 } from "./registry.js"
 import type { getControlServiceDefinition } from "./service-definitions.js"
+import { logSystemError, logSystemWarn } from "./system-log.js"
+
+const MAX_LOG_ERROR_LENGTH = 1_000
+
+/** @internal exported for tests */
+export function formatEventLoopError(error: unknown): string {
+  try {
+    const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    const singleLine = raw.replace(/\s+/g, " ").trim()
+    return singleLine.length > MAX_LOG_ERROR_LENGTH
+      ? `${singleLine.slice(0, MAX_LOG_ERROR_LENGTH)}…`
+      : singleLine
+  } catch {
+    return "Unformattable thrown value"
+  }
+}
 
 /**
  * Handlers register by the resource's logical name (the name given in the
@@ -133,7 +149,9 @@ export class EventLoop {
       try {
         await this.processTasks()
       } catch (error) {
-        console.error("[alien:event-loop] processTasks threw:", error)
+        logSystemError(
+          `[alien:event-loop] processTasks threw: error=${formatEventLoopError(error)}`,
+        )
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
     }
@@ -145,8 +163,8 @@ export class EventLoop {
       try {
         await this.handleTask(task)
       } catch (error) {
-        console.error(
-          `[alien:event-loop] handleTask threw (task will not break stream): id=${task.taskId} error=${error instanceof Error ? error.message : String(error)}`,
+        logSystemError(
+          `[alien:event-loop] handleTask threw (task will not break stream): id=${task.taskId} error=${formatEventLoopError(error)}`,
         )
       }
     }
@@ -185,7 +203,7 @@ export class EventLoop {
         // Report the miss as a failed result — without it the runtime waits
         // for the task until its event timeout (a 2-minute hang per event on
         // Lambda) instead of failing loudly.
-        console.warn(`No handler found for task: ${task.taskId}`)
+        logSystemWarn(`No handler found for task: ${task.taskId}`)
         await this.sendTaskResult(task.taskId, {
           success: false,
           error: `No handler registered for task ${task.taskId}`,
@@ -203,17 +221,16 @@ export class EventLoop {
 
       await this.sendTaskResult(task.taskId, { success: true })
     } catch (error) {
-      console.error(
-        `[alien:event-loop] Task error: id=${task.taskId} error=${error instanceof Error ? error.message : String(error)}`,
-      )
+      const formattedError = formatEventLoopError(error)
+      logSystemError(`[alien:event-loop] Task error: id=${task.taskId} error=${formattedError}`)
       try {
         await this.sendTaskResult(task.taskId, {
           success: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: formattedError,
         })
       } catch (sendError) {
-        console.error(
-          `[alien:event-loop] Failed to send error result: id=${task.taskId} sendError=${sendError instanceof Error ? sendError.message : String(sendError)}`,
+        logSystemError(
+          `[alien:event-loop] Failed to send error result: id=${task.taskId} sendError=${formatEventLoopError(sendError)}`,
         )
       }
     }

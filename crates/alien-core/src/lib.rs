@@ -30,6 +30,9 @@ pub use resource::*;
 mod ownership;
 pub use ownership::*;
 
+mod gateability;
+pub use gateability::*;
+
 mod tags;
 pub use tags::*;
 

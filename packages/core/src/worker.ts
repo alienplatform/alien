@@ -7,7 +7,7 @@ import {
   WorkerSchema,
   type WorkerTrigger,
 } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   Worker as WorkerConfig,
@@ -35,7 +35,7 @@ export interface WorkerPublicEndpointOptions {
  * Represents a serverless worker that executes code in response to triggers or direct invocations.
  * Workers are the primary compute resource in serverless applications, designed to be stateless and ephemeral.
  */
-export class Worker {
+export class Worker extends ResourceBuilder {
   private _config: Partial<WorkerConfig> = {
     links: [],
     triggers: [],
@@ -48,6 +48,7 @@ export class Worker {
    * @param id Identifier for the worker. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -243,7 +244,7 @@ export class Worker {
   public build(): Resource {
     const config = WorkerSchema.parse(this._config)
 
-    return new Resource({
+    return this.resource({
       type: "worker",
       ...config,
     })

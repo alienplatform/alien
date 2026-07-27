@@ -385,6 +385,7 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
         .platform(args.platform)
         .maybe_base_platform(args.base_platform)
         .maybe_agent_name(args.operator_name)
+        .maybe_operator_permission(operator_permission)
         .maybe_sync(sync_config)
         .data_dir(data_dir)
         .encryption_key(encryption_key)
