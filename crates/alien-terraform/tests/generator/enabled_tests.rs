@@ -452,12 +452,11 @@ fn gcp_shared_project_grant_stays_ungated_when_any_resource_is_ungated() {
     );
 }
 
-/// Rendering a gated resource through an emitter that ignores the gate would
-/// create exactly what the deployer declined. ServiceAccount stays a safe
-/// stand-in for "unconverted": the compile-time check forbids gating
-/// framework-derived types, so its emitter never needs to convert.
+/// The generator re-checks the gateability policy, so a caller that skips
+/// preflights cannot render a gate the policy refuses. ServiceAccount is a
+/// framework-derived type the policy always refuses.
 #[test]
-fn a_gate_on_an_unconverted_emitter_fails() {
+fn a_gate_on_a_policy_refused_type_fails_at_render() {
     let stack = Stack::new("gated-stack".to_string())
         .inputs(vec![gate_input(
             "storeEnabled",

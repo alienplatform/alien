@@ -5,12 +5,23 @@
 //! `AzureRuntimePermissionsGenerator` integration path; RSM covers the
 //! cross-tenant federated-identity-credential shape.
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     AzureResourceGroup, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_terraform::TerraformTarget;
+
+/// A minimal Live worker for the management-grant tests.
+fn dispatch_worker(id: &str) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
+            image: format!("registry.example.com/app/{id}:1.2.3"),
+        })
+        .permissions("execution".to_string())
+        .build()
+}
 
 fn resource_group() -> AzureResourceGroup {
     AzureResourceGroup::new("default-resource-group".to_string()).build()
@@ -153,6 +164,107 @@ fn azure_compute_management_emits_subscription_scoped_sku_discovery() {
     assert!(rendered.contains("Microsoft.Compute/skus/read"));
     assert!(rendered.contains("\"/subscriptions/${var.azure_subscription_id}\""));
     assert_terraform_valid(&module, "azure_compute_management_sku_discovery");
+}
+
+/// Azure folds every resource-scoped management permission set into one
+/// assignment, so the grant belongs to all of its contributors at once. When
+/// every contributor is gated the assignment carries their gates, and
+/// declining them all takes the grant with it. The role definition stays
+/// ungated on purpose — a definition nothing is assigned to grants nothing.
+#[test]
+fn azure_management_assignment_follows_the_gates_of_its_only_contributors() {
+    let stack = Stack::new("acme-mgmt-gated".to_string())
+        .inputs(vec![
+            gate_input("jobsEnabled", "Enable jobs", "Whether to run the jobs worker."),
+            gate_input("auditEnabled", "Enable audit", "Whether to run the audit worker."),
+        ])
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new()
+                .resource("jobs", ["worker/dispatch-command"])
+                .resource("audit", ["worker/dispatch-command"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(dispatch_worker("jobs"), ResourceLifecycle::Live, "jobsEnabled")
+        .add_enabled_when(dispatch_worker("audit"), ResourceLifecycle::Live, "auditEnabled")
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let assignment = rendered
+        .split("resource \"")
+        .find(|block| block.starts_with("azurerm_role_assignment\" \"management_management_uami_assignment"))
+        .unwrap_or_else(|| panic!("a management assignment should render:\n{rendered}"));
+    // Gates render in sorted order so reordering resources cannot churn the plan.
+    assert!(
+        assignment.contains("var.input_audit_enabled || var.input_jobs_enabled ? 1 : 0"),
+        "the merged grant must follow every contributor's gate:\n{assignment}"
+    );
+
+    // A custom role definition, when one is needed at all, stays ungated: a
+    // definition nothing is assigned to grants nothing. (This fixture's grant
+    // resolves to a predefined Azure role, so none is emitted here.)
+    for block in rendered.split("resource \"") {
+        if block.starts_with("azurerm_role_definition\"") {
+            assert!(
+                !block.contains("count"),
+                "an unassigned role definition grants nothing, so it stays ungated:\n{block}"
+            );
+        }
+    }
+
+    assert_terraform_valid(&module, "azure_management_assignment_gated");
+}
+
+/// One ungated contributor means the grant is needed unconditionally —
+/// declining its gated sibling must not revoke it.
+#[test]
+fn azure_management_assignment_stays_ungated_when_a_contributor_is_ungated() {
+    let stack = Stack::new("acme-mgmt-mixed".to_string())
+        .inputs(vec![gate_input(
+            "jobsEnabled",
+            "Enable jobs",
+            "Whether to run the jobs worker.",
+        )])
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new()
+                .resource("jobs", ["worker/dispatch-command"])
+                .resource("always", ["worker/dispatch-command"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(dispatch_worker("jobs"), ResourceLifecycle::Live, "jobsEnabled")
+        .add(dispatch_worker("always"), ResourceLifecycle::Live)
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let assignment = rendered
+        .split("resource \"")
+        .find(|block| block.starts_with("azurerm_role_assignment\" \"management_management_uami_assignment"))
+        .unwrap_or_else(|| panic!("a management assignment should render:\n{rendered}"));
+    assert!(
+        !assignment.contains("var.input_jobs_enabled"),
+        "an ungated contributor keeps the grant unconditional:\n{assignment}"
+    );
+
+    assert_terraform_valid(&module, "azure_management_assignment_mixed");
 }
 
 #[test]

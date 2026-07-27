@@ -895,8 +895,9 @@ fn build_logs_query(
         // explicitly requested. `NOT field:value` keeps documents that lack the
         // attribute entirely, so user workload logs are always shown.
         filters.push(format!(
-            "NOT {}:\"true\"",
-            system_resource_attribute_field()
+            "NOT {}:\"true\" AND NOT {}:\"true\"",
+            system_resource_attribute_field(),
+            system_log_attribute_field()
         ));
     }
 
@@ -938,6 +939,13 @@ fn system_resource_attribute_field() -> String {
     // `resource_attributes.` as a single field name.
     format!(
         "resource_attributes.{}",
+        alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE.replace('.', "\\.")
+    )
+}
+
+fn system_log_attribute_field() -> String {
+    format!(
+        "attributes.{}",
         alien_core::ALIEN_SYSTEM_RESOURCE_ATTRIBUTE.replace('.', "\\.")
     )
 }
@@ -1016,7 +1024,7 @@ mod tests {
 
         assert_eq!(
             query,
-            "* AND NOT resource_attributes.alien\\.system:\"true\""
+            "* AND NOT resource_attributes.alien\\.system:\"true\" AND NOT attributes.alien\\.system:\"true\""
         );
     }
 
@@ -1039,7 +1047,7 @@ mod tests {
 
         assert_eq!(
             query,
-            "(service_name:api) AND ((severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\" AND NOT resource_attributes.alien\\.system:\"true\""
+            "(service_name:api) AND ((severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\" AND NOT resource_attributes.alien\\.system:\"true\" AND NOT attributes.alien\\.system:\"true\""
         );
     }
 

@@ -6,7 +6,6 @@ use crate::{
     emitters::aws::helpers::{
         downcast, nested_block, required_label, resource_prefix_template, tags,
     },
-    emitters::enabled,
     expr,
 };
 use alien_core::{import::EmitContext, Kv, Result};
@@ -20,7 +19,7 @@ impl TfEmitter for AwsKvEmitter {
         let kv = downcast::<Kv>(ctx, Kv::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        let mut table = resource_block(
+        let table = resource_block(
             "aws_dynamodb_table",
             label,
             [
@@ -67,7 +66,6 @@ impl TfEmitter for AwsKvEmitter {
                 )),
             ],
         );
-        enabled::gate_own(ctx, &mut table)?;
 
         Ok(TfFragment::default().with_resource(table))
     }
@@ -77,17 +75,13 @@ impl TfEmitter for AwsKvEmitter {
         Ok(expr::object([
             (
                 "tableName",
-                enabled::self_attribute(ctx, "aws_dynamodb_table", label, "name"),
+                expr::traversal(["aws_dynamodb_table", label, "name"]),
             ),
             (
                 "tableArn",
-                enabled::self_attribute(ctx, "aws_dynamodb_table", label, "arn"),
+                expr::traversal(["aws_dynamodb_table", label, "arn"]),
             ),
         ]))
-    }
-
-    fn supports_enabled_when(&self) -> bool {
-        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -96,7 +90,7 @@ impl TfEmitter for AwsKvEmitter {
             ("service", Expression::String("dynamodb".to_string())),
             (
                 "tableName",
-                enabled::self_attribute(ctx, "aws_dynamodb_table", label, "name"),
+                expr::traversal(["aws_dynamodb_table", label, "name"]),
             ),
             ("region", expr::raw("data.aws_region.current.region")),
         ])))

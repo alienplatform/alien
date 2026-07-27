@@ -9,7 +9,6 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, required_label},
-    emitters::enabled,
     expr,
 };
 use alien_core::{import::EmitContext, AzureStorageAccount, ErrorData, Kv, Result};
@@ -27,20 +26,17 @@ impl TfEmitter for AzureKvEmitter {
 
         let mut fragment = TfFragment::default();
 
-        let mut table = resource_block(
+        let table = resource_block(
             "azurerm_storage_table",
             label,
             [
                 attr("name", table_name_expr(kv.id())),
-                // The Storage account is a separate, ungated resource, so this
-                // reference stays unindexed even when the table is counted.
                 attr(
                     "storage_account_name",
                     expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
                 ),
             ],
         );
-        enabled::gate_own(ctx, &mut table)?;
         fragment.resource_blocks.push(table);
 
         Ok(fragment)
@@ -52,15 +48,13 @@ impl TfEmitter for AzureKvEmitter {
         Ok(expr::object([
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
-            // Storage-account attributes belong to an ungated resource and
-            // must not be indexed; only the table below is counted.
             (
                 "storageAccountName",
                 expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
             ),
             (
                 "tableName",
-                enabled::self_attribute(ctx, "azurerm_storage_table", label, "name"),
+                expr::traversal(["azurerm_storage_table", label, "name"]),
             ),
             (
                 "tableEndpoint",
@@ -73,10 +67,6 @@ impl TfEmitter for AzureKvEmitter {
         ]))
     }
 
-    fn supports_enabled_when(&self) -> bool {
-        true
-    }
-
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
         let parent_label = parent_storage_account_label(ctx)?.to_string();
@@ -86,15 +76,13 @@ impl TfEmitter for AzureKvEmitter {
                 "resourceGroupName",
                 expr::raw("var.azure_resource_group_name"),
             ),
-            // The storage account hosting the table is ungated; only the table
-            // below is counted.
             (
                 "accountName",
                 expr::traversal(["azurerm_storage_account", &parent_label, "name"]),
             ),
             (
                 "tableName",
-                enabled::self_attribute(ctx, "azurerm_storage_table", label, "name"),
+                expr::traversal(["azurerm_storage_table", label, "name"]),
             ),
         ])))
     }

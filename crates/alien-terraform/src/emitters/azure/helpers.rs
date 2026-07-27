@@ -460,7 +460,10 @@ fn emit_setup_execution_role_definitions(
             role_definition.name, profile_name
         );
 
-        fragment.resource_blocks.push(role_definition_block(
+        // Shared: role definitions are appended into whichever fragment the
+        // generator hands over first, so a gated first resource must not pull
+        // stack-wide role definitions behind its gate.
+        fragment.push_shared_resource(role_definition_block(
             &role_label,
             expr::template(role_definition.name.clone()),
             expr::raw(&format!(
@@ -488,7 +491,8 @@ fn emit_setup_management_role_definitions(
         role_definition.name =
             format!("${{local.resource_prefix}}-{} [mgmt]", role_definition.name);
 
-        fragment.resource_blocks.push(role_definition_block(
+        // Shared for the same reason as the execution role definitions above.
+        fragment.push_shared_resource(role_definition_block(
             &role_label,
             expr::template(role_definition.name.clone()),
             expr::raw(&format!(

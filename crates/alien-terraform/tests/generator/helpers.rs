@@ -5,9 +5,7 @@
 //! `=== <path> ===` separators. Snapshots stay reviewable as a unit, the
 //! way a security team would actually read the module.
 
-use alien_core::{
-    Stack, StackInputDefinition, StackSettings,
-};
+use alien_core::{Stack, StackInputDefinition, StackSettings};
 use alien_terraform::{
     generate_terraform_module, ModuleFiles, TerraformOptions, TerraformTarget, TfRegistry,
 };

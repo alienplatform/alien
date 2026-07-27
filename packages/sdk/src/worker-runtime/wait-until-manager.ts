@@ -16,6 +16,7 @@ import type { WaitUntilServiceClient as GeneratedClient } from "./generated/wait
 import { wrapGrpcCall } from "./grpc-utils.js"
 import { setOnTaskRegistered } from "./registry.js"
 import type { getWaitUntilServiceDefinition } from "./service-definitions.js"
+import { logSystemError } from "./system-log.js"
 
 /**
  * WaitUntil manager for coordinating background tasks with the runtime.
@@ -42,7 +43,7 @@ export class WaitUntilManager {
   install(): void {
     setOnTaskRegistered(() => {
       this.notifyTaskRegistered().catch(error => {
-        console.error("[alien:wait-until] notifyTaskRegistered failed:", error)
+        logSystemError("[alien:wait-until] notifyTaskRegistered failed:", error)
       })
     })
   }

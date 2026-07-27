@@ -20,6 +20,7 @@ mod generator {
     pub mod enabled_queue_tests;
     pub mod enabled_storage_tests;
     pub mod enabled_tests;
+    pub mod gating_matrix_tests;
     pub mod gcp_compute_tests;
     pub mod gcp_data_layer_tests;
     pub mod gcp_full_stack_tests;

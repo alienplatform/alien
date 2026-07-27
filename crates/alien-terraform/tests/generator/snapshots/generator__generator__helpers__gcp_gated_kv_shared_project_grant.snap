@@ -140,13 +140,13 @@ variable "gcp_custom_role_prefix" {
 
 variable "input_first_enabled" {
   type        = bool
-  description = "Enable first Whether to create the first store."
+  description = "Enable first. Whether to create the first store."
   default     = true
 }
 
 variable "input_second_enabled" {
   type        = bool
-  description = "Enable second Whether to create the second store."
+  description = "Enable second. Whether to create the second store."
   default     = true
 }
 
@@ -310,6 +310,11 @@ output "deployment_resources" {
   description = "Deployment registration resource metadata JSON."
 }
 
+output "deployment_input_values" {
+  value       = jsonencode({ firstEnabled = var.input_first_enabled, secondEnabled = var.input_second_enabled })
+  description = "Deployer input values JSON for registration flows managed outside Terraform."
+}
+
 === README.md ===
 # Deployment setup - gated-stack
 
@@ -362,11 +367,12 @@ terraform apply tfplan
 
 ## Registration
 
-This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
 
 ## Outputs
 
 - `deployment_management_config`: management endpoint and credential-boundary metadata.
 - `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.

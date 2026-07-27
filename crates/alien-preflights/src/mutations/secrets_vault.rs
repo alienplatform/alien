@@ -27,10 +27,10 @@ pub struct SecretsVaultMutation;
 
 /// Resource id this mutation reserves for the deployment secrets vault.
 ///
-/// `ResourceEnabledValidCheck` reads it to reject `.enabled()` on this vault:
-/// the links below are attached after every compile-time check has run, so no
-/// check can see that gating it would strand its dependents.
-pub const SECRETS_VAULT_ID: &str = "secrets";
+/// Owned by `alien_core::gateability` so the gating rules the generators
+/// enforce agree with this mutation on one constant; re-exported here for the
+/// preflight callers that always read it from this module.
+pub use alien_core::SECRETS_VAULT_ID;
 
 #[async_trait]
 impl StackMutation for SecretsVaultMutation {

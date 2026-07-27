@@ -1,10 +1,10 @@
 //! GCP identity & network — service-account / management /
 //! network (Create + ByoVpcGcp + UseDefault).
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, ServiceAccount, Stack, StackSettings,
+    ResourceLifecycle, ServiceAccount, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -155,4 +155,70 @@ fn gcp_network_byo_vpc_emits_data_lookups() {
     let module = render(&stack, TerraformTarget::Gcp, settings);
     snapshot_module("gcp_network_byo_vpc", &module);
     assert_terraform_valid(&module, "gcp_network_byo_vpc");
+}
+
+/// GCP's counterpart to the AWS and Azure management-grant gating: prove
+/// there is nothing to gate. Resource-scoped management grants are emitted
+/// only for a Kubernetes cluster, a type the gateability policy refuses, so a
+/// gated worker can contribute no management grant at all — and the grants it
+/// does get, through its permission profile, already carry its gate.
+#[test]
+fn gcp_emits_no_ungated_management_grant_for_a_gated_worker() {
+    let stack = Stack::new("acme-mgmt-gcp".to_string())
+        .inputs(vec![gate_input(
+            "jobsEnabled",
+            "Enable jobs",
+            "Whether to run the jobs worker.",
+        )])
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("jobs", ["worker/dispatch-command"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Worker::new("jobs".to_string())
+                .code(WorkerCode::Image {
+                    image: "registry.example.com/app/jobs:1.2.3".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+            "jobsEnabled",
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Every block naming the gated worker must carry its gate. A management
+    // grant would name it by resource prefix, which no address-based scan can
+    // see — this is the check that would have caught the AWS gap.
+    let mut blocks_naming_the_worker = 0usize;
+    for block in rendered.split("resource \"").skip(1) {
+        if block.contains("-jobs") {
+            blocks_naming_the_worker += 1;
+            assert!(
+                block.contains("var.input_jobs_enabled"),
+                "a grant naming the gated worker must follow its gate:\n{block}"
+            );
+        }
+    }
+    // Today that loop finds nothing, and the reason is the finding: GCP's
+    // resource-scoped management path handles only Kubernetes clusters, so a
+    // Live worker contributes no management grant to name. AWS emits one and
+    // needed gating; GCP has none to gate. If that ever changes, the loop
+    // above turns from vacuous into the guard that catches it ungated.
+    assert_eq!(
+        blocks_naming_the_worker, 0,
+        "GCP emitted a setup block naming a Live gated worker — it now needs the \
+         same gating AWS has:\n{rendered}"
+    );
+
+    assert_terraform_valid(&module, "gcp_gated_worker_management_grants");
 }

@@ -1,5 +1,5 @@
 import { type Email as EmailConfig, EmailSchema, type ResourceType } from "./generated/index.js"
-import { Resource } from "./resource.js"
+import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
   EmailOutputs,
@@ -33,7 +33,7 @@ export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
  * region, so an AWS stack may contain only one Email with inbound delivery,
  * and installing it makes its rule set the account's active rule set.
  */
-export class Email {
+export class Email extends ResourceBuilder {
   private _config: Partial<EmailConfig> = {
     domains: [],
   }
@@ -43,6 +43,7 @@ export class Email {
    * @param id Identifier for the email resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
   constructor(id: string) {
+    super()
     this._config.id = id
   }
 
@@ -106,7 +107,7 @@ export class Email {
    */
   public build(): Resource {
     const config = EmailSchema.parse(this._config)
-    return new Resource({
+    return this.resource({
       type: "email",
       ...config,
     })
