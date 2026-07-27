@@ -204,13 +204,29 @@ struct ReleaseConfig {
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
-    stack: Stack,
+    onboarding_inputs: Vec<StackInputDefinition>,
 }
 
 #[derive(Clone)]
 struct AutoBuildPlan {
     platform: String,
     settings: alien_build::settings::BuildSettings,
+}
+
+async fn load_source_stack_for_release(
+    prebuilt: bool,
+    current_dir: &Path,
+) -> Result<Option<Stack>> {
+    if prebuilt {
+        return Ok(None);
+    }
+
+    crate::config::load_configuration(current_dir.to_path_buf())
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to load configuration".to_string(),
+        })
+        .map(Some)
 }
 
 /// Load and validate all release configuration from args + execution context.
@@ -233,12 +249,7 @@ async fn load_release_config(
 
     let is_dev = ctx.is_dev();
 
-    // Load stack config (needed for supported_platforms validation and auto-build)
-    let stack = crate::config::load_configuration(current_dir.clone())
-        .await
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to load configuration".to_string(),
-        })?;
+    let source_stack = load_source_stack_for_release(args.prebuilt, &current_dir).await?;
 
     // Determine target platforms:
     // 1. Explicit --platforms flag takes priority (validated against stack.supported_platforms)
@@ -246,13 +257,28 @@ async fn load_release_config(
     // 3. stack.supported_platforms if declared
     // 4. Otherwise, discover from build artifacts
     let target_platforms = if let Some(ref platforms) = args.platforms {
-        // Validate against stack's supported platforms
-        validate_platforms_against_stack(platforms, &stack)?;
+        if let Some(stack) = source_stack.as_ref() {
+            validate_platforms_against_stack(platforms, stack)?;
+        }
         platforms.clone()
+    } else if source_stack.is_none() {
+        let discovered = discover_built_platforms(&output_dir)?;
+        if discovered.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platforms".to_string(),
+                message:
+                    "No built platforms found in .alien directory. Please run `alien build` first."
+                        .to_string(),
+            }));
+        }
+        discovered
     } else if is_dev {
         // Dev mode defaults to local platform
         vec!["local".to_string()]
-    } else if let Some(supported) = stack.supported_platforms() {
+    } else if let Some(supported) = source_stack
+        .as_ref()
+        .and_then(|stack| stack.supported_platforms())
+    {
         // Use declared supported platforms from alien.ts
         supported.iter().map(|p| p.as_str().to_string()).collect()
     } else {
@@ -275,10 +301,10 @@ async fn load_release_config(
 
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
-    if !args.prebuilt {
+    if let Some(stack) = source_stack.as_ref() {
         auto_build_for_platforms(
             &target_platforms,
-            &stack,
+            stack,
             &output_dir,
             show_human_output,
             args.override_base_image.clone(),
@@ -291,9 +317,14 @@ async fn load_release_config(
     // Re-discover platforms after potential auto-build
     let platforms = if let Some(ref platforms) = args.platforms {
         platforms.clone()
+    } else if source_stack.is_none() {
+        target_platforms.clone()
     } else if is_dev {
         target_platforms.clone()
-    } else if stack.supported_platforms().is_some() {
+    } else if source_stack
+        .as_ref()
+        .is_some_and(|stack| stack.supported_platforms().is_some())
+    {
         // Stack declares its platforms — use them directly (already validated above)
         target_platforms.clone()
     } else {
@@ -307,6 +338,23 @@ async fn load_release_config(
             }));
         }
         discovered
+    };
+
+    let onboarding_inputs = if let Some(stack) = source_stack.as_ref() {
+        stack.inputs.clone()
+    } else {
+        let mut inputs = Vec::new();
+        for platform in &platforms {
+            for input in load_built_stack(&output_dir, platform)?.inputs {
+                if !inputs
+                    .iter()
+                    .any(|existing: &StackInputDefinition| existing.id == input.id)
+                {
+                    inputs.push(input);
+                }
+            }
+        }
+        inputs
     };
 
     // Resolve manager for standalone/dev mode (needed for release creation).
@@ -344,7 +392,7 @@ async fn load_release_config(
         project_link,
         git_metadata,
         platforms,
-        stack,
+        onboarding_inputs,
     })
 }
 
@@ -393,7 +441,6 @@ async fn release_task_core(
         project_link,
         git_metadata,
         platforms: platforms_to_release,
-        stack: _stack,
         ..
     } = config;
     // Process each platform: load stack, push images, collect pushed stacks
@@ -1317,8 +1364,7 @@ fn onboard_command_hint(config: &ReleaseConfig) -> String {
     }
 
     let required_inputs = config
-        .stack
-        .inputs
+        .onboarding_inputs
         .iter()
         .filter(|input| input.required)
         .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
@@ -1783,6 +1829,18 @@ fn collect_push_cache_entries(
 mod tests {
     use super::*;
     use alien_core::ResourceLifecycle;
+
+    #[tokio::test]
+    async fn prebuilt_release_does_not_load_source_configuration() {
+        let temporary_dir = tempfile::tempdir().unwrap();
+        let missing_project = temporary_dir.path().join("missing");
+
+        let stack = load_source_stack_for_release(true, &missing_project)
+            .await
+            .expect("prebuilt releases should not inspect the source project");
+
+        assert!(stack.is_none());
+    }
 
     fn daemon_with_image(image: &str) -> Daemon {
         Daemon::new("operator".to_string())
