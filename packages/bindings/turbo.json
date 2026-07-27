@@ -1,0 +1,11 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build:addon": {
+      "cache": false
+    },
+    "test": {
+      "dependsOn": ["$TURBO_EXTENDS$", "build:addon"]
+    }
+  }
+}
