@@ -204,7 +204,7 @@ struct ReleaseConfig {
     project_link: crate::project_link::ProjectLink,
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
-    source_stack: Option<Stack>,
+    onboarding_inputs: Vec<StackInputDefinition>,
 }
 
 #[derive(Clone)]
@@ -261,6 +261,17 @@ async fn load_release_config(
             validate_platforms_against_stack(platforms, stack)?;
         }
         platforms.clone()
+    } else if source_stack.is_none() {
+        let discovered = discover_built_platforms(&output_dir)?;
+        if discovered.is_empty() {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platforms".to_string(),
+                message:
+                    "No built platforms found in .alien directory. Please run `alien build` first."
+                        .to_string(),
+            }));
+        }
+        discovered
     } else if is_dev {
         // Dev mode defaults to local platform
         vec!["local".to_string()]
@@ -306,6 +317,8 @@ async fn load_release_config(
     // Re-discover platforms after potential auto-build
     let platforms = if let Some(ref platforms) = args.platforms {
         platforms.clone()
+    } else if source_stack.is_none() {
+        target_platforms.clone()
     } else if is_dev {
         target_platforms.clone()
     } else if source_stack
@@ -325,6 +338,23 @@ async fn load_release_config(
             }));
         }
         discovered
+    };
+
+    let onboarding_inputs = if let Some(stack) = source_stack.as_ref() {
+        stack.inputs.clone()
+    } else {
+        let mut inputs = Vec::new();
+        for platform in &platforms {
+            for input in load_built_stack(&output_dir, platform)?.inputs {
+                if !inputs
+                    .iter()
+                    .any(|existing: &StackInputDefinition| existing.id == input.id)
+                {
+                    inputs.push(input);
+                }
+            }
+        }
+        inputs
     };
 
     // Resolve manager for standalone/dev mode (needed for release creation).
@@ -362,7 +392,7 @@ async fn load_release_config(
         project_link,
         git_metadata,
         platforms,
-        source_stack,
+        onboarding_inputs,
     })
 }
 
@@ -1333,15 +1363,13 @@ fn onboard_command_hint(config: &ReleaseConfig) -> String {
         command_parts.push(format!("--platforms {}", config.platforms.join(",")));
     }
 
-    let required_inputs = config.source_stack.as_ref().map_or_else(Vec::new, |stack| {
-        stack
-            .inputs
-            .iter()
-            .filter(|input| input.required)
-            .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
-            .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
-            .collect::<Vec<_>>()
-    });
+    let required_inputs = config
+        .onboarding_inputs
+        .iter()
+        .filter(|input| input.required)
+        .filter(|input| input.provided_by.contains(&StackInputProvider::Developer))
+        .filter(|input| input_applies_to_any_platform(input, &selected_platforms))
+        .collect::<Vec<_>>();
 
     for input in required_inputs.iter().take(3) {
         command_parts.push(format!(
