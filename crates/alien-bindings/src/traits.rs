@@ -436,6 +436,106 @@ impl SslMode {
     }
 }
 
+/// Invalid PEM roots supplied to a verified Postgres TLS policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidPostgresCaCertificates;
+
+impl std::fmt::Display for InvalidPostgresCaCertificates {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("expected one or more non-empty PEM certificates")
+    }
+}
+
+impl std::error::Error for InvalidPostgresCaCertificates {}
+
+/// A complete Postgres TLS policy.
+///
+/// The fields are private so callers cannot pair plaintext with CA roots or construct
+/// `verify-ca` without a root. Cloning the policy is cheap: certificate bundles are
+/// reference-counted and copied only when crossing an FFI boundary.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PostgresTlsPolicy {
+    sslmode: SslMode,
+    ca_certificates: Arc<[String]>,
+}
+
+impl std::fmt::Debug for PostgresTlsPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresTlsPolicy")
+            .field("sslmode", &self.sslmode)
+            .field("ca_certificate_count", &self.ca_certificates.len())
+            .finish()
+    }
+}
+
+impl PostgresTlsPolicy {
+    /// Plain TCP with no certificate roots.
+    pub fn disabled() -> Self {
+        Self {
+            sslmode: SslMode::Disable,
+            ca_certificates: Arc::default(),
+        }
+    }
+
+    /// TLS with CA verification but no hostname verification.
+    ///
+    /// This mode requires at least one valid PEM root.
+    pub fn verify_ca(
+        ca_certificates: Vec<String>,
+    ) -> std::result::Result<Self, InvalidPostgresCaCertificates> {
+        Self::verified(SslMode::VerifyCa, ca_certificates, true)
+    }
+
+    /// TLS with CA and hostname verification.
+    ///
+    /// An empty root set intentionally selects the runtime's system trust store.
+    pub fn verify_full(
+        ca_certificates: Vec<String>,
+    ) -> std::result::Result<Self, InvalidPostgresCaCertificates> {
+        Self::verified(SslMode::VerifyFull, ca_certificates, false)
+    }
+
+    /// TLS with CA and hostname verification using the runtime's system trust store.
+    pub fn verify_full_with_system_roots() -> Self {
+        Self {
+            sslmode: SslMode::VerifyFull,
+            ca_certificates: Arc::default(),
+        }
+    }
+
+    fn verified(
+        sslmode: SslMode,
+        ca_certificates: Vec<String>,
+        require_roots: bool,
+    ) -> std::result::Result<Self, InvalidPostgresCaCertificates> {
+        if (require_roots && ca_certificates.is_empty())
+            || ca_certificates.iter().any(|certificate| {
+                let certificate = certificate.trim();
+                !certificate.starts_with("-----BEGIN CERTIFICATE-----")
+                    || !certificate.ends_with("-----END CERTIFICATE-----")
+            })
+        {
+            return Err(InvalidPostgresCaCertificates);
+        }
+
+        Ok(Self {
+            sslmode,
+            ca_certificates: ca_certificates.into(),
+        })
+    }
+
+    /// The libpq-compatible `sslmode` represented by this complete policy.
+    pub fn sslmode(&self) -> SslMode {
+        self.sslmode
+    }
+
+    /// PEM-encoded roots, or an empty slice when this policy uses no roots or the
+    /// runtime's system trust store.
+    pub fn ca_certificates(&self) -> &[String] {
+        &self.ca_certificates
+    }
+}
+
 /// Resolved connection details for a Postgres database.
 #[derive(Clone)]
 pub struct PostgresConnectionParams {
@@ -444,10 +544,7 @@ pub struct PostgresConnectionParams {
     pub database: String,
     pub username: String,
     pub password: String,
-    pub sslmode: SslMode,
-    /// PEM-encoded root CA certificates. Empty for plaintext or when BYO `verify-full`
-    /// uses the runtime's system trust store.
-    pub ca_certificates: Vec<String>,
+    pub tls: PostgresTlsPolicy,
 }
 
 // Hand-written Debug so the resolved password never reaches logs, error chains, or panic output
@@ -460,13 +557,42 @@ impl std::fmt::Debug for PostgresConnectionParams {
             .field("database", &self.database)
             .field("username", &self.username)
             .field("password", &"<redacted>")
-            .field("sslmode", &self.sslmode)
-            .field("ca_certificate_count", &self.ca_certificates.len())
+            .field("tls", &self.tls)
             .finish()
     }
 }
 
 impl PostgresConnectionParams {
+    /// Creates resolved connection details from a complete, internally consistent TLS
+    /// policy.
+    pub fn new(
+        host: String,
+        port: u16,
+        database: String,
+        username: String,
+        password: String,
+        tls: PostgresTlsPolicy,
+    ) -> Self {
+        Self {
+            host,
+            port,
+            database,
+            username,
+            password,
+            tls,
+        }
+    }
+
+    /// The libpq-compatible TLS mode used by this connection.
+    pub fn sslmode(&self) -> SslMode {
+        self.tls.sslmode()
+    }
+
+    /// PEM-encoded root CA certificates.
+    pub fn ca_certificates(&self) -> &[String] {
+        self.tls.ca_certificates()
+    }
+
     /// Builds a `postgres://` URL. Username and password are percent-encoded so a
     /// generated password containing URL-special characters can never corrupt it.
     pub fn connection_string(&self) -> String {
@@ -479,7 +605,7 @@ impl PostgresConnectionParams {
             // Encode the database path segment so this URL stays byte-identical to the TS
             // resolver's `encodeUserinfo` (the same RFC 3986 unreserved-set encoding).
             encode_userinfo(&self.database),
-            self.sslmode.as_str(),
+            self.sslmode().as_str(),
         )
     }
 }
@@ -503,7 +629,7 @@ fn encode_userinfo(value: &str) -> String {
 /// speaks the same wire protocol, so the binding returns connection details and the
 /// application uses its own driver.
 pub trait Postgres: Binding {
-    fn connection_params(&self) -> PostgresConnectionParams;
+    fn connection_params(&self) -> &PostgresConnectionParams;
 
     /// `postgres://` connection string, derived from `connection_params` and never stored.
     fn connection_string(&self) -> String {

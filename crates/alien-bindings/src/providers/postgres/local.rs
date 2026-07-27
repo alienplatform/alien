@@ -1,21 +1,16 @@
 use crate::error::{ErrorData, Result};
-use crate::providers::postgres::resolve_params;
-use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
+use crate::providers::postgres::{resolve_params, PostgresConnectionInput, ResolvedPostgres};
+use crate::traits::PostgresTlsPolicy;
 use alien_core::bindings::{ExternalPostgresSslMode, PostgresBinding};
 use alien_error::AlienError;
 
-/// A resolved Postgres binding. Holds connection details only — it never opens or
-/// owns a server process.
-#[derive(Debug)]
-pub struct LocalPostgres {
-    params: PostgresConnectionParams,
-}
+/// Backwards-compatible name for a resolved inline-password Postgres binding.
+///
+/// All Postgres backends now use the same resolved handle internally, but local
+/// platform consumers historically constructed this public type directly.
+pub type LocalPostgres = ResolvedPostgres;
 
-impl LocalPostgres {
-    pub fn new(params: PostgresConnectionParams) -> Self {
-        Self { params }
-    }
-
+impl ResolvedPostgres {
     /// Resolves connection parameters from a binding that carries its password inline:
     /// the Local (developer) and External (BYO / Kubernetes) variants.
     ///
@@ -26,30 +21,34 @@ impl LocalPostgres {
         let params = match binding {
             PostgresBinding::Local(b) => resolve_params(
                 binding_name,
-                &b.host,
-                &b.port,
-                &b.database,
-                &b.username,
-                // Inline password is already a concrete `String` (the type forbids an
-                // unresolved ref).
-                &b.password,
-                SslMode::Disable,
-                Vec::new(),
+                PostgresConnectionInput {
+                    host: &b.host,
+                    port: &b.port,
+                    database: &b.database,
+                    username: &b.username,
+                    // Inline password is already a concrete `String` (the type forbids an
+                    // unresolved ref).
+                    password: &b.password,
+                    tls: PostgresTlsPolicy::disabled(),
+                },
             )?,
             PostgresBinding::External(b) => {
-                let sslmode = match b.ssl_mode {
-                    ExternalPostgresSslMode::VerifyFull => SslMode::VerifyFull,
-                    ExternalPostgresSslMode::Disable => SslMode::Disable,
+                let tls = match b.ssl_mode {
+                    ExternalPostgresSslMode::VerifyFull => {
+                        PostgresTlsPolicy::verify_full_with_system_roots()
+                    }
+                    ExternalPostgresSslMode::Disable => PostgresTlsPolicy::disabled(),
                 };
                 resolve_params(
                     binding_name,
-                    &b.host,
-                    &b.port,
-                    &b.database,
-                    &b.username,
-                    &b.password,
-                    sslmode,
-                    Vec::new(),
+                    PostgresConnectionInput {
+                        host: &b.host,
+                        port: &b.port,
+                        database: &b.database,
+                        username: &b.username,
+                        password: &b.password,
+                        tls,
+                    },
                 )?
             }
             // Listed explicitly rather than via a catch-all so a future `PostgresBinding`
@@ -70,27 +69,20 @@ impl LocalPostgres {
     }
 }
 
-impl Binding for LocalPostgres {}
-
-impl Postgres for LocalPostgres {
-    fn connection_params(&self) -> PostgresConnectionParams {
-        self.params.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::{Postgres, SslMode};
     use alien_core::bindings::BindingValue;
 
     #[test]
     fn local_binding_resolves_to_disable_sslmode_connection_string() {
         let binding = PostgresBinding::local("127.0.0.1", 6543, "db", "alien", "p@ss/word");
-        let pg = LocalPostgres::from_binding("db", &binding).expect("local binding resolves");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("local binding resolves");
         let params = pg.connection_params();
         assert_eq!(params.host, "127.0.0.1");
         assert_eq!(params.port, 6543);
-        assert_eq!(params.sslmode, SslMode::Disable);
+        assert_eq!(params.sslmode(), SslMode::Disable);
         // password is percent-encoded; sslmode=disable for Local (plain TCP).
         assert_eq!(
             pg.connection_string(),
@@ -101,9 +93,9 @@ mod tests {
     #[test]
     fn external_binding_defaults_to_verify_full_sslmode() {
         let binding = PostgresBinding::external("db.internal", 5432, "app", "alien", "p@ss/word");
-        let pg = LocalPostgres::from_binding("db", &binding).expect("external binding resolves");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("external binding resolves");
 
-        assert_eq!(pg.connection_params().sslmode, SslMode::VerifyFull);
+        assert_eq!(pg.connection_params().sslmode(), SslMode::VerifyFull);
         assert_eq!(
             pg.connection_string(),
             "postgres://alien:p%40ss%2Fword@db.internal:5432/app?sslmode=verify-full"
@@ -122,9 +114,9 @@ mod tests {
             "sslMode": "disable",
         }))
         .expect("external plaintext binding deserializes");
-        let pg = LocalPostgres::from_binding("db", &binding).expect("external binding resolves");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("external binding resolves");
 
-        assert_eq!(pg.connection_params().sslmode, SslMode::Disable);
+        assert_eq!(pg.connection_params().sslmode(), SslMode::Disable);
         assert_eq!(
             pg.connection_string(),
             "postgres://alien:secret@db.internal:5432/app?sslmode=disable"
@@ -139,7 +131,7 @@ mod tests {
     #[test]
     fn connection_string_percent_encodes_rfc3986_sub_delims() {
         let binding = PostgresBinding::local("h", 5432, "db", "alien", "a!b*c'd(e)f");
-        let pg = LocalPostgres::from_binding("db", &binding).expect("local binding resolves");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("local binding resolves");
         assert_eq!(
             pg.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f@h:5432/db?sslmode=disable"
@@ -158,7 +150,7 @@ mod tests {
             password_secret_arn: "arn:aws:secretsmanager:...".into(),
         });
 
-        let error = LocalPostgres::from_binding("db", &binding)
+        let error = ResolvedPostgres::from_binding("db", &binding)
             .expect_err("cloud bindings must not resolve without their secret");
 
         assert_eq!(error.code, "BINDING_CONFIG_INVALID");

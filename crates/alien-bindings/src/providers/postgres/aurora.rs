@@ -9,9 +9,9 @@
 
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{
-    cloud::resolve_secret_locator, resolve_params, AWS_RDS_CA_CERTIFICATES,
+    aws_rds_tls_policy, cloud::resolve_secret_locator, resolve_params, PostgresConnectionInput,
 };
-use crate::traits::{PostgresConnectionParams, SslMode};
+use crate::traits::PostgresConnectionParams;
 use alien_aws_clients::secrets_manager::{GetSecretValueRequest, SecretsManagerApi};
 use alien_core::bindings::AuroraPostgresBinding;
 use alien_error::{AlienError, Context};
@@ -39,16 +39,14 @@ pub(crate) async fn resolve(
 
     resolve_params(
         binding_name,
-        &binding.cluster_endpoint,
-        &binding.port,
-        &binding.database,
-        &binding.username,
-        &password,
-        SslMode::VerifyFull,
-        AWS_RDS_CA_CERTIFICATES
-            .iter()
-            .map(|certificate| (*certificate).to_string())
-            .collect(),
+        PostgresConnectionInput {
+            host: &binding.cluster_endpoint,
+            port: &binding.port,
+            database: &binding.database,
+            username: &binding.username,
+            password: &password,
+            tls: aws_rds_tls_policy(),
+        },
     )
 }
 
@@ -58,7 +56,12 @@ async fn read_password(
     secret_arn: &str,
     secrets: &dyn SecretsManagerApi,
 ) -> Result<String> {
-    let failed = |reason: &str| ErrorData::PostgresSecretResolutionFailed {
+    let read_failed = |reason: &str| ErrorData::PostgresSecretResolutionFailed {
+        binding_name: binding_name.to_string(),
+        secret: secret_arn.to_string(),
+        reason: reason.to_string(),
+    };
+    let invalid_value = |reason: &str| ErrorData::PostgresSecretValueInvalid {
         binding_name: binding_name.to_string(),
         secret: secret_arn.to_string(),
         reason: reason.to_string(),
@@ -71,20 +74,19 @@ async fn read_password(
                 .build(),
         )
         .await
-        .context(failed("Secrets Manager GetSecretValue failed"))?;
+        .context(read_failed("Secrets Manager GetSecretValue failed"))?;
 
-    // An absent or empty `SecretString` is a control-plane invariant the workload cannot
-    // fix locally, so it reports the same (retryable) resolution failure as a failed read
-    // rather than connecting with an empty password.
+    // Retrying the same secret version cannot turn a missing value into a password.
     response
         .secret_string
         .filter(|password| !password.is_empty())
-        .ok_or_else(|| AlienError::new(failed("secret has no SecretString value")))
+        .ok_or_else(|| AlienError::new(invalid_value("SecretString is missing or empty")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::SslMode;
     use alien_aws_clients::secrets_manager::{GetSecretValueResponse, MockSecretsManagerApi};
     use alien_core::bindings::BindingValue;
 
@@ -141,10 +143,10 @@ mod tests {
         assert_eq!(params.database, "app");
         assert_eq!(params.username, "alien");
         assert_eq!(params.password, "a!b*c'd(e)f@/");
-        assert_eq!(params.sslmode, SslMode::VerifyFull);
-        assert_eq!(params.ca_certificates.len(), 1);
+        assert_eq!(params.sslmode(), SslMode::VerifyFull);
+        assert_eq!(params.ca_certificates().len(), 1);
         assert_eq!(
-            params.ca_certificates[0]
+            params.ca_certificates()[0]
                 .matches("-----BEGIN CERTIFICATE-----")
                 .count(),
             108,
@@ -182,6 +184,27 @@ mod tests {
         );
     }
 
+    /// Permanent and internal provider metadata must survive the domain wrapper.
+    #[tokio::test]
+    async fn permanent_secret_read_preserves_source_metadata() {
+        let mut secrets = MockSecretsManagerApi::new();
+        secrets.expect_get_secret_value().times(1).returning(|_| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::SerializationError {
+                    message: "Secrets Manager returned malformed JSON".to_string(),
+                },
+            ))
+        });
+
+        let error = resolve("db", &binding(), Arc::new(secrets))
+            .await
+            .expect_err("a malformed provider response must not resolve a connection");
+
+        assert_eq!(error.code, "POSTGRES_SECRET_RESOLUTION_FAILED");
+        assert!(!error.retryable, "the provider error is permanent");
+        assert!(error.internal, "the provider error is internal");
+    }
+
     /// An empty stored secret must fail rather than silently connect with no password.
     #[tokio::test]
     async fn empty_secret_string_fails_resolution() {
@@ -196,8 +219,9 @@ mod tests {
                 .await
                 .expect_err("an empty secret must not resolve a connection");
 
-            assert_eq!(error.code, "POSTGRES_SECRET_RESOLUTION_FAILED");
-            assert!(error.retryable);
+            assert_eq!(error.code, "POSTGRES_SECRET_VALUE_INVALID");
+            assert!(!error.retryable);
+            assert!(!error.internal);
         }
     }
 

@@ -54,8 +54,8 @@ fn connection_to_js(params: &PostgresConnectionParams) -> PostgresConnectionJs {
         database: params.database.clone(),
         username: params.username.clone(),
         password: params.password.clone(),
-        sslmode: params.sslmode.as_str().to_string(),
-        ca_certificates: params.ca_certificates.clone(),
+        sslmode: params.sslmode().as_str().to_string(),
+        ca_certificates: params.ca_certificates().to_vec(),
     }
 }
 
@@ -64,30 +64,30 @@ impl PostgresHandle {
     /// Return the resolved connection details.
     #[napi]
     pub fn connection(&self) -> PostgresConnectionJs {
-        connection_to_js(&self.inner.connection_params())
+        connection_to_js(self.inner.connection_params())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_bindings::SslMode;
+    use alien_bindings::PostgresTlsPolicy;
 
     /// The JS shape must carry every field verbatim, with the connection string derived
     /// from the same params (not stored separately) and `sslmode` as its wire string.
     #[test]
     fn connection_to_js_maps_every_field() {
-        let params = PostgresConnectionParams {
-            host: "cluster.rds.amazonaws.com".to_string(),
-            port: 5432,
-            database: "app".to_string(),
-            username: "alien".to_string(),
-            password: "p@ss/word".to_string(),
-            sslmode: SslMode::VerifyFull,
-            ca_certificates: vec![
+        let params = PostgresConnectionParams::new(
+            "cluster.rds.amazonaws.com".to_string(),
+            5432,
+            "app".to_string(),
+            "alien".to_string(),
+            "p@ss/word".to_string(),
+            PostgresTlsPolicy::verify_full(vec![
                 "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string(),
-            ],
-        };
+            ])
+            .unwrap(),
+        );
 
         let js = connection_to_js(&params);
 
@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(js.username, "alien");
         assert_eq!(js.password, "p@ss/word");
         assert_eq!(js.sslmode, "verify-full");
-        assert_eq!(js.ca_certificates, params.ca_certificates);
+        assert_eq!(js.ca_certificates, params.ca_certificates());
         assert_eq!(
             js.connection_string,
             "postgres://alien:p%40ss%2Fword@cluster.rds.amazonaws.com:5432/app?sslmode=verify-full"
@@ -108,25 +108,28 @@ mod tests {
     /// uses, so the TS layer can map it to a driver TLS setting without guessing.
     #[test]
     fn connection_to_js_reports_each_sslmode_as_its_wire_string() {
-        for (mode, expected) in [
-            (SslMode::Disable, "disable"),
-            (SslMode::VerifyCa, "verify-ca"),
-            (SslMode::VerifyFull, "verify-full"),
+        for (tls, expected) in [
+            (PostgresTlsPolicy::disabled(), "disable"),
+            (
+                PostgresTlsPolicy::verify_ca(vec![
+                    "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string(),
+                ])
+                .unwrap(),
+                "verify-ca",
+            ),
+            (
+                PostgresTlsPolicy::verify_full_with_system_roots(),
+                "verify-full",
+            ),
         ] {
-            let params = PostgresConnectionParams {
-                host: "h".to_string(),
-                port: 5432,
-                database: "db".to_string(),
-                username: "u".to_string(),
-                password: "p".to_string(),
-                sslmode: mode,
-                ca_certificates: match mode {
-                    SslMode::VerifyCa | SslMode::VerifyFull => vec![
-                        "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string(),
-                    ],
-                    SslMode::Disable => Vec::new(),
-                },
-            };
+            let params = PostgresConnectionParams::new(
+                "h".to_string(),
+                5432,
+                "db".to_string(),
+                "u".to_string(),
+                "p".to_string(),
+                tls,
+            );
 
             assert_eq!(connection_to_js(&params).sslmode, expected);
         }

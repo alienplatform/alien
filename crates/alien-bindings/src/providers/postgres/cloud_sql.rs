@@ -7,11 +7,12 @@
 
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{
-    cloud::resolve_secret_locator, resolve_ca_certificates, resolve_params,
+    cloud::resolve_secret_locator, resolve_params, resolve_verify_ca_policy,
+    PostgresConnectionInput,
 };
-use crate::traits::{PostgresConnectionParams, SslMode};
+use crate::traits::PostgresConnectionParams;
 use alien_core::bindings::CloudSqlPostgresBinding;
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::secret_manager::SecretManagerApi;
 use base64::{engine::general_purpose::STANDARD as base64_standard, Engine as _};
 use std::sync::Arc;
@@ -30,7 +31,7 @@ pub(crate) async fn resolve(
     binding: &CloudSqlPostgresBinding,
     secrets: Arc<dyn SecretManagerApi>,
 ) -> Result<PostgresConnectionParams> {
-    let ca_certificates = resolve_ca_certificates(binding_name, &binding.server_ca_certificates)?;
+    let tls = resolve_verify_ca_policy(binding_name, &binding.server_ca_certificates)?;
     let secret_name = resolve_secret_locator(
         binding_name,
         "passwordSecretName",
@@ -40,13 +41,14 @@ pub(crate) async fn resolve(
 
     resolve_params(
         binding_name,
-        &binding.host,
-        &binding.port,
-        &binding.database,
-        &binding.username,
-        &password,
-        SslMode::VerifyCa,
-        ca_certificates,
+        PostgresConnectionInput {
+            host: &binding.host,
+            port: &binding.port,
+            database: &binding.database,
+            username: &binding.username,
+            password: &password,
+            tls,
+        },
     )
 }
 
@@ -59,45 +61,49 @@ async fn read_password(
     secret_name: &str,
     secrets: &dyn SecretManagerApi,
 ) -> Result<String> {
-    let failed = |reason: String| ErrorData::PostgresSecretResolutionFailed {
+    let read_failed = |reason: &str| ErrorData::PostgresSecretResolutionFailed {
         binding_name: binding_name.to_string(),
         secret: secret_name.to_string(),
-        reason,
+        reason: reason.to_string(),
+    };
+    let invalid_value = |reason: &str| ErrorData::PostgresSecretValueInvalid {
+        binding_name: binding_name.to_string(),
+        secret: secret_name.to_string(),
+        reason: reason.to_string(),
     };
 
     let response = secrets
         .access_secret_version(format!("{secret_name}/versions/latest"))
         .await
-        .context(failed(
-            "Secret Manager accessSecretVersion failed".to_string(),
-        ))?;
+        .context(read_failed("Secret Manager accessSecretVersion failed"))?;
 
-    // Secret Manager returns the payload base64-encoded. An absent, empty, or
-    // undecodable payload is a control-plane invariant the workload cannot fix locally,
-    // so it reports the same (retryable) resolution failure as a failed read rather than
-    // connecting with an empty password.
+    // Secret Manager returns the payload base64-encoded. Retrying the same version cannot
+    // turn a missing, empty, or malformed payload into a valid password.
     let encoded = response
         .payload
         .and_then(|payload| payload.data)
-        .ok_or_else(|| AlienError::new(failed("secret version has no payload".to_string())))?;
+        .ok_or_else(|| AlienError::new(invalid_value("secret version has no payload")))?;
 
-    let decoded = base64_standard.decode(&encoded).map_err(|error| {
-        AlienError::new(failed(format!("payload is not valid base64: {error}")))
-    })?;
+    let decoded = base64_standard
+        .decode(&encoded)
+        .into_alien_error()
+        .context(invalid_value("payload is not valid base64"))?;
 
     if decoded.is_empty() {
-        return Err(AlienError::new(failed(
-            "secret version payload is empty".to_string(),
+        return Err(AlienError::new(invalid_value(
+            "secret version payload is empty",
         )));
     }
 
     String::from_utf8(decoded)
-        .map_err(|error| AlienError::new(failed(format!("payload is not valid UTF-8: {error}"))))
+        .into_alien_error()
+        .context(invalid_value("payload is not valid UTF-8"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::SslMode;
     use alien_core::bindings::BindingValue;
     use alien_gcp_clients::secret_manager::{
         AccessSecretVersionResponse, MockSecretManagerApi, SecretPayload,
@@ -149,8 +155,8 @@ mod tests {
         assert_eq!(params.database, "app");
         assert_eq!(params.username, "alien");
         assert_eq!(params.password, "a!b*c'd(e)f@/");
-        assert_eq!(params.sslmode, SslMode::VerifyCa);
-        assert_eq!(params.ca_certificates, vec![SERVER_CA]);
+        assert_eq!(params.sslmode(), SslMode::VerifyCa);
+        assert_eq!(params.ca_certificates(), &[SERVER_CA]);
         assert_eq!(
             params.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@10.0.0.5:5432/app?sslmode=verify-ca"
@@ -224,8 +230,52 @@ mod tests {
                 .await
                 .expect_err("an empty payload must not resolve a connection");
 
-            assert_eq!(error.code, "POSTGRES_SECRET_RESOLUTION_FAILED");
-            assert!(error.retryable);
+            assert_eq!(error.code, "POSTGRES_SECRET_VALUE_INVALID");
+            assert!(!error.retryable);
+            assert!(!error.internal);
+        }
+    }
+
+    /// Decode failures are permanent but retain their third-party source error.
+    #[tokio::test]
+    async fn malformed_payload_is_non_retryable_and_preserves_source() {
+        let responses = [
+            (
+                "not valid base64".to_string(),
+                "payload is not valid base64",
+            ),
+            (base64_standard.encode([0xff]), "payload is not valid UTF-8"),
+        ];
+
+        for (encoded, expected_reason) in responses {
+            let mut secrets = MockSecretManagerApi::new();
+            secrets
+                .expect_access_secret_version()
+                .times(1)
+                .returning(move |_| {
+                    Ok(AccessSecretVersionResponse {
+                        name: Some(format!("projects/p/secrets/{SECRET_NAME}/versions/1")),
+                        payload: Some(SecretPayload {
+                            data: Some(encoded.clone()),
+                        }),
+                    })
+                });
+
+            let error = resolve("db", &binding(), Arc::new(secrets))
+                .await
+                .expect_err("a malformed payload must not resolve a connection");
+
+            assert_eq!(error.code, "POSTGRES_SECRET_VALUE_INVALID");
+            assert!(!error.retryable);
+            assert!(!error.internal);
+            assert!(
+                error.to_string().contains(expected_reason),
+                "error must identify the malformed payload: {error}"
+            );
+            assert!(
+                std::error::Error::source(&error).is_some(),
+                "the decode error must be retained as the source"
+            );
         }
     }
 

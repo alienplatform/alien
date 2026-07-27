@@ -6,14 +6,17 @@
 
 use crate::error::{ErrorData, Result};
 use crate::providers::postgres::{
-    cloud::resolve_secret_locator, resolve_params, AZURE_POSTGRES_CA_CERTIFICATES,
+    azure_postgres_tls_policy, cloud::resolve_secret_locator, resolve_params,
+    PostgresConnectionInput,
 };
-use crate::traits::{PostgresConnectionParams, SslMode};
+use crate::traits::PostgresConnectionParams;
 use alien_azure_clients::keyvault::KeyVaultSecretsApi;
 use alien_core::bindings::FlexibleServerPostgresBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::sync::Arc;
 use url::Url;
+
+const PUBLIC_KEY_VAULT_DNS_SUFFIX: &str = ".vault.azure.net";
 
 /// The parts of a Key Vault secret URI needed to read it.
 #[derive(Debug, PartialEq, Eq)]
@@ -49,24 +52,22 @@ pub(crate) async fn resolve(
 
     resolve_params(
         binding_name,
-        &binding.host,
-        &binding.port,
-        &binding.database,
-        &binding.username,
-        &password,
-        SslMode::VerifyFull,
-        AZURE_POSTGRES_CA_CERTIFICATES
-            .iter()
-            .map(|certificate| (*certificate).to_string())
-            .collect(),
+        PostgresConnectionInput {
+            host: &binding.host,
+            port: &binding.port,
+            database: &binding.database,
+            username: &binding.username,
+            password: &password,
+            tls: azure_postgres_tls_policy(),
+        },
     )
 }
 
 /// Splits a Key Vault secret URI into the vault URL, secret name, and optional version.
 ///
-/// The path is exactly `/secrets/<name>[/<version>]`; a missing version means "latest".
-/// Anything else is rejected rather than silently ignored — a URI this provider cannot
-/// interpret is a configuration problem the user can fix, so it is *not* retryable.
+/// The URI must identify a public-cloud Azure Key Vault over HTTPS, and the path must be
+/// exactly `/secrets/<name>[/<version>]`; a missing version means "latest". Rejecting
+/// every other origin prevents a binding-controlled URI from receiving a Key Vault token.
 fn parse_secret_uri(binding_name: &str, secret_uri: &str) -> Result<SecretUri> {
     let malformed = |reason: &str| {
         ErrorData::config_invalid(
@@ -79,24 +80,78 @@ fn parse_secret_uri(binding_name: &str, secret_uri: &str) -> Result<SecretUri> {
         .into_alien_error()
         .context(malformed("is not a valid URL"))?;
 
+    if url.scheme() != "https" {
+        return Err(AlienError::new(malformed("must use HTTPS")));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AlienError::new(malformed(
+            "must not contain user information",
+        )));
+    }
+    if url.port().is_some() {
+        return Err(AlienError::new(malformed("must not specify a port")));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(AlienError::new(malformed(
+            "must not contain a query or fragment",
+        )));
+    }
+
+    let host = url.host_str().ok_or_else(|| {
+        AlienError::new(malformed(
+            "must use a public Azure Key Vault host ending in '.vault.azure.net'",
+        ))
+    })?;
+    let vault_name = host
+        .strip_suffix(PUBLIC_KEY_VAULT_DNS_SUFFIX)
+        .filter(|name| valid_vault_name(name))
+        .ok_or_else(|| {
+            AlienError::new(malformed(
+                "must use a public Azure Key Vault host ending in '.vault.azure.net'",
+            ))
+        })?;
+
     let segments: Vec<&str> = url
         .path_segments()
-        .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+        .map(Iterator::collect)
         .unwrap_or_default();
 
-    if segments.first() != Some(&"secrets") || segments.len() < 2 || segments.len() > 3 {
+    if segments.first() != Some(&"secrets")
+        || !(2..=3).contains(&segments.len())
+        || !segments[1..].iter().all(|segment| valid_secret_id(segment))
+    {
         return Err(AlienError::new(malformed(
             "is not a '/secrets/<name>[/<version>]' Key Vault URL",
         )));
     }
 
     Ok(SecretUri {
-        // `origin().ascii_serialization()` is scheme://host[:port] — the vault base URL
-        // the Key Vault client expects, with the secret path stripped.
-        vault_base_url: url.origin().ascii_serialization(),
+        vault_base_url: format!("https://{vault_name}{PUBLIC_KEY_VAULT_DNS_SUFFIX}"),
         name: segments[1].to_string(),
         version: segments.get(2).map(|version| (*version).to_string()),
     })
+}
+
+/// Public Azure Key Vault names are a single 3–24 character DNS label.
+fn valid_vault_name(name: &str) -> bool {
+    (3..=24).contains(&name.len())
+        && name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && name
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && !name.contains("--")
+}
+
+/// Key Vault secret names and version identifiers are path-safe ASCII identifiers.
+fn valid_secret_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 /// Reads the raw password the Azure controller stored as a Key Vault secret.
@@ -106,7 +161,12 @@ async fn read_password(
     parsed: &SecretUri,
     secrets: &dyn KeyVaultSecretsApi,
 ) -> Result<String> {
-    let failed = |reason: &str| ErrorData::PostgresSecretResolutionFailed {
+    let read_failed = |reason: &str| ErrorData::PostgresSecretResolutionFailed {
+        binding_name: binding_name.to_string(),
+        secret: secret_uri.to_string(),
+        reason: reason.to_string(),
+    };
+    let invalid_value = |reason: &str| ErrorData::PostgresSecretValueInvalid {
         binding_name: binding_name.to_string(),
         secret: secret_uri.to_string(),
         reason: reason.to_string(),
@@ -119,20 +179,19 @@ async fn read_password(
             parsed.version.clone(),
         )
         .await
-        .context(failed("Key Vault getSecret failed"))?;
+        .context(read_failed("Key Vault getSecret failed"))?;
 
-    // An absent or empty value is a control-plane invariant the workload cannot fix
-    // locally, so it reports the same (retryable) resolution failure as a failed read
-    // rather than connecting with an empty password.
+    // Retrying the same secret version cannot turn a missing value into a password.
     bundle
         .value
         .filter(|password| !password.is_empty())
-        .ok_or_else(|| AlienError::new(failed("secret has no value")))
+        .ok_or_else(|| AlienError::new(invalid_value("secret value is missing or empty")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::SslMode;
     use alien_azure_clients::keyvault::MockKeyVaultSecretsApi;
     use alien_azure_clients::models::secrets::SecretBundle;
     use alien_core::bindings::BindingValue;
@@ -181,10 +240,10 @@ mod tests {
         assert_eq!(params.database, "app");
         assert_eq!(params.username, "alien");
         assert_eq!(params.password, "a!b*c'd(e)f@/");
-        assert_eq!(params.sslmode, SslMode::VerifyFull);
-        assert_eq!(params.ca_certificates.len(), 1);
+        assert_eq!(params.sslmode(), SslMode::VerifyFull);
+        assert_eq!(params.ca_certificates().len(), 1);
         assert_eq!(
-            params.ca_certificates[0]
+            params.ca_certificates()[0]
                 .matches("-----BEGIN CERTIFICATE-----")
                 .count(),
             3,
@@ -257,8 +316,9 @@ mod tests {
                 .await
                 .expect_err("an empty secret must not resolve a connection");
 
-            assert_eq!(error.code, "POSTGRES_SECRET_RESOLUTION_FAILED");
-            assert!(error.retryable);
+            assert_eq!(error.code, "POSTGRES_SECRET_VALUE_INVALID");
+            assert!(!error.retryable);
+            assert!(!error.internal);
         }
     }
 
@@ -269,6 +329,35 @@ mod tests {
         let cases = [
             ("not-a-url", "unparseable"),
             (
+                "http://alien-vault.vault.azure.net/secrets/pg-password",
+                "insecure scheme",
+            ),
+            ("https://example.com/secrets/pg-password", "arbitrary host"),
+            (
+                "https://alien-vault.vault.azure.net.example.com/secrets/pg-password",
+                "suffix lookalike",
+            ),
+            (
+                "https://nested.alien-vault.vault.azure.net/secrets/pg-password",
+                "nested subdomain",
+            ),
+            (
+                "https://user:password@alien-vault.vault.azure.net/secrets/pg-password",
+                "user information",
+            ),
+            (
+                "https://alien-vault.vault.azure.net:8443/secrets/pg-password",
+                "custom port",
+            ),
+            (
+                "https://alien-vault.vault.azure.net/secrets/pg-password?api-version=7.4",
+                "query",
+            ),
+            (
+                "https://alien-vault.vault.azure.net/secrets/pg-password#fragment",
+                "fragment",
+            ),
+            (
                 "https://alien-vault.vault.azure.net/keys/pg-password",
                 "wrong collection",
             ),
@@ -276,6 +365,10 @@ mod tests {
             (
                 "https://alien-vault.vault.azure.net/secrets/pg-password/v1/extra",
                 "trailing segments",
+            ),
+            (
+                "https://alien-vault.vault.azure.net/secrets/pg%2Fpassword",
+                "encoded path separator",
             ),
         ];
 

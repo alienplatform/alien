@@ -341,21 +341,18 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
-    /// A cloud Postgres binding's password could not be read from its secret store.
+    /// Reading a cloud Postgres binding's password from its secret store failed.
     ///
-    /// Retryable: the cloud variants carry only a *pointer* to the password (Secrets
-    /// Manager ARN / Secret Manager name / Key Vault URI) and the workload reads it with
-    /// its own identity, so a failure here is an upstream one — throttling, a network
-    /// blip, IAM propagation lag, or a secret the control plane has not finished writing.
-    /// A binding whose *shape* is wrong (missing/malformed locator) is user-fixable
-    /// configuration and reports `BINDING_CONFIG_INVALID` instead, which is not retryable.
+    /// The retry and visibility metadata comes from the provider error being wrapped:
+    /// throttling remains retryable, while permanent provider failures do not become
+    /// retryable merely because they happened during secret resolution.
     ///
     /// `secret` is the locator, never the secret value.
     #[error(
         code = "POSTGRES_SECRET_RESOLUTION_FAILED",
         message = "Failed to resolve the password for Postgres binding '{binding_name}' from secret '{secret}': {reason}",
-        retryable = "true",
-        internal = "false",
+        retryable = "inherit",
+        internal = "inherit",
         http_status_code = 502
     )]
     PostgresSecretResolutionFailed {
@@ -364,6 +361,26 @@ pub enum ErrorData {
         /// The secret locator that was read (an ARN / name / URI — never the value)
         secret: String,
         /// What went wrong while reading the secret
+        reason: String,
+    },
+
+    /// A cloud Postgres secret was read, but did not contain a usable password.
+    ///
+    /// Provider responses with missing, empty, or malformed values cannot become valid
+    /// by retrying the same version. `secret` is the locator, never the secret value.
+    #[error(
+        code = "POSTGRES_SECRET_VALUE_INVALID",
+        message = "Secret '{secret}' for Postgres binding '{binding_name}' does not contain a valid password: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    PostgresSecretValueInvalid {
+        /// Name of the Postgres binding whose password value was invalid
+        binding_name: String,
+        /// The secret locator that was read (an ARN / name / URI — never the value)
+        secret: String,
+        /// Why the returned value cannot be used as a password
         reason: String,
     },
 

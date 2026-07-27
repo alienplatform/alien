@@ -178,24 +178,36 @@ function makeVault(handle: () => Promise<RawVaultHandle>): Vault {
   }
 }
 
-/**
- * The set of `sslmode` values the Rust `SslMode` can emit. Used to reject anything
- * else at the addon boundary rather than widening the public union by assertion.
- */
-const POSTGRES_SSL_MODES: readonly string[] = ["disable", "verify-ca", "verify-full"]
+const POSTGRES_SSL_MODES = {
+  disable: true,
+  "verify-ca": true,
+  "verify-full": true,
+} satisfies Record<PostgresSslMode, true>
 
-function invalidPostgresTlsConfig(raw: RawPostgresConnection, reason: string): AlienError {
+function postgresSslModeLabel(sslmode: unknown): string {
+  return typeof sslmode === "string" ? sslmode : String(sslmode)
+}
+
+function invalidPostgresTlsConfig(sslmode: unknown, reason: string): AlienError {
   return new AlienError(
     InvalidPostgresTlsConfigError.create({
-      sslmode: raw.sslmode,
+      sslmode: postgresSslModeLabel(sslmode),
       reason,
     }).toOptions(),
   )
 }
 
+function isPostgresSslMode(value: unknown): value is PostgresSslMode {
+  return typeof value === "string" && Object.hasOwn(POSTGRES_SSL_MODES, value)
+}
+
+function hasAtLeastOne<T>(values: T[]): values is [T, ...T[]] {
+  return values.length > 0
+}
+
 /**
- * Widen the raw addon connection into the public shape, deriving node-postgres
- * TLS options from the Rust-resolved mode and provider roots.
+ * Decode the raw addon connection into the public discriminated union, deriving
+ * node-postgres TLS options from the Rust-resolved mode and provider roots.
  *
  * An unrecognized `sslmode` means the addon and this wrapper disagree about the
  * `SslMode` enum — a version skew that must fail loudly rather than produce a
@@ -204,54 +216,78 @@ function invalidPostgresTlsConfig(raw: RawPostgresConnection, reason: string): A
  * `guard` passes an `AlienError` through untouched.
  */
 function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
-  if (!POSTGRES_SSL_MODES.includes(raw.sslmode)) {
+  if (!isPostgresSslMode(raw.sslmode)) {
     throw new AlienError(
       UnknownPostgresSslModeError.create({
-        sslmode: raw.sslmode,
-        expected: [...POSTGRES_SSL_MODES],
+        sslmode: postgresSslModeLabel(raw.sslmode),
+        expected: Object.keys(POSTGRES_SSL_MODES),
       }).toOptions(),
     )
   }
-  const sslmode = raw.sslmode as PostgresSslMode
+
   if (!Array.isArray(raw.caCertificates)) {
-    throw invalidPostgresTlsConfig(raw, "caCertificates must be an array")
-  }
-  if (raw.caCertificates.some(certificate => certificate.trim().length === 0)) {
-    throw invalidPostgresTlsConfig(raw, "caCertificates cannot contain empty certificates")
-  }
-  if (sslmode === "verify-ca" && raw.caCertificates.length === 0) {
-    throw invalidPostgresTlsConfig(raw, "verify-ca requires at least one CA certificate")
-  }
-  if (sslmode === "disable" && raw.caCertificates.length > 0) {
-    throw invalidPostgresTlsConfig(raw, `${sslmode} cannot carry CA certificates`)
+    throw invalidPostgresTlsConfig(raw.sslmode, "caCertificates must be an array")
   }
 
-  const ssl =
-    sslmode === "verify-ca"
-      ? {
-          ca: [...raw.caCertificates],
-          rejectUnauthorized: true as const,
-          // Node calls this only after the CA chain succeeds. Cloud SQL's
-          // per-instance CA authenticates the server even though its certificate
-          // cannot match the PSC consumer endpoint IP.
-          checkServerIdentity: (): undefined => undefined,
-        }
-      : sslmode === "verify-full"
-        ? {
-            ...(raw.caCertificates.length > 0 ? { ca: [...raw.caCertificates] } : {}),
-            rejectUnauthorized: true as const,
-          }
-        : false
+  const caCertificates: string[] = []
+  const rawCaCertificates: unknown[] = raw.caCertificates
+  for (const [index, certificate] of rawCaCertificates.entries()) {
+    if (typeof certificate !== "string") {
+      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] must be a string`)
+    }
+    if (certificate.trim().length === 0) {
+      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] cannot be empty`)
+    }
+    caCertificates.push(certificate)
+  }
 
-  return {
+  const fields = {
     connectionString: raw.connectionString,
-    ssl,
     host: raw.host,
     port: raw.port,
     database: raw.database,
     username: raw.username,
     password: raw.password,
-    sslmode,
+  }
+
+  switch (raw.sslmode) {
+    case "disable":
+      if (caCertificates.length > 0) {
+        throw invalidPostgresTlsConfig(raw.sslmode, "disable cannot carry CA certificates")
+      }
+      return { ...fields, sslmode: raw.sslmode, ssl: false }
+    case "verify-ca":
+      if (!hasAtLeastOne(caCertificates)) {
+        throw invalidPostgresTlsConfig(
+          raw.sslmode,
+          "verify-ca requires at least one CA certificate",
+        )
+      }
+      return {
+        ...fields,
+        sslmode: raw.sslmode,
+        ssl: {
+          ca: caCertificates,
+          rejectUnauthorized: true,
+          // Node calls this only after the CA chain succeeds. Cloud SQL's
+          // per-instance CA authenticates the server even though its certificate
+          // cannot match the PSC consumer endpoint IP.
+          checkServerIdentity: (): undefined => undefined,
+        },
+      }
+    case "verify-full":
+      return {
+        ...fields,
+        sslmode: raw.sslmode,
+        ssl: {
+          ...(caCertificates.length > 0 ? { ca: caCertificates } : {}),
+          rejectUnauthorized: true,
+        },
+      }
+    default: {
+      const unhandledSslMode: never = raw.sslmode
+      return unhandledSslMode
+    }
   }
 }
 

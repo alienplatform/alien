@@ -25,8 +25,10 @@ import type {
 const TEST_CA = "-----BEGIN CERTIFICATE-----\ntest-root\n-----END CERTIFICATE-----"
 
 function rawConnection(
-  sslmode: string,
-  caCertificates: string[] = sslmode.startsWith("verify-") ? [TEST_CA] : [],
+  sslmode: unknown,
+  caCertificates: unknown = typeof sslmode === "string" && sslmode.startsWith("verify-")
+    ? [TEST_CA]
+    : [],
 ): RawPostgresConnection {
   return {
     connectionString: `postgres://alien:pw@db.internal:5432/app?sslmode=${sslmode}`,
@@ -361,12 +363,14 @@ describe("createFactories postgres surface", () => {
     const { postgres } = createFactories(() => addonForPostgres(rawConnection("verify-ca")))
 
     const connection = await postgres("db").connection()
-    if (connection.ssl === false) throw new Error("verify-ca unexpectedly disabled TLS")
+    if (connection.sslmode !== "verify-ca") {
+      throw new Error(`expected verify-ca, received ${connection.sslmode}`)
+    }
 
     expect(connection.ssl.ca).toEqual([TEST_CA])
     expect(connection.ssl.rejectUnauthorized).toBe(true)
     expect(connection.ssl.checkServerIdentity).toBeTypeOf("function")
-    expect(connection.ssl.checkServerIdentity?.()).toBeUndefined()
+    expect(connection.ssl.checkServerIdentity()).toBeUndefined()
   })
 
   it("fails closed when a verified mode has no CA roots", async () => {
@@ -379,6 +383,20 @@ describe("createFactories postgres surface", () => {
     expect(error).toBeInstanceOf(AlienError)
     expect((error as AlienError).code).toBe("INVALID_POSTGRES_TLS_CONFIG")
     expect((error as AlienError).retryable).toBe(false)
+  })
+
+  it("reports a malformed CA element as a TLS contract error", async () => {
+    const { postgres } = createFactories(() =>
+      addonForPostgres(rawConnection("verify-full", [TEST_CA, 42])),
+    )
+
+    const error = await postgres("db")
+      .connection()
+      .catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("INVALID_POSTGRES_TLS_CONFIG")
+    expect((error as AlienError).message).toContain("caCertificates[1] must be a string")
   })
 
   // An sslmode this wrapper doesn't know means wrapper/addon version skew. Silently

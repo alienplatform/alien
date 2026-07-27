@@ -16,7 +16,7 @@
 //! current when it was created; `BindingsProvider::load_postgres` deliberately does not
 //! cache it, so loading the binding again re-reads the secret and picks up a rotation.
 //! (The secret-store *client* is cached, so re-reading does not rebuild a connection
-//! pool — see `BindingsProvider::postgres_secret_client`.)
+//! pool; [`runtime::PostgresRuntime`] owns both policies.)
 
 #[cfg(feature = "aws")]
 pub(crate) mod aurora;
@@ -27,11 +27,18 @@ pub(crate) mod cloud_sql;
 #[cfg(feature = "azure")]
 pub(crate) mod flexible_server;
 pub mod local;
+pub(crate) mod runtime;
 
 use crate::error::{ErrorData, Result};
-use crate::traits::{PostgresConnectionParams, SslMode};
+#[cfg(any(feature = "gcp", test))]
+use crate::traits::SslMode;
+use crate::traits::{Binding, Postgres, PostgresConnectionParams, PostgresTlsPolicy};
 use alien_core::bindings::BindingValue;
-use alien_error::{AlienError, Context};
+#[cfg(feature = "gcp")]
+use alien_error::AlienError;
+use alien_error::Context;
+#[cfg(any(feature = "aws", feature = "azure"))]
+use std::sync::OnceLock;
 
 /// Official Amazon RDS roots for every commercial region.
 ///
@@ -49,6 +56,39 @@ pub(crate) const AWS_RDS_CA_CERTIFICATES: &[&str] = &[include_str!("ca/aws-rds-g
 pub(crate) const AZURE_POSTGRES_CA_CERTIFICATES: &[&str] =
     &[include_str!("ca/azure-postgres-roots.pem")];
 
+/// A Postgres handle whose cloud-specific work has already been completed.
+///
+/// Local, external, and cloud bindings differ only while resolving their connection
+/// details. They all expose the same immutable handle afterwards.
+#[derive(Debug)]
+pub struct ResolvedPostgres {
+    params: PostgresConnectionParams,
+}
+
+impl ResolvedPostgres {
+    pub fn new(params: PostgresConnectionParams) -> Self {
+        Self { params }
+    }
+}
+
+impl Binding for ResolvedPostgres {}
+
+impl Postgres for ResolvedPostgres {
+    fn connection_params(&self) -> &PostgresConnectionParams {
+        &self.params
+    }
+}
+
+/// Concrete inputs shared by every Postgres backend after password and TLS resolution.
+pub(crate) struct PostgresConnectionInput<'a> {
+    pub(crate) host: &'a BindingValue<String>,
+    pub(crate) port: &'a BindingValue<u16>,
+    pub(crate) database: &'a BindingValue<String>,
+    pub(crate) username: &'a BindingValue<String>,
+    pub(crate) password: &'a str,
+    pub(crate) tls: PostgresTlsPolicy,
+}
+
 /// Combines a binding's concrete connection fields with an already-resolved `password`.
 ///
 /// Every field arrives as a [`BindingValue`], so an unresolved template expression or
@@ -57,64 +97,48 @@ pub(crate) const AZURE_POSTGRES_CA_CERTIFICATES: &[&str] =
 ///
 /// `host` is whichever field the backend dials: the cluster endpoint for Aurora, the
 /// host for every other backend.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_params(
     binding_name: &str,
-    host: &BindingValue<String>,
-    port: &BindingValue<u16>,
-    database: &BindingValue<String>,
-    username: &BindingValue<String>,
-    password: &str,
-    sslmode: SslMode,
-    ca_certificates: Vec<String>,
+    input: PostgresConnectionInput<'_>,
 ) -> Result<PostgresConnectionParams> {
     let invalid = |field: &str| ErrorData::BindingConfigInvalid {
         env_var: crate::error::binding_env_var(binding_name),
         binding_name: binding_name.to_string(),
         reason: format!("Failed to extract '{}' from Postgres binding", field),
     };
-    match sslmode {
-        SslMode::VerifyCa => validate_ca_certificates(binding_name, &ca_certificates)?,
-        SslMode::VerifyFull if !ca_certificates.is_empty() => {
-            validate_ca_certificates(binding_name, &ca_certificates)?;
-        }
-        SslMode::Disable if !ca_certificates.is_empty() => {
-            return Err(AlienError::new(ErrorData::config_invalid(
-                binding_name,
-                "Postgres CA certificates require sslmode 'verify-ca' or 'verify-full'",
-            )));
-        }
-        SslMode::Disable | SslMode::VerifyFull => {}
-    }
 
-    Ok(PostgresConnectionParams {
-        host: host
+    Ok(PostgresConnectionParams::new(
+        input
+            .host
             .clone()
             .into_value(binding_name, "host")
             .context(invalid("host"))?,
-        port: port
+        input
+            .port
             .clone()
             .into_value(binding_name, "port")
             .context(invalid("port"))?,
-        database: database
+        input
+            .database
             .clone()
             .into_value(binding_name, "database")
             .context(invalid("database"))?,
-        username: username
+        input
+            .username
             .clone()
             .into_value(binding_name, "username")
             .context(invalid("username"))?,
-        password: password.to_string(),
-        sslmode,
-        ca_certificates,
-    })
+        input.password.to_string(),
+        input.tls,
+    ))
 }
 
-/// Resolves the per-instance CA roots carried by a Cloud SQL binding.
-pub(crate) fn resolve_ca_certificates(
+/// Resolves and validates the per-instance CA roots carried by a Cloud SQL binding.
+#[cfg(feature = "gcp")]
+pub(crate) fn resolve_verify_ca_policy(
     binding_name: &str,
     certificates: &BindingValue<Vec<String>>,
-) -> Result<Vec<String>> {
+) -> Result<PostgresTlsPolicy> {
     let certificates = certificates
         .clone()
         .into_value(binding_name, "serverCaCertificates")
@@ -122,28 +146,64 @@ pub(crate) fn resolve_ca_certificates(
             binding_name,
             "Failed to extract 'serverCaCertificates' from Postgres binding",
         ))?;
-    validate_ca_certificates(binding_name, &certificates)?;
-    Ok(certificates)
+    verified_tls_policy(
+        binding_name,
+        SslMode::VerifyCa,
+        PostgresTlsPolicy::verify_ca(certificates),
+    )
 }
 
-fn validate_ca_certificates(binding_name: &str, ca_certificates: &[String]) -> Result<()> {
-    if ca_certificates.is_empty() {
-        return Err(AlienError::new(ErrorData::config_invalid(
+#[cfg(feature = "gcp")]
+fn verified_tls_policy(
+    binding_name: &str,
+    sslmode: SslMode,
+    policy: std::result::Result<PostgresTlsPolicy, crate::traits::InvalidPostgresCaCertificates>,
+) -> Result<PostgresTlsPolicy> {
+    policy.map_err(|_| {
+        AlienError::new(ErrorData::config_invalid(
             binding_name,
-            "Postgres TLS verification requires at least one server CA certificate",
-        )));
-    }
-    if ca_certificates.iter().any(|certificate| {
-        let certificate = certificate.trim();
-        !certificate.starts_with("-----BEGIN CERTIFICATE-----")
-            || !certificate.ends_with("-----END CERTIFICATE-----")
-    }) {
-        return Err(AlienError::new(ErrorData::config_invalid(
-            binding_name,
-            "Postgres server CA certificates must be non-empty PEM certificates",
-        )));
-    }
-    Ok(())
+            format!(
+                "Postgres sslmode '{}' requires one or more non-empty PEM server CA certificates",
+                sslmode.as_str()
+            ),
+        ))
+    })
+}
+
+/// Cached Aurora TLS policy. Its large embedded root bundle is parsed and allocated once,
+/// then shared by all resolved handles.
+#[cfg(feature = "aws")]
+pub(crate) fn aws_rds_tls_policy() -> PostgresTlsPolicy {
+    static POLICY: OnceLock<PostgresTlsPolicy> = OnceLock::new();
+    POLICY
+        .get_or_init(|| {
+            PostgresTlsPolicy::verify_full(
+                AWS_RDS_CA_CERTIFICATES
+                    .iter()
+                    .map(|certificate| (*certificate).to_string())
+                    .collect(),
+            )
+            .expect("the embedded AWS RDS root bundle must contain valid PEM certificates")
+        })
+        .clone()
+}
+
+/// Cached Flexible Server TLS policy. Embedded roots are parsed and allocated once,
+/// then shared by all resolved handles.
+#[cfg(feature = "azure")]
+pub(crate) fn azure_postgres_tls_policy() -> PostgresTlsPolicy {
+    static POLICY: OnceLock<PostgresTlsPolicy> = OnceLock::new();
+    POLICY
+        .get_or_init(|| {
+            PostgresTlsPolicy::verify_full(
+                AZURE_POSTGRES_CA_CERTIFICATES
+                    .iter()
+                    .map(|certificate| (*certificate).to_string())
+                    .collect(),
+            )
+            .expect("the embedded Azure Postgres roots must contain valid PEM certificates")
+        })
+        .clone()
 }
 
 #[cfg(test)]
@@ -156,18 +216,19 @@ mod tests {
     fn unresolved_secret_ref_field_is_binding_config_invalid() {
         let error = resolve_params(
             "db",
-            &BindingValue::SecretRef {
-                secret_ref: alien_core::bindings::SecretReference {
-                    name: "pg-credentials".to_string(),
-                    key: "host".to_string(),
+            PostgresConnectionInput {
+                host: &BindingValue::SecretRef {
+                    secret_ref: alien_core::bindings::SecretReference {
+                        name: "pg-credentials".to_string(),
+                        key: "host".to_string(),
+                    },
                 },
+                port: &BindingValue::value(5432),
+                database: &"db".into(),
+                username: &"alien".into(),
+                password: "pw",
+                tls: PostgresTlsPolicy::verify_full(vec![pem("root")]).unwrap(),
             },
-            &BindingValue::value(5432),
-            &"db".into(),
-            &"alien".into(),
-            "pw",
-            SslMode::VerifyFull,
-            vec!["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string()],
         )
         .expect_err("an unresolved SecretRef host must not resolve");
 
@@ -186,13 +247,14 @@ mod tests {
     fn debug_output_never_contains_the_password() {
         let params = resolve_params(
             "db",
-            &"h".into(),
-            &BindingValue::value(5432),
-            &"db".into(),
-            &"alien".into(),
-            "super-secret-password",
-            SslMode::VerifyFull,
-            vec!["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string()],
+            PostgresConnectionInput {
+                host: &"h".into(),
+                port: &BindingValue::value(5432),
+                database: &"db".into(),
+                username: &"alien".into(),
+                password: "super-secret-password",
+                tls: PostgresTlsPolicy::verify_full(vec![pem("root")]).unwrap(),
+            },
         )
         .expect("concrete fields resolve");
 
@@ -200,6 +262,10 @@ mod tests {
         assert!(
             !rendered.contains("super-secret-password"),
             "password leaked into Debug output: {rendered}"
+        );
+        assert!(
+            !rendered.contains("BEGIN CERTIFICATE"),
+            "certificate bundle expanded into Debug output: {rendered}"
         );
         assert!(rendered.contains("<redacted>"), "got: {rendered}");
     }
@@ -211,15 +277,10 @@ mod tests {
             vec!["".to_string()],
             vec!["not a certificate".to_string()],
         ] {
-            let error = resolve_params(
+            let error = verified_tls_policy(
                 "db",
-                &"h".into(),
-                &BindingValue::value(5432),
-                &"db".into(),
-                &"alien".into(),
-                "pw",
                 SslMode::VerifyCa,
-                ca_certificates,
+                PostgresTlsPolicy::verify_ca(ca_certificates),
             )
             .expect_err("verified TLS without a PEM root must fail closed");
 
@@ -232,17 +293,29 @@ mod tests {
     fn verify_full_can_use_the_system_trust_store() {
         let params = resolve_params(
             "db",
-            &"db.example.com".into(),
-            &BindingValue::value(5432),
-            &"db".into(),
-            &"alien".into(),
-            "pw",
-            SslMode::VerifyFull,
-            Vec::new(),
+            PostgresConnectionInput {
+                host: &"db.example.com".into(),
+                port: &BindingValue::value(5432),
+                database: &"db".into(),
+                username: &"alien".into(),
+                password: "pw",
+                tls: PostgresTlsPolicy::verify_full_with_system_roots(),
+            },
         )
         .expect("BYO verify-full can rely on the runtime trust store");
 
-        assert!(params.ca_certificates.is_empty());
-        assert_eq!(params.sslmode, SslMode::VerifyFull);
+        assert!(params.ca_certificates().is_empty());
+        assert_eq!(params.sslmode(), SslMode::VerifyFull);
+    }
+
+    #[test]
+    fn tls_policy_cannot_pair_plaintext_with_roots_or_verify_ca_without_roots() {
+        assert!(PostgresTlsPolicy::verify_ca(Vec::new()).is_err());
+        assert!(PostgresTlsPolicy::disabled().ca_certificates().is_empty());
+        assert_eq!(PostgresTlsPolicy::disabled().sslmode(), SslMode::Disable);
+    }
+
+    fn pem(body: &str) -> String {
+        format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----")
     }
 }

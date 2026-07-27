@@ -160,8 +160,24 @@ export interface Container {
  */
 export type PostgresSslMode = "disable" | "verify-ca" | "verify-full"
 
-/** Verified TLS options ready to pass to node-postgres. */
-export interface PostgresTlsOptions {
+/** TLS options for `verify-ca`, where the provider CA authenticates the server. */
+interface PostgresVerifyCaTlsOptions {
+  /**
+   * One or more PEM-encoded provider CA certificates. `verify-ca` cannot use the
+   * operating system trust store because the certificate is specific to the instance.
+   */
+  ca: [string, ...string[]]
+  /** Always true: an untrusted certificate fails the connection. */
+  rejectUnauthorized: true
+  /**
+   * Skip hostname matching after the CA chain succeeds because Cloud SQL's
+   * certificate does not contain the Private Service Connect IP being dialed.
+   */
+  checkServerIdentity: () => undefined
+}
+
+/** TLS options for full certificate and hostname verification. */
+interface PostgresVerifyFullTlsOptions {
   /**
    * PEM-encoded provider root CA certificates. Managed backends supply these;
    * an external database can omit them to use the operating system trust store.
@@ -169,39 +185,21 @@ export interface PostgresTlsOptions {
   ca?: string[]
   /** Always true: an untrusted certificate fails the connection. */
   rejectUnauthorized: true
-  /**
-   * Present only for `verify-ca`, where the provider-specific CA authenticates
-   * the server but the dialed IP is not present in its certificate.
-   */
-  checkServerIdentity?: () => undefined
+  /** `verify-full` must never override Node's hostname verification. */
+  checkServerIdentity?: never
 }
 
-/** Everything a Postgres driver needs to connect. */
-export interface PostgresConnection {
+/** Verified TLS options ready to pass to node-postgres. */
+export type PostgresTlsOptions = PostgresVerifyCaTlsOptions | PostgresVerifyFullTlsOptions
+
+/** Connection fields shared by every Postgres TLS mode. */
+interface PostgresConnectionFields {
   /**
    * `postgres://user:password@host:port/database?sslmode=<mode>`. The username,
    * password, and database are percent-encoded to the RFC 3986 unreserved set, so a
    * generated password containing URL-special characters can never corrupt the URL.
    */
   connectionString: string
-  /**
-   * The TLS setting for drivers that take one, derived from {@link sslmode}:
-   * certificate and hostname verification for `verify-full` (using provider roots
-   * for managed backends or the system trust store for BYO), provider roots with
-   * certificate verification for `verify-ca`, and `false` for `disable`.
-   *
-   * For node-postgres, pass this with the individual fields —
-   * `new Client({ host, port, ..., ssl })` — NOT with `connectionString`.
-   * node-postgres parses URL TLS parameters and can overwrite an explicit `ssl`
-   * object, including these provider roots. Use the individual fields so this
-   * verified configuration reaches Node's TLS implementation.
-   *
-   * External (BYO) bindings default to `verify-full`, so the connection string and
-   * this field both require encrypted transport plus certificate and hostname
-   * verification. A plaintext-only legacy server must be configured explicitly
-   * with `sslMode: "disable"` in its external binding.
-   */
-  ssl: false | PostgresTlsOptions
   /** Address to dial — the cluster writer endpoint for Aurora, the host elsewhere. */
   host: string
   /** TCP port. */
@@ -216,9 +214,37 @@ export interface PostgresConnection {
    * carries a locator for it.
    */
   password: string
-  /** The `sslmode` carried in {@link connectionString}. */
-  sslmode: PostgresSslMode
 }
+
+interface PostgresDisableConnection extends PostgresConnectionFields {
+  sslmode: "disable"
+  ssl: false
+}
+
+interface PostgresVerifyCaConnection extends PostgresConnectionFields {
+  sslmode: "verify-ca"
+  ssl: PostgresVerifyCaTlsOptions
+}
+
+interface PostgresVerifyFullConnection extends PostgresConnectionFields {
+  sslmode: "verify-full"
+  ssl: PostgresVerifyFullTlsOptions
+}
+
+/**
+ * Everything a Postgres driver needs to connect, discriminated by {@link sslmode}.
+ *
+ * For node-postgres, pass the individual fields with `ssl` rather than combining
+ * `connectionString` and `ssl`. node-postgres parses URL TLS parameters and can
+ * overwrite an explicit `ssl` object, including provider roots.
+ *
+ * External (BYO) bindings default to `verify-full`. A plaintext-only legacy server
+ * must be configured explicitly with `sslMode: "disable"` in its external binding.
+ */
+export type PostgresConnection =
+  | PostgresDisableConnection
+  | PostgresVerifyCaConnection
+  | PostgresVerifyFullConnection
 
 /**
  * A resolved Postgres binding.
