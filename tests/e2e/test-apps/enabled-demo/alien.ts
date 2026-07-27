@@ -96,11 +96,16 @@ const queueOff = new alien.Queue("optional-queue-off").enabled(io.queueOff).buil
 const vaultOn = new alien.Vault("optional-vault-on").enabled(io.vaultOn).build()
 const vaultOff = new alien.Vault("optional-vault-off").enabled(io.vaultOff).build()
 
+// Ungated, and links both halves of a gated pair. The declined one leaves the stack with
+// this link removed alongside it, so the agent starts with ALIEN_OPTIONAL_KV_ON_BINDING and
+// without ALIEN_OPTIONAL_KV_OFF_BINDING — one deployment proving both answers.
 const agent = new alien.Worker("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .publicEndpoint("api")
   .permissions("execution")
+  .link(kvOn)
+  .link(kvOff)
   .build()
 
 // A compute gate is a live gate: the declined worker's function must never be
@@ -137,9 +142,9 @@ export default new alien.Stack("enabled-demo")
     profiles: {
       // Each gated resource carries its own resource-scoped grant so the e2e can
       // assert the grant follows the gate (present when on, gone when off). The
-      // worker binds only the ungated `state` store; it depends on no gated
-      // resource, so the ungated-dependent-of-a-gated-resource preflight stays
-      // satisfied.
+      // grant for a declined resource stays on the role by design: the role is baked
+      // at setup, so removing it would leave a later acceptance unable to restore it
+      // without the customer re-running setup.
       execution: {
         state: ["kv/data-read"],
         "optional-kv-on": ["kv/data-read"],
