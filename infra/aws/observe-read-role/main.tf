@@ -36,36 +36,13 @@ data "aws_iam_policy_document" "assume" {
 data "aws_iam_policy_document" "read" {
   statement {
     sid = "Discovery"
-    actions = [
-      "tag:GetResources",
-      "tag:GetTagKeys",
-      "tag:GetTagValues",
-    ]
+    actions   = ["tag:GetResources"]
     resources = ["*"]
   }
 
   statement {
     sid = "HealthMetrics"
-    actions = [
-      "cloudwatch:GetMetricData",
-      "cloudwatch:ListMetrics",
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid = "DescribeReadOnly"
-    actions = [
-      "ec2:Describe*",
-      "rds:Describe*",
-      "ecs:Describe*",
-      "ecs:List*",
-      "elasticloadbalancing:Describe*",
-      "s3:ListAllMyBuckets",
-      "s3:GetBucketLocation",
-      "lambda:List*",
-      "lambda:GetFunctionConfiguration",
-    ]
+    actions   = ["cloudwatch:ListMetrics"]
     resources = ["*"]
   }
 }

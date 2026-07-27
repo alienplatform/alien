@@ -71,7 +71,7 @@ impl AwsObserver {
                     "aws-cloudwatch",
                     HeartbeatCollectionIssueReason::Forbidden,
                     HeartbeatIssueSeverity::Warning,
-                    "CloudWatch metrics are unavailable; grant cloudwatch:ListMetrics/GetMetricData",
+                    "CloudWatch metrics are unavailable; grant cloudwatch:ListMetrics",
                 ))
             }
         }

@@ -9,9 +9,7 @@ expression: result
       "Sid": "DiscoverResources",
       "Effect": "Allow",
       "Action": [
-        "tag:GetResources",
-        "tag:GetTagKeys",
-        "tag:GetTagValues"
+        "tag:GetResources"
       ],
       "Resource": [
         "*"
@@ -21,9 +19,7 @@ expression: result
       "Sid": "ReadMetrics",
       "Effect": "Allow",
       "Action": [
-        "cloudwatch:GetMetricData",
-        "cloudwatch:ListMetrics",
-        "cloudwatch:GetMetricStatistics"
+        "cloudwatch:ListMetrics"
       ],
       "Resource": [
         "*"

@@ -36,6 +36,11 @@ pub struct OperatorConfig {
     /// Human-readable deployment name configured for this agent.
     pub agent_name: Option<String>,
 
+    /// Explicit permission tier assigned to this Operator installation.
+    ///
+    /// Only `observe` enables raw environment inventory collection.
+    pub operator_permission: Option<String>,
+
     /// Sync configuration (None = airgapped mode)
     pub sync: Option<SyncConfig>,
 
@@ -114,6 +119,11 @@ pub struct OperatorConfig {
 }
 
 impl OperatorConfig {
+    /// Whether this Operator is an explicit observe-only installation.
+    pub fn observes_environment(&self) -> bool {
+        self.operator_permission.as_deref() == Some("observe")
+    }
+
     /// Check if running in airgapped mode (no sync configuration)
     pub fn is_airgapped(&self) -> bool {
         self.sync.is_none()
@@ -215,6 +225,22 @@ mod tests {
             .build();
 
         assert!(config.is_airgapped());
+    }
+
+    #[test]
+    fn observation_requires_explicit_observe_permission() {
+        let application = OperatorConfig::builder()
+            .platform(Platform::Aws)
+            .encryption_key("key")
+            .build();
+        let observer = OperatorConfig::builder()
+            .platform(Platform::Aws)
+            .operator_permission("observe")
+            .encryption_key("key")
+            .build();
+
+        assert!(!application.observes_environment());
+        assert!(observer.observes_environment());
     }
 
     #[test]

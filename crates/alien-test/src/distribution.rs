@@ -4576,7 +4576,6 @@ mod tests {
             "azure-resource-group/heartbeat",
             "azure-storage-account/heartbeat",
             "azure-service-bus-namespace/heartbeat",
-            "observe/observe",
             "service-account/heartbeat",
             "service-activation/heartbeat",
         ] {
