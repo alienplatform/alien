@@ -126,7 +126,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript dependencies for Rust tests
-        run: pnpm exec turbo run build --filter=@alienplatform/core
+        run: pnpm exec turbo run build --filter=@alienplatform/sdk --filter=@alienplatform/commands
 
       - name: Rust fast tests (non-cloud)
         env:
