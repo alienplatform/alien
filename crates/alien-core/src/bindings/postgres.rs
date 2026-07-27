@@ -55,6 +55,9 @@ pub struct CloudSqlPostgresBinding {
     pub port: BindingValue<u16>,
     pub database: BindingValue<String>,
     pub username: BindingValue<String>,
+    /// Per-instance Cloud SQL server CA certificates, including every root accepted
+    /// during a CA rotation.
+    pub server_ca_certificates: BindingValue<Vec<String>>,
     /// Secret Manager secret name of the connection password; resolved at load time.
     pub password_secret_name: BindingValue<String>,
 }
@@ -270,6 +273,7 @@ mod tests {
             port: BindingValue::value(5432),
             database: "db".into(),
             username: "alien".into(),
+            server_ca_certificates: BindingValue::value(vec!["cloud-sql-root".to_string()]),
             password_secret_name: "pg-credentials".into(),
         });
         assert!(serde_json::to_string(&cloud_sql)

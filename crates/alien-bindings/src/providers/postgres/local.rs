@@ -34,6 +34,7 @@ impl LocalPostgres {
                 // unresolved ref).
                 &b.password,
                 SslMode::Disable,
+                Vec::new(),
             )?,
             PostgresBinding::External(b) => {
                 let sslmode = match b.ssl_mode {
@@ -48,6 +49,7 @@ impl LocalPostgres {
                     &b.username,
                     &b.password,
                     sslmode,
+                    Vec::new(),
                 )?
             }
             // Listed explicitly rather than via a catch-all so a future `PostgresBinding`

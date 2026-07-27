@@ -8,7 +8,9 @@
 //! client from the `vault` binding's `aws_parameter_store` provider.
 
 use crate::error::{ErrorData, Result};
-use crate::providers::postgres::{cloud::resolve_secret_locator, resolve_params};
+use crate::providers::postgres::{
+    cloud::resolve_secret_locator, resolve_params, AWS_RDS_CA_CERTIFICATES,
+};
 use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_aws_clients::secrets_manager::{GetSecretValueRequest, SecretsManagerApi};
 use alien_core::bindings::AuroraPostgresBinding;
@@ -18,7 +20,8 @@ use std::sync::Arc;
 /// Reads the password from Secrets Manager and resolves the connection parameters.
 ///
 /// Aurora is dialed at the cluster **writer endpoint**, so `clusterEndpoint` — not a
-/// `host` field — becomes the connection host. TLS is required (`sslmode=require`).
+/// `host` field — becomes the connection host. TLS verifies the official RDS root
+/// set and the cluster endpoint hostname (`sslmode=verify-full`).
 ///
 /// Performs exactly one `GetSecretValue`; a failure is returned to the caller, which
 /// owns any retry policy.
@@ -41,7 +44,11 @@ pub(crate) async fn resolve(
         &binding.database,
         &binding.username,
         &password,
-        SslMode::Require,
+        SslMode::VerifyFull,
+        AWS_RDS_CA_CERTIFICATES
+            .iter()
+            .map(|certificate| (*certificate).to_string())
+            .collect(),
     )
 }
 
@@ -110,7 +117,7 @@ mod tests {
     /// deliberately contains every RFC 3986 sub-delim that `encodeURIComponent` leaves
     /// literal, extending the encoding contract pinned in `local.rs` to this backend.
     #[tokio::test]
-    async fn resolves_cluster_endpoint_and_require_sslmode() {
+    async fn resolves_cluster_endpoint_with_verified_tls() {
         let mut secrets = MockSecretsManagerApi::new();
         secrets
             .expect_get_secret_value()
@@ -134,11 +141,19 @@ mod tests {
         assert_eq!(params.database, "app");
         assert_eq!(params.username, "alien");
         assert_eq!(params.password, "a!b*c'd(e)f@/");
-        assert_eq!(params.sslmode, SslMode::Require);
+        assert_eq!(params.sslmode, SslMode::VerifyFull);
+        assert_eq!(params.ca_certificates.len(), 1);
+        assert_eq!(
+            params.ca_certificates[0]
+                .matches("-----BEGIN CERTIFICATE-----")
+                .count(),
+            108,
+            "the embedded official global set must contain every validated regional root"
+        );
         assert_eq!(
             params.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@\
-             cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=require"
+             cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full"
         );
     }
 

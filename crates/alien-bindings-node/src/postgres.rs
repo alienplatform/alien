@@ -26,9 +26,11 @@ pub struct PostgresConnectionJs {
     pub username: String,
     /// Connection password, already resolved from the cloud secret store where applicable.
     pub password: String,
-    /// `disable` (local or explicit BYO plaintext), `verify-full` (BYO default), or
-    /// `require` (every managed cloud).
+    /// `disable` (local or explicit BYO plaintext), `verify-ca` (Cloud SQL), or
+    /// `verify-full` (BYO, Aurora, and Flexible Server).
     pub sslmode: String,
+    /// PEM-encoded root CAs used by the verified TLS modes.
+    pub ca_certificates: Vec<String>,
 }
 
 /// Handle to a resolved Postgres binding.
@@ -53,6 +55,7 @@ fn connection_to_js(params: &PostgresConnectionParams) -> PostgresConnectionJs {
         username: params.username.clone(),
         password: params.password.clone(),
         sslmode: params.sslmode.as_str().to_string(),
+        ca_certificates: params.ca_certificates.clone(),
     }
 }
 
@@ -80,7 +83,10 @@ mod tests {
             database: "app".to_string(),
             username: "alien".to_string(),
             password: "p@ss/word".to_string(),
-            sslmode: SslMode::Require,
+            sslmode: SslMode::VerifyFull,
+            ca_certificates: vec![
+                "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string(),
+            ],
         };
 
         let js = connection_to_js(&params);
@@ -90,10 +96,11 @@ mod tests {
         assert_eq!(js.database, "app");
         assert_eq!(js.username, "alien");
         assert_eq!(js.password, "p@ss/word");
-        assert_eq!(js.sslmode, "require");
+        assert_eq!(js.sslmode, "verify-full");
+        assert_eq!(js.ca_certificates, params.ca_certificates);
         assert_eq!(
             js.connection_string,
-            "postgres://alien:p%40ss%2Fword@cluster.rds.amazonaws.com:5432/app?sslmode=require"
+            "postgres://alien:p%40ss%2Fword@cluster.rds.amazonaws.com:5432/app?sslmode=verify-full"
         );
     }
 
@@ -103,8 +110,8 @@ mod tests {
     fn connection_to_js_reports_each_sslmode_as_its_wire_string() {
         for (mode, expected) in [
             (SslMode::Disable, "disable"),
+            (SslMode::VerifyCa, "verify-ca"),
             (SslMode::VerifyFull, "verify-full"),
-            (SslMode::Require, "require"),
         ] {
             let params = PostgresConnectionParams {
                 host: "h".to_string(),
@@ -113,6 +120,12 @@ mod tests {
                 username: "u".to_string(),
                 password: "p".to_string(),
                 sslmode: mode,
+                ca_certificates: match mode {
+                    SslMode::VerifyCa | SslMode::VerifyFull => vec![
+                        "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----".to_string(),
+                    ],
+                    SslMode::Disable => Vec::new(),
+                },
             };
 
             assert_eq!(connection_to_js(&params).sslmode, expected);

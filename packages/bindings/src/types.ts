@@ -155,10 +155,26 @@ export interface Container {
 /**
  * TLS mode for a Postgres connection: `disable` for the local developer backend
  * or an explicit BYO plaintext opt-out, `verify-full` for a BYO database with
- * certificate and hostname verification, and `require` for every managed cloud
- * backend (Aurora, Cloud SQL, Flexible Server).
+ * certificate and hostname verification, `verify-ca` for Cloud SQL over its
+ * Private Service Connect IP, and `verify-full` for Aurora and Flexible Server.
  */
-export type PostgresSslMode = "disable" | "verify-full" | "require"
+export type PostgresSslMode = "disable" | "verify-ca" | "verify-full"
+
+/** Verified TLS options ready to pass to node-postgres. */
+export interface PostgresTlsOptions {
+  /**
+   * PEM-encoded provider root CA certificates. Managed backends supply these;
+   * an external database can omit them to use the operating system trust store.
+   */
+  ca?: string[]
+  /** Always true: an untrusted certificate fails the connection. */
+  rejectUnauthorized: true
+  /**
+   * Present only for `verify-ca`, where the provider-specific CA authenticates
+   * the server but the dialed IP is not present in its certificate.
+   */
+  checkServerIdentity?: () => undefined
+}
 
 /** Everything a Postgres driver needs to connect. */
 export interface PostgresConnection {
@@ -170,27 +186,22 @@ export interface PostgresConnection {
   connectionString: string
   /**
    * The TLS setting for drivers that take one, derived from {@link sslmode}:
-   * `{ rejectUnauthorized: true }` for a BYO database using `verify-full`,
-   * `{ rejectUnauthorized: false }` for the managed clouds (TLS on, certificate not
-   * verified against a pinned CA), and `false` for `disable`.
+   * certificate and hostname verification for `verify-full` (using provider roots
+   * for managed backends or the system trust store for BYO), provider roots with
+   * certificate verification for `verify-ca`, and `false` for `disable`.
    *
    * For node-postgres, pass this with the individual fields —
    * `new Client({ host, port, ..., ssl })` — NOT with `connectionString`.
-   * node-postgres parses the URL's `sslmode` (treating `require` as `verify-full`)
-   * and that overrides an explicit `ssl`, so the URL form rejects a managed
-   * provider's certificate with "unable to get local issuer certificate".
-   *
-   * `rejectUnauthorized: false` is deliberate: Postgres is private-only on every
-   * cloud (no public IP, reachable only from same-stack workloads), so the network
-   * boundary is the primary control. Verified TLS against provider CAs is
-   * defense-in-depth to add later.
+   * node-postgres parses URL TLS parameters and can overwrite an explicit `ssl`
+   * object, including these provider roots. Use the individual fields so this
+   * verified configuration reaches Node's TLS implementation.
    *
    * External (BYO) bindings default to `verify-full`, so the connection string and
    * this field both require encrypted transport plus certificate and hostname
    * verification. A plaintext-only legacy server must be configured explicitly
    * with `sslMode: "disable"` in its external binding.
    */
-  ssl: false | { rejectUnauthorized: boolean }
+  ssl: false | PostgresTlsOptions
   /** Address to dial — the cluster writer endpoint for Aurora, the host elsewhere. */
   host: string
   /** TCP port. */

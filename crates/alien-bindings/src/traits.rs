@@ -412,15 +412,16 @@ pub trait Vault: Binding {
     async fn list_secrets(&self) -> Result<Vec<String>>;
 }
 
-/// TLS mode used when building a Postgres connection string.
+/// TLS policy used when building a Postgres connection string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SslMode {
     /// Plain TCP, no TLS (Local or an explicit BYO opt-out).
     Disable,
-    /// Require TLS and verify the server certificate and hostname (BYO / External default).
+    /// Require TLS and verify the server certificate against a trusted CA.
+    VerifyCa,
+    /// Require TLS and verify both the trusted CA chain and the dialed hostname
+    /// (BYO / External default, Aurora, and Flexible Server).
     VerifyFull,
-    /// Require TLS (cloud).
-    Require,
 }
 
 impl SslMode {
@@ -429,8 +430,8 @@ impl SslMode {
     pub fn as_str(self) -> &'static str {
         match self {
             SslMode::Disable => "disable",
+            SslMode::VerifyCa => "verify-ca",
             SslMode::VerifyFull => "verify-full",
-            SslMode::Require => "require",
         }
     }
 }
@@ -444,6 +445,9 @@ pub struct PostgresConnectionParams {
     pub username: String,
     pub password: String,
     pub sslmode: SslMode,
+    /// PEM-encoded root CA certificates. Empty for plaintext or when BYO `verify-full`
+    /// uses the runtime's system trust store.
+    pub ca_certificates: Vec<String>,
 }
 
 // Hand-written Debug so the resolved password never reaches logs, error chains, or panic output
@@ -457,6 +461,7 @@ impl std::fmt::Debug for PostgresConnectionParams {
             .field("username", &self.username)
             .field("password", &"<redacted>")
             .field("sslmode", &self.sslmode)
+            .field("ca_certificate_count", &self.ca_certificates.len())
             .finish()
     }
 }

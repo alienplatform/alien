@@ -61,6 +61,25 @@ export const UnknownPostgresSslModeError = defineError({
   internal: false,
 })
 
+/**
+ * Thrown when the native addon reports a Postgres TLS policy that cannot be
+ * applied safely, such as a verified mode without any CA roots.
+ *
+ * This indicates wrapper/addon version skew or a malformed resolved binding.
+ * It is not retryable because retrying cannot repair the contract.
+ */
+export const InvalidPostgresTlsConfigError = defineError({
+  code: "INVALID_POSTGRES_TLS_CONFIG",
+  context: z.object({
+    sslmode: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ sslmode, reason }) =>
+    `@alienplatform/bindings received an invalid Postgres TLS configuration for sslmode '${sslmode}' from the native addon: ${reason}.`,
+  retryable: false,
+  internal: false,
+})
+
 /** Fallback code for napi-internal errors whose message is not an envelope. */
 const GENERIC_BINDINGS_CODE = "BINDINGS_ERROR"
 

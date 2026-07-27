@@ -31,6 +31,7 @@ export {
   AlienError,
   BindingNotConfiguredError,
   defineError,
+  InvalidPostgresTlsConfigError,
   UnknownPostgresSslModeError,
 } from "./errors.js"
 
@@ -44,6 +45,7 @@ export type {
   Postgres,
   PostgresConnection,
   PostgresSslMode,
+  PostgresTlsOptions,
   PresignedRequest,
   Queue,
   QueueMessage,

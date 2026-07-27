@@ -63,6 +63,7 @@ export type {
   Postgres,
   PostgresConnection,
   PostgresSslMode,
+  PostgresTlsOptions,
   PresignedRequest,
   Queue,
   QueueMessage,

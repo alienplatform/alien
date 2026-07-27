@@ -123,6 +123,7 @@ export interface RawPostgresConnection {
   username: string
   password: string
   sslmode: string
+  caCertificates: string[]
 }
 
 /**

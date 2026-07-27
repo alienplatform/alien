@@ -6,7 +6,9 @@
 //! connection parameters.
 
 use crate::error::{ErrorData, Result};
-use crate::providers::postgres::{cloud::resolve_secret_locator, resolve_params};
+use crate::providers::postgres::{
+    cloud::resolve_secret_locator, resolve_ca_certificates, resolve_params,
+};
 use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_core::bindings::CloudSqlPostgresBinding;
 use alien_error::{AlienError, Context};
@@ -17,7 +19,9 @@ use std::sync::Arc;
 /// Reads the password from Secret Manager and resolves the connection parameters.
 ///
 /// The workload dials the binding's `host` (the Private Service Connect consumer
-/// endpoint) and TLS is required (`sslmode=require`).
+/// endpoint) and verifies its per-instance CA (`sslmode=verify-ca`). Hostname
+/// verification is not possible because the PSC consumer endpoint is an IP address
+/// that is not present in the server certificate.
 ///
 /// Performs exactly one `accessSecretVersion`; a failure is returned to the caller,
 /// which owns any retry policy.
@@ -26,6 +30,7 @@ pub(crate) async fn resolve(
     binding: &CloudSqlPostgresBinding,
     secrets: Arc<dyn SecretManagerApi>,
 ) -> Result<PostgresConnectionParams> {
+    let ca_certificates = resolve_ca_certificates(binding_name, &binding.server_ca_certificates)?;
     let secret_name = resolve_secret_locator(
         binding_name,
         "passwordSecretName",
@@ -40,7 +45,8 @@ pub(crate) async fn resolve(
         &binding.database,
         &binding.username,
         &password,
-        SslMode::Require,
+        SslMode::VerifyCa,
+        ca_certificates,
     )
 }
 
@@ -98,6 +104,8 @@ mod tests {
     };
 
     const SECRET_NAME: &str = "pg-credentials";
+    const SERVER_CA: &str =
+        "-----BEGIN CERTIFICATE-----\ncloud-sql-instance-root\n-----END CERTIFICATE-----";
 
     fn binding() -> CloudSqlPostgresBinding {
         CloudSqlPostgresBinding {
@@ -105,6 +113,7 @@ mod tests {
             port: BindingValue::value(5432),
             database: "app".into(),
             username: "alien".into(),
+            server_ca_certificates: BindingValue::value(vec![SERVER_CA.to_string()]),
             password_secret_name: SECRET_NAME.into(),
         }
     }
@@ -123,7 +132,7 @@ mod tests {
     /// The password contains every RFC 3986 sub-delim that `encodeURIComponent` leaves
     /// literal, extending the encoding contract pinned in `local.rs` to this backend.
     #[tokio::test]
-    async fn resolves_host_and_require_sslmode_from_latest_version() {
+    async fn resolves_host_with_ca_verified_tls_from_latest_version() {
         let mut secrets = MockSecretManagerApi::new();
         secrets
             .expect_access_secret_version()
@@ -140,11 +149,35 @@ mod tests {
         assert_eq!(params.database, "app");
         assert_eq!(params.username, "alien");
         assert_eq!(params.password, "a!b*c'd(e)f@/");
-        assert_eq!(params.sslmode, SslMode::Require);
+        assert_eq!(params.sslmode, SslMode::VerifyCa);
+        assert_eq!(params.ca_certificates, vec![SERVER_CA]);
         assert_eq!(
             params.connection_string(),
-            "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@10.0.0.5:5432/app?sslmode=require"
+            "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@10.0.0.5:5432/app?sslmode=verify-ca"
         );
+    }
+
+    #[tokio::test]
+    async fn missing_server_ca_fails_before_reading_the_password() {
+        for certificates in [
+            BindingValue::value(Vec::new()),
+            BindingValue::Expression(serde_json::json!({
+                "Fn::GetAtt": ["CloudSql", "ServerCaCertificates"]
+            })),
+        ] {
+            let mut secrets = MockSecretManagerApi::new();
+            secrets.expect_access_secret_version().never();
+
+            let mut malformed = binding();
+            malformed.server_ca_certificates = certificates;
+
+            let error = resolve("db", &malformed, Arc::new(secrets))
+                .await
+                .expect_err("Cloud SQL without concrete CA roots must fail closed");
+
+            assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+            assert!(!error.retryable);
+        }
     }
 
     /// A failed secret read is upstream/transient — it must stay retryable so an

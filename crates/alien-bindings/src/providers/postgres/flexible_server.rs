@@ -5,7 +5,9 @@
 //! `postgres/data-access` permission set) and builds the connection parameters.
 
 use crate::error::{ErrorData, Result};
-use crate::providers::postgres::{cloud::resolve_secret_locator, resolve_params};
+use crate::providers::postgres::{
+    cloud::resolve_secret_locator, resolve_params, AZURE_POSTGRES_CA_CERTIFICATES,
+};
 use crate::traits::{PostgresConnectionParams, SslMode};
 use alien_azure_clients::keyvault::KeyVaultSecretsApi;
 use alien_core::bindings::FlexibleServerPostgresBinding;
@@ -27,7 +29,8 @@ struct SecretUri {
 /// Reads the password from Key Vault and resolves the connection parameters.
 ///
 /// The workload dials the binding's `host` (the private DNS FQDN fronting the
-/// server's Private Endpoint) and TLS is required (`sslmode=require`).
+/// server's Private Endpoint) and verifies the Azure roots and hostname
+/// (`sslmode=verify-full`).
 ///
 /// Performs exactly one `getSecret`; a failure is returned to the caller, which owns
 /// any retry policy.
@@ -51,7 +54,11 @@ pub(crate) async fn resolve(
         &binding.database,
         &binding.username,
         &password,
-        SslMode::Require,
+        SslMode::VerifyFull,
+        AZURE_POSTGRES_CA_CERTIFICATES
+            .iter()
+            .map(|certificate| (*certificate).to_string())
+            .collect(),
     )
 }
 
@@ -155,7 +162,7 @@ mod tests {
     /// sub-delim that `encodeURIComponent` leaves literal, extending the encoding contract
     /// pinned in `local.rs` to this backend.
     #[tokio::test]
-    async fn resolves_host_and_require_sslmode_from_secret_uri() {
+    async fn resolves_host_with_verified_tls_from_secret_uri() {
         let mut secrets = MockKeyVaultSecretsApi::new();
         secrets
             .expect_get_secret()
@@ -174,11 +181,19 @@ mod tests {
         assert_eq!(params.database, "app");
         assert_eq!(params.username, "alien");
         assert_eq!(params.password, "a!b*c'd(e)f@/");
-        assert_eq!(params.sslmode, SslMode::Require);
+        assert_eq!(params.sslmode, SslMode::VerifyFull);
+        assert_eq!(params.ca_certificates.len(), 1);
+        assert_eq!(
+            params.ca_certificates[0]
+                .matches("-----BEGIN CERTIFICATE-----")
+                .count(),
+            3,
+            "the embedded set must carry only Azure's recommended roots"
+        );
         assert_eq!(
             params.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f%40%2F@\
-             pg.privatelink.postgres.database.azure.com:5432/app?sslmode=require"
+             pg.privatelink.postgres.database.azure.com:5432/app?sslmode=verify-full"
         );
     }
 

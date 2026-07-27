@@ -2366,7 +2366,7 @@ mod tests {
                 assert_eq!(
                     params.connection_string(),
                     "postgres://alien:password-v2@\
-                     cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=require",
+                     cluster.cluster-abc.us-east-1.rds.amazonaws.com:5432/app?sslmode=verify-full",
                     "re-resolving must rebuild every connection field, not just the password"
                 );
             }
