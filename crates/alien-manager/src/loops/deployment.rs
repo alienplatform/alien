@@ -39,6 +39,10 @@ use crate::transports::ManagerTransport;
 const MAX_STEPS_PER_TICK: usize = 100;
 const MAX_STEPS_PER_HEARTBEAT: usize = 1;
 /// Maximum number of deployments to process concurrently per tick.
+///
+/// This is also the acquire batch size. A deployment's lease is only renewed
+/// once it is actually being processed, so acquiring more than can be processed
+/// at once would leave the surplus holding leases that nothing is extending.
 pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Maximum acquire/process batches before yielding back to the interval sleep.
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
@@ -308,7 +312,7 @@ impl DeploymentLoop {
 
             match self
                 .deployment_store
-                .acquire(&caller, &session, &filter, 10)
+                .acquire(&caller, &session, &filter, MAX_CONCURRENT_DEPLOYMENTS as u32)
                 .await
             {
                 Ok(acquired) => {

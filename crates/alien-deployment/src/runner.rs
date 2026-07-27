@@ -38,8 +38,29 @@ use tracing::{debug, info, warn};
 const CHECKPOINT_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const CHECKPOINT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
-const LEASE_RENEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const LEASE_RENEW_FAILURE_DEADLINE: Duration = Duration::from_secs(4 * 60);
+const LEASE_RENEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const LEASE_RENEW_FAILURE_DEADLINE: Duration = Duration::from_secs(3 * 60 + 30);
+
+/// The shortest confirmed lease a deployment store is expected to grant.
+///
+/// The runner must give up ownership strictly before the store would let another
+/// session acquire the deployment, otherwise two runners could act on the same
+/// target. The worst case is a renewal attempt that starts just before the
+/// failure deadline and then times out, so the latest the runner can stop is
+/// `LEASE_RENEW_FAILURE_DEADLINE + LEASE_RENEW_REQUEST_TIMEOUT` after the last
+/// success. The assertion below keeps that strictly inside the lease.
+const MINIMUM_CONFIRMED_LEASE: Duration = Duration::from_secs(5 * 60);
+
+const _: () = assert!(
+    LEASE_RENEW_FAILURE_DEADLINE.as_secs() + LEASE_RENEW_REQUEST_TIMEOUT.as_secs()
+        < MINIMUM_CONFIRMED_LEASE.as_secs(),
+    "the runner must abandon a deployment before its lease can be reacquired elsewhere",
+);
+
+const _: () = assert!(
+    LEASE_RENEW_INTERVAL.as_secs() < LEASE_RENEW_FAILURE_DEADLINE.as_secs(),
+    "at least one renewal must be attempted before the failure deadline",
+);
 
 /// Policy configuration for the runner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
