@@ -108,6 +108,10 @@ export type SyncAcquireRequest = {
    */
   session: string;
   /**
+   * Idempotency key for one logical acquire request
+   */
+  requestId: string;
+  /**
    * Specific deployment IDs to lock (for Pull model sync)
    */
   deploymentIds?: Array<string> | undefined;
@@ -158,6 +162,7 @@ export const SyncAcquireRequestDeploymentModel$outboundSchema: z.ZodEnum<
 export type SyncAcquireRequest$Outbound = {
   managerId?: string | undefined;
   session: string;
+  requestId: string;
   deploymentIds?: Array<string> | undefined;
   statuses?: Array<string> | undefined;
   platforms?: Array<string> | undefined;
@@ -174,6 +179,7 @@ export const SyncAcquireRequest$outboundSchema: z.ZodType<
 > = z.object({
   managerId: z.string().optional(),
   session: z.string(),
+  requestId: z.string(),
   deploymentIds: z.array(z.string()).optional(),
   statuses: z.array(SyncAcquireRequestStatus$outboundSchema).optional(),
   platforms: z.array(SyncAcquireRequestPlatform$outboundSchema).optional(),
