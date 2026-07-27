@@ -533,7 +533,7 @@ mod tests {
                     .collect();
 
                 assert!(permission_names.contains(&"worker/provision".to_string()));
-                assert!(permission_names.contains(&OBSERVE_PERMISSION_SET_ID.to_string()));
+                assert!(!permission_names.contains(&OBSERVE_PERMISSION_SET_ID.to_string()));
                 assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
                 assert!(!permission_names.contains(&"aws/tag-tamper-protection".to_string()));
@@ -716,23 +716,9 @@ mod tests {
             .await
             .unwrap();
 
-        let ManagementPermissions::Extend(profile) = result_stack.management() else {
-            panic!("Expected Extend management permissions");
-        };
-        let global_permission_names: Vec<String> = profile
-            .0
-            .get("*")
-            .unwrap()
-            .iter()
-            .map(|perm_ref| perm_ref.id().to_string())
-            .collect();
-        assert_eq!(
-            global_permission_names,
-            vec![OBSERVE_PERMISSION_SET_ID.to_string()]
-        );
         assert!(
-            !profile.0.contains_key("kubernetes"),
-            "API-only Kubernetes heartbeat should not author Kubernetes cloud metadata permissions"
+            matches!(result_stack.management(), ManagementPermissions::Auto),
+            "an application with no management grants should remain Auto"
         );
     }
 
