@@ -149,43 +149,77 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
             }
         }
 
-        errors.extend(dependents_of_gated_resources(stack));
+        let (dependent_errors, warnings) = dependents_of_gated_resources(stack);
+        errors.extend(dependent_errors);
 
-        if errors.is_empty() {
-            Ok(CheckResult::success())
-        } else {
-            Ok(CheckResult::failed(errors))
+        // Severity is per finding: a scrubbable link only warns, but every other rule here
+        // still fails, including the `"*"`-grant refusal above, which is a security rule.
+        match (errors.is_empty(), warnings.is_empty()) {
+            (true, true) => Ok(CheckResult::success()),
+            (true, false) => Ok(CheckResult::with_warnings(warnings)),
+            (false, _) => Ok(CheckResult::failed_with_warnings(errors, warnings)),
         }
     }
 }
 
-/// Rejects resources that would outlive a gated resource they read outputs from.
+/// Sorts dependents of gated resources into refusals and warnings.
 ///
-/// `StackState::get_resource_outputs` errors when a resource is absent, so an
-/// ungated dependent of a gated resource fails at deploy time in the customer's
-/// account. Catching it here fails when the manifest is written instead.
-fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
+/// A pure link survives the gate being declined: `remove_declined` drops it along with the
+/// resource, so the dependent keeps its own lifecycle and simply starts without that
+/// `ALIEN_<ID>_BINDING`. Every other edge still refuses, because nothing removes it — a
+/// trigger's wiring lives on the source resource, an ordering edge is not a binding, and a
+/// resource type that does not report its links cannot have them scrubbed.
+fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
     let gates: HashMap<&str, &str> = stack
         .resources()
         .filter_map(|(id, entry)| Some((id.as_str(), entry.enabled_when.as_deref()?)))
         .collect();
 
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
     for (dependent_id, entry) in stack.resources() {
         // `ResourceEntry` documents the total as `config.get_dependencies()` plus its own
-        // list, and each compute type folds its links and triggers into the former. That
-        // canonical aggregation is used here rather than the per-type downcast in
-        // `resource_link_permissions`, which only keeps the permission-bearing link types.
+        // list, and each compute type folds its links and triggers into the former.
         let config_dependencies = entry.config.get_dependencies();
+        let links = entry.config.links();
+        let mut seen: Vec<&str> = Vec::new();
 
         for dependency in config_dependencies.iter().chain(&entry.dependencies) {
-            let Some(dependency_gate) = gates.get(dependency.id()) else {
+            let dependency_id = dependency.id();
+            let Some(dependency_gate) = gates.get(dependency_id) else {
                 continue;
             };
-            let dependency_id = dependency.id();
+            if seen.contains(&dependency_id) {
+                continue;
+            }
+            seen.push(dependency_id);
+
+            // Sharing the gate is already correct: the two rise and fall together.
+            if entry.enabled_when.as_deref() == Some(*dependency_gate) {
+                continue;
+            }
+
+            // Counting rather than testing membership: a resource that is both linked and
+            // triggered appears twice, and the trigger is the half the scrub cannot remove.
+            let link_count = links.iter().filter(|l| l.id() == dependency_id).count();
+            let total = config_dependencies
+                .iter()
+                .chain(&entry.dependencies)
+                .filter(|d| d.id() == dependency_id)
+                .count();
+
+            if link_count > 0 && total == link_count {
+                warnings.push(format!(
+                    "Resource '{dependent_id}' links '{dependency_id}', which is enabled by input \
+                     '{dependency_gate}'. A deployer who says no drops the link too, so \
+                     '{dependent_id}' starts without ALIEN_{}_BINDING. Make sure it runs without it",
+                    dependency_id.to_uppercase().replace('-', "_")
+                ));
+                continue;
+            }
 
             match entry.enabled_when.as_deref() {
-                Some(gate) if gate == *dependency_gate => {}
                 Some(gate) => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', but the two are \
                      gated on different inputs: '{gate}' and '{dependency_gate}'. Nothing makes a \
@@ -194,15 +228,15 @@ fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
                 )),
                 None => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', which is enabled by \
-                     input '{dependency_gate}'. A deployer who says no would leave \
-                     '{dependent_id}' looking up outputs of a resource that was never created. \
-                     Gate '{dependent_id}' on '{dependency_gate}' too"
+                     input '{dependency_gate}'. The dependency is not a plain link, so declining \
+                     it would leave '{dependent_id}' pointing at a resource that was never \
+                     created. Gate '{dependent_id}' on '{dependency_gate}' too"
                 )),
             }
         }
     }
 
-    errors
+    (errors, warnings)
 }
 
 #[cfg(test)]
@@ -240,6 +274,106 @@ mod tests {
             .await
             .expect("check should run")
             .errors
+    }
+
+    async fn result_for(stack: Stack) -> CheckResult {
+        ResourceEnabledValidCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("check should run")
+    }
+
+    /// An ungated worker linking a gated store, which is the shape the scrub exists for.
+    fn stack_with_worker_linking_gated_store(worker_gate: Option<&str>) -> Stack {
+        let store = Kv::new("store".to_string()).build();
+        let worker = Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&store)
+            .build();
+
+        let mut worker_input = boolean_input();
+        worker_input.id = "workerEnabled".to_string();
+        let builder = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input(), worker_input])
+            .add_enabled_when(store, ResourceLifecycle::Live, "storeEnabled");
+
+        match worker_gate {
+            Some(gate) => builder.add_enabled_when(worker, ResourceLifecycle::Live, gate),
+            None => builder.add(worker, ResourceLifecycle::Live),
+        }
+        .build()
+    }
+
+    /// The link is dropped with the resource, so the worker outliving it is legitimate —
+    /// but the author still has to handle the binding being absent.
+    #[tokio::test]
+    async fn warns_rather_than_rejects_an_ungated_worker_linking_a_gated_store() {
+        let result = result_for(stack_with_worker_linking_gated_store(None)).await;
+
+        assert!(result.success, "should not block: {:?}", result.errors);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        assert!(
+            result.warnings[0].contains("Resource 'api' links 'store'"),
+            "{:?}",
+            result.warnings
+        );
+        assert!(
+            result.warnings[0].contains("ALIEN_STORE_BINDING"),
+            "{:?}",
+            result.warnings
+        );
+    }
+
+    /// Two independent answers still produce a worker that can outlive its store, but the
+    /// link is scrubbed either way, so this is the same legitimate shape.
+    #[tokio::test]
+    async fn warns_for_a_linking_worker_gated_on_a_different_input() {
+        let result = result_for(stack_with_worker_linking_gated_store(Some("workerEnabled"))).await;
+
+        assert!(result.success, "should not block: {:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    }
+
+    /// Sharing the gate means they rise and fall together, so there is nothing to say.
+    #[tokio::test]
+    async fn stays_silent_when_the_linking_worker_shares_the_gate() {
+        let result = result_for(stack_with_worker_linking_gated_store(Some("storeEnabled"))).await;
+
+        assert!(result.success, "{:?}", result.errors);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    /// The scrub only removes links. A queue reached by both a link and a trigger keeps the
+    /// trigger wiring on the source resource, so this must stay a refusal.
+    #[tokio::test]
+    async fn rejects_a_queue_that_is_both_linked_and_triggered() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let queue_ref = alien_core::ResourceRef {
+            resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
+            id: "jobs".to_string(),
+        };
+        let worker = Worker::new("consumer".to_string())
+            .permissions("consumer".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/consumer:latest".to_string(),
+            })
+            .link(&queue)
+            .trigger(alien_core::WorkerTrigger::Queue { queue: queue_ref })
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(queue, ResourceLifecycle::Live, "storeEnabled")
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let errors = errors_for(stack).await;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("not a plain link"), "{errors:?}");
     }
 
     #[tokio::test]

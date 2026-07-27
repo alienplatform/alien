@@ -290,6 +290,14 @@ impl ResourceDefinition for Daemon {
         Some(&self.permissions)
     }
 
+    fn links(&self) -> &[ResourceRef] {
+        &self.links
+    }
+
+    fn remove_links_to(&mut self, removed: &[String]) {
+        self.links.retain(|link| !removed.contains(&link.id));
+    }
+
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
         let new_daemon = new_config
             .as_any()

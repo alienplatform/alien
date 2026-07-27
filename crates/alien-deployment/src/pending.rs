@@ -467,12 +467,39 @@ pub fn audit_live_gate_transitions(
 }
 
 fn remove_declined(stack: &mut Stack, declined: &[String]) {
+    if declined.is_empty() {
+        return;
+    }
+
     for resource_id in declined {
         info!(
             resource_id = %resource_id,
             "The deployer declined this gated resource; it leaves the desired stack"
         );
         stack.resources.shift_remove(resource_id);
+    }
+
+    // Removing the resource without its inbound links would leave a survivor pointing at
+    // something that was never created, which the executor and binding resolution both
+    // reject. Scrubbing here is what lets an ungated resource link a gated one.
+    for (resource_id, entry) in stack.resources.iter_mut() {
+        let before = entry.config.links().len();
+        entry.config.remove_links_to(declined);
+        let dropped = before - entry.config.links().len();
+        if dropped > 0 {
+            info!(
+                resource_id = %resource_id,
+                dropped,
+                declined = ?declined,
+                "Dropped links to declined resources; this resource keeps its own lifecycle"
+            );
+        }
+
+        // Preflight refuses an authored ordering edge onto a gated resource, so anything
+        // reaching here came from a mutation that ran before the strip.
+        entry
+            .dependencies
+            .retain(|dependency| !declined.contains(&dependency.id));
     }
 }
 
@@ -637,6 +664,152 @@ mod tests {
                 "cacheEnabled",
             )
             .build()
+    }
+
+    /// An ungated worker linking a gated live store: the shape the link scrub exists for.
+    fn live_gated_stack_with_linking_worker(default: Option<bool>) -> Stack {
+        let input = StackInputDefinition::deployer_boolean(
+            "cacheEnabled",
+            "Enable the cache",
+            "Whether to run the cache store.",
+            default,
+        );
+        let cache = Kv::new("cache".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&cache)
+            .build();
+
+        Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(cache, ResourceLifecycle::Live, "cacheEnabled")
+            .add(worker, ResourceLifecycle::Live)
+            .build()
+    }
+
+    fn strip_live(stack: Stack, accepted: bool) -> Stack {
+        let mut input_values = std::collections::HashMap::new();
+        input_values.insert(
+            "cacheEnabled".to_string(),
+            serde_json::Value::Bool(accepted),
+        );
+        strip_declined_live_resources(
+            stack,
+            &input_values,
+            &alien_core::GateAnswers::default(),
+            &std::collections::HashSet::new(),
+        )
+        .expect("strip should resolve the gate")
+    }
+
+    fn link_ids(stack: &Stack, resource_id: &str) -> Vec<String> {
+        stack
+            .resources
+            .get(resource_id)
+            .expect("resource should be present")
+            .config
+            .links()
+            .iter()
+            .map(|link| link.id.clone())
+            .collect()
+    }
+
+    /// The point of the whole change: the store goes, the worker stays, and the worker no
+    /// longer references a resource that was never created.
+    #[test]
+    fn a_declined_store_takes_the_linking_workers_link_with_it() {
+        let stack = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
+
+        assert!(
+            !stack.resources.contains_key("cache"),
+            "the declined store must leave the desired stack"
+        );
+        assert!(
+            stack.resources.contains_key("api"),
+            "the ungated worker must survive its declined link target"
+        );
+        assert!(
+            link_ids(&stack, "api").is_empty(),
+            "the link must not outlive the resource: {:?}",
+            link_ids(&stack, "api")
+        );
+        assert!(
+            stack
+                .resources
+                .get("api")
+                .expect("worker")
+                .config
+                .get_dependencies()
+                .is_empty(),
+            "no dependency may still name the declined store"
+        );
+    }
+
+    /// Accepting must leave the graph untouched, or the scrub would be dropping links it
+    /// was never asked to drop.
+    #[test]
+    fn an_accepted_store_keeps_the_link() {
+        let stack = strip_live(live_gated_stack_with_linking_worker(Some(false)), true);
+
+        assert!(stack.resources.contains_key("cache"));
+        assert_eq!(link_ids(&stack, "api"), vec!["cache".to_string()]);
+    }
+
+    /// The executor plans an update by comparing resource configs
+    /// (`Some(&desired_config.resource) != current_resource_config_opt`). Links live inside
+    /// that config, so the scrub must change it — otherwise the worker would keep running
+    /// with the stale binding in its environment and nothing would ever correct it.
+    #[test]
+    fn the_scrub_changes_the_config_the_executor_diffs() {
+        let before = live_gated_stack_with_linking_worker(Some(true));
+        let before_config = before
+            .resources
+            .get("api")
+            .expect("worker")
+            .config
+            .clone();
+
+        let after = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
+        let after_config = &after.resources.get("api").expect("worker").config;
+
+        assert_ne!(
+            &before_config, after_config,
+            "a scrubbed worker must not compare equal to the unscrubbed one"
+        );
+    }
+
+    /// Only the declined id is scrubbed; an unrelated link on the same resource stays.
+    #[test]
+    fn scrubbing_leaves_unrelated_links_alone() {
+        let input = StackInputDefinition::deployer_boolean(
+            "cacheEnabled",
+            "Enable the cache",
+            "Whether to run the cache store.",
+            Some(true),
+        );
+        let cache = Kv::new("cache".to_string()).build();
+        let store = Kv::new("store".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&cache)
+            .link(&store)
+            .build();
+        let stack = Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(cache, ResourceLifecycle::Live, "cacheEnabled")
+            .add(store, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let stack = strip_live(stack, false);
+
+        assert_eq!(link_ids(&stack, "api"), vec!["store".to_string()]);
     }
 
     /// Resolve-then-strip is the whole contract, so the tests exercise the
