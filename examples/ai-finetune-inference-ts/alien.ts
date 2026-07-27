@@ -26,16 +26,17 @@ const dataset = new alien.Storage("finetune-training-data").build()
 // deploy to (see the README's per-provider table). The default targets AWS
 // Bedrock (Amazon Nova).
 //
-// IMPORTANT for Bedrock: the customization base-model id is NOT the inference id
-// (`amazon.nova-lite-v1:0`) — CreateModelCustomizationJob rejects that as "invalid
-// model identifier". It requires the full foundation-model ARN with the model's
-// customization context-length suffix, which is PER-MODEL (per the Nova fine-tuning
-// docs' `model_type` table): Nova Micro is `:0:128k`, Nova Lite and Nova Pro are
-// `:0:300k`. Using the wrong suffix (e.g. `:0:128k` for Lite) is the "invalid model
-// identifier" error.
+// IMPORTANT for Bedrock: the base-model id must be a model that is actually
+// customizable IN YOUR ACCOUNT/REGION — the Bedrock console (Custom models → Create
+// → base-model dropdown) is the source of truth, and it varies by account/region.
+// Use the model's canonical Bedrock Model ID from its model card, NOT a context-
+// length suffix: Nova *2* models are plain `amazon.nova-2-lite-v1:0` (the `:0:256k`
+// / `:0:300k` / `:0:128k` suffixes were a Nova *1.0* SageMaker-recipe convention and
+// are rejected here as "invalid model identifier"). In this account/us-east-1 the
+// only model offered for customization is Amazon Nova 2 Lite:
 const llm = new alien.AI("llm")
   .finetune({
-    baseModel: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0:300k",
+    baseModel: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0",
     trainingData: dataset,
     trainingKey: "training.jsonl",
     servedModelId: "support-tuned",
