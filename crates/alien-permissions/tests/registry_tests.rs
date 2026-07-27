@@ -117,6 +117,9 @@ fn test_ai_finetune_grants_job_lifecycle() {
         "bedrock:CreateModelCustomizationJob",
         "bedrock:GetModelCustomizationJob",
         "bedrock:GetCustomModel",
+        // Passing the dedicated Bedrock-trusted finetune role to the job requires
+        // iam:PassRole, or the submit fails with "not authorized to perform: iam:PassRole".
+        "iam:PassRole",
     ] {
         assert!(
             aws_actions.iter().any(|a| a.as_str() == required),

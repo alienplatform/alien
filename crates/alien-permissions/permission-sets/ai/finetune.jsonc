@@ -38,6 +38,24 @@
             ]
           }
         }
+      },
+      {
+        // Submitting the job passes the dedicated Bedrock-trusted finetune role
+        // (`${stackPrefix}-<ai>-finetune`, provisioned by the AI emitter) to
+        // Bedrock, so the caller needs iam:PassRole on it. Without this the job
+        // submit fails with "not authorized to perform: iam:PassRole". Scoped to
+        // this stack's `-finetune` roles only.
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-finetune"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-finetune"]
+          }
+        }
       }
     ],
     "gcp": [

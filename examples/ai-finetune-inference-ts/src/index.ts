@@ -26,8 +26,12 @@ app.post("/dataset", async c => {
 //    (Bedrock / Vertex / Foundry) under the workload's ambient identity and returns a
 //    job id to poll. Long-running (minutes to hours); this returns immediately.
 app.post("/finetune", async c => {
-  const { jobId, servedModel } = await ai("llm").finetune({ trainingKey: TRAINING_KEY })
-  return c.json({ jobId, servedModel, message: "tuning started; poll /finetune/status?jobId=" })
+  try {
+    const { jobId, servedModel } = await ai("llm").finetune({ trainingKey: TRAINING_KEY })
+    return c.json({ jobId, servedModel, message: "tuning started; poll /finetune/status?jobId=" })
+  } catch (err) {
+    return c.json({ error: "finetune failed", detail: errorDetail(err) }, 502)
+  }
 })
 
 // 3. Poll a job. The gateway queries the cloud live (stateless — no job state stored).
@@ -36,9 +40,27 @@ app.get("/finetune/status", async c => {
   if (!jobId) {
     return c.json({ error: "pass ?jobId= from the POST /finetune response" }, 400)
   }
-  const state = await ai("llm").finetuneStatus(jobId)
-  return c.json(state)
+  try {
+    const state = await ai("llm").finetuneStatus(jobId)
+    return c.json(state)
+  } catch (err) {
+    return c.json({ error: "finetune status failed", detail: errorDetail(err) }, 502)
+  }
 })
+
+// Surface the underlying error message (and cause chain) so a failed tuning call
+// returns an actionable body instead of a blank 500. Examples should be debuggable.
+function errorDetail(err: unknown): string {
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause
+    return cause ? `${err.message} | cause: ${errorDetail(cause)}` : err.message
+  }
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return String(err)
+  }
+}
 
 // 4. Inference against a base foundation model (the per-cloud catalog).
 app.post("/chat", async c => {
