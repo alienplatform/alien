@@ -432,6 +432,7 @@ async fn reconcile(
     //    This must happen before persisting so the `registry_access_granted`
     //    flag is included in the persisted state (matches ManagerTransport).
     let mut final_state = deployment_state;
+    preserve_recorded_gate_answers(&mut final_state, &deployment);
     crate::registry_access::reconcile_registry_access(
         &state.bindings_provider,
         &state.target_bindings_providers,
@@ -568,8 +569,8 @@ async fn release(
 mod tests {
     use alien_core::{
         DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
-        ExternalBindings, Platform, ResourceHeartbeatData, StackSettings, StackState,
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        ExternalBindings, Platform, ResourceHeartbeatData, RuntimeMetadata, StackSettings,
+        StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -579,10 +580,10 @@ mod tests {
 
     use super::{
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
-        deployment_target_release_id, management_platform, release_stack_platform,
-        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, InitialDesiredRelease,
-        InitializeRequest, ReconcileRequest,
+        deployment_target_release_id, management_platform, preserve_recorded_gate_answers,
+        release_stack_platform, should_ignore_agent_state_report,
+        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
+        AgentSyncRequest, InitialDesiredRelease, InitializeRequest, ReconcileRequest,
     };
 
     #[test]
@@ -1122,6 +1123,40 @@ mod tests {
             error: None,
         }
     }
+
+    #[test]
+    fn preserving_gate_answers_folds_key_by_key_with_the_record_winning() {
+        let mut recorded = RuntimeMetadata::default();
+        recorded.persisted_gate_answers.insert("a".to_string(), false);
+        recorded.persisted_gate_answers.insert("b".to_string(), true);
+        let mut stored = deployment_record_with_state("running", None);
+        stored.runtime_metadata = Some(recorded);
+
+        let mut incoming_metadata = RuntimeMetadata::default();
+        incoming_metadata
+            .persisted_gate_answers
+            .insert("a".to_string(), true);
+        incoming_metadata
+            .persisted_gate_answers
+            .insert("c".to_string(), false);
+        let mut incoming = uninitialized_state();
+        incoming.runtime_metadata = Some(incoming_metadata);
+
+        preserve_recorded_gate_answers(&mut incoming, &stored);
+
+        let answers = &incoming
+            .runtime_metadata
+            .expect("metadata must survive")
+            .persisted_gate_answers;
+        assert_eq!(answers.get("a"), Some(&false), "the record wins a flip");
+        assert_eq!(answers.get("b"), Some(&true), "a dropped key is restored");
+        assert_eq!(
+            answers.get("c"),
+            Some(&false),
+            "an incoming-only key survives the fold"
+        );
+        assert_eq!(answers.len(), 3);
+    }
 }
 
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
@@ -1178,6 +1213,9 @@ async fn agent_sync(
                         "Ignoring empty pull sync state because manager already has deployment state"
                     );
                 } else {
+                    // Stays below the ignore check: restoring metadata here
+                    // would make an uninitialized report look initialized.
+                    preserve_recorded_gate_answers(&mut agent_state, &deployment);
                     // Reconcile registry access before persisting so the flag
                     // is saved in the same DB write.
                     crate::registry_access::reconcile_registry_access(
@@ -1510,6 +1548,52 @@ fn validate_initialize_base_platform(
         Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => Err(
             ErrorData::bad_request("basePlatform for kubernetes must be one of aws, gcp, or azure"),
         ),
+    }
+}
+
+/// Gate answers are lifetime-fixed: fold the stored map into a write arriving
+/// through these routes so an actor that predates the field, omits its
+/// metadata, or holds a stale copy cannot shrink or flip the record.
+fn preserve_recorded_gate_answers(incoming: &mut DeploymentState, stored: &DeploymentRecord) {
+    let Some(recorded) = stored
+        .runtime_metadata
+        .as_ref()
+        .map(|metadata| &metadata.persisted_gate_answers)
+        .filter(|answers| !answers.is_empty())
+    else {
+        return;
+    };
+    let metadata = incoming.runtime_metadata.get_or_insert_default();
+    let mut restored = 0usize;
+    for (input_id, recorded_answer) in recorded {
+        match metadata.persisted_gate_answers.get(input_id) {
+            None => {
+                metadata
+                    .persisted_gate_answers
+                    .insert(input_id.clone(), *recorded_answer);
+                restored += 1;
+            }
+            Some(incoming_answer) if incoming_answer != recorded_answer => {
+                tracing::warn!(
+                    %input_id,
+                    deployment_id = %stored.id,
+                    recorded = *recorded_answer,
+                    incoming = *incoming_answer,
+                    "state write-back contradicts a recorded gate answer; keeping the record"
+                );
+                metadata
+                    .persisted_gate_answers
+                    .insert(input_id.clone(), *recorded_answer);
+            }
+            Some(_) => {}
+        }
+    }
+    if restored > 0 {
+        tracing::debug!(
+            restored,
+            deployment_id = %stored.id,
+            "restored recorded gate answers a state write-back dropped"
+        );
     }
 }
 
