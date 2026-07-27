@@ -1307,7 +1307,8 @@ jobs:
 
   publish-ai-gateway:
     needs: [prepare, publish-npm]
-    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
+    # Skipped on a dry run: publishing is permanent and there is no qualification run to download from.
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
