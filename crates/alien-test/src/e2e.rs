@@ -443,9 +443,6 @@ pub struct TestContext {
     /// Distribution artifacts that must be destroyed outside the native
     /// deployment state machine (Terraform state, CFN stack, Helm release).
     pub distribution_cleanups: Vec<crate::distribution::DistributionArtifactCleanup>,
-    /// What a re-apply needs to reach the SAME deployment. Only a distribution
-    /// install can flip a gate, so this is `None` for a direct deployment.
-    pub gate_flip: Option<crate::distribution::GateFlip>,
 }
 
 impl TestContext {
@@ -1823,7 +1820,6 @@ pub async fn setup(
     }
 
     Ok(TestContext {
-        gate_flip: None,
         deployment,
         manager,
         platform,
