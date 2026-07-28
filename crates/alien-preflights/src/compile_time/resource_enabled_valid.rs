@@ -182,7 +182,7 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
         // `ResourceEntry` documents the total as `config.get_dependencies()` plus its own
         // list, and each compute type folds its links and triggers into the former.
         let config_dependencies = entry.config.get_dependencies();
-        let links = entry.config.links();
+        let links = alien_core::links_of(&entry.config);
         let mut seen: Vec<&str> = Vec::new();
 
         for dependency in config_dependencies.iter().chain(&entry.dependencies) {

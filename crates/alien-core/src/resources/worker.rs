@@ -406,14 +406,6 @@ impl ResourceDefinition for Worker {
         Some(&self.permissions)
     }
 
-    fn links(&self) -> &[ResourceRef] {
-        &self.links
-    }
-
-    fn remove_links_to(&mut self, removed: &[String]) {
-        self.links.retain(|link| !removed.contains(&link.id));
-    }
-
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
         // Downcast to Worker type to use the existing validate_update method
         let new_worker = new_config
