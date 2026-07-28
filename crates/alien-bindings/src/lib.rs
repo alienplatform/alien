@@ -10,9 +10,9 @@ pub use remote::{RemoteBindings, RemoteStorage};
 pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
-    GcpServiceAccountInfo, ImpersonationRequest, Kv, Postgres, PostgresConnectionParams, Queue,
-    RegistryAuthMethod, RepositoryResponse, ServiceAccount, ServiceAccountInfo, SslMode, Storage,
-    Vault, Worker,
+    GcpServiceAccountInfo, ImpersonationRequest, InvalidPostgresCaCertificates, Kv, Postgres,
+    PostgresConnectionParams, PostgresTlsPolicy, Queue, RegistryAuthMethod, RepositoryResponse,
+    ServiceAccount, ServiceAccountInfo, SslMode, Storage, Vault, Worker,
 };
 
 pub mod bindings;

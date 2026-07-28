@@ -2,7 +2,7 @@
 //!
 //! This module defines structs that represent the runtime parameters needed by bindings
 //! to interact with cloud resources. These structs are used by:
-//! - Controllers when returning binding parameters directly  
+//! - Controllers when returning binding parameters directly
 //! - Template generators when creating CloudFormation/Terraform templates (using Fn::ToJsonString)
 //! - Bindings when consuming runtime parameters (parsing JSON)
 //!
@@ -43,7 +43,7 @@ pub use kv::{
 };
 pub use postgres::{
     AuroraPostgresBinding, CloudSqlPostgresBinding, ExternalPostgresBinding,
-    FlexibleServerPostgresBinding, LocalPostgresBinding, PostgresBinding,
+    ExternalPostgresSslMode, FlexibleServerPostgresBinding, LocalPostgresBinding, PostgresBinding,
 };
 pub use queue::{
     LocalQueueBinding, PubSubQueueBinding, QueueBinding, ServiceBusQueueBinding, SqsQueueBinding,

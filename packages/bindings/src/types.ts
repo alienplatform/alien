@@ -155,6 +155,118 @@ export interface Container {
   getPublicUrl(): Promise<string | null>
 }
 
+/**
+ * TLS mode for a Postgres connection: `disable` for the local developer backend
+ * or an explicit BYO plaintext opt-out, `verify-full` for a BYO database with
+ * certificate and hostname verification, `verify-ca` for Cloud SQL over its
+ * Private Service Connect IP, and `verify-full` for Aurora and Flexible Server.
+ */
+export type PostgresSslMode = "disable" | "verify-ca" | "verify-full"
+
+/** TLS options for `verify-ca`, where the provider CA authenticates the server. */
+interface PostgresVerifyCaTlsOptions {
+  /**
+   * One or more PEM-encoded provider CA certificates. `verify-ca` cannot use the
+   * operating system trust store because the certificate is specific to the instance.
+   */
+  ca: [string, ...string[]]
+  /** Always true: an untrusted certificate fails the connection. */
+  rejectUnauthorized: true
+  /**
+   * Skip hostname matching after the CA chain succeeds because Cloud SQL's
+   * certificate does not contain the Private Service Connect IP being dialed.
+   */
+  checkServerIdentity: () => undefined
+}
+
+/** TLS options for full certificate and hostname verification. */
+interface PostgresVerifyFullTlsOptions {
+  /**
+   * PEM-encoded provider root CA certificates. Managed backends supply these;
+   * an external database can omit them to use the operating system trust store.
+   */
+  ca?: string[]
+  /** Always true: an untrusted certificate fails the connection. */
+  rejectUnauthorized: true
+  /** `verify-full` must never override Node's hostname verification. */
+  checkServerIdentity?: never
+}
+
+/** Verified TLS options ready to pass to node-postgres. */
+export type PostgresTlsOptions = PostgresVerifyCaTlsOptions | PostgresVerifyFullTlsOptions
+
+/** Connection fields shared by every Postgres TLS mode. */
+interface PostgresConnectionFields {
+  /**
+   * `postgres://user:password@host:port/database?sslmode=<mode>`. The username,
+   * password, and database are percent-encoded to the RFC 3986 unreserved set, so a
+   * generated password containing URL-special characters can never corrupt the URL.
+   */
+  connectionString: string
+  /** Address to dial — the cluster writer endpoint for Aurora, the host elsewhere. */
+  host: string
+  /** TCP port. */
+  port: number
+  /** Database name. */
+  database: string
+  /** Role to connect as. */
+  username: string
+  /**
+   * Connection password. For the managed cloud backends this was read from the
+   * cloud secret store when the binding resolved; the binding itself only ever
+   * carries a locator for it.
+   */
+  password: string
+}
+
+interface PostgresDisableConnection extends PostgresConnectionFields {
+  sslmode: "disable"
+  ssl: false
+}
+
+interface PostgresVerifyCaConnection extends PostgresConnectionFields {
+  sslmode: "verify-ca"
+  ssl: PostgresVerifyCaTlsOptions
+}
+
+interface PostgresVerifyFullConnection extends PostgresConnectionFields {
+  sslmode: "verify-full"
+  ssl: PostgresVerifyFullTlsOptions
+}
+
+/**
+ * Everything a Postgres driver needs to connect, discriminated by {@link sslmode}.
+ *
+ * For node-postgres, pass the individual fields with `ssl` rather than combining
+ * `connectionString` and `ssl`. node-postgres parses URL TLS parameters and can
+ * overwrite an explicit `ssl` object, including provider roots.
+ *
+ * External (BYO) bindings default to `verify-full`. A plaintext-only legacy server
+ * must be configured explicitly with `sslMode: "disable"` in its external binding.
+ */
+export type PostgresConnection =
+  | PostgresDisableConnection
+  | PostgresVerifyCaConnection
+  | PostgresVerifyFullConnection
+
+/**
+ * A resolved Postgres binding.
+ *
+ * Unlike the other kinds this exposes no operations: every Postgres backend speaks
+ * the same wire protocol, so the binding hands back connection details and the
+ * application connects with its own driver.
+ */
+export interface Postgres {
+  /**
+   * Resolve the connection details.
+   *
+   * For a managed cloud backend the first call reads the password from that cloud's
+   * secret store with the workload's own identity; the resolved value is then reused,
+   * so call the factory again to pick up a rotated password.
+   */
+  connection(): Promise<PostgresConnection>
+}
+
 /** A resolved vault (secrets) binding. */
 export interface Vault {
   /** Get the secret named `name` as a string. */

@@ -2,6 +2,7 @@
 
 use crate::{
     error::{binding_env_var, ErrorData, Result},
+    providers::postgres::runtime::PostgresRuntime,
     traits::{
         ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue,
         ServiceAccount, Storage, Vault, Worker,
@@ -20,10 +21,13 @@ use tokio::sync::{OnceCell, RwLock};
 /// Direct platform-specific bindings provider.
 /// Routes to appropriate platform implementations based on binding configuration.
 ///
-/// Caches all loaded bindings by name. Each `load_*` call creates cloud clients
+/// Caches loaded bindings by name. Each `load_*` call creates cloud clients
 /// (HTTP connection pools, token caches) which are expensive to initialize. Since
 /// the binding configuration is immutable for the provider's lifetime, the same
 /// binding name always produces the same client — so we cache on first load.
+///
+/// Postgres has different caching semantics because cloud handles contain a resolved
+/// password. Its dedicated runtime owns that policy and its secret-store clients.
 #[derive(Debug, Clone)]
 pub struct BindingsProvider {
     client_config: ClientConfig,
@@ -32,6 +36,7 @@ pub struct BindingsProvider {
     /// `"{trait_name}:{binding_name}"` to avoid collisions across types.
     /// Each value is a `Box<Arc<dyn Trait>>` erased via `Any`.
     cache: Arc<RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>>,
+    postgres: Arc<PostgresRuntime>,
 }
 
 /// Environment-backed provider that defers cloud client configuration until the
@@ -110,10 +115,12 @@ impl BindingsProvider {
         client_config: ClientConfig,
         bindings: HashMap<String, serde_json::Value>,
     ) -> Result<Self> {
+        let postgres = Arc::new(PostgresRuntime::new(client_config.clone()));
         Ok(Self {
             client_config,
             bindings,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            postgres,
         })
     }
 
@@ -1281,22 +1288,8 @@ impl BindingsProviderApi for BindingsProvider {
     }
 
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
-        if let Some(cached) = self
-            .get_cached::<Arc<dyn Postgres>>("postgres", binding_name)
-            .await
-        {
-            return Ok(cached);
-        }
-
         let binding: PostgresBinding = self.parse_binding(binding_name, "Postgres")?;
-
-        let result: Arc<dyn Postgres> = Arc::new(
-            crate::providers::postgres::local::LocalPostgres::from_binding(binding_name, &binding)?,
-        );
-
-        self.put_cache("postgres", binding_name, result.clone())
-            .await;
-        Ok(result)
+        self.postgres.load(binding_name, &binding).await
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {

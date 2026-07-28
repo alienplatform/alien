@@ -120,6 +120,30 @@ export interface RawContainerHandle {
   getPublicUrl(): Promise<string | null>
 }
 
+/**
+ * Raw napi Postgres connection. `sslmode` is the exact query-parameter value the
+ * Rust `SslMode` emits.
+ */
+export interface RawPostgresConnection {
+  connectionString: string
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+  sslmode: unknown
+  caCertificates: unknown
+}
+
+/**
+ * Raw napi Postgres handle. `connection()` is synchronous: the Rust provider has
+ * already resolved everything (including reading a cloud backend's password from
+ * its secret store) by the time the handle exists.
+ */
+export interface RawPostgresHandle {
+  connection(): RawPostgresConnection
+}
+
 /** Raw napi vault handle. */
 export interface RawVaultHandle {
   getSecret(name: string): Promise<string>
@@ -135,6 +159,7 @@ export interface RawBindingsHandle {
   queue(name: string): Promise<RawQueueHandle>
   vault(name: string): Promise<RawVaultHandle>
   container(name: string): Promise<RawContainerHandle>
+  postgres(name: string): Promise<RawPostgresHandle>
 }
 
 /** Raw napi remote bindings entry point. Storage is the entire v0 surface. */

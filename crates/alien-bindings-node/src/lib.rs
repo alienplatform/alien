@@ -1,5 +1,5 @@
 //! `alien-bindings-node` — a napi-rs addon exposing `alien-bindings`
-//! storage / kv / queue / vault / container to JavaScript.
+//! storage / kv / queue / vault / container / postgres to JavaScript.
 //!
 //! This crate is a pure argument/error translation layer. It contains no
 //! provider logic: every method marshals arguments across the JS boundary,
@@ -11,6 +11,7 @@
 mod container;
 mod error;
 mod kv;
+mod postgres;
 mod queue;
 #[cfg(feature = "platform-sdk")]
 mod remote_storage;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 
 pub use container::ContainerHandle;
 pub use kv::KvHandle;
+pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
 #[cfg(feature = "platform-sdk")]
 pub use remote_storage::RemoteStorageHandle;
@@ -96,6 +98,17 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let container = inner.container(&name).await.map_err(map_alien_error)?;
         Ok(ContainerHandle::new(container))
+    }
+
+    /// Resolve the Postgres binding named `name`.
+    ///
+    /// A cloud backend's password is read from its secret store here, so this is where a
+    /// secret-resolution failure surfaces — not on a later method call.
+    #[napi]
+    pub async fn postgres(&self, name: String) -> napi::Result<PostgresHandle> {
+        let inner = self.inner.clone();
+        let postgres = inner.postgres(&name).await.map_err(map_alien_error)?;
+        Ok(PostgresHandle::new(postgres))
     }
 }
 

@@ -341,6 +341,49 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// Reading a cloud Postgres binding's password from its secret store failed.
+    ///
+    /// The retry and visibility metadata comes from the provider error being wrapped:
+    /// throttling remains retryable, while permanent provider failures do not become
+    /// retryable merely because they happened during secret resolution.
+    ///
+    /// `secret` is the locator, never the secret value.
+    #[error(
+        code = "POSTGRES_SECRET_RESOLUTION_FAILED",
+        message = "Failed to resolve the password for Postgres binding '{binding_name}' from secret '{secret}': {reason}",
+        retryable = "inherit",
+        internal = "inherit",
+        http_status_code = 502
+    )]
+    PostgresSecretResolutionFailed {
+        /// Name of the Postgres binding whose password could not be resolved
+        binding_name: String,
+        /// The secret locator that was read (an ARN / name / URI — never the value)
+        secret: String,
+        /// What went wrong while reading the secret
+        reason: String,
+    },
+
+    /// A cloud Postgres secret was read, but did not contain a usable password.
+    ///
+    /// Provider responses with missing, empty, or malformed values cannot become valid
+    /// by retrying the same version. `secret` is the locator, never the secret value.
+    #[error(
+        code = "POSTGRES_SECRET_VALUE_INVALID",
+        message = "Secret '{secret}' for Postgres binding '{binding_name}' does not contain a valid password: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    PostgresSecretValueInvalid {
+        /// Name of the Postgres binding whose password value was invalid
+        binding_name: String,
+        /// The secret locator that was read (an ARN / name / URI — never the value)
+        secret: String,
+        /// Why the returned value cannot be used as a password
+        reason: String,
+    },
+
     /// Resource not found in the cloud platform.
     #[error(
         code = "RESOURCE_NOT_FOUND",
