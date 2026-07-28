@@ -681,11 +681,11 @@ impl StackExecutor {
         Ok(true)
     }
 
-    /// The resources this executor will delete from `state` and has not deleted yet.
+    /// The deletions this executor's planner schedules against `state` and has not finished.
     ///
-    /// Answered by the planner's own rule so a caller judging completion cannot wait on a
-    /// deletion the planner refuses to schedule — a resource out of scope, or held by a
-    /// dependent the scope excludes, is never pending here.
+    /// Answers the planner's question, not the step's: a resource out of scope, or held by a
+    /// dependent the scope excludes, is never pending here, but one whose delete `step` still
+    /// defers is. A caller judging completion therefore waits for the deferral to lift.
     pub fn pending_deletions<'a>(&self, state: &'a StackState) -> Result<Vec<&'a str>> {
         let has_dependents = self.deletion_dependents(state);
         let mut pending = Vec::new();
@@ -1463,10 +1463,13 @@ impl StackExecutor {
                             );
                             let failed_update_state = current_state.with_failure(
                                 ResourceStatus::UpdateFailed,
-                                AlienError::new(ErrorData::ResourceStateSerializationFailed {
-                                    resource_id: resource_id.clone(),
-                                    message: "Missing controller state for planned update"
-                                        .to_string(),
+                                AlienError::new(ErrorData::InfrastructureError {
+                                    message: format!(
+                                        "Resource '{}' has no controller state to update from",
+                                        resource_id
+                                    ),
+                                    operation: Some("update_transition".to_string()),
+                                    resource_id: Some(resource_id.clone()),
                                 })
                                 .into_generic(),
                             );

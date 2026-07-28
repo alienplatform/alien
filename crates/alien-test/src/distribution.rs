@@ -2350,49 +2350,6 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
     }
 }
 
-/// Re-import an already-installed stack. Unlike [`import_stack`] it skips fetching the
-/// deployment record, which a flip already holds.
-async fn reimport_stack(
-    manager_url: &str,
-    dg_token: &str,
-    request: StackImportRequest,
-) -> anyhow::Result<StackState> {
-    let url = format!("{manager_url}/v1/stack/import");
-    // The manager refuses an import while a reconcile is settling and asks the caller to
-    // retry once stable; a background pass can open that window at any moment, so obey it.
-    let deadline = std::time::Instant::now() + REIMPORT_RETRY_TIMEOUT;
-    loop {
-        let response = reqwest::Client::new()
-            .post(&url)
-            .bearer_auth(dg_token)
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to call /v1/stack/import for a gate flip")?;
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::CONFLICT
-            && body.contains("IMPORTED_DEPLOYMENT_CONFLICT")
-            && std::time::Instant::now() < deadline
-        {
-            info!("Deployment is still reconciling; retrying the flip's import");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            continue;
-        }
-        if !status.is_success() {
-            anyhow::bail!("stack re-import failed with {status}: {body}");
-        }
-
-        let response: StackImportResponse =
-            serde_json::from_str(&body).context("Failed to parse StackImportResponse")?;
-        return Ok(response.stack_state);
-    }
-}
-
-/// How long a flip's import retries `IMPORTED_DEPLOYMENT_CONFLICT` before giving up.
-const REIMPORT_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
 async fn import_stack(
     prepared: &DistributionPrepared,
     request: StackImportRequest,

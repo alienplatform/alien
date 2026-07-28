@@ -239,7 +239,10 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                 warnings.push(format!(
                     "Resource '{dependent_id}' links '{dependency_id}', which is enabled by input \
                      '{dependency_gate}'. A deployer who says no drops the link too, so \
-                     '{dependent_id}' starts without {}. Make sure it runs without it",
+                     '{dependent_id}' starts without {}. Make sure it runs without it. A \
+                     deployment that already accepted the gate keeps whatever access it granted \
+                     '{dependent_id}' until the next deploy re-derives it, so gate both on \
+                     '{dependency_gate}' if that access must leave with the resource",
                     alien_core::binding_env_var_name(dependency_id)
                 ));
                 continue;

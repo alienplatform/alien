@@ -608,31 +608,82 @@ async fn test_external_binding_resource_adopts_config_changes() -> Result<()> {
     Ok(())
 }
 
+/// Only an external binding may reach an update with no controller. Anything else has lost
+/// the state its update would resume from, so the resource fails loudly rather than having
+/// the update silently skipped and the deployment reporting success.
+#[tokio::test]
+async fn test_a_controllerless_resource_fails_its_update() -> Result<()> {
+    let stack = Stack::new("controllerless-update-test".to_owned())
+        .add(test_storage_with_public_read("store", true), ResourceLifecycle::Live)
+        .build();
+
+    // Running, config differs from desired, and no controller state to update from.
+    let mut state = new_test_state();
+    let mut entry = create_running_function_state("store", "n/a");
+    entry.resource_type = Storage::RESOURCE_TYPE.to_string();
+    entry.config = Resource::new(test_storage_with_public_read("store", false));
+    entry.internal_state = None;
+    state.resources.insert("store".to_string(), entry);
+
+    let executor = new_executor(&stack)?;
+    let step_result = executor.step(state).await?;
+    let stepped = step_result.next_state.resources.get("store").unwrap();
+
+    assert_eq!(stepped.status, ResourceStatus::UpdateFailed);
+    let error = stepped
+        .error
+        .as_ref()
+        .expect("a failed update must record why");
+    assert!(
+        format!("{error:?}").contains("no controller state"),
+        "the error must name the missing controller state, got {error:?}"
+    );
+
+    Ok(())
+}
+
 /// A resource dropped from the desired stack is owed a deletion even while a consumer still
 /// records a dependency on it — the executor defers that delete for a step, and a caller
 /// judging completion has to see the debt or it declares success one step early.
 #[tokio::test]
 async fn test_pending_deletions_reports_a_deferred_delete() -> Result<()> {
-    let agent = test_function("agent");
-    let stack = Stack::new("pending-deletions-test".to_owned())
-        .add(agent, ResourceLifecycle::Live)
+    // Deploy both for real, so the survivor carries the controller state its update resumes
+    // from, then record the dependency that defers the dropped resource's deletion.
+    let deployed = Stack::new("pending-deletions-test".to_owned())
+        .add(test_function("agent"), ResourceLifecycle::Live)
+        .add(test_function("dropped"), ResourceLifecycle::Live)
         .build();
+    let mut state = run_to_synced(
+        &new_executor_with_filter(&deployed, vec![ResourceLifecycle::Live])?,
+        new_test_state(),
+    )
+    .await?;
+    state.resources.get_mut("agent").unwrap().dependencies =
+        vec![ResourceRef::new(alien_core::Worker::RESOURCE_TYPE, "dropped")];
 
-    // State still holds the dropped worker, and the agent still depends on it.
-    let mut state = new_test_state();
-    let mut agent_state = create_running_function_state("agent", "test-image-agent");
-    agent_state.dependencies = vec![ResourceRef::new(alien_core::Worker::RESOURCE_TYPE, "dropped")];
-    state.resources.insert("agent".to_string(), agent_state);
-    state.resources.insert(
-        "dropped".to_string(),
-        create_running_function_state("dropped", "test-image-dropped"),
-    );
+    // The release drops `dropped` and changes the survivor, which is what a scrubbed link
+    // looks like: an update is planned, and it is what releases the deferred delete.
+    let stack = Stack::new("pending-deletions-test".to_owned())
+        .add(
+            test_function_with_image("agent", "new-image"),
+            ResourceLifecycle::Live,
+        )
+        .build();
 
     let executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
     assert_eq!(
         executor.pending_deletions(&state)?,
         vec!["dropped"],
         "a dropped resource still deployed is a deletion this executor owes"
+    );
+
+    // The debt has to be payable: stepping must shed the dependency that defers it, or
+    // holding the update open for this deletion would never end.
+    let stepped = executor.step(state).await?.next_state;
+    let agent_dependencies = &stepped.resources.get("agent").unwrap().dependencies;
+    assert!(
+        !agent_dependencies.iter().any(|d| d.id() == "dropped"),
+        "the agent's update must drop the dependency deferring the delete, got {agent_dependencies:?}"
     );
 
     Ok(())
