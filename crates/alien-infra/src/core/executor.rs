@@ -1418,6 +1418,7 @@ impl StackExecutor {
                         // the new config the way creation adopts the binding as Running, or
                         // the planner re-plans this same update forever.
                         if self.is_external_binding_resource(resource_id) {
+                            let binding = self.deployment_config.external_bindings.get(resource_id);
                             let remote_access = self
                                 .desired_stack
                                 .resources
@@ -1426,10 +1427,7 @@ impl StackExecutor {
                                 .unwrap_or(false);
                             // Serialized only while remote access is on, and cleared when it
                             // is not, matching the create path and the controller step.
-                            let remote_binding_params = match (
-                                remote_access,
-                                self.deployment_config.external_bindings.get(resource_id),
-                            ) {
+                            let remote_binding_params = match (remote_access, binding) {
                                 (true, Some(binding)) => Some(
                                     serde_json::to_value(binding).into_alien_error().context(
                                         ErrorData::ResourceStateSerializationFailed {
@@ -1441,12 +1439,18 @@ impl StackExecutor {
                                 ),
                                 _ => None,
                             };
+                            // Re-derived, not carried over: dependents resolve the target
+                            // through these, so a repointed binding must not leave them
+                            // pointing at the resource it used to name.
+                            let binding_outputs =
+                                binding.and_then(|binding| binding.to_resource_outputs());
                             let updated_state = update_state.with_updates(|state| {
                                 state.config = new_config.clone();
                                 state.previous_config = Some(current_state.config.clone());
                                 state.dependencies = desired_config.dependencies.clone();
                                 state.status = ResourceStatus::Running;
                                 state.remote_binding_params = remote_binding_params;
+                                state.outputs = binding_outputs;
                                 state.retry_attempt = 0;
                                 state.error = None;
                                 state.last_failed_state = None;
