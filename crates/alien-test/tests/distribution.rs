@@ -182,8 +182,7 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
     .await?;
 
     // The links half of the gate: an ungated worker linking gated resources keeps only the
-    // links whose target survived, so it starts with the `-on` bindings and without the
-    // `-off` ones. Before the link scrub this shape could not be expressed at all.
+    // links whose target survived, so it holds the `-on` bindings and not the `-off` ones.
     let links = agent_link_ids(&stack_state)?;
     for id in ["optional-kv-on", "optional-worker-on"] {
         anyhow::ensure!(
@@ -198,8 +197,8 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         );
     }
 
-    // The transition, on the SAME deployment: accepting a previously declined live gate
-    // must bring the resource back AND restore the link that was scrubbed with it.
+    // The transition, on the same deployment: accepting a declined live gate must bring the
+    // resource back and restore the link that was scrubbed with it.
     let flipped = alien_test::distribution::flip_terraform_gate(ctx, "input_worker_off", true)
         .await
         .context("failed to re-apply with optional-worker-off accepted")?;

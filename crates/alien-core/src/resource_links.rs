@@ -37,6 +37,11 @@ macro_rules! impl_resource_links {
 
 impl_resource_links!(Worker, Container, Daemon, Build);
 
+/// Types wired above. The drift guard holds `LINK_OWNERSHIP`'s `true` rows against this, so a
+/// type declared as owning links but never wired cannot pass as covered.
+#[cfg(test)]
+const WIRED_LINK_OWNERS: usize = 4;
+
 /// The link-owning view of a resource, or `None` when it owns no links.
 ///
 /// `None` is the ordinary answer for most resource types, and callers that walk every
@@ -52,9 +57,9 @@ pub fn resource_links(resource: &Resource) -> Option<&dyn ResourceLinks> {
     if let Some(daemon) = resource.downcast_ref::<Daemon>() {
         return Some(daemon);
     }
-    // Build is not a compute kind, but it owns author-declared links that produce the same
-    // bindings, so a declined gate must reach them too. Being frozen-only, its declines are
-    // stripped before the mutations, so no grant is ever derived for a dropped link.
+    // Build is not a compute kind, but it owns author-declared links producing the same
+    // bindings, so a declined gate must reach them too. Strip timing follows the target's
+    // lifecycle, not Build's, so a Build linking a live-gated target takes the late strip.
     if let Some(build) = resource.downcast_ref::<Build>() {
         return Some(build);
     }
@@ -200,10 +205,13 @@ mod tests {
             ("build", build()),
         ] {
             let before: Vec<ResourceRef> = links_of(&resource).to_vec();
-            if let Some(owner) = resource_links_mut(&mut resource) {
-                let declined: Vec<String> = Vec::new();
-                owner.links_mut().retain(|l| !declined.contains(&l.id));
-            }
+            assert_eq!(before.len(), 2, "{name} should start with both links");
+            // Resolved strictly: behind an `if let` a broken resolver would skip the
+            // mutation entirely and the equality below would still hold.
+            let owner = resource_links_mut(&mut resource)
+                .unwrap_or_else(|| panic!("{name} must resolve as a link owner"));
+            let declined: Vec<String> = Vec::new();
+            owner.links_mut().retain(|l| !declined.contains(&l.id));
             assert_eq!(links_of(&resource), before.as_slice(), "{name} changed");
         }
     }
@@ -284,5 +292,14 @@ mod tests {
                 "'{tag}' is classified but no longer registered; drop it from LINK_OWNERSHIP"
             );
         }
+
+        // Presence alone would pass a type declared `true` that nobody wired into
+        // `impl_resource_links!`, which then never resolves and is never scrubbed.
+        let declared_owners = LINK_OWNERSHIP.iter().filter(|(_, owns)| *owns).count();
+        assert_eq!(
+            declared_owners, WIRED_LINK_OWNERS,
+            "LINK_OWNERSHIP declares {declared_owners} link owners but {WIRED_LINK_OWNERS} are \
+             wired into impl_resource_links!; every declared owner must resolve"
+        );
     }
 }

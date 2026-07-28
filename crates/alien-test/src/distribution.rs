@@ -1894,17 +1894,20 @@ async fn apply_terraform_and_import(
 pub struct GateFlip {
     dg_token: String,
     manager_url: String,
+    /// The installed deployment's name. `terraform_import_request_from_outputs` mints a fresh
+    /// random name per call, so without overriding it the re-import creates a second
+    /// deployment instead of updating this one.
+    deployment_name: String,
 }
 
 /// Re-apply the SAME Terraform workdir with one gate variable changed, then re-import so
 /// the manager sees the new shape on the same deployment.
 ///
-/// [`apply_terraform_and_import`] allocates a fresh workdir and imports as a new install, so
-/// calling it twice stands up a second unrelated deployment instead of flipping the first.
-/// Flipping needs the original state, the original tfvars, and the original deployment-group
-/// token, which is why this reuses the retained workdir rather than building its own.
+/// [`apply_terraform_and_import`] allocates a fresh workdir and a fresh deployment name, so
+/// calling it twice stands up a second unrelated deployment. Flipping reuses the retained
+/// workdir, tfvars, group token and deployment name to reach the deployment already installed.
 pub async fn flip_terraform_gate(
-    ctx: &crate::TestContext,
+    ctx: &mut crate::TestContext,
     tfvar: &str,
     accepted: bool,
 ) -> anyhow::Result<StackState> {
@@ -1942,10 +1945,42 @@ pub async fn flip_terraform_gate(
     .await?;
 
     let outputs = terraform_output_json(&workdir_path, env).await?;
-    let request = terraform_import_request_from_outputs(&outputs, &flip.dg_token)?;
-    // Same group token and deployment name, so the manager takes its update path rather
-    // than creating a second deployment.
-    reimport_stack(&flip.manager_url, &flip.dg_token, request).await
+    let mut request = terraform_import_request_from_outputs(&outputs, &flip.dg_token)?;
+    // Overridden deliberately: the builder mints a fresh random name, which would make the
+    // manager create rather than update, and leave the extra deployment outside cleanup.
+    request.deployment_name = flip.deployment_name.clone();
+    reimport_stack(&flip.manager_url, &flip.dg_token, request).await?;
+
+    // The import response carries only the setup-delivered resources and merely schedules
+    // reconciliation, so a live resource and a restored link are not in it. Wait for the
+    // deployment to settle, then read the state the executor actually produced.
+    ctx.deployment
+        .wait_until_running(GATE_FLIP_RECONCILE_TIMEOUT)
+        .await
+        .map_err(|error| anyhow::anyhow!("deployment did not settle after the flip: {error}"))?;
+    current_stack_state(ctx).await
+}
+
+/// A flip re-runs provisioning for the resource it accepts, so it gets the same budget as an
+/// initial deployment rather than an update's shorter one.
+const GATE_FLIP_RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
+/// The deployment's stack state as the manager currently holds it, including live resources.
+async fn current_stack_state(ctx: &crate::TestContext) -> anyhow::Result<StackState> {
+    let response = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("get_deployment failed after the flip: {error}"))?;
+    let value = response
+        .into_inner()
+        .stack_state
+        .context("deployment is missing stack_state after the flip")?;
+    serde_json::from_value(value).context("failed to parse stack_state after the flip")
 }
 
 async fn terraform_stack_for_target(
@@ -2492,6 +2527,7 @@ fn context_from_deployment(
     deployment: TestDeployment,
     cleanups: Vec<DistributionArtifactCleanup>,
 ) -> TestContext {
+    let deployment_name_for_flip = deployment.name.clone();
     TestContext {
         deployment,
         manager: prepared.manager.clone(),
@@ -2503,6 +2539,7 @@ fn context_from_deployment(
         gate_flip: Some(GateFlip {
             dg_token: prepared.dg_token.clone(),
             manager_url: prepared.manager.url.clone(),
+            deployment_name: deployment_name_for_flip.clone(),
         }),
     }
 }

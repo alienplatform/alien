@@ -69,10 +69,11 @@ pub async fn handle_pending(
 
     info!("Deployment-time preflight checks completed successfully");
 
-    // Step 3.5: Drop gated live resources whose input says no. Frozen
-    // declines were stripped before the mutations above; live declines apply
-    // here, after them, so a declined workload's provisioning baseline stays
-    // derived and acceptance can return later.
+    // Step 3.5: Drop gated live resources whose input says no. Frozen declines
+    // were stripped before the mutations above; live declines apply here, after
+    // them, so the mutations still see a declined workload when deriving the
+    // service account and capacity that acceptance returns to. What the strip
+    // derives, it also removes: grants for a declined resource go with it.
     let mutated_stack = strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
@@ -502,11 +503,52 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
             );
         }
 
-        // Preflight refuses an authored ordering edge onto a gated resource, so anything
-        // reaching here came from a mutation that ran before the strip.
+        let ordering_before = entry.dependencies.len();
         entry
             .dependencies
             .retain(|dependency| !declined.contains(&dependency.id));
+        // Logged rather than silent: only the release-time preflight refuses an authored
+        // ordering edge onto a gated resource. The frozen strip runs before the
+        // deployment-time checks, so this is not backed by a second refusal at this point.
+        if ordering_before > entry.dependencies.len() {
+            info!(
+                resource_id = %resource_id,
+                dropped = ordering_before - entry.dependencies.len(),
+                "Dropped ordering edges to declined resources"
+            );
+        }
+    }
+
+    scrub_declined_grants(stack, declined);
+}
+
+/// Drop grants naming a declined resource from every permission profile.
+///
+/// Leaving them is not inert. The GCP service-account controller applies every non-`"*"`
+/// profile entry without consulting the desired resources, and `kv` binds its role at project
+/// scope because IAM cannot scope to a collection — so a declined store would leave the
+/// consumer's identity holding project-wide data access. Nothing is lost by dropping it: the
+/// mutations re-derive every link grant from the declared stack on the next deploy, so
+/// accepting the gate again restores the grant with it.
+fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
+    let scrub = |profile: &mut alien_core::permissions::PermissionProfile| {
+        for resource_id in declined {
+            if profile.0.shift_remove(resource_id).is_some() {
+                info!(
+                    resource_id = %resource_id,
+                    "Dropped the grant for a declined resource"
+                );
+            }
+        }
+    };
+
+    for profile in stack.permissions.profiles.values_mut() {
+        scrub(profile);
+    }
+    match &mut stack.permissions.management {
+        alien_core::permissions::ManagementPermissions::Extend(profile)
+        | alien_core::permissions::ManagementPermissions::Override(profile) => scrub(profile),
+        alien_core::permissions::ManagementPermissions::Auto => {}
     }
 }
 
@@ -724,8 +766,8 @@ mod tests {
             .collect()
     }
 
-    /// The point of the whole change: the store goes, the worker stays, and the worker no
-    /// longer references a resource that was never created.
+    /// A declined store leaves the stack with the linking worker's reference to it, while the
+    /// worker itself keeps its own lifecycle.
     #[test]
     fn a_declined_store_takes_the_linking_workers_link_with_it() {
         let stack = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
@@ -785,6 +827,70 @@ mod tests {
         assert_ne!(
             &before_config, after_config,
             "a scrubbed worker must not compare equal to the unscrubbed one"
+        );
+    }
+
+    /// A grant naming a declined resource must go with it. The GCP service-account controller
+    /// applies every non-`"*"` profile entry without consulting the desired resources, and `kv`
+    /// binds at project scope, so a surviving entry would leave the consumer's identity holding
+    /// project-wide data access for a store the deployer said no to.
+    #[test]
+    fn a_declined_resource_takes_its_grant_with_it() {
+        let input = StackInputDefinition::deployer_boolean(
+            "cacheEnabled",
+            "Enable the cache",
+            "Whether to run the cache store.",
+            Some(true),
+        );
+        let cache = Kv::new("cache".to_string()).build();
+        let store = Kv::new("store".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&cache)
+            .link(&store)
+            .build();
+
+        let mut profile = alien_core::permissions::PermissionProfile::new();
+        profile.0.insert(
+            "cache".to_string(),
+            vec![alien_core::permissions::PermissionSetReference::from("kv/data-read")],
+        );
+        profile.0.insert(
+            "store".to_string(),
+            vec![alien_core::permissions::PermissionSetReference::from("kv/data-read")],
+        );
+        let mut profiles = indexmap::IndexMap::new();
+        profiles.insert("execution".to_string(), profile);
+
+        let stack = Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(cache, ResourceLifecycle::Live, "cacheEnabled")
+            .add(store, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .permissions(alien_core::permissions::PermissionsConfig {
+                profiles,
+                ..Default::default()
+            })
+            .build();
+
+        let stack = strip_live(stack, false);
+
+        let execution = stack
+            .permissions
+            .profiles
+            .get("execution")
+            .expect("profile should survive");
+        assert!(
+            !execution.0.contains_key("cache"),
+            "the declined resource's grant must not survive it: {:?}",
+            execution.0.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            execution.0.contains_key("store"),
+            "an accepted resource must keep its grant"
         );
     }
 

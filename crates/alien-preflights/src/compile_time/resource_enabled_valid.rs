@@ -14,7 +14,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack, StackInputKind, StackInputProvider};
+use alien_core::{Platform, ResourceLifecycle, Stack, StackInputKind, StackInputProvider};
 use std::collections::HashMap;
 
 /// Rejects `.enabled()` uses that could not actually keep the resource out.
@@ -165,14 +165,26 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
 /// Sorts dependents of gated resources into refusals and warnings.
 ///
 /// A pure link survives the gate being declined: `remove_declined` drops it along with the
-/// resource, so the dependent keeps its own lifecycle and simply starts without that
-/// `ALIEN_<ID>_BINDING`. Every other edge still refuses, because nothing removes it — a
-/// trigger's wiring lives on the source resource, an ordering edge is not a binding, and a
-/// resource type that does not report its links cannot have them scrubbed.
+/// resource, so the dependent keeps its own lifecycle without that binding. Every other edge
+/// refuses, because nothing removes it — a trigger's wiring lives on the source resource, an
+/// ordering edge is not a binding, and a type that does not report its links cannot be scrubbed.
 fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
     let gates: HashMap<&str, &str> = stack
         .resources()
         .filter_map(|(id, entry)| Some((id.as_str(), entry.enabled_when.as_deref()?)))
+        .collect();
+
+    // A gate resolves either when setup renders the template or when the runtime strip runs,
+    // decided by where the gated resource is emitted.
+    let resolves_at_runtime: HashMap<&str, bool> = stack
+        .resources()
+        .map(|(id, entry)| {
+            let emitted_in_setup = alien_core::ownership_policy_for_resource_type(
+                entry.config.resource_type().as_ref(),
+            )
+            .should_emit_in_setup(entry.lifecycle);
+            (id.as_str(), !emitted_in_setup)
+        })
         .collect();
 
     let mut errors = Vec::new();
@@ -209,12 +221,21 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                 .filter(|d| d.id() == dependency_id)
                 .count();
 
-            if link_count > 0 && total == link_count {
+            // A frozen owner cannot be updated by the runtime, so a link it holds to a
+            // runtime-resolved gate can be neither dropped on decline nor restored on
+            // acceptance — the deployed resource would keep whichever shape setup gave it.
+            let frozen_owner_of_runtime_gate = entry.lifecycle == ResourceLifecycle::Frozen
+                && resolves_at_runtime
+                    .get(dependency_id)
+                    .copied()
+                    .unwrap_or(false);
+
+            if link_count > 0 && total == link_count && !frozen_owner_of_runtime_gate {
                 warnings.push(format!(
                     "Resource '{dependent_id}' links '{dependency_id}', which is enabled by input \
                      '{dependency_gate}'. A deployer who says no drops the link too, so \
-                     '{dependent_id}' starts without ALIEN_{}_BINDING. Make sure it runs without it",
-                    dependency_id.to_uppercase().replace('-', "_")
+                     '{dependent_id}' starts without {}. Make sure it runs without it",
+                    alien_core::binding_env_var_name(dependency_id)
                 ));
                 continue;
             }
@@ -225,6 +246,13 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                      gated on different inputs: '{gate}' and '{dependency_gate}'. Nothing makes a \
                      deployer answer both the same way, so '{dependent_id}' can be created while \
                      '{dependency_id}' is not. Gate both on '{dependency_gate}'"
+                )),
+                None if frozen_owner_of_runtime_gate => errors.push(format!(
+                    "Setup-created resource '{dependent_id}' links '{dependency_id}', which input \
+                     '{dependency_gate}' decides at runtime. Setup bakes the link, and the runtime \
+                     cannot rewrite a setup-created resource, so the answer could never reach \
+                     '{dependent_id}'. Gate '{dependent_id}' on '{dependency_gate}' too, or make \
+                     '{dependency_id}' setup-created so the answer is fixed at install"
                 )),
                 None => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', which is enabled by \
@@ -347,9 +375,8 @@ mod tests {
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
-    /// Build is not a compute kind but owns author-declared links that produce the same
-    /// bindings, so it gets the same treatment. Before the links capability existed this
-    /// was refused outright.
+    /// Build owns author-declared links producing the same bindings as a compute kind, so a
+    /// gated target warns rather than refusing.
     #[tokio::test]
     async fn warns_for_a_build_linking_a_gated_store() {
         let store = Kv::new("store".to_string()).build();
@@ -372,6 +399,31 @@ mod tests {
             result.warnings[0].contains("Resource 'packager' links 'store'"),
             "{:?}",
             result.warnings
+        );
+    }
+
+    /// Setup bakes a frozen resource's links and the runtime cannot rewrite it, so a runtime
+    /// answer could never reach the link. The scrub would drop it from the desired stack while
+    /// the deployed resource kept it.
+    #[tokio::test]
+    async fn rejects_a_frozen_link_owner_against_a_runtime_resolved_gate() {
+        let store = Kv::new("store".to_string()).build();
+        let builder = alien_core::Build::new("packager".to_string())
+            .permissions("build".to_string())
+            .link(&store)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(store, ResourceLifecycle::Live, "storeEnabled")
+            .add(builder, ResourceLifecycle::Frozen)
+            .build();
+
+        let errors = errors_for(stack).await;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("decides at runtime"),
+            "{errors:?}"
         );
     }
 
