@@ -14,7 +14,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, ResourceLifecycle, Stack, StackInputKind, StackInputProvider};
+use alien_core::{Platform, Stack, StackInputKind, StackInputProvider};
 use std::collections::HashMap;
 
 /// Rejects `.enabled()` uses that could not actually keep the resource out.
@@ -222,7 +222,11 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
             // The runtime cannot rewrite a setup-created resource, so a reference it holds to
             // a runtime-resolved gate can be neither dropped nor restored. The `expect` is
             // unreachable: both maps come from the same pass, and `gates` already resolved this id.
-            let frozen_owner_of_runtime_gate = entry.lifecycle == ResourceLifecycle::Frozen
+            let owner_baked_in_setup = alien_core::ownership_policy_for_resource_type(
+                entry.config.resource_type().as_ref(),
+            )
+            .should_emit_in_setup(entry.lifecycle);
+            let frozen_owner_of_runtime_gate = owner_baked_in_setup
                 && *resolves_at_runtime
                     .get(dependency_id)
                     .expect("a gated dependency is always a stack resource");
