@@ -48,6 +48,8 @@ const SDK_FACADE_EXPORTS = [
   "kv",
   "queue",
   "vault",
+  "container",
+  "postgres",
 ] as const
 
 // The sdk contract's "error re-exports" row: BindingNotConfiguredError (from
@@ -142,7 +144,11 @@ const BINDINGS_EXPORTS = [
   "kv",
   "queue",
   "vault",
+  "container",
+  "postgres",
   "BindingNotConfiguredError",
+  "InvalidPostgresTlsConfigError",
+  "UnknownPostgresSslModeError",
   "AlienError",
   "defineError",
 ] as const
@@ -183,7 +189,10 @@ async function checkBindings(): Promise<void> {
     package: "bindings",
     status: missing.length === 0 ? "pass" : "fail",
     reason: missing.length === 0 ? "ok" : "missing pinned exports",
-    evidence: missing.length === 0 ? "resolved storage/kv/queue/vault + error" : missing.join(", "),
+    evidence:
+      missing.length === 0
+        ? "resolved storage/kv/queue/vault/container/postgres + error"
+        : missing.join(", "),
   })
 
   // The first operation against an unconfigured binding must throw

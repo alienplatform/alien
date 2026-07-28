@@ -13,12 +13,19 @@
  * correctly even when destructured off the handle (`const { get } = storage(x)`).
  */
 
-import { unwrapNapiError } from "./errors.js"
+import {
+  AlienError,
+  InvalidPostgresTlsConfigError,
+  UnknownPostgresSslModeError,
+  unwrapNapiError,
+} from "./errors.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
   RawContainerHandle,
   RawKvHandle,
+  RawPostgresConnection,
+  RawPostgresHandle,
   RawQueueHandle,
   RawStorageHandle,
   RawVaultHandle,
@@ -28,6 +35,9 @@ import type {
   Kv,
   KvScanResult,
   KvSetOptions,
+  Postgres,
+  PostgresConnection,
+  PostgresSslMode,
   PresignedRequest,
   Queue,
   QueueMessage,
@@ -168,6 +178,126 @@ function makeVault(handle: () => Promise<RawVaultHandle>): Vault {
   }
 }
 
+const POSTGRES_SSL_MODES = {
+  disable: true,
+  "verify-ca": true,
+  "verify-full": true,
+} satisfies Record<PostgresSslMode, true>
+
+function postgresSslModeLabel(sslmode: unknown): string {
+  return typeof sslmode === "string" ? sslmode : String(sslmode)
+}
+
+function invalidPostgresTlsConfig(sslmode: unknown, reason: string): AlienError {
+  return new AlienError(
+    InvalidPostgresTlsConfigError.create({
+      sslmode: postgresSslModeLabel(sslmode),
+      reason,
+    }).toOptions(),
+  )
+}
+
+function isPostgresSslMode(value: unknown): value is PostgresSslMode {
+  return typeof value === "string" && Object.hasOwn(POSTGRES_SSL_MODES, value)
+}
+
+function hasAtLeastOne<T>(values: T[]): values is [T, ...T[]] {
+  return values.length > 0
+}
+
+/**
+ * Decode the raw addon connection into the public discriminated union, deriving
+ * node-postgres TLS options from the Rust-resolved mode and provider roots.
+ *
+ * An unrecognized `sslmode` means the addon and this wrapper disagree about the
+ * `SslMode` enum — a version skew that must fail loudly rather than produce a
+ * connection with a silently wrong TLS posture. It throws
+ * {@link UnknownPostgresSslModeError} so a caller can discriminate it by `code`;
+ * `guard` passes an `AlienError` through untouched.
+ */
+function toPostgresConnection(raw: RawPostgresConnection): PostgresConnection {
+  if (!isPostgresSslMode(raw.sslmode)) {
+    throw new AlienError(
+      UnknownPostgresSslModeError.create({
+        sslmode: postgresSslModeLabel(raw.sslmode),
+        expected: Object.keys(POSTGRES_SSL_MODES),
+      }).toOptions(),
+    )
+  }
+
+  if (!Array.isArray(raw.caCertificates)) {
+    throw invalidPostgresTlsConfig(raw.sslmode, "caCertificates must be an array")
+  }
+
+  const caCertificates: string[] = []
+  const rawCaCertificates: unknown[] = raw.caCertificates
+  for (const [index, certificate] of rawCaCertificates.entries()) {
+    if (typeof certificate !== "string") {
+      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] must be a string`)
+    }
+    if (certificate.trim().length === 0) {
+      throw invalidPostgresTlsConfig(raw.sslmode, `caCertificates[${index}] cannot be empty`)
+    }
+    caCertificates.push(certificate)
+  }
+
+  const fields = {
+    connectionString: raw.connectionString,
+    host: raw.host,
+    port: raw.port,
+    database: raw.database,
+    username: raw.username,
+    password: raw.password,
+  }
+
+  switch (raw.sslmode) {
+    case "disable":
+      if (caCertificates.length > 0) {
+        throw invalidPostgresTlsConfig(raw.sslmode, "disable cannot carry CA certificates")
+      }
+      return { ...fields, sslmode: raw.sslmode, ssl: false }
+    case "verify-ca":
+      if (!hasAtLeastOne(caCertificates)) {
+        throw invalidPostgresTlsConfig(
+          raw.sslmode,
+          "verify-ca requires at least one CA certificate",
+        )
+      }
+      return {
+        ...fields,
+        sslmode: raw.sslmode,
+        ssl: {
+          ca: caCertificates,
+          rejectUnauthorized: true,
+          // Node calls this only after the CA chain succeeds. Cloud SQL's
+          // per-instance CA authenticates the server even though its certificate
+          // cannot match the PSC consumer endpoint IP.
+          checkServerIdentity: (): undefined => undefined,
+        },
+      }
+    case "verify-full":
+      return {
+        ...fields,
+        sslmode: raw.sslmode,
+        ssl: {
+          ...(caCertificates.length > 0 ? { ca: caCertificates } : {}),
+          rejectUnauthorized: true,
+        },
+      }
+    default: {
+      const unhandledSslMode: never = raw.sslmode
+      return unhandledSslMode
+    }
+  }
+}
+
+function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
+  return {
+    connection: (): Promise<PostgresConnection> =>
+      guard(handle, async raw => toPostgresConnection(raw.connection())),
+  }
+}
+
 /** The public factory surface. */
 export interface Factories {
   storage(name: string): Storage
@@ -175,6 +305,7 @@ export interface Factories {
   queue(name: string): Queue
   vault(name: string): Vault
   container(name: string): Container
+  postgres(name: string): Postgres
 }
 
 /** Build the factories bound to a given addon provider. */
@@ -185,5 +316,6 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
     queue: name => makeQueue(lazyHandle(getAddon, name, (b, n) => b.queue(n))),
     vault: name => makeVault(lazyHandle(getAddon, name, (b, n) => b.vault(n))),
     container: name => makeContainer(lazyHandle(getAddon, name, (b, n) => b.container(n))),
+    postgres: name => makePostgres(lazyHandle(getAddon, name, (b, n) => b.postgres(n))),
   }
 }

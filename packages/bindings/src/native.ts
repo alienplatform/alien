@@ -48,8 +48,16 @@ export const queue = factories.queue
 export const vault = factories.vault
 /** Resolve the linked-container binding named `name`. */
 export const container = factories.container
+/** Resolve the Postgres binding named `name`. */
+export const postgres = factories.postgres
 
-export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
+export {
+  AlienError,
+  BindingNotConfiguredError,
+  defineError,
+  InvalidPostgresTlsConfigError,
+  UnknownPostgresSslModeError,
+} from "./errors.js"
 
 export type {
   Container,
@@ -58,6 +66,10 @@ export type {
   KvScanResult,
   KvSetOptions,
   ObjectMeta,
+  Postgres,
+  PostgresConnection,
+  PostgresSslMode,
+  PostgresTlsOptions,
   PresignedRequest,
   Queue,
   QueueMessage,

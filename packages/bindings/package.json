@@ -29,10 +29,10 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "bindings", "storage", "kv", "queue", "vault", "napi"],
+  "keywords": ["alien", "bindings", "storage", "kv", "queue", "vault", "postgres", "napi"],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
-  "description": "Direct TypeScript bindings for Alien storage, kv, queue, and vault over an in-process napi-rs addon",
+  "description": "Direct TypeScript bindings for Alien storage, kv, queue, vault, and postgres over an in-process napi-rs addon",
   "homepage": "https://alien.dev",
   "repository": {
     "type": "git",

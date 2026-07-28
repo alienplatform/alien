@@ -55,6 +55,9 @@ pub struct CloudSqlPostgresBinding {
     pub port: BindingValue<u16>,
     pub database: BindingValue<String>,
     pub username: BindingValue<String>,
+    /// Per-instance Cloud SQL server CA certificates, including every root accepted
+    /// during a CA rotation.
+    pub server_ca_certificates: BindingValue<Vec<String>>,
     /// Secret Manager secret name of the connection password; resolved at load time.
     pub password_secret_name: BindingValue<String>,
 }
@@ -73,6 +76,22 @@ pub struct FlexibleServerPostgresBinding {
     pub password_secret_uri: BindingValue<String>,
 }
 
+/// TLS policy for an operator-provided / BYO Postgres database.
+///
+/// Unlike libpq's ambiguous `prefer` mode, both choices map exactly to the
+/// connection settings exposed by every supported SDK.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ExternalPostgresSslMode {
+    /// Require TLS and verify the server certificate and hostname.
+    #[default]
+    VerifyFull,
+    /// Connect over plaintext. Intended only for explicitly configured legacy servers.
+    Disable,
+}
+
 /// Operator-provided / BYO database binding.
 // No derived `Debug` — inline `password` would print cleartext; see the redacting impl below.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +107,9 @@ pub struct ExternalPostgresBinding {
     /// materializes the Kubernetes secret into the pod env. The cloud variants carry a secret
     /// locator instead.
     pub password: String,
+    /// Explicit TLS policy. Missing legacy configuration defaults to verified TLS.
+    #[serde(default)]
+    pub ssl_mode: ExternalPostgresSslMode,
 }
 
 /// Local embedded Postgres binding.
@@ -114,6 +136,7 @@ impl std::fmt::Debug for ExternalPostgresBinding {
             .field("database", &self.database)
             .field("username", &self.username)
             .field("password", &"<redacted>")
+            .field("ssl_mode", &self.ssl_mode)
             .finish()
     }
 }
@@ -162,6 +185,7 @@ impl PostgresBinding {
             database: database.into(),
             username: username.into(),
             password: password.into(),
+            ssl_mode: ExternalPostgresSslMode::default(),
         })
     }
 }
@@ -182,10 +206,53 @@ mod tests {
     #[test]
     fn external_binding_uses_external_tag() {
         let binding = PostgresBinding::external("db.internal", 5432, "app", "alien", "secret");
-        let json = serde_json::to_string(&binding).unwrap();
+        let json = serde_json::to_string(&binding).expect("external binding serializes");
         assert!(json.contains(r#""service":"external""#));
-        let deserialized: PostgresBinding = serde_json::from_str(&json).unwrap();
+        assert!(json.contains(r#""sslMode":"verify-full""#));
+        let deserialized: PostgresBinding =
+            serde_json::from_str(&json).expect("external binding deserializes");
         assert_eq!(binding, deserialized);
+    }
+
+    #[test]
+    fn external_binding_without_ssl_mode_defaults_to_verified_tls() {
+        let json = r#"{
+            "service": "external",
+            "host": "db.internal",
+            "port": 5432,
+            "database": "app",
+            "username": "alien",
+            "password": "secret"
+        }"#;
+
+        let binding: PostgresBinding =
+            serde_json::from_str(json).expect("legacy external binding deserializes");
+
+        let PostgresBinding::External(binding) = binding else {
+            panic!("expected external Postgres binding");
+        };
+        assert_eq!(binding.ssl_mode, ExternalPostgresSslMode::VerifyFull);
+    }
+
+    #[test]
+    fn external_binding_accepts_explicit_plaintext_opt_out() {
+        let json = r#"{
+            "service": "external",
+            "host": "db.internal",
+            "port": 5432,
+            "database": "app",
+            "username": "alien",
+            "password": "secret",
+            "sslMode": "disable"
+        }"#;
+
+        let binding: PostgresBinding =
+            serde_json::from_str(json).expect("plaintext external binding deserializes");
+
+        let PostgresBinding::External(binding) = binding else {
+            panic!("expected external Postgres binding");
+        };
+        assert_eq!(binding.ssl_mode, ExternalPostgresSslMode::Disable);
     }
 
     #[test]
@@ -206,6 +273,7 @@ mod tests {
             port: BindingValue::value(5432),
             database: "db".into(),
             username: "alien".into(),
+            server_ca_certificates: BindingValue::value(vec!["cloud-sql-root".to_string()]),
             password_secret_name: "pg-credentials".into(),
         });
         assert!(serde_json::to_string(&cloud_sql)

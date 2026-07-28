@@ -1,130 +1,88 @@
-use crate::error::{binding_env_var, ErrorData, Result};
-use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
-use alien_core::bindings::{BindingValue, PostgresBinding};
-use alien_error::{AlienError, Context};
+use crate::error::{ErrorData, Result};
+use crate::providers::postgres::{resolve_params, PostgresConnectionInput, ResolvedPostgres};
+use crate::traits::PostgresTlsPolicy;
+use alien_core::bindings::{ExternalPostgresSslMode, PostgresBinding};
+use alien_error::AlienError;
 
-/// A resolved Postgres binding. Holds connection details only — it never opens or
-/// owns a server process.
-#[derive(Debug)]
-pub struct LocalPostgres {
-    params: PostgresConnectionParams,
-}
+/// Backwards-compatible name for a resolved inline-password Postgres binding.
+///
+/// All Postgres backends now use the same resolved handle internally, but local
+/// platform consumers historically constructed this public type directly.
+pub type LocalPostgres = ResolvedPostgres;
 
-impl LocalPostgres {
-    pub fn new(params: PostgresConnectionParams) -> Self {
-        Self { params }
-    }
-
-    /// Resolves connection parameters from a binding. Handles the Local and External (BYO)
-    /// variants. Cloud variants (Aurora / Cloud SQL / Flexible Server) carry only a *reference* to
-    /// the connection password in a cloud secret store; the workload SDK
-    /// (`packages/sdk/src/bindings/postgres.ts`) resolves it in-process with the workload's own
-    /// identity. This Rust provider intentionally does not read cloud secrets, so it rejects cloud
-    /// bindings by design rather than half-resolving them.
+impl ResolvedPostgres {
+    /// Resolves connection parameters from a binding that carries its password inline:
+    /// the Local (developer) and External (BYO / Kubernetes) variants.
+    ///
+    /// The cloud variants carry a secret *locator* instead and need an async read against
+    /// that cloud's secret store, so they have their own providers (`aurora`, `cloud_sql`,
+    /// `flexible_server`) that `BindingsProvider::load_postgres` dispatches to.
     pub fn from_binding(binding_name: &str, binding: &PostgresBinding) -> Result<Self> {
         let params = match binding {
             PostgresBinding::Local(b) => resolve_params(
                 binding_name,
-                &b.host,
-                &b.port,
-                &b.database,
-                &b.username,
-                &b.password,
-                SslMode::Disable,
+                PostgresConnectionInput {
+                    host: &b.host,
+                    port: &b.port,
+                    database: &b.database,
+                    username: &b.username,
+                    // Inline password is already a concrete `String` (the type forbids an
+                    // unresolved ref).
+                    password: &b.password,
+                    tls: PostgresTlsPolicy::disabled(),
+                },
             )?,
-            PostgresBinding::External(b) => resolve_params(
-                binding_name,
-                &b.host,
-                &b.port,
-                &b.database,
-                &b.username,
-                &b.password,
-                SslMode::Prefer,
-            )?,
-            // Cloud variants are resolved by the workload SDK (see the method doc), not here. Listed
-            // explicitly rather than via a catch-all so a future `PostgresBinding` variant forces a
-            // compile error to handle it. Name the backend so a reader of a later cloud plan can tell
-            // which variant was rejected.
+            PostgresBinding::External(b) => {
+                let tls = match b.ssl_mode {
+                    ExternalPostgresSslMode::VerifyFull => {
+                        PostgresTlsPolicy::verify_full_with_system_roots()
+                    }
+                    ExternalPostgresSslMode::Disable => PostgresTlsPolicy::disabled(),
+                };
+                resolve_params(
+                    binding_name,
+                    PostgresConnectionInput {
+                        host: &b.host,
+                        port: &b.port,
+                        database: &b.database,
+                        username: &b.username,
+                        password: &b.password,
+                        tls,
+                    },
+                )?
+            }
+            // Listed explicitly rather than via a catch-all so a future `PostgresBinding`
+            // variant forces a compile error to route it somewhere. Reaching this arm means
+            // `load_postgres` dispatched a cloud binding to the wrong provider — a bug here,
+            // not bad user configuration.
             PostgresBinding::Aurora(_)
             | PostgresBinding::CloudSql(_)
             | PostgresBinding::FlexibleServer(_) => {
-                let backend = match binding {
-                    PostgresBinding::Aurora(_) => "Aurora (AWS)",
-                    PostgresBinding::CloudSql(_) => "Cloud SQL (GCP)",
-                    PostgresBinding::FlexibleServer(_) => "Azure Flexible Server",
-                    _ => "cloud",
-                };
-                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
-                    env_var: binding_env_var(binding_name),
-                    binding_name: binding_name.to_string(),
-                    reason: format!(
-                        "{backend} Postgres bindings are resolved in-process by the workload SDK, \
-                         not this Rust provider"
-                    ),
-                }));
+                return Err(AlienError::new(ErrorData::config_invalid(
+                    binding_name,
+                    "Cloud Postgres bindings carry a password secret locator and must be \
+                     resolved by their own cloud provider, not the inline-password provider",
+                )));
             }
         };
         Ok(Self::new(params))
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn resolve_params(
-    binding_name: &str,
-    host: &BindingValue<String>,
-    port: &BindingValue<u16>,
-    database: &BindingValue<String>,
-    username: &BindingValue<String>,
-    password: &str,
-    sslmode: SslMode,
-) -> Result<PostgresConnectionParams> {
-    let invalid = |field: &str| ErrorData::BindingConfigInvalid {
-        env_var: binding_env_var(binding_name),
-        binding_name: binding_name.to_string(),
-        reason: format!("Failed to extract '{}' from Postgres binding", field),
-    };
-    Ok(PostgresConnectionParams {
-        host: host
-            .clone()
-            .into_value(binding_name, "host")
-            .context(invalid("host"))?,
-        port: port
-            .clone()
-            .into_value(binding_name, "port")
-            .context(invalid("port"))?,
-        database: database
-            .clone()
-            .into_value(binding_name, "database")
-            .context(invalid("database"))?,
-        username: username
-            .clone()
-            .into_value(binding_name, "username")
-            .context(invalid("username"))?,
-        // Inline password is already a concrete `String` (the type forbids an unresolved ref).
-        password: password.to_string(),
-        sslmode,
-    })
-}
-
-impl Binding for LocalPostgres {}
-
-impl Postgres for LocalPostgres {
-    fn connection_params(&self) -> PostgresConnectionParams {
-        self.params.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::{Postgres, SslMode};
+    use alien_core::bindings::BindingValue;
 
     #[test]
     fn local_binding_resolves_to_disable_sslmode_connection_string() {
         let binding = PostgresBinding::local("127.0.0.1", 6543, "db", "alien", "p@ss/word");
-        let pg = LocalPostgres::from_binding("db", &binding).expect("local binding resolves");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("local binding resolves");
         let params = pg.connection_params();
         assert_eq!(params.host, "127.0.0.1");
         assert_eq!(params.port, 6543);
+        assert_eq!(params.sslmode(), SslMode::Disable);
         // password is percent-encoded; sslmode=disable for Local (plain TCP).
         assert_eq!(
             pg.connection_string(),
@@ -132,22 +90,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn external_binding_defaults_to_verify_full_sslmode() {
+        let binding = PostgresBinding::external("db.internal", 5432, "app", "alien", "p@ss/word");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("external binding resolves");
+
+        assert_eq!(pg.connection_params().sslmode(), SslMode::VerifyFull);
+        assert_eq!(
+            pg.connection_string(),
+            "postgres://alien:p%40ss%2Fword@db.internal:5432/app?sslmode=verify-full"
+        );
+    }
+
+    #[test]
+    fn external_binding_allows_explicit_plaintext_opt_out() {
+        let binding: PostgresBinding = serde_json::from_value(serde_json::json!({
+            "service": "external",
+            "host": "db.internal",
+            "port": 5432,
+            "database": "app",
+            "username": "alien",
+            "password": "secret",
+            "sslMode": "disable",
+        }))
+        .expect("external plaintext binding deserializes");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("external binding resolves");
+
+        assert_eq!(pg.connection_params().sslmode(), SslMode::Disable);
+        assert_eq!(
+            pg.connection_string(),
+            "postgres://alien:secret@db.internal:5432/app?sslmode=disable"
+        );
+    }
+
     // The connection string must percent-encode the RFC 3986 sub-delims ! * ' ( ) that JS's
-    // encodeURIComponent leaves literal, so the Rust resolver and the TS SDK resolver
-    // (packages/sdk/.../postgres.ts `encodeUserinfo`) produce byte-identical URLs for any
-    // generated password. This pins the shared encoding contract on the Rust side.
+    // encodeURIComponent leaves literal, so any resolver that reimplements this (in any
+    // language) produces byte-identical URLs for any generated password. This pins the
+    // encoding contract; `crates/alien-bindings/src/traits.rs::encode_userinfo` is the
+    // single implementation every backend shares.
     #[test]
     fn connection_string_percent_encodes_rfc3986_sub_delims() {
         let binding = PostgresBinding::local("h", 5432, "db", "alien", "a!b*c'd(e)f");
-        let pg = LocalPostgres::from_binding("db", &binding).expect("local binding resolves");
+        let pg = ResolvedPostgres::from_binding("db", &binding).expect("local binding resolves");
         assert_eq!(
             pg.connection_string(),
             "postgres://alien:a%21b%2Ac%27d%28e%29f@h:5432/db?sslmode=disable"
         );
     }
 
+    /// A cloud binding routed here is a dispatch bug, not user error, but it must still
+    /// fail loudly rather than resolve without a password.
     #[test]
-    fn cloud_binding_resolution_is_rejected_in_this_build() {
+    fn cloud_binding_is_rejected_by_the_inline_password_provider() {
         let binding = PostgresBinding::Aurora(alien_core::bindings::AuroraPostgresBinding {
             cluster_endpoint: "cluster.rds.amazonaws.com".into(),
             port: BindingValue::value(5432),
@@ -155,6 +149,10 @@ mod tests {
             username: "alien".into(),
             password_secret_arn: "arn:aws:secretsmanager:...".into(),
         });
-        assert!(LocalPostgres::from_binding("db", &binding).is_err());
+
+        let error = ResolvedPostgres::from_binding("db", &binding)
+            .expect_err("cloud bindings must not resolve without their secret");
+
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
     }
 }

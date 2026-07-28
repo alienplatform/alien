@@ -3,7 +3,7 @@
  *
  * It provides the Worker handler APIs (`command`, `onStorageEvent`,
  * `onCronEvent`, `onQueueMessage`, `waitUntil`) and re-exports the app-facing
- * binding factories (`storage`, `kv`, `queue`, `vault`) from
+ * binding factories (`storage`, `kv`, `queue`, `vault`, `container`, `postgres`) from
  * `@alienplatform/bindings`, so a Worker author installs one package.
  *
  * Worker protocol dependencies (nice-grpc, generated Worker protocol clients)
@@ -55,8 +55,17 @@ export type {
 // Binding factories — re-exported from @alienplatform/bindings
 // ============================================================================
 
-export { storage, kv, queue, vault, container } from "@alienplatform/bindings"
-export type { Storage, Kv, Queue, Vault, Container } from "@alienplatform/bindings"
+export { storage, kv, queue, vault, container, postgres } from "@alienplatform/bindings"
+export type {
+  Storage,
+  Kv,
+  Queue,
+  Vault,
+  Container,
+  Postgres,
+  PostgresConnection,
+  PostgresSslMode,
+} from "@alienplatform/bindings"
 
 // ============================================================================
 // Errors — re-exported from @alienplatform/bindings and @alienplatform/core

@@ -1,4 +1,4 @@
-import { AlienError } from "@alienplatform/core"
+import { postgres } from "@alienplatform/sdk"
 import { Hono } from "hono"
 import { toExternalOperationError } from "../helpers.js"
 
@@ -12,91 +12,20 @@ type BunSqlClient = {
 }
 declare const Bun: { SQL: new (connectionString: string) => BunSqlClient }
 
-// Postgres connection resolution, inlined here from the (now removed)
-// `@alienplatform/sdk` `getPostgresConnection`. The SDK facade is Worker
-// handler APIs + binding factories only; connection-only Postgres resolution
-// lives with its sole consumer. This e2e app only deploys local Postgres
-// (plaintext, `sslmode=disable`), so only the non-cloud variants are inlined;
-// cloud secret resolution (Aurora/Cloud SQL/Flexible Server) is not exercised
-// here and is intentionally rejected rather than pulling in cloud secret SDKs.
-
-/** Matches the Rust `binding_env_var_name`: `ALIEN_<NAME>_BINDING`, hyphens to underscores. */
-function bindingEnvVarName(bindingName: string): string {
-  return `ALIEN_${bindingName.replace(/-/g, "_").toUpperCase()}_BINDING`
-}
-
-/**
- * Percent-encode a userinfo/path component to the RFC 3986 unreserved set,
- * matching the Rust resolver.
- */
-function encodeUserinfo(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    character => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
-  )
-}
-
-function connectionString(
-  host: string,
-  params: { port: number; database: string; username: string },
-  password: string,
-  sslmode: "disable" | "prefer",
-): string {
-  const user = encodeUserinfo(params.username)
-  const pass = encodeUserinfo(password)
-  return `postgres://${user}:${pass}@${host}:${params.port}/${encodeUserinfo(params.database)}?sslmode=${sslmode}`
-}
-
-/** Resolve the connection string for a linked local/external Postgres database. */
-function resolveConnectionString(bindingName: string): string {
-  const raw = process.env[bindingEnvVarName(bindingName)]
-  if (!raw) {
-    throw new AlienError({
-      code: "POSTGRES_BINDING_NOT_FOUND",
-      message: `Postgres binding '${bindingName}' is not configured`,
-      retryable: false,
-      internal: false,
-      httpStatusCode: 404,
-      context: { bindingName },
-    })
-  }
-  const binding = JSON.parse(raw) as {
-    service: string
-    host: string
-    port: number
-    database: string
-    username: string
-    password?: string
-  }
-  const params = { port: binding.port, database: binding.database, username: binding.username }
-  switch (binding.service) {
-    case "local-postgres":
-      return connectionString(binding.host, params, binding.password ?? "", "disable")
-    case "external":
-      return connectionString(binding.host, params, binding.password ?? "", "prefer")
-    default:
-      throw new AlienError({
-        code: "POSTGRES_BINDING_UNSUPPORTED",
-        message: `Postgres backend '${binding.service}' is not exercised by the e2e test app`,
-        retryable: false,
-        internal: false,
-        httpStatusCode: 400,
-        context: { service: binding.service },
-      })
-  }
-}
-
 const app = new Hono()
 
-// Exercise a Postgres binding end to end: resolve the connection, open a real driver connection, and
-// run a query. The binding is connection-only by design (no gRPC surface), so proving the resource
-// works means actually speaking the wire protocol against it.
+// Exercise a Postgres binding end to end: resolve the connection through the real binding, open a
+// driver connection, and run a query. The binding is connection-only by design (no gRPC surface),
+// so proving the resource works means actually speaking the wire protocol against it.
 app.post("/postgres-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
-    const url = resolveConnectionString(bindingName)
-    // Local Postgres is plaintext (sslmode=disable); the connection string carries the credentials.
-    const sql = new Bun.SQL(url)
+    // The binding resolves every backend, including reading a cloud backend's password from its
+    // secret store. This app only deploys local Postgres (plaintext, `sslmode=disable`), so the
+    // connection string alone is enough here; a cloud backend would additionally need the
+    // connection's `ssl` value passed to the driver as individual fields.
+    const { connectionString } = await postgres(bindingName).connection()
+    const sql = new Bun.SQL(connectionString)
     try {
       const rows = await sql`SELECT 1 AS one`
       const one = rows[0]?.one

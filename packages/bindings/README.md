@@ -1,6 +1,7 @@
 # `@alienplatform/bindings`
 
-Direct TypeScript bindings for Alien storage, kv, queue, vault, and linked-container discovery over an
+Direct TypeScript bindings for Alien storage, kv, queue, vault, linked-container
+discovery, and Postgres over an
 in-process [napi-rs](https://napi.rs) addon. The addon itself lives in the Rust
 crate `crates/alien-bindings-node`; this package is the published JavaScript
 wrapper that loads it.
@@ -19,6 +20,43 @@ const publicUrl = await database.getPublicUrl() // string | null
 
 Use the internal URL for calls between resources in the same deployment. Use
 the public URL only when the caller is outside that private network.
+
+## Postgres
+
+Postgres is connection-only: every backend speaks the same wire protocol, so the
+binding hands back connection details and your app connects with its own driver.
+Resolving a managed cloud backend (Aurora, Cloud SQL, Flexible Server) reads the
+password from that cloud's secret store using the workload's own identity — the
+binding itself only ever carries a locator for it.
+
+```ts
+import { Client } from "pg"
+import { postgres } from "@alienplatform/bindings"
+
+const conn = await postgres("my-db").connection()
+
+// Field style: node-postgres parses a URL's sslmode and would override `ssl`, so
+// pass the fields when you need `conn.ssl` to take effect.
+const client = new Client({
+  host: conn.host,
+  port: conn.port,
+  database: conn.database,
+  user: conn.username,
+  password: conn.password,
+  ssl: conn.ssl,
+})
+await client.connect()
+```
+
+`conn.connectionString` is the same details as a `postgres://` URL, with the
+credentials percent-encoded, for drivers that take one.
+
+External (BYO) Postgres bindings use verified TLS by default. Their `sslMode`
+policy is deliberately limited to `"verify-full"` and `"disable"` because
+node-postgres cannot represent libpq's opportunistic `prefer` fallback without
+owning the connection attempt. Use `"disable"` only as an explicit compatibility
+opt-out for a plaintext-only server; missing legacy configuration defaults to
+`"verify-full"`.
 
 ## Native addon resolution
 

@@ -43,7 +43,7 @@ pub use kv::{
 };
 pub use postgres::{
     AuroraPostgresBinding, CloudSqlPostgresBinding, ExternalPostgresBinding,
-    FlexibleServerPostgresBinding, LocalPostgresBinding, PostgresBinding,
+    ExternalPostgresSslMode, FlexibleServerPostgresBinding, LocalPostgresBinding, PostgresBinding,
 };
 pub use queue::{
     LocalQueueBinding, PubSubQueueBinding, QueueBinding, ServiceBusQueueBinding, SqsQueueBinding,
