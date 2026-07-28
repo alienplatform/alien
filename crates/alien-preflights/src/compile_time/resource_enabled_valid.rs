@@ -200,6 +200,8 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
             let Some(dependency_gate) = gates.get(dependency_id) else {
                 continue;
             };
+            // One finding per target id; the counts below re-read the full chain, so a
+            // duplicate edge still registers there.
             if seen.contains(&dependency_id) {
                 continue;
             }
@@ -231,7 +233,9 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                     .get(dependency_id)
                     .expect("a gated dependency is always a stack resource");
 
-            if link_count > 0 && total == link_count && !frozen_owner_of_runtime_gate {
+            // A setup-created owner's link renders into the install template, so only an
+            // owner the runtime manages can survive its target's decline.
+            if link_count > 0 && total == link_count && !owner_baked_in_setup {
                 warnings.push(format!(
                     "Resource '{dependent_id}' links '{dependency_id}', which is enabled by input \
                      '{dependency_gate}'. A deployer who says no drops the link too, so \
@@ -254,6 +258,12 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                      the runtime cannot rewrite a setup-created resource, so the answer could \
                      never reach '{dependent_id}'. Gate '{dependent_id}' on '{dependency_gate}' \
                      too, or make '{dependency_id}' setup-created so the answer is fixed at install"
+                )),
+                None if owner_baked_in_setup && total == link_count => errors.push(format!(
+                    "Setup-created resource '{dependent_id}' links '{dependency_id}', which is \
+                     enabled by input '{dependency_gate}'. Setup renders that binding into the \
+                     install template, so declining '{dependency_id}' would break the template's \
+                     reference. Gate '{dependent_id}' on '{dependency_gate}' too"
                 )),
                 None => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', which is enabled by \
@@ -376,10 +386,10 @@ mod tests {
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
-    /// Build owns author-declared links producing the same bindings as a compute kind, so a
-    /// gated target warns rather than refusing.
+    /// Build is setup-created, so its link renders into the install template and a declined
+    /// target would break the template's reference; refused rather than warned.
     #[tokio::test]
-    async fn warns_for_a_build_linking_a_gated_store() {
+    async fn rejects_a_setup_created_owner_linking_a_gated_store() {
         let store = Kv::new("store".to_string()).build();
         let builder = alien_core::Build::new("packager".to_string())
             .permissions("build".to_string())
@@ -394,12 +404,13 @@ mod tests {
 
         let result = result_for(stack).await;
 
-        assert!(result.success, "should not block: {:?}", result.errors);
-        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        assert!(!result.success, "a setup-created link owner must be refused");
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
         assert!(
-            result.warnings[0].contains("Resource 'packager' links 'store'"),
+            result.errors[0].contains("'packager' links 'store'"),
             "{:?}",
-            result.warnings
+            result.errors
         );
     }
 
