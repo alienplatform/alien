@@ -137,6 +137,20 @@ fn add_remote_storage_data_write_permissions(
     management_permissions: &mut ManagementPermissions,
     remote_storage_resource_ids: &[String],
 ) {
+    if remote_storage_resource_ids.is_empty() {
+        return;
+    }
+
+    // `Auto` survives this mutation when nothing else needs a management grant
+    // (for example telemetry and heartbeats are both off). Emitters read
+    // `ManagementPermissions::profile()`, which is `None` for `Auto`, so leaving
+    // it alone would silently drop the remote data grant and the deployment
+    // would fail later with an opaque access error. Promote instead.
+    if matches!(management_permissions, ManagementPermissions::Auto) {
+        *management_permissions = ManagementPermissions::Extend(PermissionProfile::new());
+    }
+
+    // `Override` profiles are authored explicitly and are never extended.
     let ManagementPermissions::Extend(profile) = management_permissions else {
         return;
     };
@@ -544,6 +558,58 @@ mod tests {
                 .iter()
                 .any(|permission| permission.id() == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID)
         }));
+    }
+
+    #[tokio::test]
+    async fn remote_storage_data_write_survives_an_otherwise_empty_auto_profile() {
+        // Turning telemetry and heartbeats off leaves a frozen storage resource
+        // with no derived management grant, so the auto profile is empty and the
+        // stack would stay `Auto`. Emitters read `profile()`, which is `None` for
+        // `Auto`, so the remote data grant has to promote the profile itself.
+        let stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(
+                Storage::new("uploads".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management(ManagementPermissions::Auto)
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                telemetry: TelemetryMode::Off,
+                heartbeats: HeartbeatsMode::Off,
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .expect("management permission mutation should succeed");
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("remote storage must still receive a scoped data-write grant");
+        };
+        let storage_permissions: Vec<&str> = profile
+            .0
+            .get("uploads")
+            .expect("remote storage should have concrete management permissions")
+            .iter()
+            .map(|permission| permission.id())
+            .collect();
+        assert_eq!(
+            storage_permissions,
+            vec![REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID]
+        );
+        assert!(
+            !profile
+                .0
+                .get("*")
+                .is_some_and(|permissions| !permissions.is_empty()),
+            "no global grant should be invented alongside the scoped data grant"
+        );
     }
 
     #[tokio::test]
