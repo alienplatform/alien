@@ -219,14 +219,13 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                 .filter(|d| d.id() == dependency_id)
                 .count();
 
-            // A frozen owner cannot be updated by the runtime, so a link it holds to a
-            // runtime-resolved gate can be neither dropped on decline nor restored on
-            // acceptance — the deployed resource would keep whichever shape setup gave it.
+            // The runtime cannot rewrite a setup-created resource, so a reference it holds to
+            // a runtime-resolved gate can be neither dropped nor restored. The `expect` is
+            // unreachable: both maps come from the same pass, and `gates` already resolved this id.
             let frozen_owner_of_runtime_gate = entry.lifecycle == ResourceLifecycle::Frozen
-                && resolves_at_runtime
+                && *resolves_at_runtime
                     .get(dependency_id)
-                    .copied()
-                    .unwrap_or(false);
+                    .expect("a gated dependency is always a stack resource");
 
             if link_count > 0 && total == link_count && !frozen_owner_of_runtime_gate {
                 warnings.push(format!(
@@ -246,11 +245,11 @@ fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
                      '{dependency_id}' is not. Gate both on '{dependency_gate}'"
                 )),
                 None if frozen_owner_of_runtime_gate => errors.push(format!(
-                    "Setup-created resource '{dependent_id}' links '{dependency_id}', which input \
-                     '{dependency_gate}' decides at runtime. Setup bakes the link, and the runtime \
-                     cannot rewrite a setup-created resource, so the answer could never reach \
-                     '{dependent_id}'. Gate '{dependent_id}' on '{dependency_gate}' too, or make \
-                     '{dependency_id}' setup-created so the answer is fixed at install"
+                    "Setup-created resource '{dependent_id}' depends on '{dependency_id}', which \
+                     input '{dependency_gate}' decides at runtime. Setup bakes that reference and \
+                     the runtime cannot rewrite a setup-created resource, so the answer could \
+                     never reach '{dependent_id}'. Gate '{dependent_id}' on '{dependency_gate}' \
+                     too, or make '{dependency_id}' setup-created so the answer is fixed at install"
                 )),
                 None => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', which is enabled by \
@@ -417,12 +416,10 @@ mod tests {
             .add(builder, ResourceLifecycle::Frozen)
             .build();
 
-        let errors = errors_for(stack).await;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("decides at runtime"),
-            "{errors:?}"
-        );
+        let result = result_for(stack).await;
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(result.errors[0].contains("decides at runtime"), "{:?}", result.errors);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
     /// The scrub only removes links. A queue reached by both a link and a trigger keeps the
@@ -449,9 +446,10 @@ mod tests {
             .add(worker, ResourceLifecycle::Live)
             .build();
 
-        let errors = errors_for(stack).await;
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("not a plain link"), "{errors:?}");
+        let result = result_for(stack).await;
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(result.errors[0].contains("not a plain link"), "{:?}", result.errors);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
     #[tokio::test]

@@ -70,8 +70,8 @@ pub async fn handle_pending(
     info!("Deployment-time preflight checks completed successfully");
 
     // Step 3.5: Drop gated live resources whose input says no. Applied after the
-    // mutations so they still derive the service account and capacity acceptance
-    // returns to; what they derive for a declined resource, the strip removes.
+    // mutations so a declined resource still derives the baseline that a later
+    // acceptance returns to.
     let mutated_stack = strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
@@ -505,9 +505,15 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
         entry
             .dependencies
             .retain(|dependency| !declined.contains(&dependency.id));
-        // Logged rather than silent: only the release-time preflight refuses an authored
-        // ordering edge onto a gated resource. The frozen strip runs before the
-        // deployment-time checks, so this is not backed by a second refusal at this point.
+        // Only the release-time preflight refuses an authored ordering edge onto a gated
+        // resource; the frozen strip runs before the deployment-time checks, so nothing
+        // refuses one here. Loud in debug, logged in release.
+        debug_assert_eq!(
+            ordering_before,
+            entry.dependencies.len(),
+            "an ordering edge onto a declined resource reached the strip, which the \
+             release-time preflight should have refused"
+        );
         if ordering_before > entry.dependencies.len() {
             info!(
                 resource_id = %resource_id,
@@ -522,8 +528,8 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
 
 /// Drop grants naming a declined resource from every permission profile.
 ///
-/// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources, and
-/// `kv` binds at project scope. Nothing is lost, the mutations re-derive them next deploy.
+/// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources.
+/// Nothing is lost, because the mutations re-derive them whenever the gate is accepted.
 fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
     let scrub = |profile: &mut alien_core::permissions::PermissionProfile| {
         for resource_id in declined {

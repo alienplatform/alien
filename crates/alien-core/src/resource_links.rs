@@ -31,10 +31,7 @@ macro_rules! impl_resource_links {
 
 impl_resource_links!(Worker, Container, Daemon, Build);
 
-/// Types wired above. The drift guard holds `LINK_OWNERSHIP`'s `true` rows against this, so a
-/// type declared as owning links but never wired cannot pass as covered.
-#[cfg(test)]
-const WIRED_LINK_OWNERS: usize = 4;
+
 
 /// The link-owning view of a resource, or `None` when it owns no links.
 ///
@@ -161,17 +158,22 @@ mod tests {
         )
     }
 
+    /// One entry per wired link owner. The resolve, scrub and drift tests all read this, so
+    /// adding a type is a single edit rather than several independently-trusted ones.
+    const FIXTURES: &[(&str, fn() -> Resource)] = &[
+        ("worker", worker),
+        ("container", container),
+        ("daemon", daemon),
+        ("build", build),
+    ];
+
     /// Every link owner must resolve, expose its links, and drop exactly the named one.
     /// Parametrised because a type that silently stops participating would otherwise only
     /// surface as a dangling reference in a customer's account.
     #[test]
     fn every_link_owner_resolves_and_scrubs() {
-        for (name, mut resource) in [
-            ("worker", worker()),
-            ("container", container()),
-            ("daemon", daemon()),
-            ("build", build()),
-        ] {
+        for (name, make) in FIXTURES {
+            let mut resource = make();
             assert_eq!(
                 links_of(&resource).len(),
                 2,
@@ -191,12 +193,8 @@ mod tests {
     /// was never asked to remove.
     #[test]
     fn no_declines_leaves_every_link_owner_untouched() {
-        for (name, mut resource) in [
-            ("worker", worker()),
-            ("container", container()),
-            ("daemon", daemon()),
-            ("build", build()),
-        ] {
+        for (name, make) in FIXTURES {
+            let mut resource = make();
             let before: Vec<ResourceRef> = links_of(&resource).to_vec();
             assert_eq!(before.len(), 2, "{name} should start with both links");
             // Resolved strictly: behind an `if let` a broken resolver would skip the
@@ -286,11 +284,22 @@ mod tests {
 
         // Presence alone would pass a type declared `true` that nobody wired into
         // `impl_resource_links!`, which then never resolves and is never scrubbed.
-        let declared_owners = LINK_OWNERSHIP.iter().filter(|(_, owns)| *owns).count();
+        let declared: Vec<&str> = LINK_OWNERSHIP
+            .iter()
+            .filter(|(_, owns)| *owns)
+            .map(|(tag, _)| *tag)
+            .collect();
+        for (tag, make) in FIXTURES {
+            assert!(declared.contains(tag), "fixture '{tag}' is not declared a link owner");
+            assert!(
+                resource_links(&make()).is_some(),
+                "'{tag}' is declared a link owner but does not resolve as one"
+            );
+        }
         assert_eq!(
-            declared_owners, WIRED_LINK_OWNERS,
-            "LINK_OWNERSHIP declares {declared_owners} link owners but {WIRED_LINK_OWNERS} are \
-             wired into impl_resource_links!; every declared owner must resolve"
+            declared.len(),
+            FIXTURES.len(),
+            "declared link owners {declared:?} have no fixture proving they resolve"
         );
     }
 }
