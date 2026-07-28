@@ -59,6 +59,7 @@ function addonForPostgres(raw: RawPostgresConnection): NativeAddon {
   }
   return {
     BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    RemoteBindingsHandle: unusedRemoteBindingsHandle(),
     version: () => "test",
   }
 }

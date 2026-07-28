@@ -5,6 +5,7 @@ import type {
   RawBindingsHandle,
   RawContainerHandle,
   RawKvHandle,
+  RawPostgresHandle,
   RawQueueHandle,
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
@@ -59,6 +60,10 @@ function fakeRemoteAddon() {
     }
 
     async container(): Promise<RawContainerHandle> {
+      throw new Error("unused")
+    }
+
+    async postgres(): Promise<RawPostgresHandle> {
       throw new Error("unused")
     }
   }
