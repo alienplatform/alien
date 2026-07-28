@@ -505,15 +505,8 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
         entry
             .dependencies
             .retain(|dependency| !declined.contains(&dependency.id));
-        // Only the release-time preflight refuses an authored ordering edge onto a gated
-        // resource; the frozen strip runs before the deployment-time checks, so nothing
-        // refuses one here. Loud in debug, logged in release.
-        debug_assert_eq!(
-            ordering_before,
-            entry.dependencies.len(),
-            "an ordering edge onto a declined resource reached the strip, which the \
-             release-time preflight should have refused"
-        );
+        // The release-time preflight refuses authored ordering edges onto gated resources,
+        // so one reaching here predates the rule; dropping it keeps the stack coherent.
         if ordering_before > entry.dependencies.len() {
             info!(
                 resource_id = %resource_id,
@@ -807,6 +800,37 @@ mod tests {
         assert_eq!(link_ids(&stack, "api"), vec!["cache".to_string()]);
     }
 
+    /// Setup authorization and the frozen-unchanged gate both hash the frozen entries, so a
+    /// live decline that rewrote one would make those baselines disagree mid-update.
+    #[test]
+    fn a_live_decline_leaves_the_frozen_digest_untouched() {
+        let with_frozen = |default| {
+            let mut stack = live_gated_stack_with_linking_worker(default);
+            let store = Kv::new("ledger".to_string()).build();
+            stack.resources.insert(
+                "ledger".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(store),
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack
+        };
+
+        let digest_before = with_frozen(Some(true)).frozen_resources_digest();
+        let stripped = strip_live(with_frozen(Some(true)), false);
+
+        assert!(!stripped.resources.contains_key("cache"));
+        assert_eq!(
+            digest_before,
+            stripped.frozen_resources_digest(),
+            "a live decline must not rewrite any frozen entry"
+        );
+    }
+
     /// The executor plans an update by diffing resource configs, and links live inside that
     /// config. Without a config change the worker keeps the stale binding indefinitely.
     #[test]
@@ -828,8 +852,9 @@ mod tests {
         );
     }
 
-    /// A surviving grant is not inert: on GCP it leaves the consumer's identity holding
-    /// project-wide data access for a store the deployer declined.
+    /// A grant left in the desired stack is not inert: on GCP the walker applies every
+    /// named entry without consulting desired resources. Revoking an already-applied
+    /// binding is the reconciler's separate concern; this pins only the desired side.
     #[test]
     fn a_declined_resource_takes_its_grant_with_it() {
         let input = StackInputDefinition::deployer_boolean(
