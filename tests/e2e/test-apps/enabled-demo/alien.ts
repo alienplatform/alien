@@ -96,18 +96,6 @@ const queueOff = new alien.Queue("optional-queue-off").enabled(io.queueOff).buil
 const vaultOn = new alien.Vault("optional-vault-on").enabled(io.vaultOn).build()
 const vaultOff = new alien.Vault("optional-vault-off").enabled(io.vaultOff).build()
 
-// Ungated, and links both halves of a gated pair. The declined one leaves the stack with
-// this link removed alongside it, so the agent starts with ALIEN_OPTIONAL_KV_ON_BINDING and
-// without ALIEN_OPTIONAL_KV_OFF_BINDING — one deployment proving both answers.
-const agent = new alien.Worker("agent")
-  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
-  .commandsEnabled(true)
-  .publicEndpoint("api")
-  .permissions("execution")
-  .link(kvOn)
-  .link(kvOff)
-  .build()
-
 // A compute gate is a live gate: the declined worker's function must never be
 // provisioned while its profile-derived service account still exists — the
 // baseline that lets a later acceptance recreate the function. Each gated
@@ -122,6 +110,24 @@ const workerOff = new alien.Worker("optional-worker-off")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .permissions("optional-off")
   .enabled(io.workerOff)
+  .build()
+
+// Ungated, and links both halves of two gated pairs. A declined resource leaves the stack
+// with this link removed alongside it, so the agent starts with the `-on` bindings and
+// without the `-off` ones: one deployment proving both answers.
+//
+// The kv pair is frozen, so those answers are fixed at install. The worker pair is live and
+// grant-free (a worker link derives no permission set), which is what makes it safe to flip
+// after the fact without a runtime policy write on the setup-owned role.
+const agent = new alien.Worker("agent")
+  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+  .commandsEnabled(true)
+  .publicEndpoint("api")
+  .permissions("execution")
+  .link(kvOn)
+  .link(kvOff)
+  .link(workerOn)
+  .link(workerOff)
   .build()
 
 export default new alien.Stack("enabled-demo")

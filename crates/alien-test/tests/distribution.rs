@@ -181,7 +181,53 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
     )
     .await?;
 
+    // The links half of the gate: an ungated worker linking gated resources keeps only the
+    // links whose target survived, so it starts with the `-on` bindings and without the
+    // `-off` ones. Before the link scrub this shape could not be expressed at all.
+    let links = agent_link_ids(&stack_state)?;
+    for id in ["optional-kv-on", "optional-worker-on"] {
+        anyhow::ensure!(
+            links.contains(&id.to_string()),
+            "agent should keep its link to accepted '{id}', got {links:?}"
+        );
+    }
+    for id in ["optional-kv-off", "optional-worker-off"] {
+        anyhow::ensure!(
+            !links.contains(&id.to_string()),
+            "agent must not keep a link to declined '{id}', got {links:?}"
+        );
+    }
+
+    // The transition, on the SAME deployment: accepting a previously declined live gate
+    // must bring the resource back AND restore the link that was scrubbed with it.
+    let flipped = alien_test::distribution::flip_terraform_gate(ctx, "input_worker_off", true)
+        .await
+        .context("failed to re-apply with optional-worker-off accepted")?;
+
+    anyhow::ensure!(
+        flipped.resources.contains_key("optional-worker-off"),
+        "accepting the gate must recreate the resource, got {:?}",
+        flipped.resources.keys().collect::<Vec<_>>()
+    );
+    let links = agent_link_ids(&flipped)?;
+    anyhow::ensure!(
+        links.contains(&"optional-worker-off".to_string()),
+        "accepting the gate must restore the scrubbed link, got {links:?}"
+    );
+
     Ok(())
+}
+
+/// The resource ids the ungated `agent` worker still links, read from the manager's view.
+fn agent_link_ids(stack_state: &alien_core::StackState) -> anyhow::Result<Vec<String>> {
+    let agent = stack_state
+        .resources
+        .get("agent")
+        .context("stack_state is missing the ungated 'agent' worker")?;
+    Ok(alien_core::links_of(&agent.config)
+        .iter()
+        .map(|link| link.id.clone())
+        .collect())
 }
 
 /// Runs one read-only `aws` list call and asserts the enabled sibling's id is

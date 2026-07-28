@@ -1890,6 +1890,64 @@ async fn apply_terraform_and_import(
     }
 }
 
+/// What a gate flip needs to reach the deployment the install created.
+pub struct GateFlip {
+    dg_token: String,
+    manager_url: String,
+}
+
+/// Re-apply the SAME Terraform workdir with one gate variable changed, then re-import so
+/// the manager sees the new shape on the same deployment.
+///
+/// [`apply_terraform_and_import`] allocates a fresh workdir and imports as a new install, so
+/// calling it twice stands up a second unrelated deployment instead of flipping the first.
+/// Flipping needs the original state, the original tfvars, and the original deployment-group
+/// token, which is why this reuses the retained workdir rather than building its own.
+pub async fn flip_terraform_gate(
+    ctx: &crate::TestContext,
+    tfvar: &str,
+    accepted: bool,
+) -> anyhow::Result<StackState> {
+    let flip = ctx
+        .gate_flip
+        .as_ref()
+        .context("this deployment was not installed through a distribution artifact")?;
+    let Some(DistributionArtifactCleanup::Terraform { workdir, env }) = ctx
+        .distribution_cleanups
+        .iter()
+        .find(|c| matches!(c, DistributionArtifactCleanup::Terraform { .. }))
+    else {
+        anyhow::bail!("gate flips are only defined for a Terraform install");
+    };
+    let workdir_path = workdir.path().to_path_buf();
+
+    let tfvars_path = workdir_path.join("terraform.tfvars.json");
+    let mut tfvars: Value = serde_json::from_slice(
+        &fs::read(&tfvars_path)
+            .await
+            .context("Failed to read terraform.tfvars.json for a gate flip")?,
+    )?;
+    tfvars
+        .as_object_mut()
+        .context("terraform.tfvars.json is not an object")?
+        .insert(tfvar.to_string(), Value::Bool(accepted));
+    fs::write(&tfvars_path, serde_json::to_vec_pretty(&tfvars)?).await?;
+
+    info!(tfvar, accepted, "Re-applying Terraform with a flipped gate");
+    run_terraform_cmd(
+        &workdir_path,
+        env,
+        ["apply", "-auto-approve", "-input=false"],
+    )
+    .await?;
+
+    let outputs = terraform_output_json(&workdir_path, env).await?;
+    let request = terraform_import_request_from_outputs(&outputs, &flip.dg_token)?;
+    // Same group token and deployment name, so the manager takes its update path rather
+    // than creating a second deployment.
+    reimport_stack(&flip.manager_url, &flip.dg_token, request).await
+}
+
 async fn terraform_stack_for_target(
     prepared: &DistributionPrepared,
     target: alien_terraform::TerraformTarget,
@@ -2350,6 +2408,35 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
     }
 }
 
+/// Re-import an already-installed stack and return the manager's view of it.
+///
+/// The full [`import_stack`] also fetches the deployment record, which a flip does not need:
+/// the deployment is the one the test already holds, only its stack state has moved.
+async fn reimport_stack(
+    manager_url: &str,
+    dg_token: &str,
+    request: StackImportRequest,
+) -> anyhow::Result<StackState> {
+    let url = format!("{manager_url}/v1/stack/import");
+    let response = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(dg_token)
+        .json(&request)
+        .send()
+        .await
+        .context("Failed to call /v1/stack/import for a gate flip")?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("stack re-import failed with {status}: {body}");
+    }
+
+    let response: StackImportResponse =
+        serde_json::from_str(&body).context("Failed to parse StackImportResponse")?;
+    Ok(response.stack_state)
+}
+
 async fn import_stack(
     prepared: &DistributionPrepared,
     request: StackImportRequest,
@@ -2413,6 +2500,10 @@ fn context_from_deployment(
         app: prepared.app,
         agent: None,
         distribution_cleanups: cleanups,
+        gate_flip: Some(GateFlip {
+            dg_token: prepared.dg_token.clone(),
+            manager_url: prepared.manager.url.clone(),
+        }),
     }
 }
 
