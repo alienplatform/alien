@@ -89,10 +89,9 @@ pub async fn handle_update_pending(
     // previous prepared stack, which was stripped the same way, and an
     // unstripped new stack would read as "frozen resource added" and refuse
     // the update — or worse, resurrect the resource the deployer declined.
-    // Live declines apply AFTER the mutations instead, so a declined
-    // workload's derived baseline (service account, profile grants, capacity
-    // contribution) stays identical to the accepted render and the
-    // compatibility checks never see a difference.
+    // Live declines apply AFTER the mutations, so a declined workload's service
+    // account and capacity stay identical to the accepted render. Its grant is
+    // scrubbed, which `permission_profiles_unchanged`'s gated exemption absorbs.
     let target_stack = crate::pending::strip_frozen_declines(
         target_stack,
         &persisted_gate_answers,

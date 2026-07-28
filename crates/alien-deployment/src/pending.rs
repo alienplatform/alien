@@ -198,9 +198,9 @@ fn strip_frozen_dominated_live_resources(
 /// Remove gated live resources whose input resolves false. Runs AFTER the
 /// mutations on both deployment paths, at the boundary where the executor's
 /// desired set is built: the mutations must keep seeing a declined live
-/// resource so its provisioning baseline — service account, profile grants,
-/// capacity contribution — stays stable and acceptance can return without a
-/// frozen-compatibility violation.
+/// resource so its service account and capacity contribution stay stable. Its
+/// grant does not survive — `permission_profiles_unchanged` exempts a scope
+/// keyed by a gated resource present on only one side, which absorbs that.
 ///
 /// The answer is the provided value, else the recorded answer while the input
 /// still gates a frozen resource, else the input's declared boolean default;
