@@ -347,6 +347,34 @@ mod tests {
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
+    /// Build is not a compute kind but owns author-declared links that produce the same
+    /// bindings, so it gets the same treatment. Before the links capability existed this
+    /// was refused outright.
+    #[tokio::test]
+    async fn warns_for_a_build_linking_a_gated_store() {
+        let store = Kv::new("store".to_string()).build();
+        let builder = alien_core::Build::new("packager".to_string())
+            .permissions("build".to_string())
+            .link(&store)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(store, ResourceLifecycle::Frozen, "storeEnabled")
+            .add(builder, ResourceLifecycle::Frozen)
+            .build();
+
+        let result = result_for(stack).await;
+
+        assert!(result.success, "should not block: {:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        assert!(
+            result.warnings[0].contains("Resource 'packager' links 'store'"),
+            "{:?}",
+            result.warnings
+        );
+    }
+
     /// The scrub only removes links. A queue reached by both a link and a trigger keeps the
     /// trigger wiring on the source resource, so this must stay a refusal.
     #[tokio::test]
