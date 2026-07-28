@@ -112,13 +112,9 @@ const workerOff = new alien.Worker("optional-worker-off")
   .enabled(io.workerOff)
   .build()
 
-// Ungated, and links both halves of two gated pairs. A declined resource leaves the stack
-// with this link removed alongside it, so the agent starts with the `-on` bindings and
-// without the `-off` ones: one deployment proving both answers.
-//
-// The kv pair is frozen, so those answers are fixed at install. The worker pair is live and
-// grant-free (a worker link derives no permission set), which is what makes it safe to flip
-// after the fact without a runtime policy write on the setup-owned role.
+// Ungated, linking both halves of two gated pairs so one deployment proves both answers.
+// The kv pair is frozen and fixed at install; the worker pair is live and grant-free, which
+// is what makes it flippable without a runtime policy write on the setup-owned role.
 const agent = new alien.Worker("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)

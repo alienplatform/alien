@@ -69,11 +69,9 @@ pub async fn handle_pending(
 
     info!("Deployment-time preflight checks completed successfully");
 
-    // Step 3.5: Drop gated live resources whose input says no. Frozen declines
-    // were stripped before the mutations above; live declines apply here, after
-    // them, so the mutations still see a declined workload when deriving the
-    // service account and capacity that acceptance returns to. What the strip
-    // derives, it also removes: grants for a declined resource go with it.
+    // Step 3.5: Drop gated live resources whose input says no. Applied after the
+    // mutations so they still derive the service account and capacity acceptance
+    // returns to; what they derive for a declined resource, the strip removes.
     let mutated_stack = strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
@@ -524,12 +522,8 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
 
 /// Drop grants naming a declined resource from every permission profile.
 ///
-/// Leaving them is not inert. The GCP service-account controller applies every non-`"*"`
-/// profile entry without consulting the desired resources, and `kv` binds its role at project
-/// scope because IAM cannot scope to a collection — so a declined store would leave the
-/// consumer's identity holding project-wide data access. Nothing is lost by dropping it: the
-/// mutations re-derive every link grant from the declared stack on the next deploy, so
-/// accepting the gate again restores the grant with it.
+/// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources, and
+/// `kv` binds at project scope. Nothing is lost, the mutations re-derive them next deploy.
 fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
     let scrub = |profile: &mut alien_core::permissions::PermissionProfile| {
         for resource_id in declined {
@@ -807,10 +801,8 @@ mod tests {
         assert_eq!(link_ids(&stack, "api"), vec!["cache".to_string()]);
     }
 
-    /// The executor plans an update by comparing resource configs
-    /// (`Some(&desired_config.resource) != current_resource_config_opt`). Links live inside
-    /// that config, so the scrub must change it — otherwise the worker would keep running
-    /// with the stale binding in its environment and nothing would ever correct it.
+    /// The executor plans an update by diffing resource configs, and links live inside that
+    /// config. Without a config change the worker keeps the stale binding indefinitely.
     #[test]
     fn the_scrub_changes_the_config_the_executor_diffs() {
         let before = live_gated_stack_with_linking_worker(Some(true));
@@ -830,10 +822,8 @@ mod tests {
         );
     }
 
-    /// A grant naming a declined resource must go with it. The GCP service-account controller
-    /// applies every non-`"*"` profile entry without consulting the desired resources, and `kv`
-    /// binds at project scope, so a surviving entry would leave the consumer's identity holding
-    /// project-wide data access for a store the deployer said no to.
+    /// A surviving grant is not inert: on GCP it leaves the consumer's identity holding
+    /// project-wide data access for a store the deployer declined.
     #[test]
     fn a_declined_resource_takes_its_grant_with_it() {
         let input = StackInputDefinition::deployer_boolean(

@@ -164,10 +164,8 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
 
 /// Sorts dependents of gated resources into refusals and warnings.
 ///
-/// A pure link survives the gate being declined: `remove_declined` drops it along with the
-/// resource, so the dependent keeps its own lifecycle without that binding. Every other edge
-/// refuses, because nothing removes it — a trigger's wiring lives on the source resource, an
-/// ordering edge is not a binding, and a type that does not report its links cannot be scrubbed.
+/// A pure link is dropped with the declined resource, so its owner keeps its own lifecycle
+/// without that binding. Every other edge refuses, because nothing removes it.
 fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
     let gates: HashMap<&str, &str> = stack
         .resources()
