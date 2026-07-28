@@ -13,9 +13,9 @@ pub mod manager_api_transport;
 mod observe;
 mod pending;
 pub use pending::{
-    derive_legacy_frozen_gate_answers, enforce_frozen_gate_fixity, frozen_gating_inputs,
-    resolve_frozen_gate_answers, resolve_frozen_gate_answers_from_presence,
-    strip_declined_live_resources, strip_frozen_declines,
+    enforce_frozen_gate_fixity, frozen_gating_inputs, resolve_frozen_gate_answers,
+    resolve_frozen_gate_answers_from_presence, strip_declined_live_resources,
+    strip_frozen_declines,
 };
 mod provisioning;
 pub mod runner;

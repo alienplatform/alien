@@ -11,10 +11,16 @@ import {
   SetupFingerprintInfo,
   SetupFingerprintInfo$inboundSchema,
 } from "./setupfingerprintinfo.js";
-import {
-  StackByPlatform,
-  StackByPlatform$inboundSchema,
-} from "./stackbyplatform.js";
+
+export type ReleaseListItemResponseStack = {
+  aws?: any | null | undefined;
+  gcp?: any | null | undefined;
+  azure?: any | null | undefined;
+  kubernetes?: any | null | undefined;
+  machines?: any | null | undefined;
+  local?: any | null | undefined;
+  test?: any | null | undefined;
+};
 
 /**
  * Project info, included when ?include=project is used
@@ -48,6 +54,28 @@ export type Rollout = {
   avgDurationMs: number | null;
 };
 
+/**
+ * Platform user who created the release, included when ?include=createdBy is used
+ */
+export type CreatedBy = {
+  /**
+   * User ID
+   */
+  id: string;
+  /**
+   * User's display name
+   */
+  name: string;
+  /**
+   * User's email address
+   */
+  email: string;
+  /**
+   * User's avatar image URL
+   */
+  image: string | null;
+};
+
 export type ReleaseListItemResponse = {
   /**
    * Unique identifier for the release.
@@ -57,9 +85,13 @@ export type ReleaseListItemResponse = {
   version: string;
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
-  stack?: StackByPlatform | null | undefined;
+  stack?: ReleaseListItemResponseStack | null | undefined;
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
   rootDirectory?: string | null | undefined;
+  /**
+   * ID of the platform user who created the release, if known
+   */
+  createdByUserId?: string | null | undefined;
   workspaceId: string;
   /**
    * Project info, included when ?include=project is used
@@ -69,7 +101,35 @@ export type ReleaseListItemResponse = {
    * Rollout stats, included when ?include=rollout is used
    */
   rollout?: Rollout | null | undefined;
+  /**
+   * Platform user who created the release, included when ?include=createdBy is used
+   */
+  createdBy?: CreatedBy | null | undefined;
 };
+
+/** @internal */
+export const ReleaseListItemResponseStack$inboundSchema: z.ZodType<
+  ReleaseListItemResponseStack,
+  unknown
+> = z.object({
+  aws: z.nullable(z.any()).optional(),
+  gcp: z.nullable(z.any()).optional(),
+  azure: z.nullable(z.any()).optional(),
+  kubernetes: z.nullable(z.any()).optional(),
+  machines: z.nullable(z.any()).optional(),
+  local: z.nullable(z.any()).optional(),
+  test: z.nullable(z.any()).optional(),
+});
+
+export function releaseListItemResponseStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseListItemResponseStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseListItemResponseStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseListItemResponseStack' from JSON`,
+  );
+}
 
 /** @internal */
 export const ReleaseListItemResponseProject$inboundSchema: z.ZodType<
@@ -108,6 +168,24 @@ export function rolloutFromJSON(
 }
 
 /** @internal */
+export const CreatedBy$inboundSchema: z.ZodType<CreatedBy, unknown> = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string(),
+  image: z.nullable(z.string()),
+});
+
+export function createdByFromJSON(
+  jsonString: string,
+): SafeParseResult<CreatedBy, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreatedBy$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreatedBy' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   ReleaseListItemResponse,
   unknown
@@ -117,14 +195,17 @@ export const ReleaseListItemResponse$inboundSchema: z.ZodType<
   version: z.string(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  stack: z.nullable(StackByPlatform$inboundSchema).optional(),
+  stack: z.nullable(z.lazy(() => ReleaseListItemResponseStack$inboundSchema))
+    .optional(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   rootDirectory: z.nullable(z.string()).optional(),
+  createdByUserId: z.nullable(z.string()).optional(),
   workspaceId: z.string(),
   project: z.nullable(
     z.lazy(() => ReleaseListItemResponseProject$inboundSchema),
   ).optional(),
   rollout: z.nullable(z.lazy(() => Rollout$inboundSchema)).optional(),
+  createdBy: z.nullable(z.lazy(() => CreatedBy$inboundSchema)).optional(),
 });
 
 export function releaseListItemResponseFromJSON(

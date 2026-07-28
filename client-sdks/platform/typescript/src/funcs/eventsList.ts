@@ -94,6 +94,7 @@ async function $do(
     "include": payload?.include,
     "limit": payload?.limit,
     "project": payload?.project,
+    "releaseId": payload?.releaseId,
     "workspace": payload?.workspace,
   });
 

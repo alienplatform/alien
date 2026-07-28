@@ -8,6 +8,7 @@ import { ClosedEnum } from "../../types/enums.js";
 export const GetReleaseInclude = {
   Project: "project",
   Rollout: "rollout",
+  CreatedBy: "createdBy",
 } as const;
 export type GetReleaseInclude = ClosedEnum<typeof GetReleaseInclude>;
 

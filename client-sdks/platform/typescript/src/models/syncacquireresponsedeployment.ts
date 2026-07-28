@@ -5109,6 +5109,18 @@ export type SyncAcquireResponseDeploymentRuntimeMetadata = {
     | any
     | null
     | undefined;
+  /**
+   * Canonical resolved answers for inputs that gate Frozen resources,
+   *
+   * @remarks
+   * keyed by input id, recorded when the deployment is created or its
+   * setup import registers.
+   *
+   * A frozen gate's answer is fixed for the deployment's lifetime: the
+   * update path refuses input values that conflict with these, and a Live
+   * resource sharing such an input resolves the persisted answer forever.
+   */
+  persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | SyncAcquireResponseDeploymentPreparedStack
     | any
@@ -20203,6 +20215,7 @@ export const SyncAcquireResponseDeploymentRuntimeMetadata$inboundSchema:
         z.any(),
       ]),
     ).optional(),
+    persistedGateAnswers: z.record(z.string(), z.boolean()).optional(),
     preparedStack: z.nullable(
       z.union([
         z.lazy(() => SyncAcquireResponseDeploymentPreparedStack$inboundSchema),

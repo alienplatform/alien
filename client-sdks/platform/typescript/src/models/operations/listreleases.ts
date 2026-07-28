@@ -12,6 +12,7 @@ import * as models from "../index.js";
 export const ListReleasesInclude = {
   Project: "project",
   Rollout: "rollout",
+  CreatedBy: "createdBy",
 } as const;
 export type ListReleasesInclude = ClosedEnum<typeof ListReleasesInclude>;
 

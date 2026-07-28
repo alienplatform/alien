@@ -107,6 +107,10 @@ export type ResourceCounts = {
   workers: number;
   containers: number;
   /**
+   * Daemon resources that run on managed runtime machines
+   */
+  daemons?: number | undefined;
+  /**
    * Resources that declare managed public HTTPS endpoint setup
    */
   publicHttpsEndpoints: number;
@@ -829,6 +833,7 @@ export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
   z.object({
     workers: z.int(),
     containers: z.int(),
+    daemons: z.int().optional(),
     publicHttpsEndpoints: z.int(),
     externalInfra: z.int(),
     total: z.int(),

@@ -331,6 +331,7 @@ run();
 * [listBranches](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 * [listAuthors](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 * [get](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
+* [listDeployments](docs/sdks/releases/README.md#listdeployments) - List the project's deployments with their rollout state relative to this release.
 
 ### [Resolve](docs/sdks/resolve/README.md)
 
@@ -357,6 +358,7 @@ run();
 * [context](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 * [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
+* [renew](docs/sdks/sync/README.md#renew)
 * [release](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ### [User](docs/sdks/user/README.md)
@@ -526,6 +528,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesList`](docs/sdks/releases/README.md#list) - Retrieve all releases.
 - [`releasesListAuthors`](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
+- [`releasesListDeployments`](docs/sdks/releases/README.md#listdeployments) - List the project's deployments with their rollout state relative to this release.
 - [`resendWorkspaceInvitation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
@@ -544,6 +547,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
+- [`syncRenew`](docs/sdks/sync/README.md#renew)
 - [`userCompleteProfileSetup`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 - [`userGetProfile`](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.

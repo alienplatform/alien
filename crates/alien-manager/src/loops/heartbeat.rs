@@ -14,7 +14,8 @@ use crate::loops::deployment::{DeploymentLoop, MAX_CONCURRENT_DEPLOYMENTS};
 use crate::traits::deployment_store::DeploymentFilter;
 use crate::traits::DeploymentStore;
 
-const HEARTBEAT_ACQUIRE_LIMIT: u32 = 100;
+/// Maximum deployments to health-check per tick, across all batches.
+const HEARTBEAT_DEPLOYMENTS_PER_TICK: usize = 100;
 
 pub struct HeartbeatLoop {
     config: Arc<ManagerConfig>,
@@ -65,30 +66,44 @@ impl HeartbeatLoop {
         // empty `bearer_token` — the documented signal to embedders that
         // no caller passthrough is available.
         let caller = Subject::system();
-        let session = uuid::Uuid::new_v4().to_string();
-        match self
-            .deployment_store
-            .acquire(&caller, &session, &filter, HEARTBEAT_ACQUIRE_LIMIT)
-            .await
-        {
-            Ok(acquired) => {
-                if !acquired.is_empty() {
+
+        // Acquire in batches no larger than the processing concurrency. A lease
+        // is only renewed once its deployment is being processed, so a larger
+        // batch would leave the surplus holding leases that nothing extends.
+        let batches = HEARTBEAT_DEPLOYMENTS_PER_TICK.div_ceil(MAX_CONCURRENT_DEPLOYMENTS);
+        for _ in 0..batches {
+            let session = uuid::Uuid::new_v4().to_string();
+            match self
+                .deployment_store
+                .acquire(
+                    &caller,
+                    &session,
+                    &filter,
+                    MAX_CONCURRENT_DEPLOYMENTS as u32,
+                )
+                .await
+            {
+                Ok(acquired) => {
+                    if acquired.is_empty() {
+                        break;
+                    }
                     debug!(
                         count = acquired.len(),
                         session = %session,
                         "Heartbeat: acquired running deployments"
                     );
+                    stream::iter(acquired)
+                        .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
+                            self.deployment_loop
+                                .process_heartbeat_deployment(item.deployment, &session)
+                                .await;
+                        })
+                        .await;
                 }
-                stream::iter(acquired)
-                    .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
-                        self.deployment_loop
-                            .process_heartbeat_deployment(item.deployment, &session)
-                            .await;
-                    })
-                    .await;
-            }
-            Err(e) => {
-                error!(error = %e, "Heartbeat: failed to acquire running deployments");
+                Err(e) => {
+                    error!(error = %e, "Heartbeat: failed to acquire running deployments");
+                    break;
+                }
             }
         }
     }

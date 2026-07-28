@@ -198,10 +198,6 @@ pub async fn stack_import(
             Err(e) => return e.into_response(),
         };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
-    // Held across the strips below: reconstructing a legacy deployment's
-    // answers needs every gate the release declares, including the ones this
-    // registration is about to decline.
-    let declared_stack = source_stack;
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
         &frozen_gating,
@@ -332,64 +328,11 @@ pub async fn stack_import(
             // roll the whole stack update back: the custom resource fails,
             // and CloudFormation restores whatever its conditionals just
             // created or deleted.
-            let mut persisted_answers = existing
+            let persisted_answers = existing
                 .runtime_metadata
                 .as_ref()
                 .map(|metadata| metadata.persisted_gate_answers.clone())
                 .unwrap_or_default();
-            // A deployment from before answers were recorded gets them
-            // reconstructed from its settled state read against the release it
-            // settled under — that release is what was put to the deployer, so
-            // presence there is their answer. A gate only the incoming release
-            // declares was never asked, so nothing is recorded and this
-            // registration is free to answer it for the first time.
-            // A decline is only legible against the release that offered the
-            // gate; acceptance isn't, since the resource is already settled.
-            let mut lost_settled_release: Option<(String, String)> = None;
-            if persisted_answers.is_empty() {
-                if let Some(existing_state) = existing.stack_state.as_ref() {
-                    let settled_stack = match existing.current_release_id.as_deref() {
-                        Some(settled_release_id) => match state
-                            .release_store
-                            .get_release(&subject, settled_release_id)
-                            .await
-                        {
-                            Ok(Some(settled_release)) => {
-                                match resolve_stack(&settled_release, req.platform) {
-                                    Ok(stack) => Some(stack.clone()),
-                                    Err(_) => {
-                                        lost_settled_release = Some((
-                                            settled_release_id.to_string(),
-                                            format!(
-                                                "it carries no stack for platform '{}'",
-                                                req.platform
-                                            ),
-                                        ));
-                                        None
-                                    }
-                                }
-                            }
-                            Ok(None) => {
-                                lost_settled_release = Some((
-                                    settled_release_id.to_string(),
-                                    "it could not be read back".to_string(),
-                                ));
-                                None
-                            }
-                            Err(e) => return e.into_response(),
-                        },
-                        None => None,
-                    };
-                    persisted_answers = alien_deployment::derive_legacy_frozen_gate_answers(
-                        settled_stack.as_ref(),
-                        declared_stack,
-                        existing_state,
-                    );
-                }
-            }
-            // A contradiction the settled state proves outranks an ambiguity it
-            // can't, so this names the offending input before the check below
-            // falls back to blaming the unreadable release.
             for (input_id, imported_answer) in &imported_gate_answers {
                 if let Some(persisted) = persisted_answers.get(input_id) {
                     if persisted != imported_answer {
@@ -402,15 +345,6 @@ pub async fn stack_import(
                         )
                         .into_response();
                     }
-                }
-            }
-            // Accepting a gate we can't prove wasn't declined would overwrite
-            // that decline.
-            if let Some((settled_release_id, reason)) = lost_settled_release {
-                if imported_gate_answers.iter().any(|(input_id, accepted)| {
-                    *accepted && !persisted_answers.contains_key(input_id)
-                }) {
-                    return settled_release_unavailable(&settled_release_id, reason);
                 }
             }
             let runtime_metadata = match reimport_runtime_metadata(
@@ -954,8 +888,7 @@ fn reimport_runtime_metadata(
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
     // The route refused conflicting answers before calling this, so what
     // remains is bookkeeping: answers for inputs a new release introduces are
-    // recorded, recorded answers are never overwritten, and a pre-fixity
-    // deployment adopts the import's answers wholesale.
+    // recorded, and recorded answers are never overwritten.
     for (input_id, imported_answer) in &imported_gate_answers {
         metadata
             .persisted_gate_answers
@@ -1152,18 +1085,6 @@ fn resolve_stack(
             ),
         })
     })
-}
-
-/// Refuse to reconstruct gate answers when the settled release they would be
-/// read against can no longer be resolved.
-fn settled_release_unavailable(release_id: &str, reason: String) -> Response {
-    AlienError::new(
-        alien_deployment::ErrorData::SettledReleaseUnavailable {
-            release_id: release_id.to_string(),
-            reason,
-        },
-    )
-    .into_response()
 }
 
 /// Run every `ImportedResource` through the [`alien_infra::ImporterRegistry`]

@@ -11,5 +11,5 @@ let value: ListReleasesInclude = "project";
 ## Values
 
 ```typescript
-"project" | "rollout"
+"project" | "rollout" | "createdBy"
 ```

@@ -7,7 +7,7 @@
         "label": "discover-resources",
         "description": "Discover tagged resources across the account (required for inventory).",
         "grant": {
-          "actions": ["tag:GetResources", "tag:GetTagKeys", "tag:GetTagValues"]
+          "actions": ["tag:GetResources"]
         },
         "binding": {
           "stack": {
@@ -19,11 +19,7 @@
         "label": "read-metrics",
         "description": "Read CloudWatch metrics for resource health.",
         "grant": {
-          "actions": [
-            "cloudwatch:GetMetricData",
-            "cloudwatch:ListMetrics",
-            "cloudwatch:GetMetricStatistics"
-          ]
+          "actions": ["cloudwatch:ListMetrics"]
         },
         "binding": {
           "stack": {

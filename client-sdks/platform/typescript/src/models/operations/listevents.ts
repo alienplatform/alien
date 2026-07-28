@@ -28,6 +28,10 @@ export type ListEventsRequest = {
    */
   deploymentId?: string | undefined;
   /**
+   * Filter events to a single release.
+   */
+  releaseId?: string | undefined;
+  /**
    * Optional fields to include: releaseCreatedAt
    */
   include?: Array<ListEventsInclude> | undefined;
@@ -65,6 +69,7 @@ export type ListEventsRequest$Outbound = {
   workspace?: string | undefined;
   project?: string | undefined;
   deploymentId?: string | undefined;
+  releaseId?: string | undefined;
   include?: Array<string> | undefined;
   limit: number;
   cursor?: string | undefined;
@@ -78,6 +83,7 @@ export const ListEventsRequest$outboundSchema: z.ZodType<
   workspace: z.string().optional(),
   project: z.string().optional(),
   deploymentId: z.string().optional(),
+  releaseId: z.string().optional(),
   include: z.array(ListEventsInclude$outboundSchema).optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
