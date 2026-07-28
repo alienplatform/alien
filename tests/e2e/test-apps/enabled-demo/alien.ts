@@ -117,8 +117,6 @@ const workerOff = new alien.Worker("optional-worker-off")
 // is what makes it flippable without a runtime policy write on the setup-owned role.
 const agent = new alien.Worker("agent")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
-  .commandsEnabled(true)
-  .publicEndpoint("api")
   .permissions("execution")
   .link(kvOn)
   .link(kvOff)

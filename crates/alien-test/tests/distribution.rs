@@ -154,6 +154,15 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         "optional-queue-off",
     )
     .await?;
+    // A vault on AWS is an SSM name prefix, not a listable resource; its cloud footprint
+    // is the IAM policy carrying its id, which also proves the grant follows the gate.
+    assert_cloud_gate_pair(
+        &env,
+        &["iam", "get-account-authorization-details", "--output", "json"],
+        "optional-vault-on",
+        "optional-vault-off",
+    )
+    .await?;
     // A compute gate rides the live strip: the declined worker's function is
     // never provisioned, the accepted one is.
     assert_cloud_gate_pair(
@@ -197,22 +206,9 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         );
     }
 
-    // The transition, on the same deployment: accepting a declined live gate must bring the
-    // resource back and restore the link that was scrubbed with it.
-    let flipped = alien_test::distribution::flip_terraform_gate(ctx, "input_worker_off", true)
-        .await
-        .context("failed to re-apply with optional-worker-off accepted")?;
-
-    anyhow::ensure!(
-        flipped.resources.contains_key("optional-worker-off"),
-        "accepting the gate must recreate the resource, got {:?}",
-        flipped.resources.keys().collect::<Vec<_>>()
-    );
-    let links = agent_link_ids(&flipped)?;
-    anyhow::ensure!(
-        links.contains(&"optional-worker-off".to_string()),
-        "accepting the gate must restore the scrubbed link, got {links:?}"
-    );
+    // Flipping a gate on a running deployment is an upgrade, which this harness does not
+    // cover for any app. The strip, scrub and deprovision it drives run against the test
+    // platform in `alien-deployment`'s `test_platform` suite instead.
 
     Ok(())
 }

@@ -1890,95 +1890,6 @@ async fn apply_terraform_and_import(
     }
 }
 
-/// What a gate flip needs to reach the deployment the install created.
-pub struct GateFlip {
-    dg_token: String,
-    manager_url: String,
-    /// The installed deployment's name, used to re-import that one rather than a second.
-    deployment_name: String,
-}
-
-/// Re-apply the same Terraform workdir with one gate variable changed, then re-import.
-///
-/// [`apply_terraform_and_import`] allocates a fresh workdir and deployment name, so calling it
-/// twice installs a second deployment; this reuses both to reach the one already installed.
-pub async fn flip_terraform_gate(
-    ctx: &mut crate::TestContext,
-    tfvar: &str,
-    accepted: bool,
-) -> anyhow::Result<StackState> {
-    let flip = ctx
-        .gate_flip
-        .as_ref()
-        .context("this deployment was not installed through a distribution artifact")?;
-    let Some(DistributionArtifactCleanup::Terraform { workdir, env }) = ctx
-        .distribution_cleanups
-        .iter()
-        .find(|c| matches!(c, DistributionArtifactCleanup::Terraform { .. }))
-    else {
-        anyhow::bail!("gate flips are only defined for a Terraform install");
-    };
-    let workdir_path = workdir.path().to_path_buf();
-
-    let tfvars_path = workdir_path.join("terraform.tfvars.json");
-    let mut tfvars: Value = serde_json::from_slice(
-        &fs::read(&tfvars_path)
-            .await
-            .context("Failed to read terraform.tfvars.json for a gate flip")?,
-    )?;
-    tfvars
-        .as_object_mut()
-        .context("terraform.tfvars.json is not an object")?
-        .insert(tfvar.to_string(), Value::Bool(accepted));
-    fs::write(&tfvars_path, serde_json::to_vec_pretty(&tfvars)?).await?;
-
-    info!(tfvar, accepted, "Re-applying Terraform with a flipped gate");
-    run_terraform_cmd(
-        &workdir_path,
-        env,
-        ["apply", "-auto-approve", "-input=false"],
-    )
-    .await?;
-
-    let outputs = terraform_output_json(&workdir_path, env).await?;
-    let mut request = terraform_import_request_from_outputs(&outputs, &flip.dg_token)?;
-    // Overridden deliberately: the builder mints a fresh random name, which would make the
-    // manager create rather than update, and leave the extra deployment outside cleanup.
-    request.deployment_name = flip.deployment_name.clone();
-    reimport_stack(&flip.manager_url, &flip.dg_token, request).await?;
-
-    // The import response carries only the setup-delivered resources and merely schedules
-    // reconciliation, so a live resource and a restored link are not in it. Wait for the
-    // deployment to settle, then read the state the executor actually produced.
-    ctx.deployment
-        .wait_until_running(GATE_FLIP_RECONCILE_TIMEOUT)
-        .await
-        .map_err(|error| anyhow::anyhow!("deployment did not settle after the flip: {error}"))?;
-    current_stack_state(ctx).await
-}
-
-/// A flip re-runs provisioning for the resource it accepts, so it gets the same budget as an
-/// initial deployment rather than an update's shorter one.
-const GATE_FLIP_RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
-
-/// The deployment's stack state as the manager currently holds it, including live resources.
-async fn current_stack_state(ctx: &crate::TestContext) -> anyhow::Result<StackState> {
-    let response = ctx
-        .deployment
-        .manager()
-        .client()
-        .get_deployment()
-        .id(&ctx.deployment.id)
-        .send()
-        .await
-        .map_err(|error| anyhow::anyhow!("get_deployment failed after the flip: {error}"))?;
-    let value = response
-        .into_inner()
-        .stack_state
-        .context("deployment is missing stack_state after the flip")?;
-    serde_json::from_value(value).context("failed to parse stack_state after the flip")
-}
-
 async fn terraform_stack_for_target(
     prepared: &DistributionPrepared,
     target: alien_terraform::TerraformTarget,
@@ -2447,24 +2358,40 @@ async fn reimport_stack(
     request: StackImportRequest,
 ) -> anyhow::Result<StackState> {
     let url = format!("{manager_url}/v1/stack/import");
-    let response = reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(dg_token)
-        .json(&request)
-        .send()
-        .await
-        .context("Failed to call /v1/stack/import for a gate flip")?;
+    // The manager refuses an import while a reconcile is settling and asks the caller to
+    // retry once stable; a background pass can open that window at any moment, so obey it.
+    let deadline = std::time::Instant::now() + REIMPORT_RETRY_TIMEOUT;
+    loop {
+        let response = reqwest::Client::new()
+            .post(&url)
+            .bearer_auth(dg_token)
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to call /v1/stack/import for a gate flip")?;
 
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        anyhow::bail!("stack re-import failed with {status}: {body}");
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::CONFLICT
+            && body.contains("IMPORTED_DEPLOYMENT_CONFLICT")
+            && std::time::Instant::now() < deadline
+        {
+            info!("Deployment is still reconciling; retrying the flip's import");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        }
+        if !status.is_success() {
+            anyhow::bail!("stack re-import failed with {status}: {body}");
+        }
+
+        let response: StackImportResponse =
+            serde_json::from_str(&body).context("Failed to parse StackImportResponse")?;
+        return Ok(response.stack_state);
     }
-
-    let response: StackImportResponse =
-        serde_json::from_str(&body).context("Failed to parse StackImportResponse")?;
-    Ok(response.stack_state)
 }
+
+/// How long a flip's import retries `IMPORTED_DEPLOYMENT_CONFLICT` before giving up.
+const REIMPORT_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 async fn import_stack(
     prepared: &DistributionPrepared,
@@ -2521,7 +2448,6 @@ fn context_from_deployment(
     deployment: TestDeployment,
     cleanups: Vec<DistributionArtifactCleanup>,
 ) -> TestContext {
-    let deployment_name_for_flip = deployment.name.clone();
     TestContext {
         deployment,
         manager: prepared.manager.clone(),
@@ -2530,11 +2456,6 @@ fn context_from_deployment(
         app: prepared.app,
         agent: None,
         distribution_cleanups: cleanups,
-        gate_flip: Some(GateFlip {
-            dg_token: prepared.dg_token.clone(),
-            manager_url: prepared.manager.url.clone(),
-            deployment_name: deployment_name_for_flip.clone(),
-        }),
     }
 }
 
