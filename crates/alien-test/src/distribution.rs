@@ -1894,9 +1894,7 @@ async fn apply_terraform_and_import(
 pub struct GateFlip {
     dg_token: String,
     manager_url: String,
-    /// The installed deployment's name. `terraform_import_request_from_outputs` mints a fresh
-    /// random name per call, so without overriding it the re-import creates a second
-    /// deployment instead of updating this one.
+    /// The installed deployment's name, used to re-import that one rather than a second.
     deployment_name: String,
 }
 

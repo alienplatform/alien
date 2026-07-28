@@ -142,11 +142,9 @@ export default new alien.Stack("enabled-demo")
   .add(workerOff, "live")
   .permissions({
     profiles: {
-      // Each gated resource carries its own resource-scoped grant so the e2e can
-      // assert the grant follows the gate (present when on, gone when off). The
-      // grant for a declined resource stays on the role by design: the role is baked
-      // at setup, so removing it would leave a later acceptance unable to restore it
-      // without the customer re-running setup.
+      // Each gated resource carries its own resource-scoped grant so the e2e can assert
+      // the grant follows the gate. A declined resource's grant leaves the desired stack
+      // with it, and acceptance re-derives it from the declared stack on the next deploy.
       execution: {
         state: ["kv/data-read"],
         "optional-kv-on": ["kv/data-read"],
