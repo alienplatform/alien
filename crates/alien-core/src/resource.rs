@@ -102,20 +102,6 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
         None
     }
 
-    /// The links this config holds, as opposed to the triggers and ordering edges that
-    /// [`Self::get_dependencies`] folds in alongside them.
-    ///
-    /// A link to a declined gated resource can be dropped, because it only produces an
-    /// `ALIEN_<ID>_BINDING`. A trigger cannot: its wiring lives on the source resource, so
-    /// dropping it here would leave the bucket notification or event-source mapping behind.
-    /// Types that do not override this pair keep the stricter preflight refusal.
-    fn links(&self) -> &[ResourceRef] {
-        &[]
-    }
-
-    /// Drops links naming any of `removed`. Must stay consistent with [`Self::links`].
-    fn remove_links_to(&mut self, _removed: &[String]) {}
-
     /// Validates if an update from the current configuration to a new configuration is allowed
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()>;
 
@@ -340,16 +326,6 @@ impl Resource {
     /// Returns the permission profile name for this resource, if it has one.
     pub fn get_permissions(&self) -> Option<&str> {
         self.inner.get_permissions()
-    }
-
-    /// The links this config holds, excluding triggers and ordering edges.
-    pub fn links(&self) -> &[ResourceRef] {
-        self.inner.links()
-    }
-
-    /// Drops links naming any of `removed`.
-    pub fn remove_links_to(&mut self, removed: &[String]) {
-        self.inner.remove_links_to(removed)
     }
 
     /// Validates if an update from the current configuration to a new configuration is allowed

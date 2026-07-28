@@ -483,9 +483,16 @@ fn remove_declined(stack: &mut Stack, declined: &[String]) {
     // something that was never created, which the executor and binding resolution both
     // reject. Scrubbing here is what lets an ungated resource link a gated one.
     for (resource_id, entry) in stack.resources.iter_mut() {
-        let before = entry.config.links().len();
-        entry.config.remove_links_to(declined);
-        let dropped = before - entry.config.links().len();
+        let dropped = match alien_core::resource_links_mut(&mut entry.config) {
+            Some(owner) => {
+                let before = owner.links().len();
+                owner
+                    .links_mut()
+                    .retain(|link| !declined.contains(&link.id));
+                before - owner.links().len()
+            }
+            None => 0,
+        };
         if dropped > 0 {
             info!(
                 resource_id = %resource_id,
@@ -706,12 +713,12 @@ mod tests {
     }
 
     fn link_ids(stack: &Stack, resource_id: &str) -> Vec<String> {
-        stack
+        let config = &stack
             .resources
             .get(resource_id)
             .expect("resource should be present")
-            .config
-            .links()
+            .config;
+        alien_core::links_of(config)
             .iter()
             .map(|link| link.id.clone())
             .collect()
