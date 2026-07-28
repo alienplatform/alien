@@ -1,13 +1,7 @@
 //! Resources that own links to other resources.
 //!
-//! A link is an author-declared reference that produces an `ALIEN_<ID>_BINDING` for the
-//! linked resource. It is the one reference kind a declined gate can remove: dropping it
-//! leaves the holder running with that binding absent. Every other edge a resource carries
-//! is structural — a trigger's wiring lives on the source resource, an ordering edge is not
-//! a binding — so those keep refusing a gated target.
-//!
-//! Resolution is by concrete type rather than by resource-type string, so a misspelled tag
-//! cannot silently classify a resource as link-free.
+//! A link produces an `ALIEN_<ID>_BINDING` and is the one reference kind a declined gate can
+//! remove; structural edges cannot. Resolution is by concrete type, not by tag string.
 
 use crate::resource::{Resource, ResourceRef};
 use crate::resources::{Build, Container, Daemon, Worker};
@@ -44,9 +38,8 @@ const WIRED_LINK_OWNERS: usize = 4;
 
 /// The link-owning view of a resource, or `None` when it owns no links.
 ///
-/// `None` is the ordinary answer for most resource types, and callers that walk every
-/// resource should skip them. A caller that has already established it holds a link owner
-/// should fail loudly on `None` rather than treating it as empty.
+/// `None` is ordinary and callers walking every resource skip it; a caller that has already
+/// established it holds a link owner should fail loudly instead.
 pub fn resource_links(resource: &Resource) -> Option<&dyn ResourceLinks> {
     if let Some(worker) = resource.downcast_ref::<Worker>() {
         return Some(worker);
@@ -229,8 +222,7 @@ mod tests {
 
     /// Every resource type the deserializer accepts, and whether it owns links.
     ///
-    /// The registry itself is the `Deserialize for Resource` match; this only records the
-    /// classification. Keep them in step by adding an entry when adding a type.
+    /// The `Deserialize for Resource` match is the registry; this only records classification.
     const LINK_OWNERSHIP: &[(&str, bool)] = &[
         ("worker", true),
         ("container", true),
@@ -256,10 +248,9 @@ mod tests {
         ("experimental/aws-opensearch", false),
     ];
 
-    /// Drift guard. The list of registered types is read back out of the deserializer's own
-    /// `unknown_variant` refusal rather than restated here, so adding a resource type
-    /// without deciding whether it owns links fails this test instead of silently opting
-    /// the type out of link scrubbing.
+    /// Drift guard. The registered types are read out of the deserializer's own
+    /// `unknown_variant` refusal rather than restated, so a new type that never declares
+    /// whether it owns links fails here instead of silently opting out of scrubbing.
     #[test]
     fn every_registered_resource_type_declares_link_ownership() {
         let refusal = Resource::deserialize(serde_json::json!({ "type": "not-a-resource" }))

@@ -1900,12 +1900,10 @@ pub struct GateFlip {
     deployment_name: String,
 }
 
-/// Re-apply the SAME Terraform workdir with one gate variable changed, then re-import so
-/// the manager sees the new shape on the same deployment.
+/// Re-apply the same Terraform workdir with one gate variable changed, then re-import.
 ///
-/// [`apply_terraform_and_import`] allocates a fresh workdir and a fresh deployment name, so
-/// calling it twice stands up a second unrelated deployment. Flipping reuses the retained
-/// workdir, tfvars, group token and deployment name to reach the deployment already installed.
+/// [`apply_terraform_and_import`] allocates a fresh workdir and deployment name, so calling it
+/// twice installs a second deployment; this reuses both to reach the one already installed.
 pub async fn flip_terraform_gate(
     ctx: &mut crate::TestContext,
     tfvar: &str,
@@ -2443,10 +2441,8 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
     }
 }
 
-/// Re-import an already-installed stack and return the manager's view of it.
-///
-/// The full [`import_stack`] also fetches the deployment record, which a flip does not need:
-/// the deployment is the one the test already holds, only its stack state has moved.
+/// Re-import an already-installed stack. Unlike [`import_stack`] it skips fetching the
+/// deployment record, which a flip already holds.
 async fn reimport_stack(
     manager_url: &str,
     dg_token: &str,
