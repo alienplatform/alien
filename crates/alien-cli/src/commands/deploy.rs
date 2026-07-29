@@ -1388,6 +1388,13 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         message: "Failed to construct deployment config".to_string(),
     })?;
 
+    // The manager persists bindings in stack settings, but the executor and preflights
+    // read them off the deployment config. Losing them here presents every adopted
+    // resource as unbound, which reads as a release that dropped its bindings.
+    if let Some(external_bindings) = stack_settings.external_bindings.clone() {
+        config.external_bindings = external_bindings;
+    }
+
     let setup_owned_status = matches!(
         current.status,
         DeploymentStatus::Pending
