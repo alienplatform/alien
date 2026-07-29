@@ -601,6 +601,51 @@ impl StackExecutor {
         Ok(true)
     }
 
+    /// The state an external binding dictates: what its target resolves to, and the params
+    /// synced only while the entry opts into remote access.
+    fn external_binding_state(
+        &self,
+        resource_id: &str,
+    ) -> Result<(Option<serde_json::Value>, Option<alien_core::ResourceOutputs>)> {
+        let Some(binding) = self.deployment_config.external_bindings.get(resource_id) else {
+            return Ok((None, None));
+        };
+        let remote_access = self
+            .desired_stack
+            .resources
+            .get(resource_id)
+            .map(|entry| entry.remote_access)
+            .unwrap_or(false);
+        let params = match remote_access {
+            true => Some(serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: resource_id.to_string(),
+                    message: "Failed to serialize external binding parameters".to_string(),
+                },
+            )?),
+            false => None,
+        };
+        Ok((params, binding.to_resource_outputs()))
+    }
+
+    /// Whether a bound resource's recorded state no longer matches its binding.
+    ///
+    /// Repointing a binding, or turning `remote_access` off, changes neither the declared
+    /// resource nor its dependencies, so nothing else in the plan would notice: dependents
+    /// would keep resolving the old target and synced params would outlive their opt-in.
+    fn external_binding_drifted(
+        &self,
+        resource_id: &str,
+        current_resource_state: &StackResourceState,
+    ) -> Result<bool> {
+        if !self.is_external_binding_resource(resource_id) {
+            return Ok(false);
+        }
+        let (params, outputs) = self.external_binding_state(resource_id)?;
+        Ok(current_resource_state.remote_binding_params != params
+            || current_resource_state.outputs != outputs)
+    }
+
     /// Map of resource id to the ids still depending on it, for deletion safety checks.
     fn deletion_dependents(&self, state: &StackState) -> HashMap<String, Vec<String>> {
         let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
@@ -801,8 +846,15 @@ impl StackExecutor {
                     // This prevents false config change detection for Pending resources
                     let current_resource_config_opt = Some(&current_resource_state.config);
 
-                    // Compare desired resource config with the config in the *current* state
-                    if Some(&desired_config.resource) != current_resource_config_opt {
+                    // Compare desired resource config with the config in the *current* state.
+                    // Config is not the whole desired state: ordering edges live on the stack
+                    // entry, and an external binding's target lives in the deployment config.
+                    // A resource whose only change is one of those still needs the update, or
+                    // its recorded dependencies and binding-derived state never catch up.
+                    if Some(&desired_config.resource) != current_resource_config_opt
+                        || desired_config.dependencies != current_resource_state.dependencies
+                        || self.external_binding_drifted(resource_id, current_resource_state)?
+                    {
                         match current_resource_state.status {
                             status if status_allows_update_planning(status) => {
                                 // Check if all new dependencies are ready before planning the update
@@ -821,9 +873,13 @@ impl StackExecutor {
                                 if new_dependencies_ready {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
 
-                                    // Validate the update before adding to plan
-                                    if let Some(current_config) =
-                                        current_resource_config_opt.as_ref()
+                                    // Validate the update before adding to plan. Skipped for an
+                                    // external binding: the rules guard mutating a resource we
+                                    // provisioned, and this update only re-reads a binding
+                                    // whose target someone else owns.
+                                    if let Some(current_config) = current_resource_config_opt
+                                        .as_ref()
+                                        .filter(|_| !self.is_external_binding_resource(resource_id))
                                     {
                                         current_config
                                             .validate_update(&desired_config.resource)
@@ -1418,32 +1474,12 @@ impl StackExecutor {
                         // the new config the way creation adopts the binding as Running, or
                         // the planner re-plans this same update forever.
                         if self.is_external_binding_resource(resource_id) {
-                            let binding = self.deployment_config.external_bindings.get(resource_id);
-                            let remote_access = self
-                                .desired_stack
-                                .resources
-                                .get(resource_id)
-                                .map(|entry| entry.remote_access)
-                                .unwrap_or(false);
-                            // Serialized only while remote access is on, and cleared when it
-                            // is not, matching the create path and the controller step.
-                            let remote_binding_params = match (remote_access, binding) {
-                                (true, Some(binding)) => Some(
-                                    serde_json::to_value(binding).into_alien_error().context(
-                                        ErrorData::ResourceStateSerializationFailed {
-                                            resource_id: resource_id.clone(),
-                                            message: "Failed to serialize external binding parameters"
-                                                .to_string(),
-                                        },
-                                    )?,
-                                ),
-                                _ => None,
-                            };
-                            // Re-derived, not carried over: dependents resolve the target
-                            // through these, so a repointed binding must not leave them
-                            // pointing at the resource it used to name.
-                            let binding_outputs =
-                                binding.and_then(|binding| binding.to_resource_outputs());
+                            // Re-derived from the binding, not carried over, and read through
+                            // the same helper the planner used to decide this update was
+                            // needed — otherwise the two could disagree about what the
+                            // binding currently dictates and the update would repeat.
+                            let (remote_binding_params, binding_outputs) =
+                                self.external_binding_state(resource_id)?;
                             let updated_state = update_state.with_updates(|state| {
                                 state.config = new_config.clone();
                                 state.previous_config = Some(current_state.config.clone());

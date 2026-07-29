@@ -564,6 +564,77 @@ async fn test_external_binding_resource_syncs_without_controller() -> Result<()>
     Ok(())
 }
 
+/// A Container Apps Environment's declared config is only its id, so repointing its binding
+/// changes nothing the planner used to look at. Dependents resolve the environment through
+/// the outputs it derives, so the update has to be planned off the binding itself.
+#[tokio::test]
+async fn test_repointing_an_external_binding_refreshes_its_outputs() -> Result<()> {
+    fn config_for(environment: &str) -> DeploymentConfig {
+        let mut bindings = ExternalBindings::new();
+        bindings.insert(
+            "env",
+            ExternalBinding::ContainerAppsEnvironment(
+                alien_core::ContainerAppsEnvironmentBinding::new(
+                    environment.to_string(),
+                    format!("/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/{environment}"),
+                    "rg".to_string(),
+                    format!("{environment}.example.com"),
+                ),
+            ),
+        );
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(bindings)
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    let stack = Stack::new("binding-repoint-test".to_owned())
+        .add(
+            alien_core::AzureContainerAppsEnvironment::new("env".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let first = config_for("old-environment");
+    let state = run_to_synced(
+        &StackExecutor::builder(&stack, ClientConfig::Test)
+            .deployment_config(&first)
+            .build()?,
+        new_test_state(),
+    )
+    .await?;
+    let outputs = format!("{:?}", state.resources.get("env").unwrap().outputs);
+    assert!(
+        outputs.contains("old-environment"),
+        "the create should adopt the binding's outputs, got {outputs}"
+    );
+
+    // Same stack, same declared config — only the binding moved.
+    let second = config_for("new-environment");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&second)
+        .build()?;
+    assert!(
+        executor.plan(&state)?.updates.contains_key("env"),
+        "a repointed binding must schedule the update that refreshes its outputs"
+    );
+
+    let stepped = executor.step(state).await?.next_state;
+    let refreshed = format!("{:?}", stepped.resources.get("env").unwrap().outputs);
+    assert!(
+        refreshed.contains("new-environment") && !refreshed.contains("old-environment"),
+        "the outputs must follow the binding, got {refreshed}"
+    );
+
+    Ok(())
+}
+
 /// A config change on an external binding has no cloud work behind it: the update
 /// must adopt the new config directly, or the planner re-plans the same update on
 /// every step and the stack never reaches synced.
