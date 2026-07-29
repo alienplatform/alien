@@ -405,6 +405,74 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
     }
 }
 
+/// Validates that a resource still carrying binding-derived state still has a binding.
+///
+/// A bound resource is recorded Running with no controller, because someone else owns it,
+/// and its outputs and synced params come from the binding rather than from provisioning.
+/// Drop the binding while the stack still declares the resource and Alien can neither
+/// update it nor adopt it, so dependents would keep resolving the target it used to name.
+/// Refusing the release leaves the deployment pointing at what the deployer chose.
+pub struct ExternalBindingStillBoundCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ExternalBindingStillBoundCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("EXTERNAL_BINDING_REMOVED")
+    }
+
+    fn description(&self) -> &'static str {
+        "Resources adopted from an external binding must keep one"
+    }
+
+    /// Every platform. The reachable case is a cloud override, which is exactly where
+    /// `ExternalBindingsRequiredCheck` deliberately does not run.
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        _stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        true
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let errors = stack_state
+            .resources
+            .iter()
+            .filter(|(resource_id, resource_state)| {
+                // Binding-derived state is the evidence: a resource Alien provisioned
+                // reaches these through its controller, which this one does not have.
+                let carries_binding_state = resource_state.remote_binding_params.is_some()
+                    || resource_state.outputs.is_some();
+
+                resource_state.status == alien_core::ResourceStatus::Running
+                    && resource_state.internal_state.is_none()
+                    && carries_binding_state
+                    && stack.resources.contains_key(resource_id.as_str())
+                    && !config.external_bindings.has(resource_id.as_str())
+            })
+            .map(|(resource_id, _)| {
+                format!(
+                    "Resource '{resource_id}' was adopted from an external binding that this \
+                     release no longer provides, so Alien has no way to resolve it. Restore its \
+                     binding, or remove '{resource_id}' from the stack."
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
 /// Validates that provided external bindings match their resource types.
 pub struct ExternalBindingsTypeCheck;
 
@@ -994,6 +1062,79 @@ mod tests {
                     .to_string()
             ]
         );
+    }
+
+    /// Adopted state is Running with no controller and outputs that came from the binding.
+    /// Alien cannot update or adopt such a resource once the binding is gone, so the release
+    /// is refused rather than left resolving a target nobody declared.
+    #[tokio::test]
+    async fn a_release_that_drops_an_adopted_binding_is_refused() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let stack = create_stack(resources);
+
+        let mut state = stack_state(Platform::Aws);
+        let mut adopted = alien_core::StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.to_string(),
+            Resource::new(Storage::new("uploads".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        adopted.status = alien_core::ResourceStatus::Running;
+        adopted.remote_binding_params = Some(serde_json::json!({"bucketName": "theirs"}));
+        state.resources.insert("uploads".to_string(), adopted);
+
+        let check = ExternalBindingStillBoundCheck;
+        assert_eq!(check.code(), Some("EXTERNAL_BINDING_REMOVED"));
+
+        // Still bound: nothing to say.
+        let mut bound = deployment_config();
+        bound.external_bindings.insert(
+            "uploads",
+            ExternalBinding::Storage(StorageBinding::s3("bucket")),
+        );
+        assert!(check
+            .check(&stack, &state, &bound)
+            .await
+            .unwrap()
+            .errors
+            .is_empty());
+
+        let result = check
+            .check(&stack, &state, &deployment_config())
+            .await
+            .unwrap();
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("'uploads'") && result.errors[0].contains("Restore"),
+            "the error must name the resource and the way out, got {:?}",
+            result.errors
+        );
+    }
+
+    /// Setup delivers frozen resources with no binding of their own, so carrying no
+    /// binding-derived state is what keeps them out of this check.
+    #[tokio::test]
+    async fn a_setup_delivered_resource_is_not_treated_as_adopted() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let stack = create_stack(resources);
+
+        let mut state = stack_state(Platform::Aws);
+        let mut delivered = alien_core::StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.to_string(),
+            Resource::new(Storage::new("uploads".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        delivered.status = alien_core::ResourceStatus::Running;
+        state.resources.insert("uploads".to_string(), delivered);
+
+        let result = ExternalBindingStillBoundCheck
+            .check(&stack, &state, &deployment_config())
+            .await
+            .unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
     }
 
     #[tokio::test]
