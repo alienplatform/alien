@@ -472,7 +472,7 @@ fn deployment_reference(deployment: &DeploymentResponse) -> String {
         .deployment_group
         .as_ref()
         .map(|group| format!("{}/{}", group.name, deployment.name))
-        .unwrap_or_else(|| deployment.name.clone())
+        .unwrap_or_else(|| deployment.id.clone())
 }
 
 fn desired_release_cell(deployment: &DeploymentResponse) -> String {
@@ -1533,6 +1533,13 @@ mod tests {
         );
 
         assert_eq!(deployment_reference(&deployment), "production/example");
+    }
+
+    #[test]
+    fn deployment_reference_falls_back_to_the_id_without_group_data() {
+        let deployment = deployment_with_releases(Some("rel_a"), None);
+
+        assert_eq!(deployment_reference(&deployment), "dep_1");
     }
 
     #[test]
