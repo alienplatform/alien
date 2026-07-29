@@ -169,7 +169,7 @@ mod tests {
 
     /// Every link owner must resolve, expose its links, and drop exactly the named one.
     /// Parametrised because a type that silently stops participating would otherwise only
-    /// surface as a dangling reference in a customer's account.
+    /// surface as a dangling reference in a deployed account.
     #[test]
     fn every_link_owner_resolves_and_scrubs() {
         for (name, make) in FIXTURES {

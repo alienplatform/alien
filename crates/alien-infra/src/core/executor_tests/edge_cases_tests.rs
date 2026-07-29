@@ -564,8 +564,39 @@ async fn test_external_binding_resource_syncs_without_controller() -> Result<()>
     Ok(())
 }
 
+/// Naming a resource in the bindings does not hand it over: one Alien provisioned keeps its
+/// controller, which rewrites its own outputs every update. Planning against the binding
+/// instead would schedule an update the controller undoes, forever, re-mutating a live
+/// resource each pass.
+#[tokio::test]
+async fn test_a_binding_on_a_provisioned_resource_does_not_replan_forever() -> Result<()> {
+    let stack = Stack::new("binding-over-provisioned-test".to_owned())
+        .add(test_storage("store"), ResourceLifecycle::Live)
+        .build();
+
+    // Provisioned by Alien first, so it carries controller state and controller outputs.
+    let state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    assert!(
+        state.resources.get("store").unwrap().internal_state.is_some(),
+        "fixture must own a controller for this to mean anything"
+    );
+
+    // A binding is added for the same id afterwards.
+    let bound = external_storage_config("store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&bound)
+        .build()?;
+
+    assert!(
+        !executor.plan(&state)?.updates.contains_key("store"),
+        "a resource with a controller must not be planned against its binding"
+    );
+
+    Ok(())
+}
+
 /// A Container Apps Environment's declared config is only its id, so repointing its binding
-/// changes nothing the planner used to look at. Dependents resolve the environment through
+/// changes nothing the planner compares. Dependents resolve the environment through
 /// the outputs it derives, so the update has to be planned off the binding itself.
 #[tokio::test]
 async fn test_repointing_an_external_binding_refreshes_its_outputs() -> Result<()> {

@@ -445,7 +445,9 @@ pub async fn handle_updating(
 
         DeploymentStepResult {
             state: next,
-            suggested_delay_ms: step_result.suggested_delay_ms,
+            // An update held open for outstanding work can step nothing this pass and so
+            // suggest no delay; without a floor that is a hot loop against cloud APIs.
+            suggested_delay_ms: step_result.suggested_delay_ms.or(Some(5_000)),
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
             observed_inventory_batches: vec![],

@@ -213,7 +213,7 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
     Ok(())
 }
 
-/// The resource ids the ungated `agent` worker still links, read from the manager's view.
+/// The resource ids the ungated `agent` worker still links, read from the deployed stack state.
 fn agent_link_ids(stack_state: &alien_core::StackState) -> anyhow::Result<Vec<String>> {
     let agent = stack_state
         .resources

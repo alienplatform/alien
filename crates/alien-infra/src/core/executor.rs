@@ -554,6 +554,20 @@ impl StackExecutor {
         self.deployment_config.external_bindings.has(resource_id)
     }
 
+    /// Whether this resource is one Alien adopted from a binding rather than provisioned.
+    ///
+    /// Being named in the bindings is not enough: a resource that already carries controller
+    /// state is still driven by that controller, which rewrites its own outputs on every
+    /// update. Treating it as bound would plan an update the controller then undoes, forever.
+    fn adopted_external_binding(
+        &self,
+        resource_id: &str,
+        current_resource_state: &StackResourceState,
+    ) -> bool {
+        self.is_external_binding_resource(resource_id)
+            && current_resource_state.internal_state.is_none()
+    }
+
     fn resource_lifecycle(
         &self,
         resource_id: &str,
@@ -638,7 +652,7 @@ impl StackExecutor {
         resource_id: &str,
         current_resource_state: &StackResourceState,
     ) -> Result<bool> {
-        if !self.is_external_binding_resource(resource_id) {
+        if !self.adopted_external_binding(resource_id, current_resource_state) {
             return Ok(false);
         }
         let (params, outputs) = self.external_binding_state(resource_id)?;
@@ -873,13 +887,17 @@ impl StackExecutor {
                                 if new_dependencies_ready {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
 
-                                    // Validate the update before adding to plan. Skipped for an
-                                    // external binding: the rules guard mutating a resource we
-                                    // provisioned, and this update only re-reads a binding
-                                    // whose target someone else owns.
-                                    if let Some(current_config) = current_resource_config_opt
-                                        .as_ref()
-                                        .filter(|_| !self.is_external_binding_resource(resource_id))
+                                    // Skipped only for an adopted binding: the rules guard
+                                    // mutating a resource we provisioned, and that update only
+                                    // re-reads a target someone else owns. A resource with a
+                                    // controller is still ours, whatever the bindings say.
+                                    if let Some(current_config) =
+                                        current_resource_config_opt.as_ref().filter(|_| {
+                                            !self.adopted_external_binding(
+                                                resource_id,
+                                                current_resource_state,
+                                            )
+                                        })
                                     {
                                         current_config
                                             .validate_update(&desired_config.resource)
@@ -1193,10 +1211,6 @@ impl StackExecutor {
 
                 info!("Using external binding for '{}' -> Running", resource_id);
 
-                // Get resource entry to check remote_access flag
-                let resource_entry = self.desired_stack.resources.get(resource_id);
-                let remote_access = resource_entry.map(|e| e.remote_access).unwrap_or(false);
-
                 // Create resource state as Running with external binding
                 let mut resource_state = StackResourceState::new_pending(
                     desired_config.resource.resource_type().to_string(),
@@ -1206,24 +1220,12 @@ impl StackExecutor {
                 );
                 resource_state.status = ResourceStatus::Running;
 
-                // Only sync binding params if remote_access is enabled
-                if remote_access {
-                    resource_state.remote_binding_params =
-                        Some(serde_json::to_value(binding).into_alien_error().context(
-                            ErrorData::ResourceStateSerializationFailed {
-                                resource_id: resource_id.clone(),
-                                message:
-                                    "Failed to serialize external binding parameters".to_string(),
-                            },
-                        )?);
-                }
-
-                // Populate outputs from the binding so dependent resources can
-                // call get_resource_outputs() (e.g., functions reading the
-                // Container Apps Environment name/resource ID).
-                if let Some(outputs) = binding.to_resource_outputs() {
-                    resource_state.outputs = Some(outputs);
-                }
+                // Seeded through the same helper the planner diffs against, so a create
+                // cannot land in a state the next plan immediately calls drifted.
+                let (remote_binding_params, binding_outputs) =
+                    self.external_binding_state(resource_id)?;
+                resource_state.remote_binding_params = remote_binding_params;
+                resource_state.outputs = binding_outputs;
 
                 initial_transitions.insert(resource_id.clone(), resource_state);
                 continue;

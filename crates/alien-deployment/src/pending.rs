@@ -199,8 +199,9 @@ fn strip_frozen_dominated_live_resources(
 /// mutations on both deployment paths, at the boundary where the executor's
 /// desired set is built: the mutations must keep seeing a declined live
 /// resource so its service account and capacity contribution stay stable. Its
-/// grant does not survive — `permission_profiles_unchanged` exempts a scope
-/// keyed by a gated resource present on only one side, which absorbs that.
+/// grant leaves the desired stack, which the one-sided gated scope exemption
+/// absorbs; revoking one already applied in the cloud is the reconciler's own
+/// concern and does not happen here.
 ///
 /// The answer is the provided value, else the recorded answer while the input
 /// still gates a frozen resource, else the input's declared boolean default;
@@ -759,7 +760,7 @@ mod tests {
             .collect()
     }
 
-    /// A declined store leaves the stack with the linking worker's reference to it, while the
+    /// A declined store takes the linking worker's reference with it, while the
     /// worker itself keeps its own lifecycle.
     #[test]
     fn a_declined_store_takes_the_linking_workers_link_with_it() {
