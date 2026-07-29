@@ -60,6 +60,15 @@ pub struct DatabaseInstance {
     /// fallback attachment surface if a future API revision drops `pscServiceAttachmentLink`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ip_addresses: Vec<IpMapping>,
+    /// Current server CA certificate reported by Cloud SQL (response only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_ca_cert: Option<ServerCaCert>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerCaCert {
+    pub cert: String,
 }
 
 /// One entry of a Cloud SQL instance's reported IP addresses. `type` distinguishes
@@ -376,7 +385,23 @@ mod tests {
             state: None,
             psc_service_attachment_link: None,
             ip_addresses: vec![],
+            server_ca_cert: None,
         }
+    }
+
+    #[test]
+    fn database_instance_deserializes_server_ca_certificate() {
+        let mut value = serde_json::to_value(private_instance()).unwrap();
+        value["serverCaCert"] = serde_json::json!({
+            "cert": "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n"
+        });
+
+        let instance: DatabaseInstance = serde_json::from_value(value).unwrap();
+
+        assert_eq!(
+            instance.server_ca_cert.unwrap().cert,
+            "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n"
+        );
     }
 
     #[test]
