@@ -243,6 +243,7 @@ dependencies = [
  "dockdash",
  "dotenvy",
  "flate2",
+ "fs2",
  "futures",
  "glob",
  "object_store",
