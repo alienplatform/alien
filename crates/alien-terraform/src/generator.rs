@@ -923,9 +923,12 @@ fn versions_body(
         ));
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
+        // Upper bound deliberate: an open-ended constraint promises every future
+        // major works, and azurerm 5 renamed arguments we emit. Raise it once the
+        // emitters are ported, rather than letting a release decide for us.
         provider_attrs.push(attr(
             "azurerm",
-            provider_decl_attr("hashicorp/azurerm", ">= 3.100"),
+            provider_decl_attr("hashicorp/azurerm", ">= 3.100, < 5.0"),
         ));
         if include_azapi_provider {
             provider_attrs.push(attr("azapi", provider_decl_attr("Azure/azapi", ">= 2.6")));
