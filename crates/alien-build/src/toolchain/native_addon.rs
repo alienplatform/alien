@@ -151,7 +151,7 @@ async fn find_addon_source(
         addon_file_name,
         crate_dir.display()
     );
-    let _build_lock = lock_workspace_addon_build(&crate_dir, resource_name).await?;
+    let build_lock = lock_workspace_addon_build(&crate_dir, resource_name).await?;
 
     // Another process may have completed the build while this one waited.
     let dev_addon = crate_dir.join(addon_file_name);
@@ -159,20 +159,35 @@ async fn find_addon_source(
         return Ok(Some(dev_addon));
     }
 
-    let output = Command::new("npx")
-        .args(["napi", "build", "--platform", "--release"])
-        .current_dir(&crate_dir)
-        .output()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ImageBuildFailed {
-            resource_name: resource_name.to_string(),
-            reason: format!(
-                "Failed to execute `npx napi build --platform --release` in {}",
-                crate_dir.display()
-            ),
-            build_output: None,
-        })?;
+    let build_dir = crate_dir.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        // Keep the cross-process lock inside the blocking task. If the async caller is cancelled,
+        // Tokio detaches this task, which continues holding the lock until the child has exited.
+        let _build_lock = build_lock;
+        std::process::Command::new("npx")
+            .args(["napi", "build", "--platform", "--release"])
+            .current_dir(build_dir)
+            .output()
+    })
+    .await
+    .into_alien_error()
+    .context(ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: format!(
+            "Failed to wait for `npx napi build --platform --release` in {}",
+            crate_dir.display()
+        ),
+        build_output: None,
+    })?
+    .into_alien_error()
+    .context(ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: format!(
+            "Failed to execute `npx napi build --platform --release` in {}",
+            crate_dir.display()
+        ),
+        build_output: None,
+    })?;
     if !output.status.success() {
         let mut build_output = String::from_utf8_lossy(&output.stdout).into_owned();
         build_output.push_str(&String::from_utf8_lossy(&output.stderr));
