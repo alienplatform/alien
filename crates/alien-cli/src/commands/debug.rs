@@ -40,7 +40,7 @@ const DEBUG_SESSIONS_PATH: &str = "/v1/debug/sessions";
     long_about = "Request a debug session from the manager for a deployment, then run a \
 local command (or an interactive shell) with the env the manager returns.
 
-DEPLOYMENT can be a deployment ID (`dep_...`), a deployment name, or `<group>/<name>`.",
+DEPLOYMENT can be a deployment ID (`dep_...`) or `<group>/<name>`.",
     after_help = "EXAMPLES:
     alien debug dep_abc123 -- aws sts get-caller-identity
     alien debug acme/prod -- gcloud projects list
@@ -63,7 +63,7 @@ pub struct DebugArgs {
     #[command(subcommand)]
     pub command: Option<DebugSubcommand>,
 
-    /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
+    /// Deployment ID (`dep_...`) or `<group>/<name>`.
     pub deployment: Option<String>,
 
     /// Command and arguments to execute. Everything after `--` is forwarded verbatim.
@@ -92,7 +92,7 @@ pub enum DebugSubcommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct DebugShellArgs {
-    /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
+    /// Deployment ID (`dep_...`) or `<group>/<name>`.
     pub deployment: String,
 
     /// Container or daemon resource ID to attach to.
@@ -110,7 +110,7 @@ pub struct DebugShellArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct DebugExecArgs {
-    /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
+    /// Deployment ID (`dep_...`) or `<group>/<name>`.
     pub deployment: String,
 
     /// Container or daemon resource ID to attach to.
