@@ -408,8 +408,8 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
 /// Validates that a resource running without Alien control still has a binding.
 ///
 /// Adoption is what records a resource Running with no controller state, on create and on
-/// update alike. Drop the binding while the stack still declares the resource and Alien can
-/// neither update nor delete it, so dependents keep pointing at a target nothing owns.
+/// update alike. The binding is the only handle Alien has on such a resource: without it
+/// there is nothing to update it against, and nothing to settle a deletion with either.
 pub struct ExternalBindingStillBoundCheck;
 
 #[async_trait::async_trait]
@@ -435,7 +435,7 @@ impl DeploymentPrerequisiteCheck for ExternalBindingStillBoundCheck {
 
     async fn check(
         &self,
-        stack: &Stack,
+        _stack: &Stack,
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
@@ -443,9 +443,10 @@ impl DeploymentPrerequisiteCheck for ExternalBindingStillBoundCheck {
             .resources
             .iter()
             .filter(|(resource_id, resource_state)| {
+                // Whether the release still declares the resource is beside the point:
+                // dropping it needs the binding just as much as keeping it does.
                 resource_state.status == alien_core::ResourceStatus::Running
                     && resource_state.internal_state.is_none()
-                    && stack.resources.contains_key(resource_id.as_str())
                     && !config.external_bindings.has(resource_id.as_str())
             })
             .map(|(resource_id, _)| {
@@ -1140,6 +1141,54 @@ mod tests {
         assert!(
             result.errors[0].contains("'uploads'"),
             "the error must name the resource, got {:?}",
+            result.errors
+        );
+    }
+
+    /// Retiring an adopted resource takes two releases: the deletion settles only while the
+    /// binding is still configured, and a deletion that fails is never planned again. Dropping
+    /// both at once has to be refused here, because nothing downstream can recover it.
+    #[tokio::test]
+    async fn dropping_an_adopted_resource_and_its_binding_together_is_refused() {
+        // The release removed 'uploads' outright, so the target stack no longer declares it.
+        let stack = create_stack(IndexMap::new());
+
+        let mut state = stack_state(Platform::Aws);
+        let mut adopted = alien_core::StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.to_string(),
+            Resource::new(Storage::new("uploads".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        adopted.status = alien_core::ResourceStatus::Running;
+        state.resources.insert("uploads".to_string(), adopted);
+
+        let check = ExternalBindingStillBoundCheck;
+
+        // Keeping the binding through this release is the supported way out, so it must pass.
+        let mut bound = deployment_config();
+        bound.external_bindings.insert(
+            "uploads",
+            ExternalBinding::Storage(StorageBinding::s3("bucket")),
+        );
+        assert!(
+            check
+                .check(&stack, &state, &bound)
+                .await
+                .unwrap()
+                .errors
+                .is_empty(),
+            "removing the resource while the binding stays must be allowed"
+        );
+
+        let result = check
+            .check(&stack, &state, &deployment_config())
+            .await
+            .unwrap();
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("'uploads'") && result.errors[0].contains("keep the binding"),
+            "the error must name the resource and the order that works, got {:?}",
             result.errors
         );
     }
