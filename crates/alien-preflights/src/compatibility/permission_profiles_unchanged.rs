@@ -1,5 +1,7 @@
 use crate::error::Result;
-use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXES;
+use crate::mutations::management_permission_profile::{
+    GATE_DERIVED_GLOBAL_SUFFIXES, OBSERVE_PERMISSION_SET_ID,
+};
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::Stack;
@@ -60,15 +62,32 @@ fn gated_contributions(old_stack: &Stack, new_stack: &Stack) -> GatedContributio
 /// data-capable grant here would let it slip through as soon as any resource
 /// of its type is gated. Full references are compared (not their ids), so an
 /// inline set whose body changed under a stable id still reads as drift.
+///
+/// Older managers also inserted the named `observe/observe` grant into every
+/// prepared management profile. Application stacks no longer receive that
+/// account-wide grant. Compatibility may therefore omit that exact named
+/// reference from the old management profile only; named profiles, inline
+/// permission sets, and additions on the new side remain unchanged.
 fn without_gate_derived<'a>(
     grants: Option<&'a Vec<PermissionSetReference>>,
     gated: &GatedContributions,
+    omit_legacy_automatic_observe: bool,
 ) -> Vec<&'a PermissionSetReference> {
     grants
         .map(|grants| {
             grants
                 .iter()
                 .filter(|grant| {
+                    if omit_legacy_automatic_observe
+                        && matches!(
+                            grant,
+                            PermissionSetReference::Name(name)
+                                if name == OBSERVE_PERMISSION_SET_ID
+                        )
+                    {
+                        return false;
+                    }
+
                     !gated.type_prefixes.iter().any(|prefix| {
                         grant
                             .id()
@@ -92,6 +111,7 @@ fn profiles_differ_outside_gates(
     old_profile: &PermissionProfile,
     new_profile: &PermissionProfile,
     gated: &GatedContributions,
+    allow_legacy_automatic_observe_removal: bool,
 ) -> bool {
     let scopes: HashSet<&str> = old_profile
         .0
@@ -105,7 +125,9 @@ fn profiles_differ_outside_gates(
         let new_grants = new_profile.0.get(scope);
 
         if scope == "*" {
-            if without_gate_derived(old_grants, gated) != without_gate_derived(new_grants, gated) {
+            if without_gate_derived(old_grants, gated, allow_legacy_automatic_observe_removal)
+                != without_gate_derived(new_grants, gated, false)
+            {
                 return true;
             }
             continue;
@@ -137,7 +159,10 @@ fn management_differs_outside_gates(
         | (
             ManagementPermissions::Override(old_profile),
             ManagementPermissions::Override(new_profile),
-        ) => profiles_differ_outside_gates(old_profile, new_profile, gated),
+        ) => profiles_differ_outside_gates(old_profile, new_profile, gated, true),
+        (ManagementPermissions::Extend(old_profile), ManagementPermissions::Auto) => {
+            profiles_differ_outside_gates(old_profile, &PermissionProfile::new(), gated, true)
+        }
         _ => true,
     }
 }
@@ -172,7 +197,7 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
         for (profile_name, new_profile) in new_profiles {
             if let Some(old_profile) = old_profiles.get(profile_name) {
                 // Profile exists in both - check if it was modified
-                if profiles_differ_outside_gates(old_profile, new_profile, &gated) {
+                if profiles_differ_outside_gates(old_profile, new_profile, &gated, false) {
                     errors.push(format!(
                         "Permission profile '{}' was modified",
                         profile_name
@@ -458,6 +483,118 @@ mod tests {
             .expect("check should run");
         assert!(!result.success);
         assert!(result.errors[0].contains("Management permissions"));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_automatic_observe_grant_can_leave_management() {
+        let old_stack = Stack::new("s".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().global(["observe/observe", "worker/provision"]),
+            ))
+            .build();
+        let new_stack = Stack::new("s".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().global(["worker/provision"]),
+            ))
+            .build();
+
+        let result = PermissionProfilesUnchangedCheck
+            .check(&old_stack, &new_stack)
+            .await
+            .expect("check should run");
+
+        assert!(result.success, "{:?}", result.errors);
+        assert!(result.errors.is_empty());
+        assert!(result.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_legacy_observe_only_management_profile_can_return_to_auto() {
+        let old_stack = Stack::new("s".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().global(["observe/observe"]),
+            ))
+            .build();
+        let new_stack = Stack::new("s".to_string()).build();
+
+        let result = PermissionProfilesUnchangedCheck
+            .check(&old_stack, &new_stack)
+            .await
+            .expect("check should run");
+
+        assert!(result.success, "{:?}", result.errors);
+        assert!(result.errors.is_empty());
+        assert!(result.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_observe_grant_cannot_enter_management() {
+        let old_stack = Stack::new("s".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().global(["worker/provision"]),
+            ))
+            .build();
+        let new_stack = Stack::new("s".to_string())
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().global(["observe/observe", "worker/provision"]),
+            ))
+            .build();
+
+        let result = PermissionProfilesUnchangedCheck
+            .check(&old_stack, &new_stack)
+            .await
+            .expect("check should run");
+
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            vec!["Management permissions configuration was modified"]
+        );
+        assert!(result.warnings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn observe_removal_from_a_named_profile_is_still_rejected() {
+        let old_profile = PermissionProfile::new().global(["observe/observe", "worker/execute"]);
+        let new_profile = PermissionProfile::new().global(["worker/execute"]);
+
+        let mut old_profiles = IndexMap::new();
+        old_profiles.insert("application".to_string(), old_profile);
+        let mut new_profiles = IndexMap::new();
+        new_profiles.insert("application".to_string(), new_profile);
+
+        let old_stack = Stack {
+            id: "s".to_string(),
+            resources: IndexMap::new(),
+            permissions: PermissionsConfig {
+                profiles: old_profiles,
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![],
+        };
+        let new_stack = Stack {
+            id: "s".to_string(),
+            resources: IndexMap::new(),
+            permissions: PermissionsConfig {
+                profiles: new_profiles,
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        let result = PermissionProfilesUnchangedCheck
+            .check(&old_stack, &new_stack)
+            .await
+            .expect("check should run");
+
+        assert!(!result.success);
+        assert_eq!(
+            result.errors,
+            vec!["Permission profile 'application' was modified"]
+        );
+        assert!(result.warnings.is_empty());
     }
 
     #[tokio::test]
