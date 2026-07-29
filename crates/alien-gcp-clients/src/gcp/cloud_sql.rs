@@ -61,7 +61,7 @@ pub struct DatabaseInstance {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ip_addresses: Vec<IpMapping>,
     /// Current server CA certificate reported by Cloud SQL (response only).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     pub server_ca_cert: Option<ServerCaCert>,
 }
 
@@ -402,6 +402,18 @@ mod tests {
             instance.server_ca_cert.unwrap().cert,
             "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----\n"
         );
+    }
+
+    #[test]
+    fn database_instance_never_serializes_response_only_server_ca_certificate() {
+        let mut instance = private_instance();
+        instance.server_ca_cert = Some(ServerCaCert {
+            cert: "response-only".to_string(),
+        });
+
+        let value = serde_json::to_value(instance).unwrap();
+
+        assert!(value.get("serverCaCert").is_none());
     }
 
     #[test]
