@@ -22,6 +22,8 @@
 use crate::error::{ErrorData, Result};
 use alien_core::BinaryTarget;
 use alien_error::{AlienError, Context, IntoAlienError};
+use fs2::FileExt;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -149,6 +151,14 @@ async fn find_addon_source(
         addon_file_name,
         crate_dir.display()
     );
+    let _build_lock = lock_workspace_addon_build(&crate_dir, resource_name).await?;
+
+    // Another process may have completed the build while this one waited.
+    let dev_addon = crate_dir.join(addon_file_name);
+    if dev_addon.is_file() {
+        return Ok(Some(dev_addon));
+    }
+
     let output = Command::new("npx")
         .args(["napi", "build", "--platform", "--release"])
         .current_dir(&crate_dir)
@@ -182,6 +192,49 @@ async fn find_addon_source(
     } else {
         Ok(None)
     }
+}
+
+async fn lock_workspace_addon_build(crate_dir: &Path, resource_name: &str) -> Result<File> {
+    let workspace_dir = crate_dir
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(crate_dir);
+    let lock_path = workspace_dir
+        .join("target")
+        .join("alien-bindings-node-build.lock");
+    let lock_path_for_error = lock_path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        FileExt::lock_exclusive(&file)?;
+        Ok::<_, std::io::Error>(file)
+    })
+    .await
+    .into_alien_error()
+    .context(ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: format!(
+            "Failed to wait for the native bindings addon build lock at {}",
+            lock_path_for_error.display()
+        ),
+        build_output: None,
+    })?
+    .into_alien_error()
+    .context(ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: format!(
+            "Failed to acquire the native bindings addon build lock at {}",
+            lock_path_for_error.display()
+        ),
+        build_output: None,
+    })
 }
 
 /// bun script that prints the resolved path of the bindings package's `./native`
@@ -530,6 +583,34 @@ mod tests {
         );
         assert_eq!(napi_triple(BinaryTarget::DarwinArm64), Some("darwin-arm64"));
         assert_eq!(napi_triple(BinaryTarget::WindowsX64), None);
+    }
+
+    #[tokio::test]
+    async fn workspace_addon_build_lock_waits_for_the_current_builder() {
+        let workspace = tempdir().unwrap();
+        let crate_dir = workspace.path().join("crates").join("alien-bindings-node");
+        fs::create_dir_all(&crate_dir).await.unwrap();
+        let first_lock = lock_workspace_addon_build(&crate_dir, "first")
+            .await
+            .expect("first builder should acquire the lock");
+
+        let waiting_crate_dir = crate_dir.clone();
+        let mut waiting_builder =
+            tokio::spawn(
+                async move { lock_workspace_addon_build(&waiting_crate_dir, "second").await },
+            );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiting_builder)
+                .await
+                .is_err(),
+            "a second builder must wait while the first holds the filesystem lock"
+        );
+
+        drop(first_lock);
+        waiting_builder
+            .await
+            .expect("waiting builder task should finish")
+            .expect("the next builder should acquire the released lock");
     }
 
     #[tokio::test]
