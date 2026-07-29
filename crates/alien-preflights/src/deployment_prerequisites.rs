@@ -405,13 +405,11 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
     }
 }
 
-/// Validates that a resource still carrying binding-derived state still has a binding.
+/// Validates that a resource running without Alien control still has a binding.
 ///
-/// A bound resource is recorded Running with no controller, because someone else owns it,
-/// and its outputs and synced params come from the binding rather than from provisioning.
-/// Drop the binding while the stack still declares the resource and Alien can neither
-/// update it nor adopt it, so dependents would keep resolving the target it used to name.
-/// Refusing the release leaves the deployment pointing at what the deployer chose.
+/// Adoption is what records a resource Running with no controller state, on create and on
+/// update alike. Drop the binding while the stack still declares the resource and Alien can
+/// neither update nor delete it, so dependents keep pointing at a target nothing owns.
 pub struct ExternalBindingStillBoundCheck;
 
 #[async_trait::async_trait]
@@ -445,22 +443,20 @@ impl DeploymentPrerequisiteCheck for ExternalBindingStillBoundCheck {
             .resources
             .iter()
             .filter(|(resource_id, resource_state)| {
-                // Binding-derived state is the evidence: a resource Alien provisioned
-                // reaches these through its controller, which this one does not have.
-                let carries_binding_state = resource_state.remote_binding_params.is_some()
-                    || resource_state.outputs.is_some();
-
                 resource_state.status == alien_core::ResourceStatus::Running
                     && resource_state.internal_state.is_none()
-                    && carries_binding_state
                     && stack.resources.contains_key(resource_id.as_str())
                     && !config.external_bindings.has(resource_id.as_str())
             })
             .map(|(resource_id, _)| {
+                // Removing the resource and its binding together strands it: the
+                // controller-less delete path settles only while the binding is still
+                // configured, and a failed deletion is never re-planned.
                 format!(
                     "Resource '{resource_id}' was adopted from an external binding that this \
                      release no longer provides, so Alien has no way to resolve it. Restore its \
-                     binding, or remove '{resource_id}' from the stack."
+                     binding. To retire '{resource_id}', keep the binding through the release \
+                     that removes the resource, then drop the binding."
                 )
             })
             .collect::<Vec<_>>();
@@ -1112,8 +1108,45 @@ mod tests {
         );
     }
 
-    /// Setup delivers frozen resources with no binding of their own, so carrying no
-    /// binding-derived state is what keeps them out of this check.
+    /// A store bound without remote access carries neither params nor outputs, so the
+    /// binding is the only record that it was adopted.
+    #[tokio::test]
+    async fn a_release_that_drops_a_binding_carrying_no_state_is_refused() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let stack = create_stack(resources);
+
+        let mut state = stack_state(Platform::Aws);
+        let mut adopted = alien_core::StackResourceState::new_pending(
+            Storage::RESOURCE_TYPE.to_string(),
+            Resource::new(Storage::new("uploads".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        adopted.status = alien_core::ResourceStatus::Running;
+        assert!(
+            adopted.internal_state.is_none()
+                && adopted.remote_binding_params.is_none()
+                && adopted.outputs.is_none(),
+            "the fixture must carry no controller state and no binding-derived state"
+        );
+        state.resources.insert("uploads".to_string(), adopted);
+
+        let result = ExternalBindingStillBoundCheck
+            .check(&stack, &state, &deployment_config())
+            .await
+            .unwrap();
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("'uploads'"),
+            "the error must name the resource, got {:?}",
+            result.errors
+        );
+    }
+
+    /// Setup delivers frozen resources through an importer, which always serializes the
+    /// controller into the state. That controller is what keeps them out of this check:
+    /// Alien can still drive them, so a missing binding costs nothing.
     #[tokio::test]
     async fn a_setup_delivered_resource_is_not_treated_as_adopted() {
         let mut resources = IndexMap::new();
@@ -1128,6 +1161,11 @@ mod tests {
             Vec::new(),
         );
         delivered.status = alien_core::ResourceStatus::Running;
+        delivered.internal_state = Some(serde_json::json!({
+            "type": "AwsStorageController",
+            "_controllerStateVersion": 1,
+            "state": "ready",
+        }));
         state.resources.insert("uploads".to_string(), delivered);
 
         let result = ExternalBindingStillBoundCheck

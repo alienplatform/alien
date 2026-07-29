@@ -1825,6 +1825,14 @@ async fn a_declined_gated_import_is_not_created_by_the_runner() {
         Vec::new(),
     );
     imported_assets.status = alien_core::ResourceStatus::Running;
+    // Importers always serialize the controller into the state. Running without one
+    // means adopted from a binding, which this resource is not.
+    imported_assets.internal_state = Some(serde_json::json!({
+        "type": "TestStorageController",
+        "_controllerStateVersion": 1,
+        "state": "ready",
+        "bucketName": "test-assets",
+    }));
     let mut imported_state = StackState::new(Platform::Test);
     imported_state
         .resources
