@@ -7,6 +7,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
+use std::collections::HashSet;
 use tracing::{debug, info};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -20,7 +21,12 @@ fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &Stack
         })
 }
 
-fn compute_update_status(stack_state: &StackState, target_stack: &Stack) -> Result<StackStatus> {
+fn compute_update_status(
+    stack_state: &StackState,
+    target_stack: &Stack,
+    reconciled: &HashSet<&str>,
+    pending_deletions: &[&str],
+) -> Result<StackStatus> {
     let statuses = stack_state
         .resources
         .iter()
@@ -35,11 +41,45 @@ fn compute_update_status(stack_state: &StackState, target_stack: &Stack) -> Resu
         return Ok(StackStatus::Running);
     }
 
-    StackState::compute_stack_status_from_resources(&statuses).context(
+    let status = StackState::compute_stack_status_from_resources(&statuses).context(
         ErrorData::StackExecutionFailed {
             message: "Failed to compute update status".to_string(),
         },
-    )
+    )?;
+
+    // Health is not completion, in both directions. The executor defers a resource's update
+    // while its new dependency provisions, and defers a deletion while a consumer still
+    // records the dependency — either way every status reads Running with work outstanding.
+    if status == StackStatus::Running
+        && (!stack_has_converged(stack_state, target_stack, reconciled)
+            || !pending_deletions.is_empty())
+    {
+        return Ok(StackStatus::InProgress);
+    }
+
+    Ok(status)
+}
+
+/// Whether every resource the executor reconciles matches the config the release asks for.
+///
+/// Scoped to `reconciled` because a resource the executor's lifecycle filter excluded is never
+/// planned: a setup-owned resource whose recorded config differs from the declared one would
+/// otherwise hold the update open forever. A resource missing from state has not converged.
+fn stack_has_converged(
+    stack_state: &StackState,
+    target_stack: &Stack,
+    reconciled: &HashSet<&str>,
+) -> bool {
+    target_stack
+        .resources
+        .iter()
+        .filter(|(resource_id, _)| reconciled.contains(resource_id.as_str()))
+        .all(|(resource_id, desired)| {
+            stack_state
+                .resources
+                .get(resource_id)
+                .is_some_and(|deployed| deployed.config == desired.config)
+        })
 }
 
 /// Handle UpdatePending → Updating transition
@@ -89,10 +129,9 @@ pub async fn handle_update_pending(
     // previous prepared stack, which was stripped the same way, and an
     // unstripped new stack would read as "frozen resource added" and refuse
     // the update — or worse, resurrect the resource the deployer declined.
-    // Live declines apply AFTER the mutations instead, so a declined
-    // workload's derived baseline (service account, profile grants, capacity
-    // contribution) stays identical to the accepted render and the
-    // compatibility checks never see a difference.
+    // Live declines apply AFTER the mutations, so a declined workload's service
+    // account and capacity stay identical to the accepted render. Its grant is
+    // scrubbed, which `permission_profiles_unchanged`'s gated exemption absorbs.
     let target_stack = crate::pending::strip_frozen_declines(
         target_stack,
         &persisted_gate_answers,
@@ -285,6 +324,10 @@ pub async fn handle_updating(
             message: "Failed to create stack executor for update".to_string(),
         })?;
 
+    // Captured before stepping: completion is judged over exactly what this executor
+    // reconciles, so the two cannot disagree about which resources are in scope.
+    let reconciled_ids = executor.tracked_resource_ids();
+
     // Execute one step
     let mut step_result =
         executor
@@ -304,7 +347,17 @@ pub async fn handle_updating(
     );
 
     // Compute the stack status from the resulting state
-    let stack_status = compute_update_status(&step_result.next_state, &target_stack)?;
+    let pending_deletions = executor
+        .pending_deletions(&step_result.next_state)
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to determine outstanding deletions".to_string(),
+        })?;
+    let stack_status = compute_update_status(
+        &step_result.next_state,
+        &target_stack,
+        &reconciled_ids,
+        &pending_deletions,
+    )?;
 
     // Check if update is complete
     let waiting_for_machines =
@@ -392,7 +445,9 @@ pub async fn handle_updating(
 
         DeploymentStepResult {
             state: next,
-            suggested_delay_ms: step_result.suggested_delay_ms,
+            // An update held open for outstanding work can step nothing this pass and so
+            // suggest no delay; without a floor that is a hot loop against cloud APIs.
+            suggested_delay_ms: step_result.suggested_delay_ms.or(Some(5_000)),
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
             observed_inventory_batches: vec![],
@@ -510,6 +565,169 @@ mod tests {
         );
         entry.status = status;
         entry
+    }
+
+    /// An update is finished when the executor has nothing left to do, not when every
+    /// resource is healthy. A consumer deferred while its dependency provisioned is still
+    /// healthy on its old config, so status alone reports success too early.
+    #[test]
+    fn an_update_is_not_complete_while_a_resource_has_not_reached_its_desired_config() {
+        let cache = Kv::new("cache".to_string()).build();
+        let deployed_agent = Worker::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .build();
+        // What the release asks for: the same worker, now linked to the cache.
+        let desired_agent = Worker::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .link(&cache)
+            .build();
+
+        let target_stack = Stack::new("s".to_string())
+            .add(desired_agent, ResourceLifecycle::Live)
+            .add(cache.clone(), ResourceLifecycle::Live)
+            .build();
+
+        // The cache finished provisioning, so every resource is healthy, but the worker is
+        // still running the config it had before the link was added.
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "agent".to_string(),
+            state_entry(Resource::new(deployed_agent), ResourceStatus::Running),
+        );
+        stack_state.resources.insert(
+            "cache".to_string(),
+            state_entry(Resource::new(cache), ResourceStatus::Running),
+        );
+
+        let reconciled = HashSet::from(["agent", "cache"]);
+        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &[])
+            .expect("status should compute");
+
+        assert_eq!(
+            status,
+            StackStatus::InProgress,
+            "the worker has not reached its desired config, so the update is not complete"
+        );
+    }
+
+    /// Declining a gate that was accepted must take the resource away, and the executor defers
+    /// that deletion for a step while the consumer still records a dependency on it. Judging
+    /// completion by config alone misses the deletion entirely, so the resource keeps running.
+    #[test]
+    fn an_update_is_not_complete_while_a_declined_resource_is_still_deployed() {
+        let agent = Worker::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .build();
+        // The gate was declined, so the release's target no longer declares the worker.
+        let target_stack = Stack::new("s".to_string())
+            .add(agent.clone(), ResourceLifecycle::Live)
+            .build();
+
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "agent".to_string(),
+            state_entry(Resource::new(agent), ResourceStatus::Running),
+        );
+        stack_state.resources.insert(
+            "declined".to_string(),
+            state_entry(
+                Resource::new(Worker::new("declined".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "example.com/declined:latest".to_string(),
+                    })
+                    .build()),
+                ResourceStatus::Running,
+            ),
+        );
+
+        // The declined worker is not in the target, so the executor does not track it; the
+        // executor reports it as a deletion it still owes.
+        let reconciled = HashSet::from(["agent"]);
+        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &["declined"])
+            .expect("status should compute");
+
+        assert_eq!(
+            status,
+            StackStatus::InProgress,
+            "a declined resource still deployed means the update has work left"
+        );
+    }
+
+    /// A resource the executor will never delete — outside its deletion scope, or held by a
+    /// dependent that scope excludes — is absent from `pending_deletions`, so waiting on it
+    /// cannot hold the update open.
+    #[test]
+    fn a_deletion_the_executor_will_not_perform_cannot_hold_the_update_open() {
+        let agent = Worker::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .build();
+        let target_stack = Stack::new("s".to_string())
+            .add(agent.clone(), ResourceLifecycle::Live)
+            .build();
+
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "agent".to_string(),
+            state_entry(Resource::new(agent), ResourceStatus::Running),
+        );
+        stack_state.resources.insert(
+            "out-of-scope".to_string(),
+            state_entry(
+                Resource::new(Kv::new("out-of-scope".to_string()).build()),
+                ResourceStatus::Running,
+            ),
+        );
+
+        let reconciled = HashSet::from(["agent"]);
+        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &[])
+            .expect("status should compute");
+
+        assert_eq!(
+            status,
+            StackStatus::Running,
+            "a deletion the executor does not own must not block completion"
+        );
+    }
+
+    /// A setup-owned resource is excluded by the executor's lifecycle filter, so nothing will
+    /// ever reconcile it. Holding the update open until its recorded config matches the
+    /// declared one would never finish.
+    #[test]
+    fn a_resource_the_executor_does_not_reconcile_cannot_hold_the_update_open() {
+        let declared = Kv::new("store".to_string()).build();
+        let target_stack = Stack::new("s".to_string())
+            .add(declared, ResourceLifecycle::Frozen)
+            .build();
+
+        let deployed = Kv::new("other-name".to_string()).build();
+        let mut stack_state = StackState::new(Platform::Aws);
+        let mut entry = state_entry(Resource::new(deployed), ResourceStatus::Running);
+        entry.lifecycle = Some(ResourceLifecycle::Frozen);
+        stack_state.resources.insert("store".to_string(), entry);
+
+        // The executor reconciles only Live resources, so the frozen store is not in scope.
+        let reconciled = HashSet::new();
+        let status = compute_update_status(&stack_state, &target_stack, &reconciled, &[])
+            .expect("status should compute");
+
+        assert_eq!(
+            status,
+            StackStatus::Running,
+            "a resource outside the executor's scope must not block completion"
+        );
     }
 
     /// Build a release stack where `cache` is declared behind a gate.

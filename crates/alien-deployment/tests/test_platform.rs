@@ -1548,6 +1548,97 @@ async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
     assert_eq!(store.status, alien_core::ResourceStatus::Running);
 }
 
+/// The same live-gate flip, but an ungated worker links the gated store — the shape the
+/// link scrub allows. The consumer's recorded dependency makes the executor defer the
+/// store's deletion for a step, so the update must stay open until the store is actually
+/// gone rather than finishing on the step that scrubs the link.
+#[tokio::test]
+async fn declining_a_linked_gate_deprovisions_the_store_before_the_update_completes() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let stack = create_live_gated_stack_with_linking_worker("linked-gate-stack", "cache", "api");
+    let config = create_test_config("hash_v1", false);
+    let mut state = create_initial_state(stack.clone());
+
+    // The declared default is true, so both the store and its consumer come up.
+    state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("cache"));
+
+    // Declining takes the store away and scrubs the link. The worker survives.
+    start_update(&mut state, release_of("rel_v2", stack));
+    state = run_to_completion(state, config_with_store_enabled(false)).await;
+
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert!(
+        !resources.contains_key("cache"),
+        "the declined store must be deprovisioned, got {:?}",
+        resources
+            .iter()
+            .map(|(id, r)| format!("{id}={:?}", r.status))
+            .collect::<Vec<_>>()
+    );
+    let worker = resources
+        .get("api")
+        .expect("the ungated worker must outlive the store it linked");
+    assert_eq!(worker.status, alien_core::ResourceStatus::Running);
+    let links = alien_core::links_of(&worker.config);
+    assert!(
+        !links.iter().any(|link| link.id == "cache"),
+        "the link must leave with the resource, got {links:?}"
+    );
+}
+
+/// A live gated store with an ungated worker linking it.
+fn create_live_gated_stack_with_linking_worker(
+    stack_id: &str,
+    store_id: &str,
+    function_id: &str,
+) -> Stack {
+    let store = Storage::new(store_id.to_string()).build();
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .link(&store)
+        .build();
+
+    let mut stack = create_test_stack(stack_id, function_id);
+    stack.resources.insert(
+        function_id.to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(function),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
+    stack.resources.insert(
+        store_id.to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(store),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: Some("storeEnabled".to_string()),
+        },
+    );
+    stack.inputs = vec![boolean_gate_input(
+        "storeEnabled",
+        "Enable the store",
+        "Whether to run the store.",
+    )];
+    stack
+}
+
 /// A frozen gate is answered once: the answer recorded at creation refuses
 /// every later conflicting input value.
 #[tokio::test]
@@ -1734,6 +1825,14 @@ async fn a_declined_gated_import_is_not_created_by_the_runner() {
         Vec::new(),
     );
     imported_assets.status = alien_core::ResourceStatus::Running;
+    // Importers always serialize the controller into the state. Running without one
+    // means adopted from a binding, which this resource is not.
+    imported_assets.internal_state = Some(serde_json::json!({
+        "type": "TestStorageController",
+        "_controllerStateVersion": 1,
+        "state": "ready",
+        "bucketName": "test-assets",
+    }));
     let mut imported_state = StackState::new(Platform::Test);
     imported_state
         .resources

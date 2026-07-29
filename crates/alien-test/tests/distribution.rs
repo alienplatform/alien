@@ -154,6 +154,15 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
         "optional-queue-off",
     )
     .await?;
+    // A vault on AWS is an SSM name prefix, not a listable resource; its cloud footprint
+    // is the IAM policy carrying its id, which also proves the grant follows the gate.
+    assert_cloud_gate_pair(
+        &env,
+        &["iam", "get-account-authorization-details", "--output", "json"],
+        "optional-vault-on",
+        "optional-vault-off",
+    )
+    .await?;
     // A compute gate rides the live strip: the declined worker's function is
     // never provisioned, the accepted one is.
     assert_cloud_gate_pair(
@@ -181,7 +190,39 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
     )
     .await?;
 
+    // The links half of the gate: an ungated worker linking gated resources keeps only the
+    // links whose target survived, so it holds the `-on` bindings and not the `-off` ones.
+    let links = agent_link_ids(&stack_state)?;
+    for id in ["optional-kv-on", "optional-worker-on"] {
+        anyhow::ensure!(
+            links.contains(&id.to_string()),
+            "agent should keep its link to accepted '{id}', got {links:?}"
+        );
+    }
+    for id in ["optional-kv-off", "optional-worker-off"] {
+        anyhow::ensure!(
+            !links.contains(&id.to_string()),
+            "agent must not keep a link to declined '{id}', got {links:?}"
+        );
+    }
+
+    // Flipping a gate on a running deployment is an upgrade, which this harness does not
+    // cover for any app. The strip, scrub and deprovision it drives run against the test
+    // platform in `alien-deployment`'s `test_platform` suite instead.
+
     Ok(())
+}
+
+/// The resource ids the ungated `agent` worker still links, read from the deployed stack state.
+fn agent_link_ids(stack_state: &alien_core::StackState) -> anyhow::Result<Vec<String>> {
+    let agent = stack_state
+        .resources
+        .get("agent")
+        .context("stack_state is missing the ungated 'agent' worker")?;
+    Ok(alien_core::links_of(&agent.config)
+        .iter()
+        .map(|link| link.id.clone())
+        .collect())
 }
 
 /// Runs one read-only `aws` list call and asserts the enabled sibling's id is

@@ -12,6 +12,8 @@ pub use permissions::*;
 mod platform;
 pub use platform::*;
 
+mod resource_links;
+pub use resource_links::*;
 mod secret_delivery;
 pub use secret_delivery::*;
 

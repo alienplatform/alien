@@ -8,6 +8,7 @@ use alien_core::{
     ExternalBindings, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack,
     StackSettings, Storage, StorageBinding,
 };
+use std::collections::HashSet;
 
 fn external_storage_config(resource_id: &str) -> DeploymentConfig {
     let mut external_bindings = ExternalBindings::new();
@@ -558,6 +559,288 @@ async fn test_external_binding_resource_syncs_without_controller() -> Result<()>
     assert!(
         executor.is_synced(&state),
         "Desired external binding should be considered synced while Running"
+    );
+
+    Ok(())
+}
+
+/// Naming a resource in the bindings does not hand it over: one Alien provisioned keeps its
+/// controller, which rewrites its own outputs every update. Planning against the binding
+/// instead would schedule an update the controller undoes, forever, re-mutating a live
+/// resource each pass.
+#[tokio::test]
+async fn test_a_binding_on_a_provisioned_resource_does_not_replan_forever() -> Result<()> {
+    let stack = Stack::new("binding-over-provisioned-test".to_owned())
+        .add(test_storage("store"), ResourceLifecycle::Live)
+        .build();
+
+    // Provisioned by Alien first, so it carries controller state and controller outputs.
+    let state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    assert!(
+        state.resources.get("store").unwrap().internal_state.is_some(),
+        "fixture must own a controller for this to mean anything"
+    );
+
+    // A binding is added for the same id afterwards.
+    let bound = external_storage_config("store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&bound)
+        .build()?;
+
+    assert!(
+        !executor.plan(&state)?.updates.contains_key("store"),
+        "a resource with a controller must not be planned against its binding"
+    );
+
+    Ok(())
+}
+
+/// A Container Apps Environment's declared config is only its id, so repointing its binding
+/// changes nothing the planner compares. Dependents resolve the environment through
+/// the outputs it derives, so the update has to be planned off the binding itself.
+#[tokio::test]
+async fn test_repointing_an_external_binding_refreshes_its_outputs() -> Result<()> {
+    fn config_for(environment: &str) -> DeploymentConfig {
+        let mut bindings = ExternalBindings::new();
+        bindings.insert(
+            "env",
+            ExternalBinding::ContainerAppsEnvironment(
+                alien_core::ContainerAppsEnvironmentBinding::new(
+                    environment.to_string(),
+                    format!("/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/managedEnvironments/{environment}"),
+                    "rg".to_string(),
+                    format!("{environment}.example.com"),
+                ),
+            ),
+        );
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(bindings)
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    let stack = Stack::new("binding-repoint-test".to_owned())
+        .add(
+            alien_core::AzureContainerAppsEnvironment::new("env".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let first = config_for("old-environment");
+    let state = run_to_synced(
+        &StackExecutor::builder(&stack, ClientConfig::Test)
+            .deployment_config(&first)
+            .build()?,
+        new_test_state(),
+    )
+    .await?;
+    let outputs = format!("{:?}", state.resources.get("env").unwrap().outputs);
+    assert!(
+        outputs.contains("old-environment"),
+        "the create should adopt the binding's outputs, got {outputs}"
+    );
+
+    // Same stack, same declared config — only the binding moved.
+    let second = config_for("new-environment");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&second)
+        .build()?;
+    assert!(
+        executor.plan(&state)?.updates.contains_key("env"),
+        "a repointed binding must schedule the update that refreshes its outputs"
+    );
+
+    let stepped = executor.step(state).await?.next_state;
+    let refreshed = format!("{:?}", stepped.resources.get("env").unwrap().outputs);
+    assert!(
+        refreshed.contains("new-environment") && !refreshed.contains("old-environment"),
+        "the outputs must follow the binding, got {refreshed}"
+    );
+
+    Ok(())
+}
+
+/// A config change on an external binding has no cloud work behind it: the update
+/// must adopt the new config directly, or the planner re-plans the same update on
+/// every step and the stack never reaches synced.
+#[tokio::test]
+async fn test_external_binding_resource_adopts_config_changes() -> Result<()> {
+    let storage = test_storage_with_public_read("external-store", false);
+    let stack = Stack::new("external-binding-update-test".to_owned())
+        .add(storage.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let deployment_config = external_storage_config("external-store");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+    let state = run_to_synced(&executor, new_test_state()).await?;
+
+    let updated_storage = test_storage_with_public_read("external-store", true);
+    let updated_stack = Stack::new("external-binding-update-test".to_owned())
+        .add(updated_storage.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let update_executor = StackExecutor::builder(&updated_stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+
+    let state = run_steps(&update_executor, state, 3).await?;
+    let external_state = state.resources.get("external-store").unwrap();
+
+    assert_eq!(external_state.status, ResourceStatus::Running);
+    assert_eq!(
+        external_state.config,
+        Resource::new(updated_storage),
+        "the external binding must adopt the new declared config"
+    );
+    assert!(
+        external_state.internal_state.is_none(),
+        "adopting a config change must not synthesize controller state"
+    );
+    assert!(
+        update_executor.is_synced(&state),
+        "a config change on an external binding must reach synced"
+    );
+
+    Ok(())
+}
+
+/// Only an external binding may reach an update with no controller. Anything else has lost
+/// the state its update would resume from, so the resource fails loudly rather than having
+/// the update silently skipped and the deployment reporting success.
+#[tokio::test]
+async fn test_a_controllerless_resource_fails_its_update() -> Result<()> {
+    let stack = Stack::new("controllerless-update-test".to_owned())
+        .add(test_storage_with_public_read("store", true), ResourceLifecycle::Live)
+        .build();
+
+    // Running, config differs from desired, and no controller state to update from.
+    let mut state = new_test_state();
+    let mut entry = create_running_function_state("store", "n/a");
+    entry.resource_type = Storage::RESOURCE_TYPE.to_string();
+    entry.config = Resource::new(test_storage_with_public_read("store", false));
+    entry.internal_state = None;
+    state.resources.insert("store".to_string(), entry);
+
+    let executor = new_executor(&stack)?;
+    let step_result = executor.step(state).await?;
+    let stepped = step_result.next_state.resources.get("store").unwrap();
+
+    assert_eq!(stepped.status, ResourceStatus::UpdateFailed);
+    let error = stepped
+        .error
+        .as_ref()
+        .expect("a failed update must record why");
+    assert!(
+        format!("{error:?}").contains("no controller state"),
+        "the error must name the missing controller state, got {error:?}"
+    );
+
+    Ok(())
+}
+
+/// A resource dropped from the desired stack is owed a deletion even while a consumer still
+/// records a dependency on it — the executor defers that delete for a step, and a caller
+/// judging completion has to see the debt or it declares success one step early.
+#[tokio::test]
+async fn test_pending_deletions_reports_a_deferred_delete() -> Result<()> {
+    // Deploy both for real, so the survivor carries the controller state its update resumes
+    // from, then record the dependency that defers the dropped resource's deletion.
+    let deployed = Stack::new("pending-deletions-test".to_owned())
+        .add(test_function("agent"), ResourceLifecycle::Live)
+        .add(test_function("dropped"), ResourceLifecycle::Live)
+        .build();
+    let mut state = run_to_synced(
+        &new_executor_with_filter(&deployed, vec![ResourceLifecycle::Live])?,
+        new_test_state(),
+    )
+    .await?;
+    state.resources.get_mut("agent").unwrap().dependencies =
+        vec![ResourceRef::new(alien_core::Worker::RESOURCE_TYPE, "dropped")];
+
+    // The release drops `dropped` and changes the survivor, which is what a scrubbed link
+    // looks like: an update is planned, and it is what releases the deferred delete.
+    let stack = Stack::new("pending-deletions-test".to_owned())
+        .add(
+            test_function_with_image("agent", "new-image"),
+            ResourceLifecycle::Live,
+        )
+        .build();
+
+    let executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
+    assert_eq!(
+        executor.pending_deletions(&state)?,
+        vec!["dropped"],
+        "a dropped resource still deployed is a deletion this executor owes"
+    );
+
+    // The debt has to be payable: stepping must shed the dependency that defers it, or
+    // holding the update open for this deletion would never end.
+    let stepped = executor.step(state).await?.next_state;
+    let agent_dependencies = &stepped.resources.get("agent").unwrap().dependencies;
+    assert!(
+        !agent_dependencies.iter().any(|d| d.id() == "dropped"),
+        "the agent's update must drop the dependency deferring the delete, got {agent_dependencies:?}"
+    );
+
+    Ok(())
+}
+
+/// The deletion scope is the whole answer: a resource this executor would never delete must
+/// not be reported as owed, or a caller waiting on it waits forever.
+#[tokio::test]
+async fn test_pending_deletions_excludes_resources_outside_the_deletion_scope() -> Result<()> {
+    let agent = test_function("agent");
+    let stack = Stack::new("pending-deletions-scope-test".to_owned())
+        .add(agent, ResourceLifecycle::Live)
+        .build();
+
+    let mut state = new_test_state();
+    state.resources.insert(
+        "agent".to_string(),
+        create_running_function_state("agent", "test-image-agent"),
+    );
+    let mut frozen_state = create_running_function_state("frozen-leftover", "n/a");
+    frozen_state.lifecycle = Some(ResourceLifecycle::Frozen);
+    state
+        .resources
+        .insert("frozen-leftover".to_string(), frozen_state);
+
+    let executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
+    assert!(
+        executor.pending_deletions(&state)?.is_empty(),
+        "a frozen leftover is outside a Live-filtered executor's deletion scope"
+    );
+
+    Ok(())
+}
+
+/// `tracked_resource_ids` is the executor's post-filter view: a caller judging
+/// convergence must see exactly the resources this executor reconciles.
+#[tokio::test]
+async fn test_tracked_resource_ids_follow_the_lifecycle_filter() -> Result<()> {
+    let frozen_store = test_storage("frozen-store");
+    let live_func = test_function("live-func");
+    let stack = Stack::new("tracked-ids-test".to_owned())
+        .add(frozen_store, ResourceLifecycle::Frozen)
+        .add(live_func, ResourceLifecycle::Live)
+        .build();
+
+    let filtered = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
+    assert_eq!(
+        filtered.tracked_resource_ids(),
+        HashSet::from(["live-func"])
+    );
+
+    let unfiltered = new_executor(&stack)?;
+    assert_eq!(
+        unfiltered.tracked_resource_ids(),
+        HashSet::from(["frozen-store", "live-func"])
     );
 
     Ok(())
