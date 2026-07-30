@@ -1134,7 +1134,9 @@ jobs:
           done
 
       - name: Build wrapper
-        run: pnpm --filter @alienplatform/bindings build
+        run: |
+          pnpm --filter @alienplatform/core build
+          pnpm --filter @alienplatform/bindings build
 
       - name: Pack platform prebuild packages
         run: |
@@ -1795,6 +1797,23 @@ jobs:
               chmod +x "target/${target}/release/${binary}"
             done
           done
+
+      - name: Download Linux AI gateway binaries
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ai-gateway-bin-linux-*
+          path: ./gateway-bins
+          merge-multiple: false
+
+      - name: Place AI gateway binaries in target layout for Dockerfiles
+        run: |
+          cp ./gateway-bins/ai-gateway-bin-linux-x64/alien-ai-gateway \
+            target/x86_64-unknown-linux-musl/release/alien-ai-gateway
+          cp ./gateway-bins/ai-gateway-bin-linux-arm64/alien-ai-gateway \
+            target/aarch64-unknown-linux-musl/release/alien-ai-gateway
+          chmod +x \
+            target/x86_64-unknown-linux-musl/release/alien-ai-gateway \
+            target/aarch64-unknown-linux-musl/release/alien-ai-gateway
 
       - name: Download Linux Worker addons
         uses: actions/download-artifact@v7
