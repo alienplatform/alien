@@ -1363,12 +1363,12 @@ impl AwsWorkerController {
             })
         })?;
 
-        if self.rest_deployment_id.is_none() {
-            let client = ctx
-                .service_provider
-                .get_aws_apigateway_client(aws_cfg)
-                .await?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigateway_client(aws_cfg)
+            .await?;
 
+        if self.rest_deployment_id.is_none() {
             let deployment = client
                 .create_deployment(
                     &rest_api_id,
@@ -1391,22 +1391,23 @@ impl AwsWorkerController {
 
             self.rest_deployment_id = Some(deployment_id);
             self.stage_name = Some("prod".to_string());
-
-            // CreateDeployment takes no tags, so the stage it creates would sit
-            // outside the deployment's tag boundary that every management grant
-            // is conditioned on.
-            let region = &aws_cfg.region;
-            client
-                .tag_resource(
-                    &format!("arn:aws:apigateway:{region}::/restapis/{rest_api_id}/stages/prod"),
-                    standard_resource_tags(ctx.resource_prefix, &worker_config.id),
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to tag REST API stage".to_string(),
-                    resource_id: Some(worker_config.id.clone()),
-                })?;
         }
+
+        // CreateDeployment takes no tags, so the stage it creates would sit outside
+        // the deployment's tag boundary that every management grant is conditioned
+        // on. Tagging runs outside the creation guard because it is idempotent and
+        // a retry must reach it even once the deployment id is recorded.
+        let region = &aws_cfg.region;
+        client
+            .tag_resource(
+                &format!("arn:aws:apigateway:{region}::/restapis/{rest_api_id}/stages/prod"),
+                standard_resource_tags(ctx.resource_prefix, &worker_config.id),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to tag REST API stage".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
 
         if self.fqdn.is_some() {
             Ok(HandlerAction::Continue {
@@ -1588,10 +1589,26 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
 
+        // Without a source ARN the grant lets any API Gateway in any account
+        // invoke this function, so scope it to whichever API fronts the worker.
+        let api_id = self
+            .rest_api_id
+            .as_ref()
+            .or(self.api_id.as_ref())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "API Gateway permission needs the API it fronts".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })
+            })?;
         let request = AddPermissionRequest::builder()
             .statement_id("ApiGatewayInvoke".to_string())
             .action("lambda:InvokeFunction".to_string())
             .principal("apigateway.amazonaws.com".to_string())
+            .source_arn(format!(
+                "arn:aws:execute-api:{}:{}:{api_id}/*",
+                aws_cfg.region, aws_cfg.account_id
+            ))
             .build();
 
         client
