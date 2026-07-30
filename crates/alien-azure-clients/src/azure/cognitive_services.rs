@@ -322,7 +322,7 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
                 url: url.clone(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(body),
+                http_response_text: None,
             })?;
 
         Ok(account)
@@ -451,7 +451,7 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
                 url: url.clone(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: Some(body),
+                http_response_text: None,
             })?;
 
         Ok(deployment)
