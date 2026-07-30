@@ -84,7 +84,7 @@ fn external_binding_is_passthrough() {
         .args(["--", "/bin/sh", "-c", "printf '%s' \"gw=${ALIEN_AI_GATEWAY_URL:-unset}\""])
         .env(
             "ALIEN_LLM_BINDING",
-            r#"{"service":"external","provider":"openai","apiKey":"sk-x"}"#,
+            r#"{"service":"external-ai","provider":"openai","apiKey":"sk-x"}"#,
         )
         .output()
         .expect("launcher should run");
