@@ -43,7 +43,7 @@ pub struct CommandsArgs {
 pub enum CommandsAction {
     /// Invoke a command on a deployment and wait for the result
     Invoke {
-        /// Deployment name or ID
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
         #[arg(long)]
         deployment: String,
 

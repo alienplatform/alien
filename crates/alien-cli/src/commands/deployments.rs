@@ -125,7 +125,7 @@ pub enum DeploymentsCmd {
     },
     /// Get deployment details
     Get {
-        /// Deployment name or ID
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
 
         /// Print machine-readable JSON
@@ -134,7 +134,7 @@ pub enum DeploymentsCmd {
     },
     /// Delete a deployment
     Delete {
-        /// Deployment name or ID
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
 
         /// Skip confirmation prompt
@@ -143,7 +143,7 @@ pub enum DeploymentsCmd {
     },
     /// Retry a deployment
     Retry {
-        /// Deployment name or ID
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
         /// Print the updated deployment as machine-readable JSON
         #[arg(long)]
@@ -151,7 +151,7 @@ pub enum DeploymentsCmd {
     },
     /// Redeploy a deployment with the same release
     Redeploy {
-        /// Deployment name or ID
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
         /// Print the updated deployment as machine-readable JSON
         #[arg(long)]
@@ -415,6 +415,7 @@ async fn resolve_deployment_reference(
 async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -> Result<()> {
     let response = client
         .list_deployments()
+        .include(vec!["deploymentGroup".to_string()])
         .send()
         .await
         .into_sdk_error()
@@ -434,7 +435,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
     }
 
     let mut table = make_table(&[
-        "Name",
+        "Reference",
         "ID",
         "Status",
         "Platform",
@@ -444,7 +445,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
     ]);
     for deployment in &response.items {
         table.add_row(vec![
-            deployment.name.clone().into(),
+            deployment_reference(deployment).into(),
             deployment.id.clone().into(),
             status_cell(&deployment.status),
             deployment.platform.to_string().into(),
@@ -464,6 +465,14 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
     print_table(table);
 
     Ok(())
+}
+
+fn deployment_reference(deployment: &DeploymentResponse) -> String {
+    deployment
+        .deployment_group
+        .as_ref()
+        .map(|group| format!("{}/{}", group.name, deployment.name))
+        .unwrap_or_else(|| deployment.id.clone())
 }
 
 fn desired_release_cell(deployment: &DeploymentResponse) -> String {
@@ -1469,7 +1478,7 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_manager_api::types::Platform;
+    use alien_manager_api::types::{DeploymentGroupMinimal, Platform};
 
     fn deployment_with_releases(
         current: Option<&str>,
@@ -1510,6 +1519,27 @@ mod tests {
             desired_release_cell(&deployment_with_releases(None, Some("rel_first"))),
             "rel_first"
         );
+    }
+
+    #[test]
+    fn deployment_reference_includes_the_group_name() {
+        let mut deployment = deployment_with_releases(Some("rel_a"), None);
+        deployment.deployment_group = Some(
+            DeploymentGroupMinimal::builder()
+                .id("dg_1")
+                .name("production")
+                .try_into()
+                .expect("valid deployment group"),
+        );
+
+        assert_eq!(deployment_reference(&deployment), "production/example");
+    }
+
+    #[test]
+    fn deployment_reference_falls_back_to_the_id_without_group_data() {
+        let deployment = deployment_with_releases(Some("rel_a"), None);
+
+        assert_eq!(deployment_reference(&deployment), "dep_1");
     }
 
     #[test]

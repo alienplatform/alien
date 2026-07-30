@@ -32,3 +32,21 @@ fn api_key_environment_value_is_absent_from_subcommand_help() {
     assert!(!stdout.contains(SENTINEL), "help stdout leaked the API key");
     assert!(!stderr.contains(SENTINEL), "help stderr leaked the API key");
 }
+
+#[test]
+fn deployments_get_help_documents_unambiguous_references() {
+    let output = Command::new(get_alien_cli_binary())
+        .args(["deployments", "get", "--help"])
+        .output()
+        .expect("alien help subprocess should run");
+
+    assert!(
+        output.status.success(),
+        "help should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("help stdout should be UTF-8");
+
+    assert!(stdout.contains("Deployment ID, or <deployment-group-name>/<deployment-name>"));
+}
