@@ -11,8 +11,7 @@
       "groupSlug": "stable-minor-patch",
       "automerge": true,
       "automergeType": "pr",
-      "automergeStrategy": "squash",
-      "platformAutomerge": false
+      "automergeStrategy": "squash"
     }
   ]
 }
