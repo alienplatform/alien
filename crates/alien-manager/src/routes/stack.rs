@@ -571,7 +571,28 @@ fn merge_reimported_stack_state(
             })?;
         imported.resources.insert(resource.id.clone(), merged);
     }
+
+    // The setup payload is authoritative for setup-owned resources: omission
+    // means setup removed one. Runtime-owned resources are not present in that
+    // payload, so carry their current controller state across explicitly.
+    preserve_live_runtime_state(stack, existing, &mut imported);
+
     Ok(imported)
+}
+
+fn preserve_live_runtime_state(stack: &Stack, existing: &StackState, imported: &mut StackState) {
+    for (resource_id, entry) in stack.resources() {
+        if entry.lifecycle != alien_core::ResourceLifecycle::Live
+            || imported.resources.contains_key(resource_id)
+        {
+            continue;
+        }
+        if let Some(existing_resource) = existing.resources.get(resource_id) {
+            imported
+                .resources
+                .insert(resource_id.clone(), existing_resource.clone());
+        }
+    }
 }
 
 fn assert_supported_import_region(
@@ -1407,5 +1428,48 @@ mod setup_update_authorization_tests {
             Some("env-hash")
         );
         assert!(metadata.registry_access_granted);
+    }
+
+    #[test]
+    fn reimport_preserves_live_state_without_resurrecting_removed_frozen_state() {
+        let target = stack("live", "frozen-new");
+        let mut existing = StackState::new(Platform::Aws);
+        for resource_id in ["live", "frozen-old"] {
+            existing.resources.insert(
+                resource_id.to_string(),
+                StackResourceState::new_pending(
+                    if resource_id == "live" {
+                        Worker::RESOURCE_TYPE.to_string()
+                    } else {
+                        Storage::RESOURCE_TYPE.to_string()
+                    },
+                    target
+                        .resources
+                        .get(if resource_id == "live" {
+                            "live"
+                        } else {
+                            "frozen-new"
+                        })
+                        .unwrap()
+                        .config
+                        .clone(),
+                    Some(if resource_id == "live" {
+                        ResourceLifecycle::Live
+                    } else {
+                        ResourceLifecycle::Frozen
+                    }),
+                    vec![],
+                ),
+            );
+        }
+        let mut imported = StackState::new(Platform::Aws);
+
+        preserve_live_runtime_state(&target, &existing, &mut imported);
+
+        assert!(imported.resources.contains_key("live"));
+        assert!(
+            !imported.resources.contains_key("frozen-old"),
+            "an omitted setup-owned resource must remain removed"
+        );
     }
 }
