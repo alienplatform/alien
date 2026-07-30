@@ -176,6 +176,11 @@ jobs:
 
             # Manager registry proxy against a real cloud registry: cloud-tests.yml.
             'and not binary_id(alien-manager::registry_proxy_cloud_test)'
+
+            # AI gateway suites that hit real model endpoints: they need .env.test creds.
+            'and not binary_id(alien-ai-gateway::live_bedrock)'
+            'and not binary_id(alien-ai-gateway::live_foundry_claude)'
+            'and not binary_id(alien-ai-gateway::live_vertex_claude)'
           )
           cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
 
@@ -299,7 +304,7 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
-          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
+          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
           pnpm test:manager-sdk-wire
           pnpm test:platform-sdk-wire
 

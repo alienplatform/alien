@@ -9,7 +9,7 @@ use crate::core::{
 use crate::error::{ErrorData, Result};
 use alien_core::{
     HeartbeatBackend, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, LocalWorkerHeartbeatData,
-    ObservedHealth, Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker,
     WorkerCode, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
     ENV_ALIEN_COMMANDS_TOKEN,
@@ -157,21 +157,16 @@ impl LocalWorkerController {
         runtime_only_env_names.sort();
         env_vars.extend(runtime_control_env);
 
-        // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
-        // worker manager delivers the binding to the process but never persists it to metadata.
-        let runtime_only_binding_names: Vec<String> = config
-            .links
-            .iter()
-            .filter(|link| link.resource_type() == &Postgres::RESOURCE_TYPE)
-            .map(|link| link.id().to_string())
-            .collect();
+        // Links whose binding carries a runtime-only secret (Postgres password, BYO-key AI):
+        // the worker manager delivers the binding to the process but never persists it to metadata.
+        let runtime_only_bindings = alien_local::RuntimeOnlyBindingRef::from_links(&config.links);
 
         // Start the worker with complete environment
         let worker_url = func_mgr
             .start_worker(
                 &config.id,
                 env_vars,
-                runtime_only_binding_names,
+                runtime_only_bindings,
                 runtime_only_env_names,
             )
             .await

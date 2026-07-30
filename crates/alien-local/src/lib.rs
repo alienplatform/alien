@@ -81,4 +81,4 @@ pub use postgres_manager::LocalPostgresManager;
 pub use queue_manager::LocalQueueManager;
 pub use storage_manager::LocalStorageManager;
 pub use vault_manager::LocalVaultManager;
-pub use worker_manager::LocalWorkerManager;
+pub use worker_manager::{LocalWorkerManager, RuntimeOnlyBindingRef};

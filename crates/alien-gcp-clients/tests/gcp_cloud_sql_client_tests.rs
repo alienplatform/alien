@@ -131,6 +131,7 @@ async fn cloud_sql_tier_resize_is_in_place_not_recreate() {
         state: None,
         psc_service_attachment_link: None,
         ip_addresses: vec![],
+        server_ca_cert: None,
     };
 
     // Create a small instance and wait until it is serving.

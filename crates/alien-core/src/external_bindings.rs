@@ -10,8 +10,8 @@ use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
 use crate::bindings::{
-    ArtifactRegistryBinding, BindingValue, ContainerAppsEnvironmentBinding, KvBinding,
-    PostgresBinding, QueueBinding, StorageBinding, VaultBinding,
+    ArtifactRegistryBinding, BindingValue, ContainerAppsEnvironmentBinding, ExternalAiBinding,
+    KvBinding, PostgresBinding, QueueBinding, StorageBinding, VaultBinding,
 };
 use crate::error::ErrorData;
 use crate::resource::ResourceOutputs;
@@ -40,6 +40,8 @@ pub enum ExternalBinding {
     ContainerAppsEnvironment(ContainerAppsEnvironmentBinding),
     /// External Postgres binding (operator-provided / BYO database)
     Postgres(PostgresBinding),
+    /// External AI provider binding (BYO-key OpenAI/Anthropic, etc.)
+    Ai(ExternalAiBinding),
 }
 
 /// Map from resource ID to external binding.
@@ -144,6 +146,20 @@ impl ExternalBindings {
         }
     }
 
+    /// Gets an AI binding for the given resource ID.
+    /// Returns an error if the binding exists but is not an Ai type.
+    pub fn get_ai(&self, id: &str) -> crate::error::Result<Option<&ExternalAiBinding>> {
+        match self.0.get(id) {
+            Some(ExternalBinding::Ai(b)) => Ok(Some(b)),
+            Some(other) => Err(AlienError::new(ErrorData::ExternalBindingTypeMismatch {
+                resource_id: id.to_string(),
+                expected: "ai".to_string(),
+                actual: other.binding_type().to_string(),
+            })),
+            None => Ok(None),
+        }
+    }
+
     /// Gets a container apps environment binding for the given resource ID.
     /// Returns an error if the binding exists but is not a ContainerAppsEnvironment type.
     pub fn get_container_apps_environment(
@@ -191,6 +207,7 @@ impl ExternalBinding {
             ExternalBinding::Vault(_) => "vault",
             ExternalBinding::ContainerAppsEnvironment(_) => "azure_container_apps_environment",
             ExternalBinding::Postgres(_) => "postgres",
+            ExternalBinding::Ai(_) => "ai",
         }
     }
 
@@ -241,6 +258,28 @@ impl ExternalBinding {
             _ => None,
         }
     }
+
+    /// Serializes this external binding to the JSON value injected into the worker
+    /// environment as `ALIEN_<NAME>_BINDING`, matching the shape the SDK parses.
+    ///
+    /// The AI arm wraps the carried `ExternalAiBinding` in `AiBinding::External` so
+    /// the value keeps the `service` tag the SDK's `ai(name)` parser discriminates
+    /// on; a bare `ExternalAiBinding` would lack it. Every other arm serializes the
+    /// carried binding directly, like the runtime controllers' `get_binding_params`.
+    pub fn to_env_binding_value(&self) -> serde_json::Result<serde_json::Value> {
+        match self {
+            ExternalBinding::Storage(b) => serde_json::to_value(b),
+            ExternalBinding::Queue(b) => serde_json::to_value(b),
+            ExternalBinding::Kv(b) => serde_json::to_value(b),
+            ExternalBinding::ArtifactRegistry(b) => serde_json::to_value(b),
+            ExternalBinding::Vault(b) => serde_json::to_value(b),
+            ExternalBinding::ContainerAppsEnvironment(b) => serde_json::to_value(b),
+            ExternalBinding::Postgres(b) => serde_json::to_value(b),
+            ExternalBinding::Ai(b) => {
+                serde_json::to_value(crate::bindings::AiBinding::External(b.clone()))
+            }
+        }
+    }
 }
 
 /// Validates that an external binding type matches the resource type.
@@ -259,6 +298,7 @@ pub fn validate_binding_type(
         ("vault", ExternalBinding::Vault(_)) => true,
         ("azure_container_apps_environment", ExternalBinding::ContainerAppsEnvironment(_)) => true,
         ("postgres", ExternalBinding::Postgres(_)) => true,
+        ("ai", ExternalBinding::Ai(_)) => true,
         _ => false,
     };
 
@@ -301,6 +341,25 @@ mod tests {
         assert!(bindings.has("cache"));
         assert!(bindings.get_kv("cache").unwrap().is_some());
         assert!(bindings.get_storage("cache").is_err()); // Wrong type
+    }
+
+    #[test]
+    fn test_external_bindings_ai() {
+        use crate::bindings::ExternalAiBinding;
+
+        let mut bindings = ExternalBindings::new();
+        bindings.insert(
+            "llm",
+            ExternalBinding::Ai(ExternalAiBinding {
+                provider: "openai".to_string(),
+                api_key: "sk-test".into(),
+            }),
+        );
+
+        assert!(bindings.has("llm"));
+        assert_eq!(bindings.get("llm").unwrap().binding_type(), "ai");
+        assert_eq!(bindings.get_ai("llm").unwrap().unwrap().provider, "openai");
+        assert!(bindings.get_kv("llm").is_err()); // Wrong type
     }
 
     #[test]

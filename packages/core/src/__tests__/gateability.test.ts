@@ -27,6 +27,7 @@ const builders: Record<string, () => object> = {
   queue: () => new alien.Queue("fixture"),
   vault: () => new alien.Vault("fixture"),
   postgres: () => new alien.Postgres("fixture"),
+  ai: () => new alien.AI("fixture"),
   worker: () =>
     new alien.Worker("fixture").code({ type: "image", image: IMAGE }).permissions("execution"),
   daemon: () =>

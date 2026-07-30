@@ -9,8 +9,8 @@ export function writeManifest(ctx: Ctx): CheckResult[] {
 
   // Direct dependencies the consumer imports; overrides pin every transitive
   // @alienplatform/* to a packed tarball so npm never reaches the registry for one.
-  const DIRECT_DEP_PACKAGES = ["sdk", "bindings", "commands"] as const
-  const OVERRIDE_PACKAGES = ["core", "sdk", "bindings", "commands"] as const
+  const DIRECT_DEP_PACKAGES = ["sdk", "bindings", "commands", "ai-gateway"] as const
+  const OVERRIDE_PACKAGES = ["core", "sdk", "bindings", "commands", "ai-gateway"] as const
 
   function fileSpec(tarball: string): string {
     return `file:${relative(fixtureDir, tarball).split("\\").join("/")}`

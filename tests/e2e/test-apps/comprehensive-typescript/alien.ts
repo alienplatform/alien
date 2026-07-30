@@ -18,6 +18,7 @@ const queue = new alien.Queue("alien-queue").build()
 // race that consumer. This queue has exactly one consumer: the queue trigger.
 const eventsQueue = new alien.Queue("alien-events-queue").build()
 const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
+const ai = new alien.AI("test-ai").build()
 
 let workerBuilder = new alien.Worker("alien-ts-worker")
   .code({
@@ -39,6 +40,7 @@ let workerBuilder = new alien.Worker("alien-ts-worker")
   .link(kv)
   .link(queue)
   .link(eventsQueue)
+  .link(ai)
   .commandsEnabled(true)
   // Event triggers under test: each one must invoke the registered handler in
   // src/index.ts, which records the event in `alien-kv` for read-back.
@@ -60,6 +62,7 @@ const executionPermissions = [
   "queue/data-read",
   "queue/data-write",
   "worker/execute",
+  "ai/invoke",
 ]
 if (postgres) {
   executionPermissions.push("postgres/data-access")
@@ -78,6 +81,7 @@ let stackBuilder = new alien.Stack("alien-ts-stack")
   .add(kv, "frozen")
   .add(queue, "frozen")
   .add(eventsQueue, "frozen")
+  .add(ai, "frozen")
 if (postgres) {
   stackBuilder = stackBuilder.add(postgres, "live")
 }

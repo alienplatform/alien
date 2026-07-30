@@ -12,6 +12,21 @@ export const packages = [
   { path: "packages/testing/package.json", publish: true },
   { path: "client-sdks/platform/typescript/package.json", publish: true },
   { path: "client-sdks/manager/typescript/package.json", publish: true },
+  { path: "packages/ai-gateway/package.json", publish: true },
+  // Written by generate-prebuilds.mjs rather than checked in, so every command here
+  // requires that script to have run first.
+  ...[
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-x64-gnu",
+    "linux-x64-musl",
+    "linux-arm64-gnu",
+    "linux-arm64-musl",
+  ].map(triple => ({
+    path: `packages/ai-gateway/npm/${triple}/package.json`,
+    publish: true,
+    versionFrom: "@alienplatform/ai-gateway",
+  })),
   {
     path: "crates/alien-bindings-node/package.json",
     publish: false,

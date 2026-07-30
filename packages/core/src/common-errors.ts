@@ -53,3 +53,33 @@ export const UnexpectedResourceTypeError = defineError({
   internal: false,
   httpStatusCode: 400,
 })
+
+/**
+ * Error thrown when a binding's projected configuration is invalid.
+ */
+export const InvalidBindingConfigError = defineError({
+  code: "INVALID_BINDING_CONFIG",
+  context: z.object({
+    message: z.string(),
+    suggestion: z.string().optional(),
+  }),
+  message: ({ message, suggestion }) => (suggestion ? `${message}. ${suggestion}` : message),
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/**
+ * Error thrown when a binding is not found.
+ */
+export const BindingNotFoundError = defineError({
+  code: "BINDING_NOT_FOUND",
+  context: z.object({
+    bindingName: z.string(),
+    bindingType: z.string(),
+  }),
+  message: ({ bindingName, bindingType }) => `${bindingType} binding '${bindingName}' not found`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 404,
+})

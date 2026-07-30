@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs"
 import { join, relative } from "node:path"
 import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts"
 
-const PACK_TARGETS = ["sdk", "core", "bindings", "commands"] as const
+const PACK_TARGETS = ["sdk", "core", "bindings", "commands", "ai-gateway"] as const
 
 export function packPackages(ctx: Ctx): CheckResult[] {
   const { scriptDir, packagesDir, tarballsDir, tarballs } = ctx

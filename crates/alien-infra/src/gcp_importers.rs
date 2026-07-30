@@ -5,9 +5,12 @@
 
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesCluster;
-use alien_core::{ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker};
+use alien_core::{
+    Ai, ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker,
+};
 use alien_core::{RemoteStackManagement, ServiceAccount, ServiceActivation};
 
+use crate::ai::GcpAiImporter;
 use crate::artifact_registry::GcpArtifactRegistryImporter;
 use crate::build::GcpBuildImporter;
 #[cfg(feature = "kubernetes")]
@@ -26,6 +29,7 @@ use crate::ImporterRegistry;
 /// Register every OSS GCP importer with `registry`.
 pub fn register(registry: &mut ImporterRegistry) {
     registry
+        .register(Ai::RESOURCE_TYPE, Platform::Gcp, GcpAiImporter)
         .register(Storage::RESOURCE_TYPE, Platform::Gcp, GcpStorageImporter)
         .register(Kv::RESOURCE_TYPE, Platform::Gcp, GcpKvImporter)
         .register(Vault::RESOURCE_TYPE, Platform::Gcp, GcpVaultImporter)

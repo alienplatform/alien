@@ -41,8 +41,10 @@ export interface Ctx {
   bunAvailable: boolean
   /** name -> absolute tarball path, for packages that packed successfully. */
   tarballs: Map<string, string>
-  /** Resolved dev-addon path, when one had to be located or built for this host. */
+  /** Resolved bindings dev-addon path, when one had to be located or built for this host. */
   addonPath?: string
+  /** Resolved ai-gateway launcher-binary path, when one is available for this host. */
+  aiBinaryPath?: string
   /** Env carrying ALIEN_BINDINGS_ADDON_PATH for subprocesses, when `addonPath` is set. */
   addonEnv?: NodeJS.ProcessEnv
 }
