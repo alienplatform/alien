@@ -263,18 +263,6 @@ pub async fn handle_updating(
                 message: "Pending prepared stack not found in runtime metadata".to_string(),
             })
         })?;
-    let setup_update_authorized = runtime_metadata
-        .setup_update_authorization
-        .as_ref()
-        .is_some_and(|authorization| {
-            authorization.target_frozen_digest == target_stack.frozen_resources_digest()
-                && current
-                    .target_release
-                    .as_ref()
-                    .and_then(|release| release.release_id.as_deref())
-                    == Some(authorization.release_id.as_str())
-        });
-
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
@@ -305,19 +293,10 @@ pub async fn handle_updating(
         debug!("Secrets already synced, continuing with update");
     }
 
-    // Create executor for resources
-    // By default, only deploy live resources (frozen resources don't change)
-    // If allow_frozen_changes is true, also deploy frozen resources
-    let mut lifecycle_filter_vec = vec![ResourceLifecycle::Live];
-    if config.allow_frozen_changes || setup_update_authorized {
-        info!("Including frozen resources in authorized update");
-        lifecycle_filter_vec.push(ResourceLifecycle::Frozen);
-    }
-
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .running_resource_policy(RunningResourcePolicy::OptIn)
-        .lifecycle_filter(lifecycle_filter_vec)
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {

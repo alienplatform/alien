@@ -61,13 +61,6 @@ pub async fn handle_running(
         )?;
     }
 
-    // TODO: Add mechanism to limit executor to only perform read-only health checks
-    // and prevent any mutable operations on cloud resources during refresh.
-    // This could be done by:
-    // 1. Adding a "read-only" mode to StackExecutor
-    // 2. Having controllers check this mode and skip any mutating operations
-    // 3. Or creating a separate HealthCheckExecutor that only calls read methods
-
     // Create executor with the target stack configuration
     // No lifecycle filter - check all resources during health checks
     let executor = StackExecutor::builder(&target_stack, client_config)
@@ -82,7 +75,7 @@ pub async fn handle_running(
     // The Ready handlers perform heartbeat checks (e.g., verify function still exists, bucket is accessible)
     let step_result =
         executor
-            .step(stack_state)
+            .refresh(stack_state)
             .await
             .context(ErrorData::StackExecutionFailed {
                 message: "Failed to execute health check step".to_string(),
