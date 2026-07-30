@@ -8,23 +8,23 @@ pub mod gcp;
 pub mod kubernetes_cluster;
 
 pub use aws::{
-    AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
+    AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
     AwsEmailDkimTokenImportData, AwsEmailDomainImportData, AwsEmailImportData, AwsKvImportData,
     AwsNetworkImportData, AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData,
     AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
     AwsVaultImportData, AwsWorkerImportData,
 };
 pub use azure::{
-    AzureArtifactRegistryImportData, AzureBuildImportData, AzureComputeClusterImportData,
-    AzureContainerAppsEnvironmentImportData, AzureFlexibleServerPostgresImportData,
-    AzureKvImportData, AzureNetworkImportData, AzureQueueImportData,
-    AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+    AzureAiImportData, AzureArtifactRegistryImportData, AzureBuildImportData,
+    AzureComputeClusterImportData, AzureContainerAppsEnvironmentImportData,
+    AzureFlexibleServerPostgresImportData, AzureKvImportData, AzureNetworkImportData,
+    AzureQueueImportData, AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
     AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };
 pub use gcp::{
-    GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
+    GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
     GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
     GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
     GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
@@ -62,6 +62,7 @@ mod schema_snapshots {
     #[test]
     fn import_data_schema_snapshot() {
         let schemas = IndexMap::from([
+            ("aws_ai", schema::<AwsAiImportData>()),
             (
                 "aws_artifact_registry",
                 schema::<AwsArtifactRegistryImportData>(),
@@ -88,6 +89,7 @@ mod schema_snapshots {
             ),
             ("aws_storage", schema::<AwsStorageImportData>()),
             ("aws_vault", schema::<AwsVaultImportData>()),
+            ("azure_ai", schema::<AzureAiImportData>()),
             (
                 "azure_artifact_registry",
                 schema::<AzureArtifactRegistryImportData>(),
@@ -135,6 +137,7 @@ mod schema_snapshots {
                 schema::<AzureStorageAccountImportData>(),
             ),
             ("azure_vault", schema::<AzureVaultImportData>()),
+            ("gcp_ai", schema::<GcpAiImportData>()),
             (
                 "gcp_artifact_registry",
                 schema::<GcpArtifactRegistryImportData>(),

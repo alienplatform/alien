@@ -12,6 +12,7 @@ pub use alien_core::{
 pub mod application_gateways;
 pub mod authorization;
 pub mod blob_containers;
+pub mod cognitive_services;
 pub mod common;
 pub mod compute;
 pub mod container_apps;

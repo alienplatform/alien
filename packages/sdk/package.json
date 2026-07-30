@@ -15,6 +15,10 @@
     "./native": {
       "types": "./dist/native.d.ts",
       "import": "./dist/native.js"
+    },
+    "./native-bindings": {
+      "types": "./dist/native-bindings.d.ts",
+      "import": "./dist/native-bindings.js"
     }
   },
   "scripts": {
@@ -49,6 +53,7 @@
     "vitest": "^3.1.4"
   },
   "dependencies": {
+    "@alienplatform/ai-gateway": "workspace:^",
     "@alienplatform/bindings": "workspace:^",
     "@alienplatform/core": "workspace:^",
     "@bufbuild/protobuf": "^2.5.3",

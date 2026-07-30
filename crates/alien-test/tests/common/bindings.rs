@@ -15,6 +15,7 @@ const KV_BINDING: &str = "alien-kv";
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
+const AI_BINDING: &str = "test-ai";
 
 /// Standard response shape returned by binding test endpoints.
 #[derive(Debug, Deserialize)]
@@ -926,5 +927,157 @@ pub async fn check_service_account(deployment: &TestDeployment) -> anyhow::Resul
     }
 
     info!("Service account binding check passed");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AI Gateway
+// ---------------------------------------------------------------------------
+
+/// Response from the /ai-test endpoint. `model_count`, `models`, and `results` are
+/// present only on `?invoke=1` responses.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiTestResponse {
+    injected: bool,
+    service: String,
+    locator: Option<String>,
+    model_count: Option<usize>,
+    models: Option<Vec<AiModelInfo>>,
+    results: Option<Vec<AiInvokeResult>>,
+}
+
+/// One entry in the availability-filtered model list, with its picker metadata.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiModelInfo {
+    id: String,
+    provider: String,
+    display_name: String,
+}
+
+/// The outcome of invoking one listed model. `ok` is true on a completion or a 429
+/// (enabled but rate-limited); false means the model was listed but not invocable.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiInvokeResult {
+    #[allow(dead_code)]
+    model: String,
+    ok: bool,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+/// Check the AI binding end to end: GET /ai-test, then GET /ai-test?invoke=1.
+///
+/// The first call proves the runtime injected ALIEN_TEST_AI_BINDING and that it
+/// parsed to a well-formed config. The second exercises the availability contract:
+/// getAvailableModels is filtered to the models this cloud actually has enabled, and
+/// every listed model is invoked through the embedded gateway under the workload's
+/// ambient credentials. A 429 counts as available (enabled but rate-limited), so this
+/// passes on a quota-zeroed account; a 403/404 on a listed model would mean the
+/// filter is broken. Set ALIEN_E2E_AI_SKIP_INVOKE=1 to run provisioning-only.
+pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
+    let url = deployment_url(deployment)?;
+    info!(binding = AI_BINDING, "Checking AI binding injection");
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/ai-test", url))
+        .send()
+        .await
+        .context("AI test request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("AI test returned {}: {}", status, body);
+    }
+
+    let data: AiTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse AI test response")?;
+
+    if !data.injected {
+        bail!(
+            "AI binding not injected: ALIEN_TEST_AI_BINDING was missing or unparseable. \
+             Response: {:?}",
+            data
+        );
+    }
+    let expected_service = match deployment.platform.as_str() {
+        "aws" => "bedrock",
+        "gcp" => "vertex",
+        "azure" => "foundry",
+        other => bail!("AI binding check has no expected service for platform '{other}'"),
+    };
+    if data.service != expected_service {
+        bail!(
+            "AI binding service mismatch: expected '{}', got '{}'.",
+            expected_service,
+            data.service
+        );
+    }
+    let locator = data.locator.as_deref().unwrap_or("");
+    if locator.is_empty() {
+        bail!("AI binding locator is empty; the controller must fill the service scope (region / project / endpoint)");
+    }
+
+    info!(service = %data.service, %locator, "AI binding injection check passed");
+
+    if std::env::var("ALIEN_E2E_AI_SKIP_INVOKE").as_deref() == Ok("1") {
+        info!("Skipping the real model invoke (ALIEN_E2E_AI_SKIP_INVOKE=1)");
+        return Ok(());
+    }
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/ai-test?invoke=1", url))
+        .timeout(std::time::Duration::from_secs(180))
+        .send()
+        .await
+        .context("AI invoke request failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("AI invoke returned {}: {}", status, body);
+    }
+    let data: AiTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse AI invoke response")?;
+    let model_count = data.model_count.unwrap_or(0);
+    if model_count == 0 {
+        bail!("getAvailableModels returned no models; expected at least one enabled model");
+    }
+
+    // Every listed model must carry picker metadata (provider + displayName).
+    let models = data.models.unwrap_or_default();
+    if models.len() != model_count {
+        bail!("modelCount {model_count} disagrees with the models list ({})", models.len());
+    }
+    for m in &models {
+        if m.provider.is_empty() || m.display_name.is_empty() {
+            bail!("listed model '{}' is missing provider/displayName enrichment", m.id);
+        }
+    }
+
+    // Every listed model must be invocable (2xx or 429). The list is
+    // availability-filtered, so a 403/404 on a listed model means the filter let a
+    // disabled model through.
+    let results = data.results.unwrap_or_default();
+    if results.len() != model_count {
+        bail!("modelCount {model_count} disagrees with the results list ({})", results.len());
+    }
+    let failed: Vec<&AiInvokeResult> = results.iter().filter(|r| !r.ok).collect();
+    if !failed.is_empty() {
+        bail!(
+            "some listed models were not invocable (a listed-but-unavailable model means the availability filter is broken): {failed:?}"
+        );
+    }
+
+    info!(
+        model_count,
+        "AI availability check passed: every enabled model listed (with provider/displayName) invoked cleanly (2xx or 429)"
+    );
     Ok(())
 }

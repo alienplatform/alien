@@ -11,8 +11,9 @@ use super::helpers::{
 };
 use alien_cloudformation::{CfRegistry, CloudFormationTarget};
 use alien_core::{
-    ownership_policy_for_resource_type, AwsOpenSearch, Email, EmailInbound, Kv, Platform, Queue,
-    ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
+    ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Kv,
+    PermissionProfile, Platform, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
+    StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use std::collections::HashMap;
 
@@ -42,6 +43,11 @@ fn gated_fixture(resource_type: &str) -> Option<Stack> {
         ),
         "vault" => base().add_enabled_when(
             Vault::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "fixtureEnabled",
+        ),
+        "ai" => base().add_enabled_when(
+            Ai::new("fixture".to_string()).build(),
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
@@ -242,6 +248,59 @@ fn a_gated_vault_renders_conditionally() {
         "an accepted vault must keep its registration entry:\n{text}"
     );
     insta::assert_snapshot!("enabled_gated_vault", yaml);
+}
+
+/// The AI resource's only AWS footprint is its scoped `ai/invoke` grants — a
+/// "*" grant could not be gated — so a declined deploy must take the Bedrock
+/// policy with it.
+#[test]
+fn a_gated_ai_takes_its_invoke_grant_with_it() {
+    let stack = Stack::new("matrix-stack".to_string())
+        .inputs(vec![gate_input(
+            "fixtureEnabled",
+            "Enable the fixture resource",
+            "Whether to create the gated matrix fixture.",
+        )])
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("fixture", ["ai/invoke"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Ai::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "fixtureEnabled",
+        )
+        .build();
+
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "gated ai with scoped grant",
+    );
+
+    let (policy_id, policy) = template
+        .resources
+        .iter()
+        .find(|(_id, resource)| resource.resource_type == "AWS::IAM::Policy")
+        .expect("the scoped ai/invoke grant should render");
+    assert_eq!(
+        policy.condition.as_deref(),
+        Some("InputFixtureEnabledIsTrue"),
+        "{policy_id}: the inference grant must ride the ai gate"
+    );
+    let text = serde_json::to_string(&policy.properties).expect("policy properties serialize");
+    assert!(
+        text.contains("bedrock:InvokeModel"),
+        "the grant should carry the Bedrock invoke actions:\n{text}"
+    );
+    insta::assert_snapshot!("enabled_gated_ai", yaml);
 }
 
 /// The render-side policy check: a gate the policy refuses fails without

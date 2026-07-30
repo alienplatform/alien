@@ -1,4 +1,8 @@
 {
+  "ai": {
+    "frozen": true,
+    "live": true
+  },
   "container": {
     "frozen": false,
     "live": true

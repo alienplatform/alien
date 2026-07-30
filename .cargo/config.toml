@@ -2,5 +2,14 @@
 rustflags = ["--cfg", "tokio_unstable"]
 rustdocflags = ["--cfg", "tokio_unstable"]
 
+[env]
+# The deployment reconcile polls a deep async chain on one stack (executor -> resource
+# controllers -> the cloud SDKs' tower/hyper/rustls futures). In debug builds those frames
+# are un-inlined and the chain needs ~3MB, over tokio's 2MB default thread-stack, so the
+# alien-test cloud e2e (push_/pull_) overflows its test thread. Release binaries are
+# unaffected (inlined frames fit 2MB), so this only sizes dev/test threads. 8MB matches the
+# headroom alien-worker-runtime already gives its runtime for the same reason.
+RUST_MIN_STACK = "8388608"
+
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

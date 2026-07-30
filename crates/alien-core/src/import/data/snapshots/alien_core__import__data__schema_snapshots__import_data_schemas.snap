@@ -3,6 +3,21 @@ source: crates/alien-core/src/import/data/mod.rs
 expression: schemas
 ---
 {
+  "aws_ai": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "AWS AI ImportData.",
+    "properties": {
+      "region": {
+        "description": "AWS region where Bedrock is accessed.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "region"
+    ],
+    "title": "AwsAiImportData",
+    "type": "object"
+  },
   "aws_artifact_registry": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS ArtifactRegistry ImportData.",
@@ -603,6 +618,36 @@ expression: schemas
       "region"
     ],
     "title": "AwsVaultImportData",
+    "type": "object"
+  },
+  "azure_ai": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "Azure AI (AIServices) ImportData.\n\nCarries the account name, endpoint, resource group, and location from an externally-created AIServices account directly into the controller's ready state so that heartbeat ticks and binding-param serialization work without a cloud round-trip.",
+    "properties": {
+      "accountName": {
+        "description": "Name of the Azure CognitiveServices / AIServices account.",
+        "type": "string"
+      },
+      "endpoint": {
+        "description": "The endpoint URL of the AIServices account.",
+        "type": "string"
+      },
+      "location": {
+        "description": "Azure region where the account lives (e.g. \"eastus\").",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Azure resource group containing the account.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "accountName",
+      "endpoint",
+      "location",
+      "resourceGroup"
+    ],
+    "title": "AzureAiImportData",
     "type": "object"
   },
   "azure_artifact_registry": {
@@ -1272,6 +1317,26 @@ expression: schemas
       "vaultUri"
     ],
     "title": "AzureVaultImportData",
+    "type": "object"
+  },
+  "gcp_ai": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "GCP AI (Vertex AI) ImportData.\n\nThe `project_id` and `location` fields identify the Vertex AI endpoint and are carried directly into the controller's ready state so that heartbeat ticks and binding-param serialization work without a cloud round-trip.",
+    "properties": {
+      "location": {
+        "description": "GCP region (location) of the Vertex AI endpoint.",
+        "type": "string"
+      },
+      "projectId": {
+        "description": "GCP project ID that owns the Vertex AI endpoint.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "location",
+      "projectId"
+    ],
+    "title": "GcpAiImportData",
     "type": "object"
   },
   "gcp_artifact_registry": {

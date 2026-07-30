@@ -5,9 +5,9 @@
 
 use crate::registry::TfRegistry;
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, KubernetesCluster, Kv, Network, Platform, Queue,
-    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
+    Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
+    AzureServiceBusNamespace, AzureStorageAccount, Build, KubernetesCluster, Kv, Network, Platform,
+    Queue, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -19,6 +19,7 @@ pub(crate) fn register_all(registry: &mut TfRegistry) {
 fn register_aws(registry: &mut TfRegistry) {
     use crate::emitters::aws;
     let p = Platform::Aws;
+    registry.register(Ai::RESOURCE_TYPE, p, aws::AwsAiEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, aws::AwsStorageEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, aws::AwsKvEmitter);
     registry.register(Queue::RESOURCE_TYPE, p, aws::AwsQueueEmitter);
@@ -51,6 +52,7 @@ fn register_aws(registry: &mut TfRegistry) {
 fn register_gcp(registry: &mut TfRegistry) {
     use crate::emitters::gcp;
     let p = Platform::Gcp;
+    registry.register(Ai::RESOURCE_TYPE, p, gcp::GcpAiEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, gcp::GcpStorageEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, gcp::GcpKvEmitter);
     registry.register(Queue::RESOURCE_TYPE, p, gcp::GcpQueueEmitter);
@@ -90,6 +92,7 @@ fn register_azure(registry: &mut TfRegistry) {
     let p = Platform::Azure;
 
     // Main resources — one emitter per Alien resource type.
+    registry.register(Ai::RESOURCE_TYPE, p, azure::AzureAiEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, azure::AzureStorageEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, azure::AzureKvEmitter);
     registry.register(Queue::RESOURCE_TYPE, p, azure::AzureQueueEmitter);

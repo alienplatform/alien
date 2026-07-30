@@ -30,6 +30,7 @@ export const postgres = factories.postgres
 export {
   AlienError,
   BindingNotConfiguredError,
+  BindingNotFoundError,
   defineError,
   InvalidPostgresTlsConfigError,
   UnknownPostgresSslModeError,

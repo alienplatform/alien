@@ -234,6 +234,7 @@ mod tests {
         ("email", false),
         ("kv", false),
         ("postgres", false),
+        ("ai", false),
         ("network", false),
         ("service-account", false),
         ("artifact-registry", false),

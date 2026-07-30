@@ -491,38 +491,38 @@ impl EnvironmentVariableBuilder {
                     // Check if there's an external binding for this resource
                     match ctx.deployment_config.external_bindings.get(binding_name) {
                         Some(external) => {
-                            let value = match external {
-                                alien_core::ExternalBinding::Storage(b) => serde_json::to_value(b),
-                                alien_core::ExternalBinding::Queue(b) => serde_json::to_value(b),
-                                alien_core::ExternalBinding::Kv(b) => serde_json::to_value(b),
-                                alien_core::ExternalBinding::ArtifactRegistry(b) => {
-                                    serde_json::to_value(b)
-                                }
-                                alien_core::ExternalBinding::Vault(b) => serde_json::to_value(b),
-                                alien_core::ExternalBinding::ContainerAppsEnvironment(b) => {
-                                    serde_json::to_value(b)
-                                }
-                                alien_core::ExternalBinding::Postgres(b) => {
-                                    // External (Remote Access) Postgres on the local platform: the
-                                    // binding inlines a raw password with no local manager to
-                                    // re-resolve it, so it would persist into worker metadata.
-                                    if ctx.platform == alien_core::Platform::Local {
-                                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                                            message: "external (Remote Access) Postgres is not supported on the local platform".to_string(),
-                                            resource_id: Some(binding_name.to_string()),
-                                        }));
+                            // External Postgres and AI on the local platform: the binding
+                            // inlines a raw secret, and the local runtime-only channel would
+                            // either persist it into worker metadata (Postgres) or silently
+                            // replace it with the dev key from the process environment (AI).
+                            if ctx.platform == alien_core::Platform::Local
+                                && matches!(
+                                    external,
+                                    alien_core::ExternalBinding::Postgres(_)
+                                        | alien_core::ExternalBinding::Ai(_)
+                                )
+                            {
+                                let kind = match external {
+                                    alien_core::ExternalBinding::Postgres(_) => {
+                                        "external (Remote Access) Postgres"
                                     }
-                                    serde_json::to_value(b)
-                                }
+                                    _ => "an external (BYO-key) AI binding",
+                                };
+                                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                                    message: format!(
+                                        "{kind} is not supported on the local platform"
+                                    ),
+                                    resource_id: Some(binding_name.to_string()),
+                                }));
                             }
-                            .into_alien_error()
-                            .context(
-                                ErrorData::ResourceStateSerializationFailed {
+                            let value = external
+                                .to_env_binding_value()
+                                .into_alien_error()
+                                .context(ErrorData::ResourceStateSerializationFailed {
                                     resource_id: binding_name.to_string(),
                                     message: "Failed to serialize external binding parameters"
                                         .to_string(),
-                                },
-                            )?;
+                                })?;
                             Some(value)
                         }
                         None => None,
@@ -657,6 +657,46 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].0, "cache");
         assert_eq!(bindings[0].1, binding_json);
+    }
+
+    /// Real-path assertion for the AI external-binding env-var injection: drives the
+    /// PRODUCTION serialization (`ExternalBinding::to_env_binding_value`, the same
+    /// call `add_linked_resources` makes) through `serialize_binding_as_env_var` and
+    /// asserts the `ALIEN_<NAME>_BINDING` value is the exact service-tagged JSON the
+    /// SDK's `ai(name)` parser consumes. A drift here (e.g. dropping the
+    /// `AiBinding::External` wrap) silently routes external OpenAI/Anthropic to the
+    /// wrong upstream.
+    #[test]
+    fn test_ai_external_binding_injects_service_tagged_env_var() {
+        use alien_core::bindings::{
+            binding_env_var_name, serialize_binding_as_env_var, ExternalAiBinding,
+        };
+        use alien_core::ExternalBinding;
+
+        let external = ExternalBinding::Ai(ExternalAiBinding {
+            provider: "openai".to_string(),
+            api_key: "sk-test".into(),
+        });
+
+        let value = external
+            .to_env_binding_value()
+            .expect("external AI binding should serialize");
+
+        let env = serialize_binding_as_env_var("llm", &value).unwrap();
+        let key = binding_env_var_name("llm");
+        assert_eq!(key, "ALIEN_LLM_BINDING");
+
+        let injected: serde_json::Value =
+            serde_json::from_str(env.get(&key).expect("binding env var present")).unwrap();
+        assert_eq!(
+            injected,
+            json!({
+                "service": "external",
+                "provider": "openai",
+                "apiKey": "sk-test",
+            }),
+            "injected AI binding env var must match the SDK's expected service-tagged shape"
+        );
     }
 
     #[test]

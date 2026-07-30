@@ -1,4 +1,4 @@
-//! AWS data-layer scenarios — storage / kv / queue / vault.
+//! AWS data-layer scenarios — storage / kv / queue / vault / ai.
 //!
 //! Each scenario is one multi-file snapshot so reviewers see the
 //! complete module a developer would `terraform apply`. Every scenario
@@ -7,7 +7,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
+    Ai, Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
     StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
@@ -147,4 +147,59 @@ fn aws_data_layer_renders_complete_stack() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_data_layer_full", &module);
     assert_terraform_valid(&module, "aws_data_layer_full");
+}
+
+#[test]
+fn aws_ai_emits_only_import_data() {
+    // AWS Bedrock has no per-stack cloud resource to provision. The emitter
+    // returns an empty fragment so only the import metadata JSON is produced.
+    let stack = Stack::new("acme-ai".to_string())
+        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    snapshot_module("aws_ai_minimal", &module);
+    assert_terraform_valid(&module, "aws_ai_minimal");
+
+    // Import metadata must carry the region so the controller can reconstruct
+    // the Bedrock endpoint. The import ref appears in locals.tf.
+    let locals = module
+        .get("locals.tf")
+        .expect("locals.tf should render");
+    assert!(locals.contains("region"), "import ref must carry region");
+}
+
+#[test]
+fn aws_ai_invoke_permissions_attach_to_service_account_role() {
+    // When a permission profile references ai/invoke, the AI emitter attaches the
+    // bedrock IAM policy to the workload (service-account) role.
+    let stack = Stack::new("acme-ai".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("llm", ["ai/invoke"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(
+        rendered.contains("bedrock:InvokeModel"),
+        "bedrock InvokeModel action must appear"
+    );
+    assert!(
+        rendered.contains("bedrock:InvokeModelWithResponseStream"),
+        "bedrock InvokeModelWithResponseStream action must appear"
+    );
+    assert!(
+        rendered.contains("arn:aws:bedrock:*::foundation-model/*"),
+        "bedrock foundation-model ARN must appear"
+    );
+    assert_terraform_valid(&module, "aws_ai_invoke_permissions");
 }

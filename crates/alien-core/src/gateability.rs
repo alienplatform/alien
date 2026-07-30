@@ -141,6 +141,7 @@ pub const MANIFEST_TYPES: &[&str] = &[
     "queue",
     "vault",
     "postgres",
+    "ai",
     "worker",
     "daemon",
     "container",
@@ -154,7 +155,7 @@ mod tests {
 
     #[test]
     fn stores_are_gateable_in_both_lifecycles() {
-        for store in ["kv", "storage", "queue", "vault"] {
+        for store in ["kv", "storage", "queue", "vault", "ai"] {
             assert_eq!(gate_refusal(store, "analytics"), None, "{store}");
             let gateability = type_gateability(store);
             assert!(gateability.frozen && gateability.live, "{store}");

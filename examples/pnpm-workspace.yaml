@@ -1,4 +1,5 @@
 packages:
+  - ai-quickstart-ts
   - basic-worker-ts
   - basic-worker-rs
   - remote-worker-ts
