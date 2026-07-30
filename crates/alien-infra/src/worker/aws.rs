@@ -11,6 +11,12 @@ use crate::error::{ErrorData, Result};
 use crate::worker::readiness_probe::{
     run_readiness_probe_with_dns_override, ReadinessProbeDnsOverride, READINESS_PROBE_MAX_ATTEMPTS,
 };
+use alien_aws_clients::apigateway::{
+    CreateBasePathMappingRequest, CreateDeploymentRequest,
+    CreateDomainNameRequest as CreateRestDomainNameRequest, CreateResourceRequest,
+    CreateRestApiRequest, EndpointConfiguration as RestEndpointConfiguration,
+    PutIntegrationRequest, PutMethodRequest,
+};
 use alien_aws_clients::apigatewayv2::{
     CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
@@ -182,6 +188,17 @@ impl AwsWorkerController {
         }
     }
 
+    /// Streaming forks to REST V1 — the only API Gateway flavor that both
+    /// streams and carries a custom domain — while buffered workers stay on
+    /// the V2 HTTP API.
+    fn gateway_entry_state(worker: &Worker) -> AwsWorkerState {
+        if worker_wants_streaming(worker) {
+            AwsWorkerState::CreatingRestApi
+        } else {
+            AwsWorkerState::CreatingApiGateway
+        }
+    }
+
     fn unexpected_update_wrapper_state(
         resource_id: &str,
         handler: &str,
@@ -218,6 +235,22 @@ pub struct AwsWorkerController {
     pub(crate) stage_name: Option<String>,
     /// API Gateway API mapping ID
     pub(crate) api_mapping_id: Option<String>,
+    /// API Gateway REST (V1) API ID, set for streaming workers
+    #[serde(default)]
+    pub(crate) rest_api_id: Option<String>,
+    /// REST API root resource ID
+    #[serde(default)]
+    pub(crate) rest_root_resource_id: Option<String>,
+    /// REST API `{proxy+}` resource ID
+    #[serde(default)]
+    pub(crate) rest_proxy_resource_id: Option<String>,
+    /// REST API deployment ID
+    #[serde(default)]
+    pub(crate) rest_deployment_id: Option<String>,
+    /// REST API base path mapping key, stored verbatim from the API (the empty
+    /// base path is the literal `(none)`, which deletion must address by key)
+    #[serde(default)]
+    pub(crate) rest_base_path: Option<String>,
     /// API Gateway domain name
     pub(crate) domain_name: Option<String>,
     /// Endpoint metadata for DNS controller
@@ -303,6 +336,19 @@ fn emit_aws_lambda_worker_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+/// Whether this worker should be exposed via a streaming REST (V1) API
+/// (`responseTransferMode: STREAM`) instead of the buffered V2 HTTP API.
+/// Signalled by `WORKER_RESPONSE_STREAMING=true` in the worker's environment.
+/// (A typed builder field is the cleaner long-term surface; an env flag keeps
+/// this change contained to the AWS controller.)
+fn worker_wants_streaming(worker: &Worker) -> bool {
+    worker
+        .environment
+        .get("WORKER_RESPONSE_STREAMING")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 #[controller]
@@ -507,7 +553,7 @@ impl AwsWorkerController {
                     WaitingForCertificate
                 } else {
                     // Standalone mode: skip certificate/custom domain, use API Gateway default endpoint
-                    CreatingApiGateway
+                    Self::gateway_entry_state(&worker_config)
                 };
                 Ok(HandlerAction::Continue {
                     state: next_state,
@@ -552,13 +598,13 @@ impl AwsWorkerController {
         let status = metadata.map(|m| &m.certificate_status);
         if !self.ensure_domain_info(ctx, &worker_config.id)? {
             return Ok(HandlerAction::Continue {
-                state: CreatingApiGateway,
+                state: Self::gateway_entry_state(&worker_config),
                 suggested_delay: Some(Duration::from_secs(1)),
             });
         }
         if self.uses_custom_domain && self.certificate_arn.is_some() {
             return Ok(HandlerAction::Continue {
-                state: CreatingApiGateway,
+                state: Self::gateway_entry_state(&worker_config),
                 suggested_delay: Some(Duration::from_secs(1)),
             });
         }
@@ -647,7 +693,7 @@ impl AwsWorkerController {
         self.certificate_issued_at = resource.issued_at.clone();
 
         Ok(HandlerAction::Continue {
-            state: CreatingApiGateway,
+            state: Self::gateway_entry_state(&worker_config),
             suggested_delay: None,
         })
     }
@@ -661,6 +707,17 @@ impl AwsWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        // Single chokepoint fork: streaming workers are served by REST V1
+        // (see gateway_entry_state), so every path that lands here reroutes.
+        if worker_wants_streaming(&worker_config) {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRestApi,
+                suggested_delay: None,
+            });
+        }
+
         if self.api_id.is_some() {
             return Ok(HandlerAction::Continue {
                 state: CreatingApiIntegration,
@@ -673,7 +730,6 @@ impl AwsWorkerController {
             .service_provider
             .get_aws_apigatewayv2_client(aws_cfg)
             .await?;
-        let worker_config = ctx.desired_resource_config::<Worker>()?;
         let api_tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id);
 
         let api = client
@@ -1060,6 +1116,443 @@ impl AwsWorkerController {
             })?;
 
         self.api_mapping_id = mapping.api_mapping_id.clone();
+
+        Ok(HandlerAction::Continue {
+            state: AddingApiGatewayPermission,
+            suggested_delay: Some(Duration::from_secs(1)),
+        })
+    }
+
+    #[handler(
+        state = CreatingRestApi,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_rest_api(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.rest_api_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRestResource,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigateway_client(aws_cfg)
+            .await?;
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let api_tags = standard_resource_tags(ctx.resource_prefix, &worker_config.id);
+
+        let api = client
+            .create_rest_api(
+                CreateRestApiRequest::builder()
+                    .name(format!("{}-{}-api", ctx.resource_prefix, worker_config.id))
+                    .endpoint_configuration(RestEndpointConfiguration {
+                        types: vec!["REGIONAL".to_string()],
+                    })
+                    .tags(api_tags)
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create API Gateway REST API".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        let rest_api_id = api.id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "REST API ID not returned".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let root_resource_id = api.root_resource_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "REST API root resource ID not returned".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        self.rest_api_id = Some(rest_api_id);
+        self.rest_root_resource_id = Some(root_resource_id);
+
+        Ok(HandlerAction::Continue {
+            state: CreatingRestResource,
+            suggested_delay: Some(Duration::from_secs(1)),
+        })
+    }
+
+    #[handler(
+        state = CreatingRestResource,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_rest_resource(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.rest_proxy_resource_id.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRestMethods,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigateway_client(aws_cfg)
+            .await?;
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        let rest_api_id = self.rest_api_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API ID missing for proxy resource".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let root_resource_id = self.rest_root_resource_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API root resource ID missing for proxy resource".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let resource = client
+            .create_resource(
+                &rest_api_id,
+                &root_resource_id,
+                CreateResourceRequest {
+                    path_part: "{proxy+}".to_string(),
+                },
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create REST API proxy resource".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        let proxy_resource_id = resource.id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "REST API proxy resource ID not returned".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        self.rest_proxy_resource_id = Some(proxy_resource_id);
+
+        Ok(HandlerAction::Continue {
+            state: CreatingRestMethods,
+            suggested_delay: Some(Duration::from_secs(1)),
+        })
+    }
+
+    #[handler(
+        state = CreatingRestMethods,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_rest_methods(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigateway_client(aws_cfg)
+            .await?;
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        let rest_api_id = self.rest_api_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API ID missing for methods".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let root_resource_id = self.rest_root_resource_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API root resource ID missing for methods".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let proxy_resource_id = self.rest_proxy_resource_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API proxy resource ID missing for methods".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+        let function_arn = self.arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Worker ARN missing for REST integration".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let integration_uri = format!(
+            "arn:aws:apigateway:{}:lambda:path/2021-11-15/functions/{}/response-streaming-invocations",
+            aws_cfg.region, function_arn
+        );
+
+        // Both the root resource and `{proxy+}` need the ANY method so the REST
+        // API catches every path, matching the V2 `$default` catch-all route.
+        // put_integration overwrites idempotently on retry, but put_method
+        // returns ConflictException once the method exists (which the client
+        // maps to a *retryable* error) — so a retry after a mid-loop throttle
+        // would loop to CreateFailed. Tolerate that conflict as success.
+        for resource_id in [&root_resource_id, &proxy_resource_id] {
+            if let Err(e) = client
+                .put_method(
+                    &rest_api_id,
+                    resource_id,
+                    "ANY",
+                    PutMethodRequest {
+                        authorization_type: "NONE".to_string(),
+                    },
+                )
+                .await
+            {
+                if !is_remote_resource_conflict(&e) {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: "Failed to put REST API method".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    }));
+                }
+            }
+
+            client
+                .put_integration(
+                    &rest_api_id,
+                    resource_id,
+                    "ANY",
+                    PutIntegrationRequest::builder()
+                        .integration_type("AWS_PROXY".to_string())
+                        .integration_http_method("POST".to_string())
+                        .uri(integration_uri.clone())
+                        .response_transfer_mode("STREAM".to_string())
+                        .timeout_in_millis(900_000)
+                        .build(),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to put REST API streaming integration".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+        }
+
+        Ok(HandlerAction::Continue {
+            state: CreatingRestDeployment,
+            suggested_delay: Some(Duration::from_secs(1)),
+        })
+    }
+
+    #[handler(
+        state = CreatingRestDeployment,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_rest_deployment(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_cfg = ctx.get_aws_config()?;
+
+        let rest_api_id = self.rest_api_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API ID missing for deployment".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        if self.rest_deployment_id.is_none() {
+            let client = ctx
+                .service_provider
+                .get_aws_apigateway_client(aws_cfg)
+                .await?;
+
+            let deployment = client
+                .create_deployment(
+                    &rest_api_id,
+                    CreateDeploymentRequest {
+                        stage_name: "prod".to_string(),
+                    },
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to create REST API deployment".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+
+            let deployment_id = deployment.id.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "REST API deployment ID not returned".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })
+            })?;
+
+            self.rest_deployment_id = Some(deployment_id);
+            self.stage_name = Some("prod".to_string());
+        }
+
+        if self.fqdn.is_some() {
+            Ok(HandlerAction::Continue {
+                state: CreatingRestDomain,
+                suggested_delay: Some(Duration::from_secs(1)),
+            })
+        } else {
+            // Standalone mode: the REST default endpoint serves under /{stage},
+            // unlike the V2 `$default` stage which serves at the domain root.
+            self.url = Some(format!(
+                "https://{}.execute-api.{}.amazonaws.com/prod",
+                rest_api_id, aws_cfg.region
+            ));
+            Ok(HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay: Some(Duration::from_secs(1)),
+            })
+        }
+    }
+
+    #[handler(
+        state = CreatingRestDomain,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_rest_domain(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.load_balancer.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: CreatingRestBasePathMapping,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigateway_client(aws_cfg)
+            .await?;
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        let fqdn = self.fqdn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "FQDN missing for REST API domain".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let cert_arn = self.certificate_arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Certificate ARN missing for REST API domain".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let domain = client
+            .create_domain_name(
+                CreateRestDomainNameRequest::builder()
+                    .domain_name(fqdn.clone())
+                    .regional_certificate_arn(cert_arn)
+                    .endpoint_configuration(RestEndpointConfiguration {
+                        types: vec!["REGIONAL".to_string()],
+                    })
+                    .security_policy("TLS_1_2".to_string())
+                    .tags(standard_resource_tags(
+                        ctx.resource_prefix,
+                        &worker_config.id,
+                    ))
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create REST API domain name".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        let endpoint = domain.regional_domain_name.clone().and_then(|dns_name| {
+            let hosted_zone_id = domain.regional_hosted_zone_id.clone()?;
+            Some(LoadBalancerEndpoint {
+                dns_name,
+                hosted_zone_id,
+            })
+        });
+
+        self.domain_name = Some(fqdn);
+        self.load_balancer = Some(LoadBalancerState { endpoint });
+
+        Ok(HandlerAction::Continue {
+            state: CreatingRestBasePathMapping,
+            suggested_delay: Some(Duration::from_secs(1)),
+        })
+    }
+
+    #[handler(
+        state = CreatingRestBasePathMapping,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_rest_base_path_mapping(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.rest_base_path.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay: Some(Duration::from_secs(1)),
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx
+            .service_provider
+            .get_aws_apigateway_client(aws_cfg)
+            .await?;
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+
+        let rest_api_id = self.rest_api_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "REST API ID missing for base path mapping".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let domain_name = self.domain_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Domain name missing for base path mapping".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let stage = self.stage_name.clone().unwrap_or_else(|| "prod".to_string());
+
+        let mapping = client
+            .create_base_path_mapping(
+                &domain_name,
+                CreateBasePathMappingRequest {
+                    rest_api_id,
+                    stage,
+                    base_path: None,
+                },
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to create REST API base path mapping".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        // The API reports the empty base path as the literal `(none)`, which is
+        // also the key deletion must use.
+        self.rest_base_path = Some(
+            mapping
+                .base_path
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string()),
+        );
 
         Ok(HandlerAction::Continue {
             state: AddingApiGatewayPermission,
@@ -2121,12 +2614,15 @@ impl AwsWorkerController {
             });
         }
 
-        if previous_config.public_endpoints.is_empty() && self.api_id.is_none() {
+        if previous_config.public_endpoints.is_empty()
+            && self.api_id.is_none()
+            && self.rest_api_id.is_none()
+        {
             self.url = None;
         }
 
         let has_domain_info = self.ensure_domain_info(ctx, &current_config.id)?;
-        if self.api_id.is_some() {
+        if self.api_id.is_some() || self.rest_api_id.is_some() {
             return Ok(HandlerAction::Continue {
                 state: UpdateRunningReadinessProbe,
                 suggested_delay: None,
@@ -2135,6 +2631,8 @@ impl AwsWorkerController {
 
         let next_state = if has_domain_info {
             UpdateWaitingForCertificate
+        } else if worker_wants_streaming(&current_config) {
+            UpdateCreatingRestApi
         } else {
             UpdateCreatingApiGateway
         };
@@ -2170,6 +2668,13 @@ impl AwsWorkerController {
                 state: UpdateCreatingApiGateway,
                 suggested_delay,
             }),
+            HandlerAction::Continue {
+                state: CreatingRestApi,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestApi,
+                suggested_delay,
+            }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
                 &worker_config.id,
                 "waiting_for_certificate",
@@ -2201,6 +2706,13 @@ impl AwsWorkerController {
                 suggested_delay,
             } => Ok(HandlerAction::Continue {
                 state: UpdateCreatingApiGateway,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: CreatingRestApi,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestApi,
                 suggested_delay,
             }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
@@ -2411,6 +2923,211 @@ impl AwsWorkerController {
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
                 &worker_config.id,
                 "creating_api_mapping",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingRestApi,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_rest_api(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_rest_api(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingRestResource,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestResource,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_rest_api",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingRestResource,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_rest_resource(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_rest_resource(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingRestMethods,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestMethods,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_rest_resource",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingRestMethods,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_rest_methods(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_rest_methods(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingRestDeployment,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestDeployment,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_rest_methods",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingRestDeployment,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_rest_deployment(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_rest_deployment(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingRestDomain,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestDomain,
+                suggested_delay,
+            }),
+            HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateAddingApiGatewayPermission,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_rest_deployment",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingRestDomain,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_rest_domain(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_rest_domain(ctx).await? {
+            HandlerAction::Continue {
+                state: CreatingRestBasePathMapping,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestBasePathMapping,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_rest_domain",
+                state,
+            )),
+            HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            } => Ok(HandlerAction::Stay {
+                max_times,
+                suggested_delay,
+            }),
+        }
+    }
+
+    #[handler(
+        state = UpdateCreatingRestBasePathMapping,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn update_creating_rest_base_path_mapping(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        match self.creating_rest_base_path_mapping(ctx).await? {
+            HandlerAction::Continue {
+                state: AddingApiGatewayPermission,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateAddingApiGatewayPermission,
+                suggested_delay,
+            }),
+            HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
+                &worker_config.id,
+                "creating_rest_base_path_mapping",
                 state,
             )),
             HandlerAction::Stay {
@@ -3033,6 +3750,39 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         // Ordering matters: delete API mapping before domain name, domain name before API.
+        // A worker is V1 xor V2, so at most one branch of each pair runs. The REST V1
+        // order is the same — base path mapping, then domain, then the REST API, whose
+        // deletion cascades to resources, methods, deployments, and stages.
+        if let (Some(domain_name), Some(base_path)) =
+            (self.domain_name.as_ref(), self.rest_base_path.as_ref())
+        {
+            let client = ctx
+                .service_provider
+                .get_aws_apigateway_client(aws_cfg)
+                .await?;
+            match client.delete_base_path_mapping(domain_name, base_path).await {
+                Ok(()) => info!(worker=%worker_config.id, "REST base path mapping deleted"),
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(
+                            CloudClientErrorData::RemoteResourceNotFound { .. }
+                                | CloudClientErrorData::RemoteAccessDenied { .. }
+                        )
+                    ) =>
+                {
+                    info!(worker=%worker_config.id, "REST base path mapping already gone or inaccessible");
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: "Failed to delete REST base path mapping".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    }));
+                }
+            }
+        }
+        self.rest_base_path = None;
+
         if let (Some(domain_name), Some(api_mapping_id)) =
             (self.domain_name.as_ref(), self.api_mapping_id.as_ref())
         {
@@ -3061,27 +3811,56 @@ impl AwsWorkerController {
         self.api_mapping_id = None;
 
         if let Some(domain_name) = self.domain_name.as_ref() {
-            let client = ctx
-                .service_provider
-                .get_aws_apigatewayv2_client(aws_cfg)
-                .await?;
-            match client.delete_domain_name(domain_name).await {
-                Ok(()) => {
-                    info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
+            if self.rest_api_id.is_some() {
+                let client = ctx
+                    .service_provider
+                    .get_aws_apigateway_client(aws_cfg)
+                    .await?;
+                match client.delete_domain_name(domain_name).await {
+                    Ok(()) => {
+                        info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
+                    }
+                    Err(e)
+                        if matches!(
+                            e.error,
+                            Some(
+                                CloudClientErrorData::RemoteResourceNotFound { .. }
+                                    | CloudClientErrorData::RemoteAccessDenied { .. }
+                            )
+                        ) =>
+                    {
+                        info!(worker=%worker_config.id, "Custom domain already gone or inaccessible");
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: "Failed to delete custom domain".to_string(),
+                            resource_id: Some(worker_config.id.clone()),
+                        }));
+                    }
                 }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(worker=%worker_config.id, "Custom domain already gone");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: "Failed to delete custom domain".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    }));
+            } else {
+                let client = ctx
+                    .service_provider
+                    .get_aws_apigatewayv2_client(aws_cfg)
+                    .await?;
+                match client.delete_domain_name(domain_name).await {
+                    Ok(()) => {
+                        info!(worker=%worker_config.id, domain=%domain_name, "Custom domain deleted")
+                    }
+                    Err(e)
+                        if matches!(
+                            e.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        info!(worker=%worker_config.id, "Custom domain already gone");
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: "Failed to delete custom domain".to_string(),
+                            resource_id: Some(worker_config.id.clone()),
+                        }));
+                    }
                 }
             }
         }
@@ -3116,6 +3895,39 @@ impl AwsWorkerController {
         self.api_id = None;
         self.integration_id = None;
         self.route_id = None;
+
+        if let Some(rest_api_id) = self.rest_api_id.as_ref() {
+            let client = ctx
+                .service_provider
+                .get_aws_apigateway_client(aws_cfg)
+                .await?;
+            match client.delete_rest_api(rest_api_id).await {
+                Ok(()) => {
+                    info!(worker=%worker_config.id, rest_api_id=%rest_api_id, "REST API deleted")
+                }
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(
+                            CloudClientErrorData::RemoteResourceNotFound { .. }
+                                | CloudClientErrorData::RemoteAccessDenied { .. }
+                        )
+                    ) =>
+                {
+                    info!(worker=%worker_config.id, "REST API already gone or inaccessible");
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: "Failed to delete REST API".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    }));
+                }
+            }
+        }
+        self.rest_api_id = None;
+        self.rest_root_resource_id = None;
+        self.rest_proxy_resource_id = None;
+        self.rest_deployment_id = None;
         self.stage_name = None;
 
         Ok(HandlerAction::Continue {
@@ -3982,6 +4794,11 @@ impl AwsWorkerController {
             route_id: None,
             stage_name: None,
             api_mapping_id: None,
+            rest_api_id: None,
+            rest_root_resource_id: None,
+            rest_proxy_resource_id: None,
+            rest_deployment_id: None,
+            rest_base_path: None,
             domain_name: None,
             load_balancer: None,
             uses_custom_domain: false,

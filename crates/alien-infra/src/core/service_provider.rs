@@ -1,6 +1,7 @@
 use crate::error::Result;
 use alien_aws_clients::{
     acm::{AcmApi, AcmClient},
+    apigateway::{ApiGatewayApi, ApiGatewayClient},
     apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
     autoscaling::{AutoScalingApi, AutoScalingClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
@@ -121,6 +122,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_aws_elbv2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Elbv2Api>>;
     async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>>;
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>>;
+    async fn get_aws_apigateway_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ApiGatewayApi>>;
     async fn get_aws_apigatewayv2_client(
         &self,
         config: &AwsClientConfig,
@@ -645,6 +650,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(AcmClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_apigateway_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ApiGatewayApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ApiGatewayClient::new(
             reqwest::Client::new(),
             credentials,
         )))

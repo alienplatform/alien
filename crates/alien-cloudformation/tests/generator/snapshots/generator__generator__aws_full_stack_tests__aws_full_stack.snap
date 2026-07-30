@@ -817,6 +817,7 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
           Sid: CreateHttpApiEndpoints
         - Action:
@@ -831,6 +832,8 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: CreateHttpApiRoutes
         - Action:
           - apigateway:PUT
@@ -846,6 +849,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
           Sid: TagHttpApiEndpoints
       Roles:
@@ -875,6 +879,9 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: ManageHttpApiEndpoints
         - Action:
           - events:PutRule
