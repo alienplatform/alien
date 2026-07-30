@@ -238,6 +238,12 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         message: "Failed to construct deployment config".to_string(),
     })?;
 
+    // Settling an adopted resource's deletion needs its binding, and the manager keeps
+    // bindings in stack settings rather than on the deployment config the executor reads.
+    if let Some(external_bindings) = stack_settings.external_bindings.clone() {
+        config.external_bindings = external_bindings;
+    }
+
     // Acquire → step loop → reconcile → release
     let session = format!("cli-destroy-{}", Uuid::new_v4());
     acquire_setup_delete_deployment(

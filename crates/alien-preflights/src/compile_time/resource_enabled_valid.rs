@@ -149,60 +149,138 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
             }
         }
 
-        errors.extend(dependents_of_gated_resources(stack));
+        let (dependent_errors, warnings) = dependents_of_gated_resources(stack);
+        errors.extend(dependent_errors);
 
-        if errors.is_empty() {
-            Ok(CheckResult::success())
-        } else {
-            Ok(CheckResult::failed(errors))
+        // Severity is per finding: a scrubbable link only warns, but every other rule here
+        // still fails, including the `"*"`-grant refusal above, which is a security rule.
+        match (errors.is_empty(), warnings.is_empty()) {
+            (true, true) => Ok(CheckResult::success()),
+            (true, false) => Ok(CheckResult::with_warnings(warnings)),
+            (false, _) => Ok(CheckResult::failed_with_warnings(errors, warnings)),
         }
     }
 }
 
-/// Rejects resources that would outlive a gated resource they read outputs from.
+/// Sorts dependents of gated resources into refusals and warnings.
 ///
-/// `StackState::get_resource_outputs` errors when a resource is absent, so an
-/// ungated dependent of a gated resource fails at deploy time in the customer's
-/// account. Catching it here fails when the manifest is written instead.
-fn dependents_of_gated_resources(stack: &Stack) -> Vec<String> {
+/// A pure link is dropped with the declined resource, so its owner keeps its own lifecycle
+/// without that binding. Every other edge refuses, because nothing removes it.
+fn dependents_of_gated_resources(stack: &Stack) -> (Vec<String>, Vec<String>) {
     let gates: HashMap<&str, &str> = stack
         .resources()
         .filter_map(|(id, entry)| Some((id.as_str(), entry.enabled_when.as_deref()?)))
         .collect();
 
+    // A gate resolves either when setup renders the template or when the runtime strip runs,
+    // decided by where the gated resource is emitted.
+    let resolves_at_runtime: HashMap<&str, bool> = stack
+        .resources()
+        .map(|(id, entry)| {
+            let emitted_in_setup = alien_core::ownership_policy_for_resource_type(
+                entry.config.resource_type().as_ref(),
+            )
+            .should_emit_in_setup(entry.lifecycle);
+            (id.as_str(), !emitted_in_setup)
+        })
+        .collect();
+
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
     for (dependent_id, entry) in stack.resources() {
         // `ResourceEntry` documents the total as `config.get_dependencies()` plus its own
-        // list, and each compute type folds its links and triggers into the former. That
-        // canonical aggregation is used here rather than the per-type downcast in
-        // `resource_link_permissions`, which only keeps the permission-bearing link types.
+        // list, and each compute type folds its links and triggers into the former.
         let config_dependencies = entry.config.get_dependencies();
+        let links = alien_core::links_of(&entry.config);
+        let mut seen: Vec<&str> = Vec::new();
 
         for dependency in config_dependencies.iter().chain(&entry.dependencies) {
-            let Some(dependency_gate) = gates.get(dependency.id()) else {
+            let dependency_id = dependency.id();
+            let Some(dependency_gate) = gates.get(dependency_id) else {
                 continue;
             };
-            let dependency_id = dependency.id();
+            // One finding per target id; the counts below re-read the full chain, so a
+            // duplicate edge still registers there.
+            if seen.contains(&dependency_id) {
+                continue;
+            }
+            seen.push(dependency_id);
+
+            // Sharing the gate is already correct: the two rise and fall together.
+            if entry.enabled_when.as_deref() == Some(*dependency_gate) {
+                continue;
+            }
+
+            // Counting rather than testing membership: a resource that is both linked and
+            // triggered appears twice, and the trigger is the half the scrub cannot remove.
+            let link_count = links.iter().filter(|l| l.id() == dependency_id).count();
+            let total = config_dependencies
+                .iter()
+                .chain(&entry.dependencies)
+                .filter(|d| d.id() == dependency_id)
+                .count();
+
+            // The runtime cannot rewrite a setup-created resource, so a reference it holds to
+            // a runtime-resolved gate can be neither dropped nor restored. The `expect` is
+            // unreachable: both maps come from the same pass, and `gates` already resolved this id.
+            let owner_baked_in_setup = alien_core::ownership_policy_for_resource_type(
+                entry.config.resource_type().as_ref(),
+            )
+            .should_emit_in_setup(entry.lifecycle);
+            let frozen_owner_of_runtime_gate = owner_baked_in_setup
+                && *resolves_at_runtime
+                    .get(dependency_id)
+                    .expect("a gated dependency is always a stack resource");
+
+            // A setup-created owner's link renders into the install template, so only an
+            // owner the runtime manages can survive its target's decline.
+            if link_count > 0 && total == link_count && !owner_baked_in_setup {
+                warnings.push(format!(
+                    "Resource '{dependent_id}' links '{dependency_id}', which is enabled by input \
+                     '{dependency_gate}'. A deployer who says no drops the link too, so \
+                     '{dependent_id}' starts without {}. Make sure it runs without it. A \
+                     deployment that already accepted the gate keeps the access that link \
+                     granted '{dependent_id}': on GCP that is a project-scoped role reaching \
+                     every resource of its kind in the project, and declining does not revoke \
+                     it. Gate both on '{dependency_gate}' if the access must leave with the \
+                     resource",
+                    alien_core::binding_env_var_name(dependency_id)
+                ));
+                continue;
+            }
 
             match entry.enabled_when.as_deref() {
-                Some(gate) if gate == *dependency_gate => {}
                 Some(gate) => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', but the two are \
                      gated on different inputs: '{gate}' and '{dependency_gate}'. Nothing makes a \
                      deployer answer both the same way, so '{dependent_id}' can be created while \
                      '{dependency_id}' is not. Gate both on '{dependency_gate}'"
                 )),
+                None if frozen_owner_of_runtime_gate => errors.push(format!(
+                    "Setup-created resource '{dependent_id}' depends on '{dependency_id}', which \
+                     input '{dependency_gate}' decides at runtime. Setup bakes that reference and \
+                     the runtime cannot rewrite a setup-created resource, so the answer could \
+                     never reach '{dependent_id}'. Gate '{dependent_id}' on '{dependency_gate}' \
+                     too, or make '{dependency_id}' setup-created so the answer is fixed at install"
+                )),
+                None if owner_baked_in_setup && total == link_count => errors.push(format!(
+                    "Setup-created resource '{dependent_id}' links '{dependency_id}', which is \
+                     enabled by input '{dependency_gate}'. Setup renders that binding into the \
+                     install template, so declining '{dependency_id}' would break the template's \
+                     reference. Gate '{dependent_id}' on '{dependency_gate}' too"
+                )),
                 None => errors.push(format!(
                     "Resource '{dependent_id}' depends on '{dependency_id}', which is enabled by \
-                     input '{dependency_gate}'. A deployer who says no would leave \
-                     '{dependent_id}' looking up outputs of a resource that was never created. \
-                     Gate '{dependent_id}' on '{dependency_gate}' too"
+                     input '{dependency_gate}'. The dependency is not a plain link, so declining \
+                     it would leave '{dependent_id}' pointing at a resource that was never \
+                     created. Gate '{dependent_id}' on '{dependency_gate}' too"
                 )),
             }
         }
     }
 
-    errors
+    (errors, warnings)
 }
 
 #[cfg(test)]
@@ -240,6 +318,169 @@ mod tests {
             .await
             .expect("check should run")
             .errors
+    }
+
+    async fn result_for(stack: Stack) -> CheckResult {
+        ResourceEnabledValidCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("check should run")
+    }
+
+    /// An ungated worker linking a gated store, which is the shape the scrub exists for.
+    fn stack_with_worker_linking_gated_store(worker_gate: Option<&str>) -> Stack {
+        let store = Kv::new("store".to_string()).build();
+        let worker = Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&store)
+            .build();
+
+        let mut worker_input = boolean_input();
+        worker_input.id = "workerEnabled".to_string();
+        let builder = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input(), worker_input])
+            .add_enabled_when(store, ResourceLifecycle::Live, "storeEnabled");
+
+        match worker_gate {
+            Some(gate) => builder.add_enabled_when(worker, ResourceLifecycle::Live, gate),
+            None => builder.add(worker, ResourceLifecycle::Live),
+        }
+        .build()
+    }
+
+    /// The link is dropped with the resource, so the worker outliving it is legitimate —
+    /// but the author still has to handle the binding being absent.
+    #[tokio::test]
+    async fn warns_rather_than_rejects_an_ungated_worker_linking_a_gated_store() {
+        let result = result_for(stack_with_worker_linking_gated_store(None)).await;
+
+        assert!(result.success, "should not block: {:?}", result.errors);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        assert!(
+            result.warnings[0].contains("Resource 'api' links 'store'"),
+            "{:?}",
+            result.warnings
+        );
+        assert!(
+            result.warnings[0].contains("ALIEN_STORE_BINDING"),
+            "{:?}",
+            result.warnings
+        );
+    }
+
+    /// Two independent answers still produce a worker that can outlive its store, but the
+    /// link is scrubbed either way, so this is the same legitimate shape.
+    #[tokio::test]
+    async fn warns_for_a_linking_worker_gated_on_a_different_input() {
+        let result = result_for(stack_with_worker_linking_gated_store(Some("workerEnabled"))).await;
+
+        assert!(result.success, "should not block: {:?}", result.errors);
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    }
+
+    /// Sharing the gate means they rise and fall together, so there is nothing to say.
+    #[tokio::test]
+    async fn stays_silent_when_the_linking_worker_shares_the_gate() {
+        let result = result_for(stack_with_worker_linking_gated_store(Some("storeEnabled"))).await;
+
+        assert!(result.success, "{:?}", result.errors);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    /// Build is setup-created, so its link renders into the install template and a declined
+    /// target would break the template's reference; refused rather than warned.
+    #[tokio::test]
+    async fn rejects_a_setup_created_owner_linking_a_gated_store() {
+        let store = Kv::new("store".to_string()).build();
+        let builder = alien_core::Build::new("packager".to_string())
+            .permissions("build".to_string())
+            .link(&store)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(store, ResourceLifecycle::Frozen, "storeEnabled")
+            .add(builder, ResourceLifecycle::Frozen)
+            .build();
+
+        let result = result_for(stack).await;
+
+        assert!(
+            !result.success,
+            "a setup-created link owner must be refused"
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("'packager' links 'store'"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// Setup bakes a frozen resource's links and the runtime cannot rewrite it, so a runtime
+    /// answer could never reach the link. The scrub would drop it from the desired stack while
+    /// the deployed resource kept it.
+    #[tokio::test]
+    async fn rejects_a_frozen_link_owner_against_a_runtime_resolved_gate() {
+        let store = Kv::new("store".to_string()).build();
+        let builder = alien_core::Build::new("packager".to_string())
+            .permissions("build".to_string())
+            .link(&store)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(store, ResourceLifecycle::Live, "storeEnabled")
+            .add(builder, ResourceLifecycle::Frozen)
+            .build();
+
+        let result = result_for(stack).await;
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("decides at runtime"),
+            "{:?}",
+            result.errors
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    /// The scrub only removes links. A queue reached by both a link and a trigger keeps the
+    /// trigger wiring on the source resource, so this must stay a refusal.
+    #[tokio::test]
+    async fn rejects_a_queue_that_is_both_linked_and_triggered() {
+        let queue = alien_core::Queue::new("jobs".to_string()).build();
+        let queue_ref = alien_core::ResourceRef {
+            resource_type: alien_core::Queue::RESOURCE_TYPE.clone(),
+            id: "jobs".to_string(),
+        };
+        let worker = Worker::new("consumer".to_string())
+            .permissions("consumer".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/consumer:latest".to_string(),
+            })
+            .link(&queue)
+            .trigger(alien_core::WorkerTrigger::Queue { queue: queue_ref })
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![boolean_input()])
+            .add_enabled_when(queue, ResourceLifecycle::Live, "storeEnabled")
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let result = result_for(stack).await;
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("not a plain link"),
+            "{:?}",
+            result.errors
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
     #[tokio::test]
@@ -356,10 +597,7 @@ mod tests {
 
         let errors = errors_for(stack).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("depends on 'jobs'"),
-            "{errors:?}"
-        );
+        assert!(errors[0].contains("depends on 'jobs'"), "{errors:?}");
     }
 
     #[tokio::test]

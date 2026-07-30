@@ -96,13 +96,6 @@ const queueOff = new alien.Queue("optional-queue-off").enabled(io.queueOff).buil
 const vaultOn = new alien.Vault("optional-vault-on").enabled(io.vaultOn).build()
 const vaultOff = new alien.Vault("optional-vault-off").enabled(io.vaultOff).build()
 
-const agent = new alien.Worker("agent")
-  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
-  .commandsEnabled(true)
-  .publicEndpoint("api")
-  .permissions("execution")
-  .build()
-
 // A compute gate is a live gate: the declined worker's function must never be
 // provisioned while its profile-derived service account still exists — the
 // baseline that lets a later acceptance recreate the function. Each gated
@@ -117,6 +110,18 @@ const workerOff = new alien.Worker("optional-worker-off")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .permissions("optional-off")
   .enabled(io.workerOff)
+  .build()
+
+// Ungated, linking both halves of two gated pairs so one deployment proves both answers.
+// The kv pair is frozen and fixed at install; the worker pair is live and grant-free, which
+// is what makes it flippable without a runtime policy write on the setup-owned role.
+const agent = new alien.Worker("agent")
+  .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
+  .permissions("execution")
+  .link(kvOn)
+  .link(kvOff)
+  .link(workerOn)
+  .link(workerOff)
   .build()
 
 export default new alien.Stack("enabled-demo")
@@ -135,11 +140,9 @@ export default new alien.Stack("enabled-demo")
   .add(workerOff, "live")
   .permissions({
     profiles: {
-      // Each gated resource carries its own resource-scoped grant so the e2e can
-      // assert the grant follows the gate (present when on, gone when off). The
-      // worker binds only the ungated `state` store; it depends on no gated
-      // resource, so the ungated-dependent-of-a-gated-resource preflight stays
-      // satisfied.
+      // Each gated resource carries its own resource-scoped grant so the e2e can assert
+      // the grant follows the gate. A declined resource's grant leaves the desired stack
+      // with it, and acceptance re-derives it from the declared stack on the next deploy.
       execution: {
         state: ["kv/data-read"],
         "optional-kv-on": ["kv/data-read"],

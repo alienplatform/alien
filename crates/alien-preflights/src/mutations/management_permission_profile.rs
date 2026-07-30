@@ -13,7 +13,7 @@ use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
-pub(crate) const OBSERVE_PERMISSION_SET_ID: &str = "observe/observe";
+const OBSERVE_PERMISSION_SET_ID: &str = "observe/observe";
 
 /// Automatically adds management permission profile with necessary permissions for all resources in the stack.
 ///

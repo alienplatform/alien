@@ -49,8 +49,7 @@ pub async fn handle_pending(
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
-    let target_stack =
-        strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
+    let target_stack = strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -69,10 +68,9 @@ pub async fn handle_pending(
 
     info!("Deployment-time preflight checks completed successfully");
 
-    // Step 3.5: Drop gated live resources whose input says no. Frozen
-    // declines were stripped before the mutations above; live declines apply
-    // here, after them, so a declined workload's provisioning baseline stays
-    // derived and acceptance can return later.
+    // Step 3.5: Drop gated live resources whose input says no. Applied after the
+    // mutations so a declined resource still derives the baseline that a later
+    // acceptance returns to.
     let mutated_stack = strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
@@ -138,10 +136,7 @@ pub async fn handle_pending(
 /// the frozen-compatibility check say so — "frozen resources are setup-owned
 /// and can only be added by rerunning setup" — instead of this strip silently
 /// deleting the release's new resource and reporting success.
-fn strip_declined_frozen_resources(
-    mut stack: Stack,
-    answers: &alien_core::GateAnswers,
-) -> Stack {
+fn strip_declined_frozen_resources(mut stack: Stack, answers: &alien_core::GateAnswers) -> Stack {
     let declined: Vec<String> = frozen_gated(&stack)
         .filter(|(_, input_id)| answers.get(*input_id) == Some(&false))
         .map(|(resource_id, _)| resource_id.clone())
@@ -199,9 +194,10 @@ fn strip_frozen_dominated_live_resources(
 /// Remove gated live resources whose input resolves false. Runs AFTER the
 /// mutations on both deployment paths, at the boundary where the executor's
 /// desired set is built: the mutations must keep seeing a declined live
-/// resource so its provisioning baseline — service account, profile grants,
-/// capacity contribution — stays stable and acceptance can return without a
-/// frozen-compatibility violation.
+/// resource so its service account and capacity contribution stay stable. Its
+/// grant leaves the desired stack, which the one-sided gated scope exemption
+/// absorbs; revoking one already applied in the cloud is the reconciler's own
+/// concern and does not happen here.
 ///
 /// The answer is the provided value, else the recorded answer while the input
 /// still gates a frozen resource, else the input's declared boolean default;
@@ -333,10 +329,9 @@ fn live_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
 
 fn gate_of(entry: &alien_core::ResourceEntry, setup_created: bool) -> Option<&str> {
     let input_id = entry.enabled_when.as_deref()?;
-    let emitted_in_setup = alien_core::ownership_policy_for_resource_type(
-        entry.config.resource_type().as_ref(),
-    )
-    .should_emit_in_setup(entry.lifecycle);
+    let emitted_in_setup =
+        alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+            .should_emit_in_setup(entry.lifecycle);
     (emitted_in_setup == setup_created).then_some(input_id)
 }
 
@@ -396,14 +391,14 @@ pub fn enforce_frozen_gate_fixity(
             }));
         };
         if requested != *persisted_answer {
-            return Err(AlienError::new(
-                crate::error::ErrorData::FrozenGateAnswerChanged {
+            return Err(
+                AlienError::new(crate::error::ErrorData::FrozenGateAnswerChanged {
                     input_id: input_id.clone(),
                     persisted: *persisted_answer,
                     requested,
-                },
-            )
-            .into());
+                })
+                .into(),
+            );
         }
     }
     Ok(())
@@ -467,12 +462,82 @@ pub fn audit_live_gate_transitions(
 }
 
 fn remove_declined(stack: &mut Stack, declined: &[String]) {
+    if declined.is_empty() {
+        return;
+    }
+
     for resource_id in declined {
         info!(
             resource_id = %resource_id,
             "The deployer declined this gated resource; it leaves the desired stack"
         );
         stack.resources.shift_remove(resource_id);
+    }
+
+    // Removing the resource without its inbound links would leave a survivor pointing at
+    // something that was never created, which the executor and binding resolution both
+    // reject. Scrubbing here is what lets an ungated resource link a gated one.
+    for (resource_id, entry) in stack.resources.iter_mut() {
+        let dropped = match alien_core::resource_links_mut(&mut entry.config) {
+            Some(owner) => {
+                let before = owner.links().len();
+                owner
+                    .links_mut()
+                    .retain(|link| !declined.contains(&link.id));
+                before - owner.links().len()
+            }
+            None => 0,
+        };
+        if dropped > 0 {
+            info!(
+                resource_id = %resource_id,
+                dropped,
+                declined = ?declined,
+                "Dropped links to declined resources; this resource keeps its own lifecycle"
+            );
+        }
+
+        let ordering_before = entry.dependencies.len();
+        entry
+            .dependencies
+            .retain(|dependency| !declined.contains(&dependency.id));
+        // The release-time preflight refuses authored ordering edges onto gated resources,
+        // so one reaching here predates the rule; dropping it keeps the stack coherent.
+        if ordering_before > entry.dependencies.len() {
+            info!(
+                resource_id = %resource_id,
+                dropped = ordering_before - entry.dependencies.len(),
+                "Dropped ordering edges to declined resources"
+            );
+        }
+    }
+
+    scrub_declined_grants(stack, declined);
+}
+
+/// Drop grants naming a declined resource from every permission profile.
+///
+/// Not inert: GCP applies every non-`"*"` entry without consulting the desired resources.
+/// Nothing is lost, because the mutations re-derive them whenever the gate is accepted.
+fn scrub_declined_grants(stack: &mut Stack, declined: &[String]) {
+    let scrub = |profile: &mut alien_core::permissions::PermissionProfile| {
+        for resource_id in declined {
+            if profile.0.shift_remove(resource_id).is_some() {
+                info!(
+                    resource_id = %resource_id,
+                    "Dropped the grant for a declined resource"
+                );
+            }
+        }
+    };
+
+    for profile in stack.permissions.profiles.values_mut() {
+        scrub(profile);
+    }
+    match &mut stack.permissions.management {
+        alien_core::permissions::ManagementPermissions::Extend(profile)
+        | alien_core::permissions::ManagementPermissions::Override(profile) => scrub(profile),
+        alien_core::permissions::ManagementPermissions::Auto => {}
     }
 }
 
@@ -639,6 +704,243 @@ mod tests {
             .build()
     }
 
+    /// An ungated worker linking a gated live store: the shape the link scrub exists for.
+    fn live_gated_stack_with_linking_worker(default: Option<bool>) -> Stack {
+        let input = StackInputDefinition::deployer_boolean(
+            "cacheEnabled",
+            "Enable the cache",
+            "Whether to run the cache store.",
+            default,
+        );
+        let cache = Kv::new("cache".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&cache)
+            .build();
+
+        Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(cache, ResourceLifecycle::Live, "cacheEnabled")
+            .add(worker, ResourceLifecycle::Live)
+            .build()
+    }
+
+    fn strip_live(stack: Stack, accepted: bool) -> Stack {
+        let mut input_values = std::collections::HashMap::new();
+        input_values.insert(
+            "cacheEnabled".to_string(),
+            serde_json::Value::Bool(accepted),
+        );
+        strip_declined_live_resources(
+            stack,
+            &input_values,
+            &alien_core::GateAnswers::default(),
+            &std::collections::HashSet::new(),
+        )
+        .expect("strip should resolve the gate")
+    }
+
+    fn link_ids(stack: &Stack, resource_id: &str) -> Vec<String> {
+        let config = &stack
+            .resources
+            .get(resource_id)
+            .expect("resource should be present")
+            .config;
+        alien_core::links_of(config)
+            .iter()
+            .map(|link| link.id.clone())
+            .collect()
+    }
+
+    /// A declined store takes the linking worker's reference with it, while the
+    /// worker itself keeps its own lifecycle.
+    #[test]
+    fn a_declined_store_takes_the_linking_workers_link_with_it() {
+        let stack = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
+
+        assert!(
+            !stack.resources.contains_key("cache"),
+            "the declined store must leave the desired stack"
+        );
+        assert!(
+            stack.resources.contains_key("api"),
+            "the ungated worker must survive its declined link target"
+        );
+        assert!(
+            link_ids(&stack, "api").is_empty(),
+            "the link must not outlive the resource: {:?}",
+            link_ids(&stack, "api")
+        );
+        assert!(
+            stack
+                .resources
+                .get("api")
+                .expect("worker")
+                .config
+                .get_dependencies()
+                .is_empty(),
+            "no dependency may still name the declined store"
+        );
+    }
+
+    /// Accepting must leave the graph untouched, or the scrub would be dropping links it
+    /// was never asked to drop.
+    #[test]
+    fn an_accepted_store_keeps_the_link() {
+        let stack = strip_live(live_gated_stack_with_linking_worker(Some(false)), true);
+
+        assert!(stack.resources.contains_key("cache"));
+        assert_eq!(link_ids(&stack, "api"), vec!["cache".to_string()]);
+    }
+
+    /// Setup authorization and the frozen-unchanged gate both hash the frozen entries, so a
+    /// live decline that rewrote one would make those baselines disagree mid-update.
+    #[test]
+    fn a_live_decline_leaves_the_frozen_digest_untouched() {
+        let with_frozen = |default| {
+            let mut stack = live_gated_stack_with_linking_worker(default);
+            let store = Kv::new("ledger".to_string()).build();
+            stack.resources.insert(
+                "ledger".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(store),
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack
+        };
+
+        let digest_before = with_frozen(Some(true)).frozen_resources_digest();
+        let stripped = strip_live(with_frozen(Some(true)), false);
+
+        assert!(!stripped.resources.contains_key("cache"));
+        assert_eq!(
+            digest_before,
+            stripped.frozen_resources_digest(),
+            "a live decline must not rewrite any frozen entry"
+        );
+    }
+
+    /// The executor plans an update by diffing resource configs, and links live inside that
+    /// config. Without a config change the worker keeps the stale binding indefinitely.
+    #[test]
+    fn the_scrub_changes_the_config_the_executor_diffs() {
+        let before = live_gated_stack_with_linking_worker(Some(true));
+        let before_config = before.resources.get("api").expect("worker").config.clone();
+
+        let after = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
+        let after_config = &after.resources.get("api").expect("worker").config;
+
+        assert_ne!(
+            &before_config, after_config,
+            "a scrubbed worker must not compare equal to the unscrubbed one"
+        );
+    }
+
+    /// A grant left in the desired stack is not inert: on GCP the walker applies every
+    /// named entry without consulting desired resources. Revoking an already-applied
+    /// binding is the reconciler's separate concern; this pins only the desired side.
+    #[test]
+    fn a_declined_resource_takes_its_grant_with_it() {
+        let input = StackInputDefinition::deployer_boolean(
+            "cacheEnabled",
+            "Enable the cache",
+            "Whether to run the cache store.",
+            Some(true),
+        );
+        let cache = Kv::new("cache".to_string()).build();
+        let store = Kv::new("store".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&cache)
+            .link(&store)
+            .build();
+
+        let mut profile = alien_core::permissions::PermissionProfile::new();
+        profile.0.insert(
+            "cache".to_string(),
+            vec![alien_core::permissions::PermissionSetReference::from(
+                "kv/data-read",
+            )],
+        );
+        profile.0.insert(
+            "store".to_string(),
+            vec![alien_core::permissions::PermissionSetReference::from(
+                "kv/data-read",
+            )],
+        );
+        let mut profiles = indexmap::IndexMap::new();
+        profiles.insert("execution".to_string(), profile);
+
+        let stack = Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(cache, ResourceLifecycle::Live, "cacheEnabled")
+            .add(store, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .permissions(alien_core::permissions::PermissionsConfig {
+                profiles,
+                ..Default::default()
+            })
+            .build();
+
+        let stack = strip_live(stack, false);
+
+        let execution = stack
+            .permissions
+            .profiles
+            .get("execution")
+            .expect("profile should survive");
+        assert!(
+            !execution.0.contains_key("cache"),
+            "the declined resource's grant must not survive it: {:?}",
+            execution.0.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            execution.0.contains_key("store"),
+            "an accepted resource must keep its grant"
+        );
+    }
+
+    /// Only the declined id is scrubbed; an unrelated link on the same resource stays.
+    #[test]
+    fn scrubbing_leaves_unrelated_links_alone() {
+        let input = StackInputDefinition::deployer_boolean(
+            "cacheEnabled",
+            "Enable the cache",
+            "Whether to run the cache store.",
+            Some(true),
+        );
+        let cache = Kv::new("cache".to_string()).build();
+        let store = Kv::new("store".to_string()).build();
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(&cache)
+            .link(&store)
+            .build();
+        let stack = Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(cache, ResourceLifecycle::Live, "cacheEnabled")
+            .add(store, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let stack = strip_live(stack, false);
+
+        assert_eq!(link_ids(&stack, "api"), vec!["store".to_string()]);
+    }
+
     /// Resolve-then-strip is the whole contract, so the tests exercise the
     /// pair: what each path proves, and what the strip does with it.
     fn resolve_and_strip(
@@ -697,7 +999,11 @@ mod tests {
             &Default::default(),
         )
         .expect_err("no value and no default cannot resolve");
-        assert!(error.message.contains("analyticsEnabled"), "{}", error.message);
+        assert!(
+            error.message.contains("analyticsEnabled"),
+            "{}",
+            error.message
+        );
     }
 
     /// A gated resource the import delivered was accepted; it stays.
@@ -759,7 +1065,10 @@ mod tests {
     fn a_live_gate_answered_false_drops_the_resource() {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -771,7 +1080,10 @@ mod tests {
     fn a_live_gate_answered_true_keeps_the_resource() {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(false)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -823,18 +1135,16 @@ mod tests {
             "analytics",
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
-        let answers =
-            resolve_frozen_gate_answers(&gated_stack(), &imported, &Default::default())
-                .expect("presence resolves");
+        let answers = resolve_frozen_gate_answers(&gated_stack(), &imported, &Default::default())
+            .expect("presence resolves");
         assert_eq!(answers.get("analyticsEnabled"), Some(&true));
 
         let declined = imported_state_with(
             "execution-sa",
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
-        let answers =
-            resolve_frozen_gate_answers(&gated_stack(), &declined, &Default::default())
-                .expect("absence resolves");
+        let answers = resolve_frozen_gate_answers(&gated_stack(), &declined, &Default::default())
+            .expect("absence resolves");
         assert_eq!(answers.get("analyticsEnabled"), Some(&false));
 
         let direct = resolve_frozen_gate_answers(
@@ -874,9 +1184,9 @@ mod tests {
     /// does not mention keep their recorded answer silently.
     #[test]
     fn fixity_refuses_conflicting_answers_only() {
-        let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
-        let still_frozen =
-            std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+        let persisted =
+            alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+        let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
 
         enforce_frozen_gate_fixity(&persisted, &still_frozen, &Default::default())
             .expect("an unmentioned input keeps its answer");
@@ -908,8 +1218,7 @@ mod tests {
     /// update does not mention stays with the compatibility check.
     #[test]
     fn fixity_refuses_a_value_for_an_unrecorded_gate() {
-        let still_frozen =
-            std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+        let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
 
         enforce_frozen_gate_fixity(
             &alien_core::GateAnswers::new(),
@@ -935,7 +1244,8 @@ mod tests {
     /// is a normal update again.
     #[test]
     fn fixity_releases_inputs_no_longer_frozen_gating() {
-        let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+        let persisted =
+            alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
 
         enforce_frozen_gate_fixity(
             &persisted,
@@ -972,8 +1282,7 @@ mod tests {
     #[test]
     fn an_omitted_live_gate_follows_the_persisted_answer_over_the_default() {
         let persisted = alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), true)]);
-        let still_gating =
-            std::collections::HashSet::from(["cacheEnabled".to_string()]);
+        let still_gating = std::collections::HashSet::from(["cacheEnabled".to_string()]);
 
         let kept = strip_declined_live_resources(
             live_gated_stack(Some(false)),
@@ -989,7 +1298,10 @@ mod tests {
 
         let provided_wins = strip_declined_live_resources(
             live_gated_stack(Some(false)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
             &persisted,
             &still_gating,
         )
@@ -1007,8 +1319,7 @@ mod tests {
     /// anything.
     #[test]
     fn a_freed_gate_stops_following_its_recorded_answer() {
-        let recorded_no =
-            alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
+        let recorded_no = alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
 
         let kept = strip_declined_live_resources(
             live_gated_stack(Some(true)),
@@ -1043,7 +1354,10 @@ mod tests {
     fn a_string_boolean_gate_value_coerces_and_anything_else_fails_fast() {
         let dropped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!("false"),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -1055,7 +1369,10 @@ mod tests {
 
         let error = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("yes"))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!("yes"),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -1094,9 +1411,12 @@ mod tests {
         };
 
         let declined = shared_gate_stack(false);
-        let answers =
-            resolve_frozen_gate_answers(&declined, &StackState::new(Platform::Aws), &Default::default())
-                .expect("the declared default resolves");
+        let answers = resolve_frozen_gate_answers(
+            &declined,
+            &StackState::new(Platform::Aws),
+            &Default::default(),
+        )
+        .expect("the declared default resolves");
         assert_eq!(answers.get("extrasEnabled"), Some(&false));
         let frozen_gating = frozen_gating_inputs(&declined);
         let stripped = strip_declined_frozen_resources(declined, &answers);
@@ -1108,9 +1428,12 @@ mod tests {
         );
 
         let accepted = shared_gate_stack(true);
-        let answers =
-            resolve_frozen_gate_answers(&accepted, &StackState::new(Platform::Aws), &Default::default())
-                .expect("the declared default resolves");
+        let answers = resolve_frozen_gate_answers(
+            &accepted,
+            &StackState::new(Platform::Aws),
+            &Default::default(),
+        )
+        .expect("the declared default resolves");
         let frozen_gating = frozen_gating_inputs(&accepted);
         let kept = strip_declined_frozen_resources(accepted, &answers);
         let kept = strip_frozen_dominated_live_resources(kept, &answers, &frozen_gating);
@@ -1129,13 +1452,13 @@ mod tests {
             alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
         let freed_target = live_gated_stack(Some(false));
         let frozen_gating = frozen_gating_inputs(&freed_target);
-        assert!(frozen_gating.is_empty(), "nothing frozen gates this input anymore");
-
-        let kept = strip_frozen_dominated_live_resources(
-            freed_target,
-            &stale_answers,
-            &frozen_gating,
+        assert!(
+            frozen_gating.is_empty(),
+            "nothing frozen gates this input anymore"
         );
+
+        let kept =
+            strip_frozen_dominated_live_resources(freed_target, &stale_answers, &frozen_gating);
         assert!(
             kept.resources.contains_key("cache"),
             "a freed gate follows live resolution, not the stale frozen answer"
@@ -1143,7 +1466,10 @@ mod tests {
 
         let accepted = strip_declined_live_resources(
             kept,
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
             &stale_answers,
             &Default::default(),
         )

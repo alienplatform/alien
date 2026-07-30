@@ -305,6 +305,15 @@ impl StackExecutor {
         StackExecutorConfig::builder(stack, client_config)
     }
 
+    /// The resources this executor reconciles, after the lifecycle filter.
+    ///
+    /// A caller deciding whether a stack has converged must ask about these and no others: a
+    /// resource the filter excluded is never planned, so holding it to the desired config
+    /// would wait on work that will never happen.
+    pub fn tracked_resource_ids(&self) -> HashSet<&str> {
+        self.resources.keys().map(String::as_str).collect()
+    }
+
     /// Simple constructor for basic use cases (tests, examples).
     /// For production use, prefer the builder pattern.
     pub fn new(
@@ -564,6 +573,20 @@ impl StackExecutor {
         Ok(())
     }
 
+    /// Whether this resource is one Alien adopted from a binding rather than provisioned.
+    ///
+    /// Being named in the bindings is not enough: a resource that already carries controller
+    /// state is still driven by that controller, which rewrites its own outputs on every
+    /// update. Treating it as bound would plan an update the controller then undoes, forever.
+    fn adopted_external_binding(
+        &self,
+        resource_id: &str,
+        current_resource_state: &StackResourceState,
+    ) -> bool {
+        self.is_external_binding_resource(resource_id)
+            && current_resource_state.internal_state.is_none()
+    }
+
     fn resource_lifecycle(
         &self,
         resource_id: &str,
@@ -609,6 +632,142 @@ impl StackExecutor {
         }
 
         Ok(true)
+    }
+
+    /// The state an external binding dictates: what its target resolves to.
+    ///
+    /// External bindings never publish `remote_binding_params` — their binding may carry
+    /// inline credentials, and remote access is limited to resources created by setup —
+    /// so requesting remote access on one is a configuration error.
+    fn external_binding_state(
+        &self,
+        resource_id: &str,
+    ) -> Result<(
+        Option<serde_json::Value>,
+        Option<alien_core::ResourceOutputs>,
+    )> {
+        let Some(binding) = self.deployment_config.external_bindings.get(resource_id) else {
+            return Ok((None, None));
+        };
+        self.validate_external_binding_remote_access(resource_id)?;
+        Ok((None, binding.to_resource_outputs()))
+    }
+
+    /// Whether a bound resource's recorded state no longer matches its binding.
+    ///
+    /// Repointing a binding, or turning `remote_access` off, changes neither the declared
+    /// resource nor its dependencies, so nothing else in the plan would notice: dependents
+    /// would keep resolving the old target and synced params would outlive their opt-in.
+    fn external_binding_drifted(
+        &self,
+        resource_id: &str,
+        current_resource_state: &StackResourceState,
+    ) -> Result<bool> {
+        if !self.adopted_external_binding(resource_id, current_resource_state) {
+            return Ok(false);
+        }
+        let (params, outputs) = self.external_binding_state(resource_id)?;
+        Ok(current_resource_state.remote_binding_params != params
+            || current_resource_state.outputs != outputs)
+    }
+
+    /// Map of resource id to the ids still depending on it, for deletion safety checks.
+    fn deletion_dependents(&self, state: &StackState) -> HashMap<String, Vec<String>> {
+        let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
+        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter {
+            return has_dependents;
+        }
+
+        for (res_id, resource_state) in &state.resources {
+            if resource_state.status == ResourceStatus::Deleting
+                || resource_state.status == ResourceStatus::Deleted
+            {
+                continue;
+            }
+            // State dependencies, not config ones: they record what the deployed resource
+            // still holds, which is what makes deleting its target unsafe.
+            for dependency in &resource_state.dependencies {
+                has_dependents
+                    .entry(dependency.id().to_string())
+                    .or_default()
+                    .push(res_id.clone());
+            }
+        }
+        has_dependents
+    }
+
+    /// Whether this executor will delete a resource that is absent from the desired stack:
+    /// not already settled, inside the deletion scope, and not held by a dependent the scope
+    /// excludes.
+    fn is_deletion_planned(
+        &self,
+        resource_id: &str,
+        current_resource_state: &StackResourceState,
+        has_dependents: &HashMap<String, Vec<String>>,
+        state: &StackState,
+    ) -> Result<bool> {
+        if current_resource_state.status == ResourceStatus::Deleting
+            || current_resource_state.status == ResourceStatus::Deleted
+            || current_resource_state.status == ResourceStatus::DeleteFailed
+            || (self.runtime_cleanup_filter
+                && current_resource_state.status == ResourceStatus::TeardownRequired)
+        {
+            return Ok(false);
+        }
+
+        if self.lifecycle_filter.is_none() && !self.runtime_cleanup_filter {
+            return Ok(true);
+        }
+
+        if !self.resource_matches_deletion_scope(resource_id, current_resource_state)? {
+            debug!(
+                "Resource '{}' is outside deletion scope, skipping deletion",
+                resource_id
+            );
+            return Ok(false);
+        }
+
+        if let Some(dependent_resources) = has_dependents.get(resource_id) {
+            for dep_id in dependent_resources {
+                let Some(dependent_state) = state.resources.get(dep_id) else {
+                    continue;
+                };
+                if dependent_state.status == ResourceStatus::Deleting
+                    || dependent_state.status == ResourceStatus::Deleted
+                    || dependent_state.status == ResourceStatus::TeardownRequired
+                {
+                    continue;
+                }
+                if !self.resource_matches_deletion_scope(dep_id, dependent_state)? {
+                    debug!(
+                        "Resource '{}' has active dependents outside deletion scope, skipping deletion",
+                        resource_id
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// The deletions this executor's planner schedules against `state` and has not finished.
+    ///
+    /// Answers the planner's question, not the step's: a resource out of scope, or held by a
+    /// dependent the scope excludes, is never pending here, but one whose delete `step` still
+    /// defers is. A caller judging completion therefore waits for the deferral to lift.
+    pub fn pending_deletions<'a>(&self, state: &'a StackState) -> Result<Vec<&'a str>> {
+        let has_dependents = self.deletion_dependents(state);
+        let mut pending = Vec::new();
+        for (resource_id, resource_state) in &state.resources {
+            if self.resources.contains_key(resource_id) {
+                continue;
+            }
+            if self.is_deletion_planned(resource_id, resource_state, &has_dependents, state)? {
+                pending.push(resource_id.as_str());
+            }
+        }
+        Ok(pending)
     }
 
     /// Computes the **diff** between the *desired* stack configuration and the
@@ -684,93 +843,25 @@ impl StackExecutor {
             }
         }
 
-        // Pre-check: When using lifecycle filters, build a dependency map to check if resources can be safely deleted
-        let mut has_dependents: HashMap<String, Vec<String>> = HashMap::new();
-
-        if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
-            // Build map of resource_id -> list of resources that depend on it
-            for (res_id, resource_state) in &state.resources {
-                // Skip resources that are already being deleted or deleted
-                if resource_state.status == ResourceStatus::Deleting
-                    || resource_state.status == ResourceStatus::Deleted
-                {
-                    continue;
-                }
-
-                // Use the dependencies from the state instead of getting them from the config
-                for dependency in &resource_state.dependencies {
-                    let dep_id = dependency.id().to_string();
-                    has_dependents
-                        .entry(dep_id)
-                        .or_default()
-                        .push(res_id.clone());
-                }
-            }
-        }
+        let has_dependents = self.deletion_dependents(state);
 
         // 2. Identify Deletes & Updates
         for (resource_id, current_resource_state) in &state.resources {
             match self.resources.get(resource_id) {
                 // Resource NOT in desired state -> Delete (unless filtered by lifecycle)
                 None => {
-                    // Skip if the resource status is already Deleting, Deleted, or DeleteFailed
-                    if current_resource_state.status == ResourceStatus::Deleting
-                        || current_resource_state.status == ResourceStatus::Deleted
-                        || current_resource_state.status == ResourceStatus::DeleteFailed
-                        || (self.runtime_cleanup_filter
-                            && current_resource_state.status == ResourceStatus::TeardownRequired)
-                    {
-                        continue;
+                    if self.is_deletion_planned(
+                        resource_id,
+                        current_resource_state,
+                        &has_dependents,
+                        state,
+                    )? {
+                        debug!(
+                            "Planning DELETE for resource '{}' (status: {:?})",
+                            resource_id, current_resource_state.status
+                        );
+                        plan_result.deletes.push(resource_id.clone());
                     }
-
-                    if self.lifecycle_filter.is_some() || self.runtime_cleanup_filter {
-                        if !self
-                            .resource_matches_deletion_scope(resource_id, current_resource_state)?
-                        {
-                            debug!(
-                                "Resource '{}' is outside deletion scope, skipping deletion",
-                                resource_id
-                            );
-                            continue;
-                        }
-
-                        // Now check if this resource has any active dependents
-                        if let Some(dependent_resources) = has_dependents.get(resource_id) {
-                            // Check if any active dependent is outside the same deletion scope.
-                            let mut has_active_dependents_outside_filter = false;
-                            for dep_id in dependent_resources {
-                                let Some(dependent_state) = state.resources.get(dep_id) else {
-                                    continue;
-                                };
-                                if dependent_state.status == ResourceStatus::Deleting
-                                    || dependent_state.status == ResourceStatus::Deleted
-                                    || dependent_state.status == ResourceStatus::TeardownRequired
-                                {
-                                    continue;
-                                }
-
-                                if !self.resource_matches_deletion_scope(dep_id, dependent_state)? {
-                                    has_active_dependents_outside_filter = true;
-                                    break;
-                                }
-                            }
-
-                            if has_active_dependents_outside_filter {
-                                debug!(
-                                    "Resource '{}' has active dependents outside deletion scope, skipping deletion",
-                                    resource_id
-                                );
-                                continue;
-                            }
-                        }
-                    }
-
-                    // If we get here, the resource should be deleted
-                    debug!(
-                        "Planning DELETE for resource '{}' (status: {:?})",
-                        resource_id, current_resource_state.status
-                    );
-                    plan_result.deletes.push(resource_id.clone());
                 }
                 // Resource EXISTS in desired state -> Check for Update
                 Some(desired_config) => {
@@ -780,8 +871,15 @@ impl StackExecutor {
                     // This prevents false config change detection for Pending resources
                     let current_resource_config_opt = Some(&current_resource_state.config);
 
-                    // Compare desired resource config with the config in the *current* state
-                    if Some(&desired_config.resource) != current_resource_config_opt {
+                    // Compare desired resource config with the config in the *current* state.
+                    // Config is not the whole desired state: ordering edges live on the stack
+                    // entry, and an external binding's target lives in the deployment config.
+                    // A resource whose only change is one of those still needs the update, or
+                    // its recorded dependencies and binding-derived state never catch up.
+                    if Some(&desired_config.resource) != current_resource_config_opt
+                        || desired_config.dependencies != current_resource_state.dependencies
+                        || self.external_binding_drifted(resource_id, current_resource_state)?
+                    {
                         match current_resource_state.status {
                             status if status_allows_update_planning(status) => {
                                 // Check if all new dependencies are ready before planning the update
@@ -800,9 +898,17 @@ impl StackExecutor {
                                 if new_dependencies_ready {
                                     debug!("Scheduling UPDATE transition for '{}'", resource_id);
 
-                                    // Validate the update before adding to plan
+                                    // Skipped only for an adopted binding: the rules guard
+                                    // mutating a resource we provisioned, and that update only
+                                    // re-reads a target someone else owns. A resource with a
+                                    // controller is still ours, whatever the bindings say.
                                     if let Some(current_config) =
-                                        current_resource_config_opt.as_ref()
+                                        current_resource_config_opt.as_ref().filter(|_| {
+                                            !self.adopted_external_binding(
+                                                resource_id,
+                                                current_resource_state,
+                                            )
+                                        })
                                     {
                                         current_config
                                             .validate_update(&desired_config.resource)
@@ -1125,17 +1231,14 @@ impl StackExecutor {
                 );
                 resource_state.status = ResourceStatus::Running;
 
-                // External resources are never published for Remote Bindings.
-                // In particular, their binding may contain inline credentials.
-                self.validate_external_binding_remote_access(resource_id)?;
-                resource_state.remote_binding_params = None;
-
-                // Populate outputs from the binding so dependent resources can
-                // call get_resource_outputs() (e.g., functions reading the
-                // Container Apps Environment name/resource ID).
-                if let Some(outputs) = binding.to_resource_outputs() {
-                    resource_state.outputs = Some(outputs);
-                }
+                // Seeded through the same helper the planner diffs against, so a create
+                // cannot land in a state the next plan immediately calls drifted. External
+                // resources never publish `remote_binding_params`; their binding may
+                // contain inline credentials.
+                let (remote_binding_params, binding_outputs) =
+                    self.external_binding_state(resource_id)?;
+                resource_state.remote_binding_params = remote_binding_params;
+                resource_state.outputs = binding_outputs;
 
                 initial_transitions.insert(resource_id.clone(), resource_state);
                 continue;
@@ -1305,31 +1408,35 @@ impl StackExecutor {
 
                 let update_state = current_state.clone();
 
+                let desired_config = match self.resources.get(resource_id) {
+                    Some(config) => config,
+                    None => {
+                        error!(
+                            "Resource '{}' not found in desired config during update",
+                            resource_id
+                        );
+                        let failed_update_state = current_state.with_failure(
+                            ResourceStatus::UpdateFailed,
+                            AlienError::new(ErrorData::InfrastructureError {
+                                message: format!(
+                                    "Resource '{}' not found in desired config during update",
+                                    resource_id
+                                ),
+                                operation: Some("update_dependencies".to_string()),
+                                resource_id: Some(resource_id.clone()),
+                            })
+                            .into_generic(),
+                        );
+                        initial_transitions.insert(resource_id.clone(), failed_update_state);
+                        continue;
+                    }
+                };
+
                 // Try to get the controller and transition to update
                 match update_state.get_internal_controller() {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
-                                // Calculate updated dependencies based on new config
-                                let desired_config = match self.resources.get(resource_id) {
-                                    Some(config) => config,
-                                    None => {
-                                        error!(
-                                            "Resource '{}' not found in desired config during update",
-                                            resource_id
-                                        );
-                                        let failed_update_state = current_state
-                                            .with_failure(ResourceStatus::UpdateFailed, AlienError::new(ErrorData::InfrastructureError {
-                                                message: format!("Resource '{}' not found in desired config during update", resource_id),
-                                                operation: Some("update_dependencies".to_string()),
-                                                resource_id: Some(resource_id.clone()),
-                                            }).into_generic());
-                                        initial_transitions
-                                            .insert(resource_id.clone(), failed_update_state);
-                                        continue;
-                                    }
-                                };
-
                                 let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config = Some(current_state.config.clone()); // Store old config
@@ -1378,10 +1485,47 @@ impl StackExecutor {
                         }
                     }
                     Ok(None) => {
-                        warn!(
-                            "Cannot start update transition from state {:?}, skipping planned update",
-                            current_state.status
-                        );
+                        // An external binding carries no controller and no cloud work: adopt
+                        // the new config the way creation adopts the binding as Running, or
+                        // the planner re-plans this same update forever.
+                        if self.is_external_binding_resource(resource_id) {
+                            // Re-derived from the binding, not carried over, and read through
+                            // the same helper the planner used to decide this update was
+                            // needed — otherwise the two could disagree about what the
+                            // binding currently dictates and the update would repeat.
+                            let (remote_binding_params, binding_outputs) =
+                                self.external_binding_state(resource_id)?;
+                            let updated_state = update_state.with_updates(|state| {
+                                state.config = new_config.clone();
+                                state.previous_config = Some(current_state.config.clone());
+                                state.dependencies = desired_config.dependencies.clone();
+                                state.status = ResourceStatus::Running;
+                                state.remote_binding_params = remote_binding_params;
+                                state.outputs = binding_outputs;
+                                state.retry_attempt = 0;
+                                state.error = None;
+                                state.last_failed_state = None;
+                            });
+                            initial_transitions.insert(resource_id.clone(), updated_state);
+                        } else {
+                            error!(
+                                "Cannot start update transition for '{}' from state {:?}: no controller state",
+                                resource_id, current_state.status
+                            );
+                            let failed_update_state = current_state.with_failure(
+                                ResourceStatus::UpdateFailed,
+                                AlienError::new(ErrorData::InfrastructureError {
+                                    message: format!(
+                                        "Resource '{}' has no controller state to update from",
+                                        resource_id
+                                    ),
+                                    operation: Some("update_transition".to_string()),
+                                    resource_id: Some(resource_id.clone()),
+                                })
+                                .into_generic(),
+                            );
+                            initial_transitions.insert(resource_id.clone(), failed_update_state);
+                        }
                     }
                     Err(e) => {
                         error!(

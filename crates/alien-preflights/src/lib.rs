@@ -371,6 +371,9 @@ impl PreflightRegistry {
             deployment_prerequisites::ExternalBindingsTypeCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(remote_storage::ExternalBindingCheck));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::ExternalBindingStillBoundCheck,
+        ));
         registry
             .add_deployment_prerequisite_check(Box::new(compile_time::CapacityGroupProfileCheck));
 
