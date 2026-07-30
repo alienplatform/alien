@@ -1,0 +1,81 @@
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
+import { ai, getAiConnection, postgres } from "@alienplatform/sdk"
+import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
+import { Pool } from "pg"
+import { z } from "zod"
+
+// The binding reads the password from the cloud secret store at runtime with the
+// workload's own identity — it is never in the environment.
+let dbPool: Promise<Pool> | undefined
+function db(): Promise<Pool> {
+  if (!dbPool) {
+    dbPool = (async () => {
+      const conn = await postgres("db").connection()
+      // Field style + conn.ssl, NOT conn.connectionString: node-postgres parses the
+      // URL's sslmode and overrides ssl, which breaks the managed-cloud cert path.
+      return new Pool({
+        host: conn.host,
+        port: conn.port,
+        database: conn.database,
+        user: conn.username,
+        password: conn.password,
+        ssl: conn.ssl,
+        // The model's tool only reads; enforce it in the session, not by parsing SQL.
+        options: "-c default_transaction_read_only=on",
+      })
+    })().catch(err => {
+      // Don't cache a failed resolution; let the next request retry.
+      dbPool = undefined
+      throw err
+    })
+  }
+  return dbPool
+}
+
+const queryDatabase = tool({
+  description:
+    "Run a read-only SQL query against the company's private Postgres database. " +
+    "Tables: customers(id, name, plan, country, mrr_usd), orders(id, customer_id, amount_usd, status, created).",
+  inputSchema: z.object({
+    sql: z.string().describe("a single read-only SELECT or WITH statement for Postgres"),
+  }),
+  execute: async ({ sql }) => {
+    // node-postgres runs semicolon-separated statements, so reject chained SQL here;
+    // writes are stopped by the pool's read-only sessions, not by parsing.
+    const statement = sql.trim().replace(/;\s*$/, "")
+    if (!/^(select|with)\b/i.test(statement) || statement.includes(";")) {
+      return { error: "only a single read-only SELECT or WITH statement is allowed" }
+    }
+    const pool = await db()
+    const result = await pool.query(statement)
+    // Cap what the model sees; rowCount still reports the real total.
+    return { rowCount: result.rowCount, rows: result.rows.slice(0, 50) }
+  },
+})
+
+export async function POST(req: Request) {
+  const { messages, model }: { messages: UIMessage[]; model?: string } = await req.json()
+
+  // Resolved per request: the binding env exists only in the running workload, not at build.
+  const provider = createOpenAICompatible({ name: "alien", ...(await getAiConnection("llm")) })
+
+  // Model ids differ per cloud, so the fallback is the binding's first model, not a hardcoded id.
+  const modelId = model || (await ai("llm").getAvailableModels())[0]?.id
+  if (!modelId) {
+    return Response.json({ error: "the AI binding exposes no models" }, { status: 503 })
+  }
+
+  const result = streamText({
+    model: provider(modelId),
+    system:
+      "You answer questions about the company's data. When a question needs data, write a " +
+      "single read-only Postgres SELECT and call the queryDatabase tool, then summarize the " +
+      "result for the user in plain English.",
+    messages: await convertToModelMessages(messages),
+    // Without a stop condition the model never streams the answer after the tool result.
+    stopWhen: stepCountIs(6),
+    tools: { queryDatabase },
+  })
+
+  return result.toUIMessageStreamResponse()
+}
