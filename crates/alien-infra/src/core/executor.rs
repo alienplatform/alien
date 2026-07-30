@@ -620,7 +620,10 @@ impl StackExecutor {
     fn external_binding_state(
         &self,
         resource_id: &str,
-    ) -> Result<(Option<serde_json::Value>, Option<alien_core::ResourceOutputs>)> {
+    ) -> Result<(
+        Option<serde_json::Value>,
+        Option<alien_core::ResourceOutputs>,
+    )> {
         let Some(binding) = self.deployment_config.external_bindings.get(resource_id) else {
             return Ok((None, None));
         };

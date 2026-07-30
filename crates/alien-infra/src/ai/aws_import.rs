@@ -8,10 +8,10 @@ use alien_core::{
     Result, StackResourceState,
 };
 
-use crate::import::ResourceImporter;
-use crate::import_helpers::make_imported_state;
 use crate::ai::aws::AwsAiState;
 use crate::ai::AwsAiController;
+use crate::import::ResourceImporter;
+use crate::import_helpers::make_imported_state;
 
 /// AWS Bedrock AI importer.
 #[derive(Debug, Default)]

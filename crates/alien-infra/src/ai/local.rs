@@ -5,9 +5,9 @@ use tracing::info;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    bindings::AiBinding, Ai, AiHeartbeatData, AiHeartbeatStatus, AiOutputs, ExternalAiHeartbeatData,
-    HeartbeatBackend, Platform, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    bindings::AiBinding, Ai, AiHeartbeatData, AiHeartbeatStatus, AiOutputs,
+    ExternalAiHeartbeatData, HeartbeatBackend, Platform, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -46,7 +46,10 @@ impl LocalAiController {
 
         // Fail loud if the developer hasn't supplied a key — local AI has no ambient
         // identity to fall back on, so this is a required, actionable precondition.
-        if std::env::var(API_KEY_ENV).map(|k| k.is_empty()).unwrap_or(true) {
+        if std::env::var(API_KEY_ENV)
+            .map(|k| k.is_empty())
+            .unwrap_or(true)
+        {
             return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
                 resource_id: Some(config.id.clone()),
                 message: format!(
@@ -138,10 +141,16 @@ impl LocalAiController {
 
     // ─────────────── TERMINALS ────────────────────────────────
 
-    terminal_state!(state = CreateFailed, status = ResourceStatus::ProvisionFailed);
+    terminal_state!(
+        state = CreateFailed,
+        status = ResourceStatus::ProvisionFailed
+    );
     terminal_state!(state = UpdateFailed, status = ResourceStatus::UpdateFailed);
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
-    terminal_state!(state = RefreshFailed, status = ResourceStatus::RefreshFailed);
+    terminal_state!(
+        state = RefreshFailed,
+        status = ResourceStatus::RefreshFailed
+    );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -172,7 +181,6 @@ impl LocalAiController {
         }
         Ok(Some(value))
     }
-
 }
 
 #[cfg(test)]
@@ -194,7 +202,10 @@ mod tests {
             .get_binding_params()
             .expect("binding params serialize")
             .expect("a provisioned controller emits a binding");
-        assert_eq!(value.get("provider").and_then(|v| v.as_str()), Some("openai"));
+        assert_eq!(
+            value.get("provider").and_then(|v| v.as_str()),
+            Some("openai")
+        );
         assert!(
             value.get("apiKey").is_none(),
             "the synced binding must never carry the provider key: {value}"

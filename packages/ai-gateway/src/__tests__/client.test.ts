@@ -157,7 +157,12 @@ describe("getAiConnection", () => {
   it("rejects an external binding with an unexpected key (strict at the trust boundary)", async () => {
     vi.stubEnv(
       "ALIEN_LLM_BINDING",
-      JSON.stringify({ service: "external-ai", provider: "openai", apiKey: "sk", extra: "tampered" }),
+      JSON.stringify({
+        service: "external-ai",
+        provider: "openai",
+        apiKey: "sk",
+        extra: "tampered",
+      }),
     )
     await expect(getAiConnection("llm")).rejects.toMatchObject({
       code: "INVALID_BINDING_CONFIG",

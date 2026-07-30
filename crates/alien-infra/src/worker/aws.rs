@@ -338,11 +338,8 @@ fn emit_aws_lambda_worker_heartbeat(
     });
 }
 
-/// Whether this worker should be exposed via a streaming REST (V1) API
-/// (`responseTransferMode: STREAM`) instead of the buffered V2 HTTP API.
-/// Signalled by `WORKER_RESPONSE_STREAMING=true` in the worker's environment.
-/// (A typed builder field is the cleaner long-term surface; an env flag keeps
-/// this change contained to the AWS controller.)
+/// Streaming REST (V1) exposure is opt-in per worker through
+/// `WORKER_RESPONSE_STREAMING=true` in its environment.
 fn worker_wants_streaming(worker: &Worker) -> bool {
     worker
         .environment
@@ -709,8 +706,7 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
-        // Single chokepoint fork: streaming workers are served by REST V1
-        // (see gateway_entry_state), so every path that lands here reroutes.
+        // Streaming workers reroute to REST V1 (see gateway_entry_state).
         if worker_wants_streaming(&worker_config) {
             return Ok(HandlerAction::Continue {
                 state: CreatingRestApi,
@@ -1395,6 +1391,21 @@ impl AwsWorkerController {
 
             self.rest_deployment_id = Some(deployment_id);
             self.stage_name = Some("prod".to_string());
+
+            // CreateDeployment takes no tags, so the stage it creates would sit
+            // outside the deployment's tag boundary that every management grant
+            // is conditioned on.
+            let region = &aws_cfg.region;
+            client
+                .tag_resource(
+                    &format!("arn:aws:apigateway:{region}::/restapis/{rest_api_id}/stages/prod"),
+                    standard_resource_tags(ctx.resource_prefix, &worker_config.id),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to tag REST API stage".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
         }
 
         if self.fqdn.is_some() {
@@ -1528,7 +1539,10 @@ impl AwsWorkerController {
             })
         })?;
 
-        let stage = self.stage_name.clone().unwrap_or_else(|| "prod".to_string());
+        let stage = self
+            .stage_name
+            .clone()
+            .unwrap_or_else(|| "prod".to_string());
 
         let mapping = client
             .create_base_path_mapping(
@@ -2748,6 +2762,15 @@ impl AwsWorkerController {
                 state: UpdateCreatingApiIntegration,
                 suggested_delay,
             }),
+            // Reached when a worker with no endpoint yet reruns this state and
+            // now wants streaming: creating_api_gateway reroutes to REST V1.
+            HandlerAction::Continue {
+                state: CreatingRestApi,
+                suggested_delay,
+            } => Ok(HandlerAction::Continue {
+                state: UpdateCreatingRestApi,
+                suggested_delay,
+            }),
             HandlerAction::Continue { state, .. } => Err(Self::unexpected_update_wrapper_state(
                 &worker_config.id,
                 "creating_api_gateway",
@@ -3753,25 +3776,31 @@ impl AwsWorkerController {
         // A worker is V1 xor V2, so at most one branch of each pair runs. The REST V1
         // order is the same — base path mapping, then domain, then the REST API, whose
         // deletion cascades to resources, methods, deployments, and stages.
-        if let (Some(domain_name), Some(base_path)) =
-            (self.domain_name.as_ref(), self.rest_base_path.as_ref())
-        {
+        if let (Some(domain_name), true) = (self.domain_name.as_ref(), self.rest_api_id.is_some()) {
+            // An imported worker never learns its mapping key, so fall back to the
+            // literal the API reports for an empty base path. Deleting the domain
+            // while a mapping still points at it fails.
+            let base_path = self
+                .rest_base_path
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string());
+            let base_path = &base_path;
             let client = ctx
                 .service_provider
                 .get_aws_apigateway_client(aws_cfg)
                 .await?;
-            match client.delete_base_path_mapping(domain_name, base_path).await {
+            match client
+                .delete_base_path_mapping(domain_name, base_path)
+                .await
+            {
                 Ok(()) => info!(worker=%worker_config.id, "REST base path mapping deleted"),
                 Err(e)
                     if matches!(
                         e.error,
-                        Some(
-                            CloudClientErrorData::RemoteResourceNotFound { .. }
-                                | CloudClientErrorData::RemoteAccessDenied { .. }
-                        )
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
-                    info!(worker=%worker_config.id, "REST base path mapping already gone or inaccessible");
+                    info!(worker=%worker_config.id, "REST base path mapping already gone");
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
@@ -3823,10 +3852,7 @@ impl AwsWorkerController {
                     Err(e)
                         if matches!(
                             e.error,
-                            Some(
-                                CloudClientErrorData::RemoteResourceNotFound { .. }
-                                    | CloudClientErrorData::RemoteAccessDenied { .. }
-                            )
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                         ) =>
                     {
                         info!(worker=%worker_config.id, "Custom domain already gone or inaccessible");
@@ -3908,13 +3934,10 @@ impl AwsWorkerController {
                 Err(e)
                     if matches!(
                         e.error,
-                        Some(
-                            CloudClientErrorData::RemoteResourceNotFound { .. }
-                                | CloudClientErrorData::RemoteAccessDenied { .. }
-                        )
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
-                    info!(worker=%worker_config.id, "REST API already gone or inaccessible");
+                    info!(worker=%worker_config.id, "REST API already gone");
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {

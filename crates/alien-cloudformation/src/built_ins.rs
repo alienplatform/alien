@@ -14,8 +14,7 @@ use crate::{
 };
 use alien_core::{
     Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, KubernetesCluster, Kv, Network, Platform,
-    Queue,
-    RemoteStackManagement, ResourceType, ServiceAccount, Storage, Vault, Worker,
+    Queue, RemoteStackManagement, ResourceType, ServiceAccount, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_aws(registry: &mut CfRegistry) {

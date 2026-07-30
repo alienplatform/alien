@@ -203,4 +203,3 @@ fn pin_statement_to_queue(statement: CfExpression, queue_id: &str) -> CfExpressi
     );
     CfExpression::Object(statement_object)
 }
-

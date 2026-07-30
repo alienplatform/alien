@@ -692,4 +692,3 @@ fn email_iam_policies(
 
     Ok(resources)
 }
-

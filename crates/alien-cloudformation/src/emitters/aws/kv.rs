@@ -1,10 +1,4 @@
 //! AWS KV — DynamoDB on-demand table with composite key, TTL, and SSE.
-//!
-//! When a service-account permission profile grants `kv/*` permission sets for
-//! this store (directly by resource id or through a `*` wildcard), the matching
-//! IAM policies are emitted against the owning roles, with every statement
-//! pinned to this table's ARN (the physical table name is
-//! CloudFormation-generated, so name-pattern bindings cannot match it).
 
 use crate::{
     emitter::CfEmitter,

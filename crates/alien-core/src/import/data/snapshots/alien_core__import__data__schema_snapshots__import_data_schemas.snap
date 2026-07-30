@@ -168,7 +168,7 @@ expression: schemas
         "type": "object"
       },
       "ruleSetName": {
-        "description": "SES receipt rule set name, present only when inbound mail is configured. Activating the rule set is a manual post-deploy step.",
+        "description": "SES receipt rule set name, present only when inbound mail is configured.",
         "type": [
           "string",
           "null"
@@ -224,6 +224,20 @@ expression: schemas
       },
       "integrationId": {
         "description": "API Gateway integration ID, when public ingress is enabled.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "restApiId": {
+        "description": "API Gateway REST (V1) API ID, when public ingress is enabled for a streaming worker. Mutually exclusive with `api_id`: a worker is exposed through REST V1 xor the V2 HTTP API, so only one set is ever populated.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "restStageName": {
+        "description": "API Gateway REST (V1) stage name, when public ingress is enabled for a streaming worker. Mutually exclusive with `stage_name` (V1 xor V2).",
         "type": [
           "string",
           "null"

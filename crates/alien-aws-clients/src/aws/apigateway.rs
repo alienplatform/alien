@@ -73,6 +73,14 @@ pub trait ApiGatewayApi: Send + Sync + std::fmt::Debug {
         request: CreateBasePathMappingRequest,
     ) -> Result<BasePathMapping>;
     async fn delete_base_path_mapping(&self, domain_name: &str, base_path: &str) -> Result<()>;
+    /// Tags any REST API object by ARN. A stage is created as a side effect of
+    /// `CreateDeployment`, which takes no tags, so it must be tagged after the
+    /// fact to carry the deployment's boundary tags.
+    async fn tag_resource(
+        &self,
+        resource_arn: &str,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +165,11 @@ impl ApiGatewayClient {
         let base_url = self.get_base_url();
         let url = format!("{}{}", base_url.trim_end_matches('/'), path);
 
-        let mut builder = self.client.request(method, &url).host(&self.host()).content_type_json();
+        let mut builder = self
+            .client
+            .request(method, &url)
+            .host(&self.host())
+            .content_type_json();
 
         let result = if let Some(body) = body {
             builder = builder.content_sha256(&body).body(body.clone());
@@ -203,7 +215,7 @@ impl ApiGatewayClient {
     fn map_apigw_error(
         status: StatusCode,
         body: &str,
-        _operation: &str,
+        operation: &str,
         resource: &str,
         request_body: Option<&str>,
     ) -> Option<ErrorData> {
@@ -232,13 +244,13 @@ impl ApiGatewayClient {
             "ConflictException" => ErrorData::RemoteResourceConflict {
                 resource_type: "ApiGateway".into(),
                 resource_name: resource.into(),
-                message,
+                message: format!("{operation}: {message}"),
             },
-            "TooManyRequestsException" | "ThrottlingException" => {
-                ErrorData::RateLimitExceeded { message }
-            }
+            "TooManyRequestsException" | "ThrottlingException" => ErrorData::RateLimitExceeded {
+                message: format!("{operation}: {message}"),
+            },
             "BadRequestException" | "ValidationException" => ErrorData::InvalidInput {
-                message,
+                message: format!("{operation}: {message}"),
                 field_name: None,
             },
             _ => match status {
@@ -249,18 +261,22 @@ impl ApiGatewayClient {
                 StatusCode::CONFLICT => ErrorData::RemoteResourceConflict {
                     resource_type: "ApiGateway".into(),
                     resource_name: resource.into(),
-                    message,
+                    message: format!("{operation}: {message}"),
                 },
                 StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => ErrorData::RemoteAccessDenied {
                     resource_type: "ApiGateway".into(),
                     resource_name: resource.into(),
                 },
-                StatusCode::TOO_MANY_REQUESTS => ErrorData::RateLimitExceeded { message },
+                StatusCode::TOO_MANY_REQUESTS => ErrorData::RateLimitExceeded {
+                    message: format!("{operation}: {message}"),
+                },
                 StatusCode::SERVICE_UNAVAILABLE
                 | StatusCode::BAD_GATEWAY
-                | StatusCode::GATEWAY_TIMEOUT => ErrorData::RemoteServiceUnavailable { message },
+                | StatusCode::GATEWAY_TIMEOUT => ErrorData::RemoteServiceUnavailable {
+                    message: format!("{operation}: {message}"),
+                },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("ApiGateway operation failed: {}", message),
+                    message: format!("ApiGateway {operation} failed: {message}"),
                     url: "apigateway.amazonaws.com".to_string(),
                     http_status: status.as_u16(),
                     http_response_text: Some(body.into()),
@@ -284,8 +300,14 @@ impl ApiGatewayClient {
 impl ApiGatewayApi for ApiGatewayClient {
     async fn create_rest_api(&self, request: CreateRestApiRequest) -> Result<RestApi> {
         let body = Self::serialize(&request, "CreateRestApiRequest")?;
-        self.send_json(Method::POST, "/restapis", Some(body), "CreateRestApi", &request.name)
-            .await
+        self.send_json(
+            Method::POST,
+            "/restapis",
+            Some(body),
+            "CreateRestApi",
+            &request.name,
+        )
+        .await
     }
 
     async fn delete_rest_api(&self, rest_api_id: &str) -> Result<()> {
@@ -302,8 +324,14 @@ impl ApiGatewayApi for ApiGatewayClient {
     ) -> Result<Resource> {
         let path = format!("/restapis/{}/resources/{}", rest_api_id, parent_id);
         let body = Self::serialize(&request, "CreateResourceRequest")?;
-        self.send_json(Method::POST, &path, Some(body), "CreateResource", rest_api_id)
-            .await
+        self.send_json(
+            Method::POST,
+            &path,
+            Some(body),
+            "CreateResource",
+            rest_api_id,
+        )
+        .await
     }
 
     async fn put_method(
@@ -334,8 +362,14 @@ impl ApiGatewayApi for ApiGatewayClient {
             rest_api_id, resource_id, http_method
         );
         let body = Self::serialize(&request, "PutIntegrationRequest")?;
-        self.send_no_response(Method::PUT, &path, Some(body), "PutIntegration", rest_api_id)
-            .await
+        self.send_no_response(
+            Method::PUT,
+            &path,
+            Some(body),
+            "PutIntegration",
+            rest_api_id,
+        )
+        .await
     }
 
     async fn create_deployment(
@@ -345,8 +379,14 @@ impl ApiGatewayApi for ApiGatewayClient {
     ) -> Result<Deployment> {
         let path = format!("/restapis/{}/deployments", rest_api_id);
         let body = Self::serialize(&request, "CreateDeploymentRequest")?;
-        self.send_json(Method::POST, &path, Some(body), "CreateDeployment", rest_api_id)
-            .await
+        self.send_json(
+            Method::POST,
+            &path,
+            Some(body),
+            "CreateDeployment",
+            rest_api_id,
+        )
+        .await
     }
 
     async fn create_domain_name(&self, request: CreateDomainNameRequest) -> Result<DomainName> {
@@ -374,12 +414,33 @@ impl ApiGatewayApi for ApiGatewayClient {
     ) -> Result<BasePathMapping> {
         let path = format!("/domainnames/{}/basepathmappings", domain_name);
         let body = Self::serialize(&request, "CreateBasePathMappingRequest")?;
-        self.send_json(Method::POST, &path, Some(body), "CreateBasePathMapping", domain_name)
+        self.send_json(
+            Method::POST,
+            &path,
+            Some(body),
+            "CreateBasePathMapping",
+            domain_name,
+        )
+        .await
+    }
+
+    async fn tag_resource(
+        &self,
+        resource_arn: &str,
+        tags: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        // The ARN is a path segment here, so its colons and slashes must be escaped.
+        let path = format!("/tags/{}", urlencoding::encode(resource_arn));
+        let body = Self::serialize(&serde_json::json!({ "tags": tags }), "TagResourceRequest")?;
+        self.send_no_response(Method::PUT, &path, Some(body), "TagResource", resource_arn)
             .await
     }
 
     async fn delete_base_path_mapping(&self, domain_name: &str, base_path: &str) -> Result<()> {
-        let path = format!("/domainnames/{}/basepathmappings/{}", domain_name, base_path);
+        let path = format!(
+            "/domainnames/{}/basepathmappings/{}",
+            domain_name, base_path
+        );
         self.send_no_response(
             Method::DELETE,
             &path,

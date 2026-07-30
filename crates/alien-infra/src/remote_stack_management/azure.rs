@@ -1074,9 +1074,12 @@ mod tests {
             PermissionSetReference::from_name("service-account/heartbeat"),
         ]);
 
-        let grant_plan =
-            generate_stack_management_grant_plan(&profile, &permission_context(), &Default::default())
-                .unwrap();
+        let grant_plan = generate_stack_management_grant_plan(
+            &profile,
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
 
         assert!(
             grant_plan.custom_roles.iter().any(|role| role
@@ -1134,8 +1137,9 @@ mod tests {
                 [PermissionSetReference::from_name("worker/dispatch-command")],
             );
 
-        let live: std::collections::HashSet<String> =
-            ["api".to_string(), "jobs".to_string()].into_iter().collect();
+        let live: std::collections::HashSet<String> = ["api".to_string(), "jobs".to_string()]
+            .into_iter()
+            .collect();
         let grant_plan =
             generate_stack_management_grant_plan(&profile, &permission_context(), &live).unwrap();
 
@@ -1161,9 +1165,12 @@ mod tests {
             [PermissionSetReference::from_name("worker/dispatch-command")],
         );
 
-        let grant_plan =
-            generate_stack_management_grant_plan(&profile, &permission_context(), &Default::default())
-                .unwrap();
+        let grant_plan = generate_stack_management_grant_plan(
+            &profile,
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
 
         assert!(
             grant_plan
@@ -1439,12 +1446,11 @@ impl AzureRemoteStackManagementController {
         };
 
         let generator = AzureRuntimePermissionsGenerator::new();
-        let grant_plan =
-            generate_stack_management_grant_plan(
-                management_profile,
-                &permission_context,
-                &ctx.desired_stack.resources.keys().cloned().collect(),
-            )?;
+        let grant_plan = generate_stack_management_grant_plan(
+            management_profile,
+            &permission_context,
+            &ctx.desired_stack.resources.keys().cloned().collect(),
+        )?;
         custom_roles.extend(grant_plan.custom_roles);
         bindings.extend(grant_plan.bindings);
 
