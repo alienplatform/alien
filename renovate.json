@@ -1,5 +1,17 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "group:allNonMajor"],
-  "additionalBranchPrefix": "alien-370-"
+  "additionalBranchPrefix": "alien-370-",
+  "packageRules": [
+    {
+      "description": "Automerge stable non-major updates",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^0/",
+      "groupName": "stable non-major dependencies",
+      "groupSlug": "stable-minor-patch",
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash"
+    }
+  ]
 }
