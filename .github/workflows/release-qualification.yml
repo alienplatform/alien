@@ -57,7 +57,16 @@ jobs:
               --jq '[.[] | select(.base.ref == "main")] | sort_by(.updated_at) | last')
             HEAD_REPOSITORY=$(jq -r '.head.repo.full_name // empty' <<< "$PR_JSON")
             HEAD_REF=$(jq -r '.head.ref // empty' <<< "$PR_JSON")
-            BASE_SHA=$(jq -r '.base.sha // empty' <<< "$PR_JSON")
+            MERGE_COMMIT_SHA=$(jq -r '.merge_commit_sha // empty' <<< "$PR_JSON")
+            if [ "$MERGE_COMMIT_SHA" != "$SOURCE_REF" ]; then
+              echo "::error::Workflow dispatch requalification requires the exact merged release commit"
+              exit 1
+            fi
+            # The PR's recorded base can be stale when another PR lands between
+            # qualification and merge. Compare the exact merged commit with its
+            # first parent so concurrent main changes are not misclassified as
+            # release-PR changes.
+            BASE_SHA=$(git rev-parse "${SOURCE_REF}^")
           fi
 
           CURRENT_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
