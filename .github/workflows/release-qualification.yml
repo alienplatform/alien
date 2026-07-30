@@ -53,8 +53,9 @@ jobs:
           else
             PR_JSON=$(gh api \
               -H "Accept: application/vnd.github+json" \
-              "/repos/${GITHUB_REPOSITORY}/commits/${SOURCE_REF}/pulls" \
-              --jq '[.[] | select(.base.ref == "main")] | sort_by(.updated_at) | last')
+              "/repos/${GITHUB_REPOSITORY}/commits/${SOURCE_REF}/pulls" |
+              jq --arg source "$SOURCE_REF" \
+                '[.[] | select(.base.ref == "main" and .merge_commit_sha == $source)] | last')
             HEAD_REPOSITORY=$(jq -r '.head.repo.full_name // empty' <<< "$PR_JSON")
             HEAD_REF=$(jq -r '.head.ref // empty' <<< "$PR_JSON")
             MERGE_COMMIT_SHA=$(jq -r '.merge_commit_sha // empty' <<< "$PR_JSON")
