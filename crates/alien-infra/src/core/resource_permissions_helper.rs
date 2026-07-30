@@ -1069,6 +1069,15 @@ impl ResourcePermissionsHelper {
         resource_name: &str,
         resource_type: &str,
     ) -> Result<()> {
+        if !Self::resource_is_setup_owned(ctx, resource_id) {
+            debug!(
+                resource_id = %resource_id,
+                resource_name = %resource_name,
+                "Skipping AWS resource-scoped data policy attachment for live resource; these policies are setup-owned"
+            );
+            return Ok(());
+        }
+
         let aws_config = ctx.get_aws_config()?;
 
         // Build permission context for this specific resource
@@ -1132,34 +1141,16 @@ impl ResourcePermissionsHelper {
             }
         }
 
-        if Self::resource_is_setup_owned(ctx, resource_id) {
-            // Setup-owned resources run while setup credentials are still active.
-            // Live resource controllers must not edit the management role after
-            // the deployment has moved to provisioning credentials.
-            Self::apply_aws_management_resource_permissions(
-                ctx,
-                resource_id,
-                resource_name,
-                resource_type,
-                &generator,
-                &permission_context,
-            )
-            .await?;
-        } else if ctx
-            .desired_stack
-            .management()
-            .profile()
-            .map(|profile| {
-                !Self::aws_management_resource_permission_refs(profile, resource_id).is_empty()
-            })
-            .unwrap_or(false)
-        {
-            debug!(
-                resource_id = %resource_id,
-                resource_name = %resource_name,
-                "Skipping AWS management resource-scoped permissions for live resource; setup must grant them"
-            );
-        }
+        // Setup-owned resources run while setup credentials are still active.
+        Self::apply_aws_management_resource_permissions(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_type,
+            &generator,
+            &permission_context,
+        )
+        .await?;
 
         Ok(())
     }

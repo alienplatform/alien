@@ -714,19 +714,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             schedule_reconciliation,
             input_values,
         } = params;
-        let mut merged_stack_state = stack_state;
-        if let Some(existing) = self.get_deployment(caller, deployment_id).await? {
-            if let Some(mut existing_stack_state) = existing.stack_state {
-                for (resource_id, resource_state) in merged_stack_state.resources {
-                    existing_stack_state
-                        .resources
-                        .insert(resource_id, resource_state);
-                }
-                merged_stack_state = existing_stack_state;
-            }
-        }
-
-        let stack_state_json = serde_json::to_string(&merged_stack_state)
+        // The import route supplies a complete ownership-aware state: freshly
+        // imported setup resources plus preserved Live controller state.
+        // Re-merging here would resurrect setup-owned resources that the new
+        // setup payload intentionally omitted.
+        let stack_state_json = serde_json::to_string(&stack_state)
             .into_alien_error()
             .context(GenericError {
                 message: "Failed to serialize imported stack_state".to_string(),

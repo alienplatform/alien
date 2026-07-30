@@ -404,9 +404,11 @@ impl PreflightRunner {
 
         // Run compatibility checks on mutated stack if old stack is provided
         // This detects if mutations added frozen resources during updates
-        // Skip the check if allow_frozen_changes flag is set
+        // Frozen changes are setup-owned. A matching setup authorization proves
+        // that the setup workflow already applied and imported them; a runtime
+        // configuration flag must never authorize their mutation.
         if let Some(old_stack) = old_stack {
-            if !config.allow_frozen_changes && !setup_update_authorized {
+            if !setup_update_authorized {
                 let compatibility_summary = self
                     .run_compatibility_checks(old_stack, &mutated_stack)
                     .await?;
