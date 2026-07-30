@@ -1,0 +1,8 @@
+node_modules
+.next
+.git
+.alien
+alien.ts
+template.toml
+README.md
+.env*.local
