@@ -21,7 +21,6 @@
   },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
-    "prepare": "npm run build",
     "test": "vitest run",
     "test:ts": "tsc --noEmit",
     "format-and-lint": "biome check .",

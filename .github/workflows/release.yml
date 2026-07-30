@@ -1276,8 +1276,12 @@ jobs:
             chmod 755 "packages/ai-gateway/npm/${triple}/alien-ai-gateway"
           done
 
+      # Install no longer builds workspace packages, so the wrapper's tsc needs
+      # its core dependency built explicitly first.
       - name: Build wrapper
-        run: pnpm --filter @alienplatform/ai-gateway build
+        run: |
+          pnpm --filter @alienplatform/core build
+          pnpm --filter @alienplatform/ai-gateway build
 
       - name: Pack platform prebuild packages
         run: |
