@@ -20,6 +20,11 @@ import {
   CreateCommandResponseSchema,
 } from "@alienplatform/core"
 import {
+  type CommandConnectionProvider,
+  FixedCommandConnectionProvider,
+  HostedCommandConnectionProvider,
+} from "./bootstrap.js"
+import {
   CommandCreationFailedError,
   CommandExpiredError,
   CommandStatusFailedError,
@@ -49,6 +54,24 @@ export interface CommandsClientConfig {
   deploymentId: string
   /** Bearer token (deployment token or workspace token). */
   token: string
+  /** Default invoke timeout in milliseconds (default: 60000). */
+  timeoutMs?: number
+  /** Allow reading local files for storage responses (default: false, local dev only). */
+  allowLocalStorage?: boolean
+  /** `fetch` implementation (defaults to the global `fetch`). */
+  fetch?: typeof fetch
+}
+
+/**
+ * Hosted Alien configuration for {@link CommandsClient.forDeployment}.
+ */
+export interface CommandsClientDeploymentConfig {
+  /** Deployment ID to invoke commands on. */
+  deploymentId: string
+  /** Alien API key used to discover the manager and mint command-only access. */
+  apiKey: string
+  /** Alien Platform API base URL (default: "https://api.alien.dev"). */
+  platformUrl?: string
   /** Default invoke timeout in milliseconds (default: 60000). */
   timeoutMs?: number
   /** Allow reading local files for storage responses (default: false, local dev only). */
@@ -186,22 +209,49 @@ function isTerminalState(state: CommandState): boolean {
  * Command sender for invoking deployment commands.
  */
 export class CommandsClient {
-  private readonly managerUrl: string
   private readonly deploymentId: string
-  private readonly token: string
   private readonly defaultTimeout: number
   private readonly allowLocalStorage: boolean
   private readonly fetchImpl: typeof fetch
+  private connectionProvider: CommandConnectionProvider
 
   constructor(config: CommandsClientConfig) {
-    // Store the base URL raw; request URLs are built with URL-based
-    // construction in `buildManagerUrl`, which preserves any query string.
-    this.managerUrl = config.managerUrl
     this.deploymentId = config.deploymentId
-    this.token = config.token
     this.defaultTimeout = config.timeoutMs ?? 60_000
     this.allowLocalStorage = config.allowLocalStorage ?? false
     this.fetchImpl = config.fetch ?? globalThis.fetch
+    this.connectionProvider = new FixedCommandConnectionProvider({
+      managerUrl: config.managerUrl,
+      token: config.token,
+      expiresAt: new Date(8_640_000_000_000_000),
+    })
+  }
+
+  /**
+   * Connect to an Alien-hosted deployment using only its ID and an Alien API
+   * key. Alien resolves the deployment's current manager and mints a
+   * short-lived command-only credential. Reused clients refresh that
+   * connection before expiry and once after a manager 401.
+   */
+  static async forDeployment(config: CommandsClientDeploymentConfig): Promise<CommandsClient> {
+    const provider = new HostedCommandConnectionProvider({
+      deploymentId: config.deploymentId,
+      apiKey: config.apiKey,
+      role: "sender",
+      platformUrl: config.platformUrl,
+      fetch: config.fetch,
+    })
+    const initial = await provider.get()
+    const client = new CommandsClient({
+      managerUrl: initial.managerUrl,
+      deploymentId: config.deploymentId,
+      token: initial.token,
+      timeoutMs: config.timeoutMs,
+      allowLocalStorage: config.allowLocalStorage,
+      fetch: config.fetch,
+    })
+    client.connectionProvider = provider
+    return client
   }
 
   /**
@@ -285,8 +335,8 @@ export class CommandsClient {
    * `buildLeaseEndpoint`, which appends path segments while leaving the query
    * untouched.
    */
-  private buildManagerUrl(path: string): string {
-    const url = new URL(this.managerUrl)
+  private buildManagerUrl(managerUrl: string, path: string): string {
+    const url = new URL(managerUrl)
     const basePath = url.pathname.replace(/\/+$/, "")
     const suffix = path.startsWith("/") ? path : `/${path}`
     url.pathname = `${basePath}${suffix}`
@@ -302,16 +352,24 @@ export class CommandsClient {
       describeError: (reason: string) => Parameters<AlienError["withContext"]>[0]
     },
   ): Promise<T> {
-    const url = this.buildManagerUrl(path)
     try {
-      const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` }
-      const init: RequestInit = { method, headers }
-      if (options.body !== undefined) {
-        headers["Content-Type"] = "application/json"
-        init.body = JSON.stringify(options.body)
+      const send = async (forceRefresh: boolean) => {
+        const connection = await this.connectionProvider.get(forceRefresh)
+        const url = this.buildManagerUrl(connection.managerUrl, path)
+        const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` }
+        const init: RequestInit = { method, headers }
+        if (options.body !== undefined) {
+          headers["Content-Type"] = "application/json"
+          init.body = JSON.stringify(options.body)
+        }
+        return { response: await this.fetchImpl(url, init), url }
       }
 
-      const response = await this.fetchImpl(url, init)
+      let result = await send(false)
+      if (result.response.status === 401 && this.connectionProvider.refreshable) {
+        result = await send(true)
+      }
+      const { response, url } = result
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "")
         throw new AlienError(

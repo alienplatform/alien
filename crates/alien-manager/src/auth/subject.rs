@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use alien_core::CommandTarget;
 use serde::{Deserialize, Serialize};
 
 /// The unified authenticated principal. Every
@@ -93,6 +94,24 @@ pub enum Scope {
         project_id: String,
         deployment_id: String,
     },
+    /// Narrow, short-lived access to the commands API for one deployment.
+    Commands {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "deploymentId")]
+        deployment_id: String,
+        capability: CommandCapability,
+    },
+}
+
+/// Operation a commands-only bearer may perform.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum CommandCapability {
+    /// Create commands and read their status.
+    Send,
+    /// Lease and complete commands for one exact app-owned receiver target.
+    Receive { target: CommandTarget },
 }
 
 impl Scope {
@@ -103,7 +122,8 @@ impl Scope {
             Scope::Workspace => None,
             Scope::Project { project_id }
             | Scope::DeploymentGroup { project_id, .. }
-            | Scope::Deployment { project_id, .. } => Some(project_id),
+            | Scope::Deployment { project_id, .. }
+            | Scope::Commands { project_id, .. } => Some(project_id),
         }
     }
 }
@@ -164,6 +184,8 @@ pub enum Role {
     DeploymentTelemetryWriter,
     DeploymentViewer,
     DeploymentGroupDeployer,
+    /// Inert outside command-specific authorization gates.
+    CommandCapability,
 }
 
 #[cfg(test)]
@@ -257,5 +279,65 @@ mod tests {
             }
             other => panic!("unexpected scope {:?}", other),
         }
+    }
+
+    #[test]
+    fn commands_scope_serde_is_stable_for_platform_validators() {
+        let sender = sample(
+            Role::CommandCapability,
+            Scope::Commands {
+                project_id: "p1".to_string(),
+                deployment_id: "d1".to_string(),
+                capability: CommandCapability::Send,
+            },
+        );
+        let sender_json = serde_json::to_value(sender).expect("serialize sender");
+        assert_eq!(
+            sender_json["scope"],
+            serde_json::json!({
+                "type": "commands",
+                "projectId": "p1",
+                "deploymentId": "d1",
+                "capability": { "type": "send" },
+            }),
+        );
+        assert_eq!(sender_json["role"], "command-capability");
+
+        let receiver = sample(
+            Role::CommandCapability,
+            Scope::Commands {
+                project_id: "p1".to_string(),
+                deployment_id: "d1".to_string(),
+                capability: CommandCapability::Receive {
+                    target: CommandTarget::new("daemon-a", alien_core::CommandTargetType::Daemon),
+                },
+            },
+        );
+        let receiver_json = serde_json::to_value(&receiver).expect("serialize receiver");
+        assert_eq!(
+            receiver_json["scope"],
+            serde_json::json!({
+                "type": "commands",
+                "projectId": "p1",
+                "deploymentId": "d1",
+                "capability": {
+                    "type": "receive",
+                    "target": {
+                        "resourceId": "daemon-a",
+                        "resourceType": "daemon",
+                    },
+                },
+            }),
+        );
+        let round_tripped: Subject =
+            serde_json::from_value(receiver_json).expect("deserialize receiver");
+        assert!(matches!(
+            round_tripped.scope,
+            Scope::Commands {
+                capability: CommandCapability::Receive { target },
+                ..
+            } if target
+                == CommandTarget::new("daemon-a", alien_core::CommandTargetType::Daemon)
+        ));
     }
 }

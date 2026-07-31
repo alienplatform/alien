@@ -12,4 +12,4 @@ pub mod authz;
 pub mod subject;
 
 pub use authz::{Authz, DeploymentCreateCtx};
-pub use subject::{Role, Scope, Subject, SubjectKind};
+pub use subject::{CommandCapability, Role, Scope, Subject, SubjectKind};

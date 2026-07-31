@@ -37,6 +37,11 @@
 import { readFile } from "node:fs/promises"
 import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
 import {
+  type CommandConnectionProvider,
+  HostedCommandConnectionProvider,
+  managerCommandsUrl,
+} from "./bootstrap.js"
+import {
   CommandReceiverConfigInvalidError,
   InvalidEnvelopeError,
   ManagerHttpError,
@@ -221,10 +226,7 @@ export interface CommandReceiver {
   stop(): void
 }
 
-/** Options for {@link createCommandReceiver}; every field has a production default. */
-export interface CommandReceiverOptions {
-  /** Environment source (defaults to `process.env`). */
-  env?: Record<string, string | undefined>
+interface CommandReceiverRuntimeOptions {
   /** `fetch` implementation (defaults to the global `fetch`). */
   fetch?: typeof fetch
   /** Lease poll interval in ms (default 5000). Overrides the environment. */
@@ -239,6 +241,29 @@ export interface CommandReceiverOptions {
   maxLeases?: number
   /** Graceful drain timeout in ms (default 30000). */
   drainTimeoutMs?: number
+}
+
+/**
+ * Injected-runtime options for {@link createCommandReceiver}. Identity and
+ * credentials come from the `ALIEN_COMMANDS_*` environment variables.
+ */
+export interface CommandReceiverOptions extends CommandReceiverRuntimeOptions {
+  /** Environment source (defaults to `process.env`). */
+  env?: Record<string, string | undefined>
+}
+
+/**
+ * Hosted Alien options for an external command receiver.
+ */
+export interface HostedCommandReceiverOptions extends CommandReceiverRuntimeOptions {
+  /** Deployment that owns the receiving target. */
+  deploymentId: string
+  /** Alien API key used to discover the manager and mint receiver-only access. */
+  apiKey: string
+  /** Command-enabled Container or Daemon name/id to receive for. */
+  target: string
+  /** Alien Platform API base URL (default: "https://api.alien.dev"). */
+  platformUrl?: string
 }
 
 interface ReceiverConfig {
@@ -256,6 +281,28 @@ interface ReceiverConfig {
   drainTimeoutMs: number
 }
 
+interface ReceiverRuntimeConfig {
+  pollIntervalMs: number
+  pollMaxIntervalMs: number
+  pollJitter: number
+  leaseSeconds: number
+  maxLeases: number
+  drainTimeoutMs: number
+}
+
+interface ReceiverConnection {
+  url: string
+  token: string
+  deploymentId: string
+  resourceId: string
+  resourceType: Exclude<CommandTargetType, "worker">
+}
+
+interface ReceiverConnectionProvider {
+  readonly refreshable: boolean
+  get(forceRefresh?: boolean): Promise<ReceiverConnection>
+}
+
 /**
  * Construct the pull receiver from environment configuration.
  *
@@ -266,10 +313,35 @@ interface ReceiverConfig {
  * `container` or `daemon`; `worker` (and anything else) is rejected — a receiver
  * must not guess its target type.
  */
-export function createCommandReceiver(options: CommandReceiverOptions = {}): CommandReceiver {
+export function createCommandReceiver(options: HostedCommandReceiverOptions): CommandReceiver
+export function createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver
+export function createCommandReceiver(
+  options: CommandReceiverOptions | HostedCommandReceiverOptions = {},
+): CommandReceiver {
+  if (isHostedOptions(options)) {
+    const provider = new HostedReceiverConnectionProvider(
+      new HostedCommandConnectionProvider({
+        deploymentId: options.deploymentId,
+        apiKey: options.apiKey,
+        role: "receiver",
+        target: options.target,
+        platformUrl: options.platformUrl,
+        fetch: options.fetch,
+      }),
+      options.deploymentId,
+    )
+    return new PullCommandReceiver(provider, validateRuntimeConfig({}, options), options)
+  }
+
   const env = options.env ?? (typeof process !== "undefined" ? process.env : {})
   const config = validateConfig(env, options)
-  return new PullCommandReceiver(config, options)
+  return new PullCommandReceiver(new EnvironmentReceiverConnectionProvider(config), config, options)
+}
+
+function isHostedOptions(
+  options: CommandReceiverOptions | HostedCommandReceiverOptions,
+): options is HostedCommandReceiverOptions {
+  return "deploymentId" in options || "apiKey" in options || "target" in options
 }
 
 function requireEnv(env: Record<string, string | undefined>, name: string): string {
@@ -365,6 +437,21 @@ function validateConfig(
     )
   }
 
+  return {
+    url,
+    token,
+    tokenFile,
+    deploymentId,
+    resourceId,
+    resourceType: rawType,
+    ...validateRuntimeConfig(env, options),
+  }
+}
+
+function validateRuntimeConfig(
+  env: Record<string, string | undefined>,
+  options: CommandReceiverRuntimeOptions,
+): ReceiverRuntimeConfig {
   const pollIntervalMs = numericConfig(
     env,
     ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
@@ -389,12 +476,6 @@ function validateConfig(
   }
 
   return {
-    url,
-    token,
-    tokenFile,
-    deploymentId,
-    resourceId,
-    resourceType: rawType,
     pollIntervalMs,
     pollMaxIntervalMs,
     pollJitter: numericConfig(
@@ -469,14 +550,69 @@ class TokenSource {
   }
 }
 
+class EnvironmentReceiverConnectionProvider implements ReceiverConnectionProvider {
+  private readonly tokenSource: TokenSource
+
+  constructor(private readonly config: ReceiverConfig) {
+    this.tokenSource = new TokenSource(config.token, config.tokenFile)
+  }
+
+  get refreshable(): boolean {
+    return this.tokenSource.refreshable
+  }
+
+  async get(forceRefresh = false): Promise<ReceiverConnection> {
+    return {
+      url: this.config.url,
+      token: await this.tokenSource.read(forceRefresh),
+      deploymentId: this.config.deploymentId,
+      resourceId: this.config.resourceId,
+      resourceType: this.config.resourceType,
+    }
+  }
+}
+
+class HostedReceiverConnectionProvider implements ReceiverConnectionProvider {
+  readonly refreshable = true
+
+  constructor(
+    private readonly provider: CommandConnectionProvider,
+    private readonly deploymentId: string,
+  ) {}
+
+  async get(forceRefresh = false): Promise<ReceiverConnection> {
+    const connection = await this.provider.get(forceRefresh)
+    if (connection.target === undefined) {
+      throw new AlienError(
+        InvalidEnvelopeError.create({
+          field: "target",
+          reason: "Receiver bootstrap response is missing target",
+        }),
+      )
+    }
+    return {
+      url: managerCommandsUrl(connection.managerUrl),
+      token: connection.token,
+      deploymentId: this.deploymentId,
+      resourceId: connection.target.resourceId,
+      resourceType: connection.target.resourceType,
+    }
+  }
+}
+
 interface ActiveLease {
   lease: LeaseInfo
   controller: AbortController
   task: Promise<void>
 }
 
+interface AcquiredLease {
+  lease: LeaseInfo
+  connection: ReceiverConnection
+}
+
 class PullCommandReceiver implements CommandReceiver {
-  private readonly config: ReceiverConfig
+  private readonly connectionProvider: ReceiverConnectionProvider
   private readonly fetchImpl: typeof fetch
   private readonly pollIntervalMs: number
   private readonly leaseSeconds: number
@@ -484,13 +620,16 @@ class PullCommandReceiver implements CommandReceiver {
   private readonly pollMaxIntervalMs: number
   private readonly pollJitter: number
   private readonly drainTimeoutMs: number
-  private readonly tokenSource: TokenSource
   private readonly handlers = new Map<string, RawCommandHandler>()
   private readonly shutdown = new AbortController()
   private readonly active = new Map<string, ActiveLease>()
 
-  constructor(config: ReceiverConfig, options: CommandReceiverOptions) {
-    this.config = config
+  constructor(
+    connectionProvider: ReceiverConnectionProvider,
+    config: ReceiverRuntimeConfig,
+    options: CommandReceiverRuntimeOptions,
+  ) {
+    this.connectionProvider = connectionProvider
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.pollIntervalMs = config.pollIntervalMs
     this.pollMaxIntervalMs = config.pollMaxIntervalMs
@@ -498,7 +637,6 @@ class PullCommandReceiver implements CommandReceiver {
     this.leaseSeconds = config.leaseSeconds
     this.maxLeases = config.maxLeases
     this.drainTimeoutMs = config.drainTimeoutMs
-    this.tokenSource = new TokenSource(config.token, config.tokenFile)
   }
 
   command(name: string, handler: CommandHandler<unknown>): CommandReceiver
@@ -551,7 +689,7 @@ class PullCommandReceiver implements CommandReceiver {
     // (no new poll starts once draining begins), acquire leases (a poll already
     // in flight completes and its leases are dispatched), then sleep-or-stop.
     while (!this.shutdown.signal.aborted) {
-      let leases: LeaseInfo[] = []
+      let leases: AcquiredLease[] = []
       let sleepMs = nextPollMs
       const available = Math.max(0, this.maxLeases - this.active.size)
       if (available === 0) {
@@ -578,13 +716,13 @@ class PullCommandReceiver implements CommandReceiver {
         }
       }
 
-      for (const lease of leases) {
+      for (const { lease, connection } of leases) {
         if (this.active.has(lease.commandId)) {
           await this.releaseLease(lease.leaseId)
           continue
         }
         const controller = new AbortController()
-        const task = this.processLease(lease, controller).finally(() => {
+        const task = this.processLease(lease, controller, connection).finally(() => {
           const current = this.active.get(lease.commandId)
           if (current?.lease.leaseId === lease.leaseId) this.active.delete(lease.commandId)
         })
@@ -624,30 +762,32 @@ class PullCommandReceiver implements CommandReceiver {
   }
 
   /** Build the lease request this receiver sends (pure — unit-testable). */
-  private buildLeaseRequest(maxLeases: number): LeaseRequest {
+  private buildLeaseRequest(maxLeases: number, connection: ReceiverConnection): LeaseRequest {
     return {
-      deploymentId: this.config.deploymentId,
+      deploymentId: connection.deploymentId,
       target: {
-        resourceId: this.config.resourceId,
-        resourceType: this.config.resourceType,
+        resourceId: connection.resourceId,
+        resourceType: connection.resourceType,
       },
       maxLeases,
       leaseSeconds: this.leaseSeconds,
     }
   }
 
-  private async acquireLeases(maxLeases: number): Promise<LeaseInfo[]> {
-    const endpoint = buildLeaseEndpoint(this.config.url)
-    const response = await this.authenticatedFetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  private async acquireLeases(maxLeases: number): Promise<AcquiredLease[]> {
+    const { response, endpoint, connection } = await this.authenticatedFetch(connection => ({
+      endpoint: buildLeaseEndpoint(connection.url),
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(this.buildLeaseRequest(maxLeases, connection)),
+        // fetch has no default timeout; a hung lease call would freeze the
+        // whole poll loop, so cap it well under the lease duration.
+        signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
       },
-      body: JSON.stringify(this.buildLeaseRequest(maxLeases)),
-      // fetch has no default timeout; a hung lease call would freeze the
-      // whole poll loop, so cap it well under the lease duration.
-      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-    })
+    }))
 
     if (!response.ok) {
       const context = {
@@ -675,21 +815,31 @@ class PullCommandReceiver implements CommandReceiver {
     for (const lease of parsed.leases) {
       resolveEnvelopeUrls(lease.envelope, endpoint)
     }
-    return parsed.leases
+    return parsed.leases.map(lease => ({ lease, connection }))
   }
 
-  private async authenticatedFetch(endpoint: string, init: RequestInit): Promise<Response> {
+  private async authenticatedFetch(
+    buildRequest: (connection: ReceiverConnection) => {
+      endpoint: string
+      init: RequestInit
+    },
+  ): Promise<{ response: Response; endpoint: string; connection: ReceiverConnection }> {
     const send = async (forceRefresh: boolean) => {
-      const token = await this.tokenSource.read(forceRefresh)
+      const connection = await this.connectionProvider.get(forceRefresh)
+      const { endpoint, init } = buildRequest(connection)
       const headers = new Headers(init.headers)
-      headers.set("Authorization", `Bearer ${token}`)
-      return this.fetchImpl(endpoint, { ...init, headers })
+      headers.set("Authorization", `Bearer ${connection.token}`)
+      return {
+        response: await this.fetchImpl(endpoint, { ...init, headers }),
+        endpoint,
+        connection,
+      }
     }
-    let response = await send(false)
-    if (response.status === 401 && this.tokenSource.refreshable) {
-      response = await send(true)
+    let result = await send(false)
+    if (result.response.status === 401 && this.connectionProvider.refreshable) {
+      result = await send(true)
     }
-    return response
+    return result
   }
 
   /**
@@ -698,12 +848,16 @@ class PullCommandReceiver implements CommandReceiver {
    * submit, and a submit failure produces no ack, so the lease expires and the
    * command is redelivered.
    */
-  private async processLease(lease: LeaseInfo, controller: AbortController): Promise<void> {
+  private async processLease(
+    lease: LeaseInfo,
+    controller: AbortController,
+    identity: ReceiverConnection,
+  ): Promise<void> {
     const executionBudget = commandBudget(
       lease.envelope.deadline ?? undefined,
       lease.leaseExpiresAt,
     )
-    const response = await this.executeLease(lease, controller, executionBudget)
+    const response = await this.executeLease(lease, controller, executionBudget, identity)
     if (response === undefined) {
       await this.releaseLease(lease.leaseId)
       return
@@ -723,8 +877,8 @@ class PullCommandReceiver implements CommandReceiver {
     logCommandProcessed({
       commandId: lease.commandId,
       leaseId: lease.leaseId,
-      targetResourceId: this.config.resourceId,
-      targetResourceType: this.config.resourceType,
+      targetResourceId: identity.resourceId,
+      targetResourceType: identity.resourceType,
       attempt: lease.attempt,
       deadline: lease.envelope.deadline ?? null,
       handlerStatus,
@@ -740,6 +894,7 @@ class PullCommandReceiver implements CommandReceiver {
     lease: LeaseInfo,
     controller: AbortController,
     budget: Date,
+    identity: ReceiverConnection,
   ): Promise<CommandResponse | undefined> {
     const { envelope, attempt } = lease
     const handler = this.handlers.get(envelope.command)
@@ -768,8 +923,8 @@ class PullCommandReceiver implements CommandReceiver {
         commandId: envelope.commandId,
         attempt,
         target: {
-          resourceId: this.config.resourceId,
-          resourceType: this.config.resourceType,
+          resourceId: identity.resourceId,
+          resourceType: identity.resourceType,
         },
         traceContext: envelope.traceContext ?? undefined,
       }
@@ -780,14 +935,16 @@ class PullCommandReceiver implements CommandReceiver {
   }
 
   private async releaseLease(leaseId: string): Promise<void> {
-    const endpoint = buildReleaseEndpoint(this.config.url, leaseId)
     try {
-      const response = await this.authenticatedFetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leaseId }),
-        signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-      })
+      const { response } = await this.authenticatedFetch(connection => ({
+        endpoint: buildReleaseEndpoint(connection.url, leaseId),
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leaseId }),
+          signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
+        },
+      }))
       if (response.ok || response.status === 409 || response.status === 410) return
       const body = await response.text().catch(() => "")
       logWarn(

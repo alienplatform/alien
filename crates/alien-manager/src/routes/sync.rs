@@ -1127,8 +1127,12 @@ mod tests {
     #[test]
     fn preserving_gate_answers_folds_key_by_key_with_the_record_winning() {
         let mut recorded = RuntimeMetadata::default();
-        recorded.persisted_gate_answers.insert("a".to_string(), false);
-        recorded.persisted_gate_answers.insert("b".to_string(), true);
+        recorded
+            .persisted_gate_answers
+            .insert("a".to_string(), false);
+        recorded
+            .persisted_gate_answers
+            .insert("b".to_string(), true);
         let mut stored = deployment_record_with_state("running", None);
         stored.runtime_metadata = Some(recorded);
 
@@ -1939,6 +1943,10 @@ async fn initialize(
                 .into_response(),
                 Err(e) => e.into_response(),
             }
+        }
+        crate::auth::Scope::Commands { .. } => {
+            ErrorData::forbidden("Command credentials cannot initialize deployments")
+                .into_response()
         }
     }
 }

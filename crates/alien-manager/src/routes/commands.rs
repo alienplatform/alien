@@ -36,6 +36,42 @@ async fn get_command_owner(state: &AppState, command_id: &str) -> Result<String,
         })
 }
 
+/// Load a deployment for a command route.
+///
+/// A commands-only credential is bound to one manager. If that manager no
+/// longer owns the deployment, return 401 so hosted clients refresh their
+/// bootstrap connection and retry against the new manager. Other callers keep
+/// the ordinary deployment-not-found response.
+async fn get_command_deployment(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+) -> Result<crate::traits::DeploymentRecord, Response> {
+    match state
+        .deployment_store
+        .get_deployment(subject, deployment_id)
+        .await
+        .map_err(|e| e.into_response())?
+    {
+        Some(deployment) => Ok(deployment),
+        None => Err(missing_command_deployment_response(subject, deployment_id)),
+    }
+}
+
+fn missing_command_deployment_response(
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+) -> Response {
+    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+        ErrorData::unauthorized(
+            "Command credential is no longer valid for this manager; refresh it and retry",
+        )
+        .into_response()
+    } else {
+        ErrorData::not_found_deployment(deployment_id).into_response()
+    }
+}
+
 /// Authorize the caller against the deployment that owns a command.
 /// Loads the deployment then defers to `Authz::can_read_command`.
 async fn require_command_access(
@@ -43,12 +79,7 @@ async fn require_command_access(
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    let deployment = state
-        .deployment_store
-        .get_deployment(subject, deployment_id)
-        .await
-        .map_err(|e| e.into_response())?
-        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
+    let deployment = get_command_deployment(state, subject, deployment_id).await?;
     if state.authz.can_read_command(subject, &deployment) {
         Ok(())
     } else {
@@ -64,6 +95,9 @@ async fn require_command_read_access(
     subject: &crate::auth::Subject,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
+    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+        require_current_command_deployment(state, subject, &command.deployment_id).await?;
+    }
     if !matches!(subject.scope, crate::auth::Scope::DeploymentGroup { .. }) {
         return if state.authz.can_read_command_context(subject, command) {
             Ok(())
@@ -75,22 +109,69 @@ async fn require_command_read_access(
     require_command_access(state, subject, &command.deployment_id).await
 }
 
+/// Require the command's deployment to still belong to this manager.
+///
+/// Hosted command credentials are manager-bound and short-lived, but a
+/// reassignment can happen before expiry. The injected deployment store is
+/// the current ownership source, so commands-only access must re-check it
+/// before authorizing a canonical command record left on the old manager.
+async fn require_current_command_deployment(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+) -> Result<(), Response> {
+    get_command_deployment(state, subject, deployment_id)
+        .await
+        .map(|_| ())
+}
+
+/// Before an assignment-filtered command/lease lookup, verify the deployment
+/// encoded in a commands-only credential still belongs to this manager.
+///
+/// Without this preflight, a stale manager can hide the command context first
+/// and incorrectly return 404, preventing hosted clients from refreshing on
+/// the 401 reassignment signal.
+async fn preflight_commands_scope_deployment(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+) -> Result<(), Response> {
+    if let crate::auth::Scope::Commands { deployment_id, .. } = &subject.scope {
+        require_current_command_deployment(state, subject, deployment_id).await?;
+    }
+    Ok(())
+}
+
 async fn require_command_execution_access(
     state: &AppState,
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    let deployment = state
-        .deployment_store
-        .get_deployment(subject, deployment_id)
-        .await
-        .map_err(|e| e.into_response())?
-        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
+    let deployment = get_command_deployment(state, subject, deployment_id).await?;
     if state.authz.can_execute_command(subject, &deployment) {
         Ok(())
     } else {
         Err(ErrorData::forbidden("Access denied").into_response())
     }
+}
+
+/// Authorize response/release execution from canonical command ownership.
+/// Commands-only receiver credentials are checked against the exact target;
+/// existing admin/deployment/group callers retain the deployment-level path.
+async fn require_command_execution_context(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    command: &alien_commands::server::CommandAccessContext,
+) -> Result<(), Response> {
+    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+        require_current_command_deployment(state, subject, &command.deployment_id).await?;
+        return if state.authz.can_execute_command_context(subject, command) {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    require_command_execution_access(state, subject, &command.deployment_id).await
 }
 
 // --- Router ---
@@ -139,14 +220,9 @@ async fn create_command(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &request.deployment_id)
-        .await
-    {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
-        Err(e) => return e.into_response(),
+    let deployment = match get_command_deployment(&state, &subject, &request.deployment_id).await {
+        Ok(deployment) => deployment,
+        Err(response) => return response,
     };
 
     if !state.authz.can_dispatch_command(&subject, &deployment) {
@@ -171,6 +247,9 @@ async fn get_command_status(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
+        return response;
+    }
     let command = match state
         .command_server
         .get_command_access_context(&command_id)
@@ -211,19 +290,17 @@ async fn upload_complete(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
+        return response;
+    }
     let deployment_id = match get_command_owner(&state, &command_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &deployment_id)
-        .await
-    {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
-        Err(e) => return e.into_response(),
+    let deployment = match get_command_deployment(&state, &subject, &deployment_id).await {
+        Ok(deployment) => deployment,
+        Err(response) => return response,
     };
 
     if !state.authz.can_dispatch_command(&subject, &deployment) {
@@ -267,23 +344,30 @@ async fn submit_response(
     };
 
     if let Some(subject) = bearer_auth {
-        // Standard Bearer auth path — verify deployment access via Authz.
-        let deployment_id = match get_command_owner(&state, &command_id).await {
-            Ok(id) => id,
-            Err(e) => return e,
-        };
-        let deployment = match state
-            .deployment_store
-            .get_deployment(&subject, &deployment_id)
+        if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
+            return response;
+        }
+        // Standard Bearer auth path — commands-only receiver credentials are
+        // bound to the exact command target, while legacy/admin credentials
+        // retain deployment-level authorization.
+        let command = match state
+            .command_server
+            .get_command_access_context(&command_id)
             .await
         {
-            Ok(Some(d)) => d,
-            Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+            Ok(Some(command)) => command,
+            Ok(None) => {
+                return alien_error::AlienError::new(
+                    alien_commands::error::ErrorData::CommandNotFound {
+                        command_id: command_id.clone(),
+                    },
+                )
+                .into_response()
+            }
             Err(e) => return e.into_response(),
         };
-        if !state.authz.can_execute_command(&subject, &deployment) {
-            return ErrorData::forbidden("Access denied: cannot act on the target deployment")
-                .into_response();
+        if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
+            return e;
         }
     } else {
         // No Bearer token — try presigned URL auth from query parameters.
@@ -322,6 +406,9 @@ async fn get_command_payload(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
+        return response;
+    }
     // Verify the caller has access to this command's deployment via Authz.
     // If the command isn't in the local registry (e.g. when command metadata
     // is managed externally), fall back to requiring workspace-write
@@ -430,19 +517,16 @@ async fn acquire_leases(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &lease_request.deployment_id)
-        .await
-    {
-        Ok(Some(d)) => d,
-        Ok(None) => {
-            return ErrorData::not_found_deployment(&lease_request.deployment_id).into_response()
-        }
-        Err(e) => return e.into_response(),
-    };
+    let deployment =
+        match get_command_deployment(&state, &subject, &lease_request.deployment_id).await {
+            Ok(deployment) => deployment,
+            Err(response) => return response,
+        };
 
-    if !state.authz.can_act_on_deployment(&subject, &deployment) {
+    if !state
+        .authz
+        .can_receive_command(&subject, &deployment, &lease_request.target)
+    {
         return ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
             .into_response();
     }
@@ -472,9 +556,12 @@ async fn release_lease(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
+        return response;
+    }
 
-    let owner = match state.command_server.get_lease_owner(&lease_id).await {
-        Ok(Some((_command_id, owner))) => owner,
+    let (command_id, owner) = match state.command_server.get_lease_owner(&lease_id).await {
+        Ok(Some((command_id, owner))) => (command_id, owner),
         Ok(None) => {
             return alien_error::AlienError::new(alien_commands::error::ErrorData::LeaseNotFound {
                 lease_id: lease_id.clone(),
@@ -483,12 +570,62 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
-    if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
+    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+        let command = match state
+            .command_server
+            .get_command_access_context(&command_id)
+            .await
+        {
+            Ok(Some(command)) => command,
+            Ok(None) => {
+                return alien_error::AlienError::new(
+                    alien_commands::error::ErrorData::CommandNotFound { command_id },
+                )
+                .into_response()
+            }
+            Err(e) => return e.into_response(),
+        };
+        if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
+            return e;
+        }
+    } else if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
         return e;
     }
 
     match state.command_server.release_lease_by_id(&lease_id).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{CommandCapability, Role, Scope, Subject, SubjectKind};
+
+    #[test]
+    fn stale_manager_is_unauthorized_only_for_commands_credentials() {
+        let commands_subject = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "commands-sender".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Send,
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        };
+
+        assert_eq!(
+            missing_command_deployment_response(&commands_subject, "deployment-1").status(),
+            StatusCode::UNAUTHORIZED,
+        );
+        assert_eq!(
+            missing_command_deployment_response(&Subject::system(), "deployment-1").status(),
+            StatusCode::NOT_FOUND,
+        );
     }
 }

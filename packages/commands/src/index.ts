@@ -29,7 +29,11 @@
 
 // Sender
 export { CommandsClient, TargetedCommands } from "./client.js"
-export type { CommandsClientConfig, InvokeOptions } from "./client.js"
+export type {
+  CommandsClientConfig,
+  CommandsClientDeploymentConfig,
+  InvokeOptions,
+} from "./client.js"
 
 // Receiver
 export { createCommandReceiver } from "./receiver.js"
@@ -38,6 +42,7 @@ export type {
   CommandHandler,
   CommandReceiver,
   CommandReceiverOptions,
+  HostedCommandReceiverOptions,
   RawCommandHandler,
   StandardSchema,
   StandardSchemaOutput,
@@ -45,6 +50,8 @@ export type {
 
 // Error set
 export {
+  CommandBootstrapConfigInvalidError,
+  CommandBootstrapFailedError,
   CommandCreationFailedError,
   CommandExpiredError,
   CommandReceiverConfigInvalidError,
@@ -54,6 +61,7 @@ export {
   InvalidEnvelopeError,
   ManagerHttpError,
   MalformedResponseError,
+  PlatformHttpError,
   ResponseDecodingFailedError,
   StorageOperationFailedError,
 } from "./errors.js"

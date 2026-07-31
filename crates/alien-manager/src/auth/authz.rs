@@ -13,6 +13,7 @@ use crate::traits::{
     release_store::ReleaseRecord,
 };
 use alien_commands::server::CommandAccessContext;
+use alien_core::CommandTarget;
 
 /// Context for create operations. Carries the parent identifiers + workspace
 /// the create is targeting; the entity itself does not exist yet.
@@ -53,6 +54,26 @@ pub trait Authz: Send + Sync {
     /// deployment tokens can execute commands but cannot create them.
     fn can_execute_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
         self.can_act_on_deployment(subject, deployment)
+    }
+    /// Authorize lease acquisition for an exact receiver target.
+    fn can_receive_command(
+        &self,
+        subject: &Subject,
+        deployment: &DeploymentRecord,
+        _target: &CommandTarget,
+    ) -> bool {
+        self.can_execute_command(subject, deployment)
+    }
+    /// Authorize bearer response/release access from canonical command data.
+    /// Implementations opt commands-only receiver capabilities into this gate;
+    /// existing deployment/group/admin paths continue through
+    /// `can_execute_command`.
+    fn can_execute_command_context(
+        &self,
+        _subject: &Subject,
+        _command: &CommandAccessContext,
+    ) -> bool {
+        false
     }
     fn can_read_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     /// Authorize a read from the canonical command record without loading its
