@@ -38,6 +38,41 @@ async fn test_config_change_triggers_update() -> Result<()> {
     Ok(())
 }
 
+/// Refresh observes the persisted deployment; it must not turn desired release
+/// drift into an update.
+#[tokio::test]
+async fn test_refresh_does_not_plan_config_changes() -> Result<()> {
+    let func_v1 = test_function_with_image("func1", "image-v1");
+    let stack_v1 = Stack::new("refresh-test".to_owned())
+        .add(func_v1.clone(), ResourceLifecycle::Live)
+        .build();
+    let state = run_to_synced(&new_executor(&stack_v1)?, new_test_state()).await?;
+
+    let stack_v2 = Stack::new("refresh-test".to_owned())
+        .add(
+            test_function_with_image("func1", "image-v2"),
+            ResourceLifecycle::Live,
+        )
+        .add(test_storage("new-storage"), ResourceLifecycle::Frozen)
+        .build();
+    let refreshed = new_executor(&stack_v2)?.refresh(state).await?.next_state;
+
+    assert_eq!(
+        refreshed.resources.len(),
+        1,
+        "refresh must not create desired resources missing from persisted state"
+    );
+    let resource = refreshed.resources.get("func1").unwrap();
+    assert_eq!(resource.status, ResourceStatus::Running);
+    assert_eq!(
+        resource.config,
+        Resource::new(func_v1),
+        "refresh must retain the deployed config instead of applying desired drift"
+    );
+
+    Ok(())
+}
+
 /// Tests that config changes while a resource is still provisioning do not
 /// interrupt the in-flight create. The update should happen after create reaches
 /// a stable state.

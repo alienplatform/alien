@@ -1219,8 +1219,11 @@ jobs:
       - name: Inject optionalDependencies into the wrapper
         run: node packages/bindings/scripts/inject-optional-deps.mjs
 
+      # pnpm, not npm: only pnpm rewrites the `workspace:` range on
+      # `@alienplatform/core` into the released version, and npm rejects a
+      # published package that still carries the protocol.
       - name: Pack bindings wrapper
-        run: npm pack ./packages/bindings --pack-destination "$PWD/qualified/bindings"
+        run: pnpm --filter @alienplatform/bindings pack --pack-destination "$PWD/qualified/bindings"
 
       - name: Upload qualified bindings packages
         uses: actions/upload-artifact@v6

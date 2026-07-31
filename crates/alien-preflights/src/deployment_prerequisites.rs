@@ -9,8 +9,8 @@ use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
     validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
-    EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionSet, Platform, ResourceEntry,
-    ResourceLifecycle, Stack, StackState, Worker,
+    EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionProfile, PermissionSet,
+    Platform, ResourceEntry, ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
@@ -50,6 +50,73 @@ fn external_binding_required_types(platform: Platform) -> &'static [&'static str
         Platform::Kubernetes => &["storage", "queue", "kv", "artifact-registry"],
         Platform::Machines => &["storage", "queue", "kv", "vault", "postgres"],
         _ => &[],
+    }
+}
+
+/// AWS runtime resource controllers deliberately do not attach data-access
+/// policies. An exact resource grant therefore has to target setup-owned
+/// infrastructure, whose concrete policy is installed during setup.
+pub struct AwsExactPermissionsSetupOwnedCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for AwsExactPermissionsSetupOwnedCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("AWS_EXACT_PERMISSION_REQUIRES_SETUP_OWNED_RESOURCE")
+    }
+
+    fn description(&self) -> &'static str {
+        "AWS exact-resource permissions require setup-owned resources"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        stack_state.platform == Platform::Aws
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let mut errors = Vec::new();
+
+        for (profile_name, profile) in &stack.permissions.profiles {
+            collect_live_exact_permission_errors(stack, profile_name, profile, &mut errors);
+        }
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
+fn collect_live_exact_permission_errors(
+    stack: &Stack,
+    profile_name: &str,
+    profile: &PermissionProfile,
+    errors: &mut Vec<String>,
+) {
+    for (resource_id, permissions) in profile
+        .0
+        .iter()
+        .filter(|(resource_id, _)| *resource_id != "*")
+    {
+        if stack.resources.get(resource_id).is_some_and(|entry| {
+            entry.lifecycle == ResourceLifecycle::Live && !permissions.is_empty()
+        }) {
+            errors.push(format!(
+                "AWS permission profile '{profile_name}' targets Live resource '{resource_id}'. \
+                 Exact-resource data policies are setup-owned and runtime resource controllers cannot author them. \
+                 Make '{resource_id}' Frozen or use a stack-scoped ('*') permission."
+            ));
+        }
     }
 }
 
@@ -648,6 +715,30 @@ mod tests {
                     .map(std::string::ToString::to_string)
                     .collect()
             }),
+        }
+    }
+
+    #[tokio::test]
+    async fn aws_exact_permissions_reject_live_resources_but_allow_frozen_resources() {
+        let check = AwsExactPermissionsSetupOwnedCheck;
+
+        for (lifecycle, expected_success) in [
+            (ResourceLifecycle::Live, false),
+            (ResourceLifecycle::Frozen, true),
+        ] {
+            let mut stack = Stack::new("permissions-test".to_string())
+                .add(Storage::new("objects".to_string()).build(), lifecycle)
+                .build();
+            stack.permissions.profiles.insert(
+                "content".to_string(),
+                PermissionProfile::new().resource("objects", ["storage/data-write"]),
+            );
+
+            let result = check
+                .check(&stack, &stack_state(Platform::Aws), &deployment_config())
+                .await
+                .unwrap();
+            assert_eq!(result.success, expected_success, "{:?}", result.errors);
         }
     }
 

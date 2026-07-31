@@ -1150,36 +1150,55 @@ impl StackExecutor {
     /// The method is entirely *stateless* from the executor's perspective: all
     /// data required for the next iteration is carried within the returned
     /// `StackState`.
+    pub async fn step(&self, state: StackState) -> Result<StepResult> {
+        self.step_inner(state, true).await
+    }
+
+    /// Steps controllers that are already active without planning stack changes.
+    ///
+    /// Refresh deliberately does not compare the persisted state with the desired
+    /// stack, resume failed updates, or initiate create/update/delete transitions.
+    /// It is suitable for periodic observation of a Running deployment.
+    pub async fn refresh(&self, state: StackState) -> Result<StepResult> {
+        self.step_inner(state, false).await
+    }
+
     #[alien_event(AlienEvent::StackStep {
         next_state: state.clone(),
         suggested_delay_ms: None,
     })]
-    pub async fn step(&self, state: StackState) -> Result<StepResult> {
+    async fn step_inner(&self, state: StackState, apply_plan: bool) -> Result<StepResult> {
         validate_stack_controller_state_versions(&state)?;
 
         let mut state = state;
-        for (resource_id, resource_state) in &mut state.resources {
-            if resource_state.status != ResourceStatus::UpdateFailed {
-                continue;
-            }
-            let Some(desired) = self.resources.get(resource_id) else {
-                continue;
-            };
-            if resource_state.config != desired.resource {
-                continue;
-            }
-            if resource_state.retry_failed()? {
-                debug!(
-                    "Resumed unchanged failed update for '{}' before planning",
-                    resource_id
-                );
+        if apply_plan {
+            for (resource_id, resource_state) in &mut state.resources {
+                if resource_state.status != ResourceStatus::UpdateFailed {
+                    continue;
+                }
+                let Some(desired) = self.resources.get(resource_id) else {
+                    continue;
+                };
+                if resource_state.config != desired.resource {
+                    continue;
+                }
+                if resource_state.retry_failed()? {
+                    debug!(
+                        "Resumed unchanged failed update for '{}' before planning",
+                        resource_id
+                    );
+                }
             }
         }
 
         let mut next_state = state.clone(); // Clone the input state to modify
 
         // --- Planning Phase ---
-        let plan_result = self.plan(&state)?;
+        let plan_result = if apply_plan {
+            self.plan(&state)?
+        } else {
+            PlanResult::default()
+        };
         debug!(
             "Plan result: {} creates, {} updates, {} deletes",
             plan_result.creates.len(),
@@ -1676,11 +1695,12 @@ impl StackExecutor {
             let context_resource: Resource;
 
             // Use current desired config from the stack if it exists, otherwise use stored config for deletion
-            context_resource = if let Some(resource_config) = self.resources.get(&resource_id) {
-                // Resource is still in desired stack (create/update case)
-                resource_config.resource.clone()
+            context_resource = if apply_plan {
+                self.resources
+                    .get(&resource_id)
+                    .map(|resource_config| resource_config.resource.clone())
+                    .unwrap_or_else(|| current_resource_state.config.clone())
             } else {
-                // Resource is not in desired stack (deletion case) - use stored config from stack state
                 current_resource_state.config.clone()
             };
 
@@ -1907,8 +1927,10 @@ impl StackExecutor {
                 };
 
             // Automatically update config to match desired state (except during deletion)
-            let next_config = if current_resource_state.status == ResourceStatus::Deleting {
-                // During deletion, preserve the current config
+            let next_config = if !apply_plan
+                || current_resource_state.status == ResourceStatus::Deleting
+            {
+                // Refresh and deletion preserve the deployed config.
                 current_resource_state.config.clone()
             } else {
                 // For create/update operations, ensure config matches desired state

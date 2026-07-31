@@ -837,14 +837,26 @@ impl ResourcePermissionsHelper {
     ///    an inline policy on the SA role.
     ///
     /// For setup-owned resources, it also applies concrete **management SA**
-    /// resource-scoped permissions. Live resources do not broaden the management
-    /// role at runtime; AWS setup output must grant those permissions up front.
+    /// resource-scoped permissions. Remote Storage grants follow the remote-stack
+    /// ownership path: setup emits them for setup-managed imports, while directly
+    /// managed identities reconcile them after the resource is ready. Live resources
+    /// do not broaden the management role at runtime; AWS setup output must grant
+    /// those permissions up front.
     pub async fn apply_aws_resource_scoped_permissions(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
         resource_name: &str,
         resource_type: &str,
     ) -> Result<()> {
+        if !Self::resource_is_setup_owned(ctx, resource_id) {
+            debug!(
+                resource_id = %resource_id,
+                resource_name = %resource_name,
+                "Skipping AWS resource-scoped data policy attachment for live resource; these policies are setup-owned"
+            );
+            return Ok(());
+        }
+
         let aws_config = ctx.get_aws_config()?;
 
         // Build permission context for this specific resource
@@ -908,12 +920,14 @@ impl ResourcePermissionsHelper {
             }
         }
 
-        if Self::resource_is_setup_owned(ctx, resource_id)
-            && !Self::remote_management_owns_resource_grants(ctx, resource_id, resource_type)
-        {
+        if Self::remote_management_owns_resource_grants(ctx, resource_id, resource_type) {
+            debug!(
+                resource_id = %resource_id,
+                resource_name = %resource_name,
+                "Skipping direct management permission attachment; the remote-stack ownership path supplies the exact Storage grant"
+            );
+        } else {
             // Setup-owned resources run while setup credentials are still active.
-            // Live resource controllers must not edit the management role after
-            // the deployment has moved to provisioning credentials.
             Self::apply_aws_management_resource_permissions(
                 ctx,
                 resource_id,
@@ -923,26 +937,6 @@ impl ResourcePermissionsHelper {
                 &permission_context,
             )
             .await?;
-        } else if Self::remote_management_owns_resource_grants(ctx, resource_id, resource_type) {
-            debug!(
-                resource_id = %resource_id,
-                resource_name = %resource_name,
-                "Skipping Storage-owned management permissions; remote management reconciles the exact grant after Storage is ready"
-            );
-        } else if ctx
-            .desired_stack
-            .management()
-            .profile()
-            .map(|profile| {
-                !Self::explicit_management_resource_permission_refs(profile, resource_id).is_empty()
-            })
-            .unwrap_or(false)
-        {
-            debug!(
-                resource_id = %resource_id,
-                resource_name = %resource_name,
-                "Skipping AWS management resource-scoped permissions for live resource; setup must grant them"
-            );
         }
 
         Ok(())
