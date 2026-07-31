@@ -34,13 +34,8 @@
  * ```
  */
 
-import { readFile } from "node:fs/promises"
 import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
-import {
-  type CommandConnectionProvider,
-  HostedCommandConnectionProvider,
-  managerCommandsUrl,
-} from "./bootstrap.js"
+import { requestWithRefreshingConnection } from "./bootstrap.js"
 import {
   CommandReceiverConfigInvalidError,
   InvalidEnvelopeError,
@@ -58,7 +53,19 @@ import type {
   PresignedRequest,
   TraceContext,
 } from "./protocol.js"
+import {
+  type CommandReceiverOptions,
+  type CommandReceiverRuntimeOptions,
+  ENV_ALIEN_COMMANDS_URL,
+  type HostedCommandReceiverOptions,
+  type ReceiverConnection,
+  type ReceiverConnectionProvider,
+  type ReceiverRuntimeConfig,
+  resolveReceiverConfig,
+} from "./receiver-config.js"
 import { parseWireResponse } from "./wire.js"
+
+export type { CommandReceiverOptions, HostedCommandReceiverOptions } from "./receiver-config.js"
 
 /**
  * Presigned-transfer policy for receivers: the local backend is always
@@ -75,18 +82,6 @@ export const ERROR_CODE_HANDLER_TIMEOUT = "HANDLER_TIMEOUT"
 /** Error code submitted when a handler throws/rejects (or its response fails to serialize). */
 export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR"
 
-/** Lease poll interval, in ms. */
-const DEFAULT_POLL_INTERVAL_MS = 5_000
-/** Max leases requested per poll. One process executes one command at a time by default. */
-const DEFAULT_MAX_LEASES = 1
-/** Requested lease duration, in seconds. */
-const DEFAULT_LEASE_SECONDS = 60
-/** Maximum interval reached by the empty/error poll backoff. */
-const DEFAULT_POLL_MAX_INTERVAL_MS = 30_000
-/** Fractional randomization applied to poll sleeps. */
-const DEFAULT_POLL_JITTER = 0.1
-/** Time allowed for in-flight handlers to finish before abort + release. */
-const DEFAULT_DRAIN_TIMEOUT_MS = 30_000
 /**
  * Safety margin subtracted from a lease's expiry when computing the execution
  * budget, in ms. Stopping this far before the lease actually expires
@@ -103,21 +98,6 @@ const LEASE_SAFETY_MARGIN_MS = 5_000
  * timeout.
  */
 const CONTROL_TIMEOUT_MS = 30_000
-
-// Env variable names — identical strings to the Rust twin
-// (`alien_core::runtime_environment`).
-const ENV_ALIEN_COMMANDS_URL = "ALIEN_COMMANDS_URL"
-const ENV_ALIEN_COMMANDS_TOKEN = "ALIEN_COMMANDS_TOKEN"
-const ENV_ALIEN_COMMANDS_TOKEN_FILE = "ALIEN_COMMANDS_TOKEN_FILE"
-const ENV_ALIEN_DEPLOYMENT_ID = "ALIEN_DEPLOYMENT_ID"
-const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID = "ALIEN_COMMANDS_TARGET_RESOURCE_ID"
-const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE = "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE"
-const ENV_ALIEN_COMMANDS_LEASE_SECONDS = "ALIEN_COMMANDS_LEASE_SECONDS"
-const ENV_ALIEN_COMMANDS_MAX_LEASES = "ALIEN_COMMANDS_MAX_LEASES"
-const ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS = "ALIEN_COMMANDS_POLL_INTERVAL_MS"
-const ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS = "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS"
-const ENV_ALIEN_COMMANDS_POLL_JITTER = "ALIEN_COMMANDS_POLL_JITTER"
-const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS"
 
 /**
  * Per-command context passed to a {@link CommandHandler}.
@@ -226,83 +206,6 @@ export interface CommandReceiver {
   stop(): void
 }
 
-interface CommandReceiverRuntimeOptions {
-  /** `fetch` implementation (defaults to the global `fetch`). */
-  fetch?: typeof fetch
-  /** Lease poll interval in ms (default 5000). Overrides the environment. */
-  pollIntervalMs?: number
-  /** Maximum empty/error poll interval in ms (default 30000). */
-  pollMaxIntervalMs?: number
-  /** Poll jitter fraction from 0 to 1 (default 0.1). */
-  pollJitter?: number
-  /** Requested lease duration in seconds (default 60). Overrides the environment. */
-  leaseSeconds?: number
-  /** Max leases requested per poll (default 1). Overrides the environment. */
-  maxLeases?: number
-  /** Graceful drain timeout in ms (default 30000). */
-  drainTimeoutMs?: number
-}
-
-/**
- * Injected-runtime options for {@link createCommandReceiver}. Identity and
- * credentials come from the `ALIEN_COMMANDS_*` environment variables.
- */
-export interface CommandReceiverOptions extends CommandReceiverRuntimeOptions {
-  /** Environment source (defaults to `process.env`). */
-  env?: Record<string, string | undefined>
-}
-
-/**
- * Hosted Alien options for an external command receiver.
- */
-export interface HostedCommandReceiverOptions extends CommandReceiverRuntimeOptions {
-  /** Deployment that owns the receiving target. */
-  deploymentId: string
-  /** Alien API key used to discover the manager and mint receiver-only access. */
-  apiKey: string
-  /** Command-enabled Container or Daemon name/id to receive for. */
-  target: string
-  /** Alien Platform API base URL (default: "https://api.alien.dev"). */
-  platformUrl?: string
-}
-
-interface ReceiverConfig {
-  url: string
-  token?: string
-  tokenFile?: string
-  deploymentId: string
-  resourceId: string
-  resourceType: Exclude<CommandTargetType, "worker">
-  pollIntervalMs: number
-  pollMaxIntervalMs: number
-  pollJitter: number
-  leaseSeconds: number
-  maxLeases: number
-  drainTimeoutMs: number
-}
-
-interface ReceiverRuntimeConfig {
-  pollIntervalMs: number
-  pollMaxIntervalMs: number
-  pollJitter: number
-  leaseSeconds: number
-  maxLeases: number
-  drainTimeoutMs: number
-}
-
-interface ReceiverConnection {
-  url: string
-  token: string
-  deploymentId: string
-  resourceId: string
-  resourceType: Exclude<CommandTargetType, "worker">
-}
-
-interface ReceiverConnectionProvider {
-  readonly refreshable: boolean
-  get(forceRefresh?: boolean): Promise<ReceiverConnection>
-}
-
 /**
  * Construct the pull receiver from environment configuration.
  *
@@ -318,286 +221,8 @@ export function createCommandReceiver(options?: CommandReceiverOptions): Command
 export function createCommandReceiver(
   options: CommandReceiverOptions | HostedCommandReceiverOptions = {},
 ): CommandReceiver {
-  if (isHostedOptions(options)) {
-    const provider = new HostedReceiverConnectionProvider(
-      new HostedCommandConnectionProvider({
-        deploymentId: options.deploymentId,
-        apiKey: options.apiKey,
-        role: "receiver",
-        target: options.target,
-        platformUrl: options.platformUrl,
-        fetch: options.fetch,
-      }),
-      options.deploymentId,
-    )
-    return new PullCommandReceiver(provider, validateRuntimeConfig({}, options), options)
-  }
-
-  const env = options.env ?? (typeof process !== "undefined" ? process.env : {})
-  const config = validateConfig(env, options)
-  return new PullCommandReceiver(new EnvironmentReceiverConnectionProvider(config), config, options)
-}
-
-function isHostedOptions(
-  options: CommandReceiverOptions | HostedCommandReceiverOptions,
-): options is HostedCommandReceiverOptions {
-  return "deploymentId" in options || "apiKey" in options || "target" in options
-}
-
-function requireEnv(env: Record<string, string | undefined>, name: string): string {
-  const value = env[name]
-  if (value === undefined) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({ envVar: name, reason: `${name} is required` }),
-    )
-  }
-  if (value.trim() === "") {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: name,
-        reason: `${name} must not be empty`,
-      }),
-    )
-  }
-  return value
-}
-
-function optionalNonEmpty(
-  env: Record<string, string | undefined>,
-  name: string,
-): string | undefined {
-  const value = env[name]
-  if (value?.trim() === "") {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: name,
-        reason: `${name} must not be empty`,
-      }),
-    )
-  }
-  return value
-}
-
-function numericConfig(
-  env: Record<string, string | undefined>,
-  envName: string,
-  override: number | undefined,
-  fallback: number,
-  validate: (value: number) => boolean,
-): number {
-  const raw = override ?? (env[envName] === undefined ? fallback : Number(env[envName]))
-  if (!Number.isFinite(raw) || !validate(raw)) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: envName,
-        reason: `${envName} has invalid numeric value '${env[envName] ?? raw}'`,
-      }),
-    )
-  }
-  return raw
-}
-
-function validateConfig(
-  env: Record<string, string | undefined>,
-  options: CommandReceiverOptions,
-): ReceiverConfig {
-  const url = requireEnv(env, ENV_ALIEN_COMMANDS_URL)
-  try {
-    // eslint-disable-next-line no-new -- validating parseability only
-    new URL(url)
-  } catch {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_URL,
-        reason: `${ENV_ALIEN_COMMANDS_URL} is not a valid URL: ${url}`,
-      }),
-    )
-  }
-
-  const token = optionalNonEmpty(env, ENV_ALIEN_COMMANDS_TOKEN)
-  const tokenFile = optionalNonEmpty(env, ENV_ALIEN_COMMANDS_TOKEN_FILE)
-  if (token === undefined && tokenFile === undefined) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_TOKEN,
-        reason: `${ENV_ALIEN_COMMANDS_TOKEN} or ${ENV_ALIEN_COMMANDS_TOKEN_FILE} is required`,
-      }),
-    )
-  }
-  const deploymentId = requireEnv(env, ENV_ALIEN_DEPLOYMENT_ID)
-  const resourceId = requireEnv(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)
-
-  const rawType = requireEnv(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE)
-  if (rawType !== "container" && rawType !== "daemon") {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
-        reason: `${ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE} must be 'container' or 'daemon', got '${rawType}'`,
-      }),
-    )
-  }
-
-  return {
-    url,
-    token,
-    tokenFile,
-    deploymentId,
-    resourceId,
-    resourceType: rawType,
-    ...validateRuntimeConfig(env, options),
-  }
-}
-
-function validateRuntimeConfig(
-  env: Record<string, string | undefined>,
-  options: CommandReceiverRuntimeOptions,
-): ReceiverRuntimeConfig {
-  const pollIntervalMs = numericConfig(
-    env,
-    ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
-    options.pollIntervalMs,
-    DEFAULT_POLL_INTERVAL_MS,
-    value => Number.isInteger(value) && value > 0,
-  )
-  const pollMaxIntervalMs = numericConfig(
-    env,
-    ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
-    options.pollMaxIntervalMs,
-    DEFAULT_POLL_MAX_INTERVAL_MS,
-    value => Number.isInteger(value) && value > 0,
-  )
-  if (pollMaxIntervalMs < pollIntervalMs) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
-        reason: `${ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS} must be at least ${ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS}`,
-      }),
-    )
-  }
-
-  return {
-    pollIntervalMs,
-    pollMaxIntervalMs,
-    pollJitter: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_POLL_JITTER,
-      options.pollJitter,
-      DEFAULT_POLL_JITTER,
-      value => value >= 0 && value <= 1,
-    ),
-    leaseSeconds: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_LEASE_SECONDS,
-      options.leaseSeconds,
-      DEFAULT_LEASE_SECONDS,
-      value => Number.isInteger(value) && value > 0,
-    ),
-    maxLeases: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_MAX_LEASES,
-      options.maxLeases,
-      DEFAULT_MAX_LEASES,
-      value => Number.isInteger(value) && value > 0,
-    ),
-    drainTimeoutMs: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
-      options.drainTimeoutMs,
-      DEFAULT_DRAIN_TIMEOUT_MS,
-      value => Number.isInteger(value) && value >= 0,
-    ),
-  }
-}
-
-class TokenSource {
-  private cachedFileToken: string | undefined
-
-  constructor(
-    private readonly token: string | undefined,
-    private readonly tokenFile: string | undefined,
-  ) {}
-
-  get refreshable(): boolean {
-    return this.token === undefined && this.tokenFile !== undefined
-  }
-
-  async read(forceRefresh = false): Promise<string> {
-    if (this.token !== undefined) return this.token
-    if (!forceRefresh && this.cachedFileToken !== undefined) return this.cachedFileToken
-
-    const path = this.tokenFile as string
-    let token: string
-    try {
-      token = (await readFile(path, "utf8")).trim()
-    } catch (error) {
-      throw (await AlienError.from(error)).withContext(
-        CommandReceiverConfigInvalidError.create({
-          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
-          reason: `Failed to read command token file '${path}'`,
-        }),
-      )
-    }
-    if (token === "") {
-      throw new AlienError(
-        CommandReceiverConfigInvalidError.create({
-          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
-          reason: `${ENV_ALIEN_COMMANDS_TOKEN_FILE} '${path}' contains an empty token`,
-        }),
-      )
-    }
-    this.cachedFileToken = token
-    return token
-  }
-}
-
-class EnvironmentReceiverConnectionProvider implements ReceiverConnectionProvider {
-  private readonly tokenSource: TokenSource
-
-  constructor(private readonly config: ReceiverConfig) {
-    this.tokenSource = new TokenSource(config.token, config.tokenFile)
-  }
-
-  get refreshable(): boolean {
-    return this.tokenSource.refreshable
-  }
-
-  async get(forceRefresh = false): Promise<ReceiverConnection> {
-    return {
-      url: this.config.url,
-      token: await this.tokenSource.read(forceRefresh),
-      deploymentId: this.config.deploymentId,
-      resourceId: this.config.resourceId,
-      resourceType: this.config.resourceType,
-    }
-  }
-}
-
-class HostedReceiverConnectionProvider implements ReceiverConnectionProvider {
-  readonly refreshable = true
-
-  constructor(
-    private readonly provider: CommandConnectionProvider,
-    private readonly deploymentId: string,
-  ) {}
-
-  async get(forceRefresh = false): Promise<ReceiverConnection> {
-    const connection = await this.provider.get(forceRefresh)
-    if (connection.target === undefined) {
-      throw new AlienError(
-        InvalidEnvelopeError.create({
-          field: "target",
-          reason: "Receiver bootstrap response is missing target",
-        }),
-      )
-    }
-    return {
-      url: managerCommandsUrl(connection.managerUrl),
-      token: connection.token,
-      deploymentId: this.deploymentId,
-      resourceId: connection.target.resourceId,
-      resourceType: connection.target.resourceType,
-    }
-  }
+  const { connectionProvider, runtimeConfig } = resolveReceiverConfig(options)
+  return new PullCommandReceiver(connectionProvider, runtimeConfig, options)
 }
 
 interface ActiveLease {
@@ -824,8 +449,7 @@ class PullCommandReceiver implements CommandReceiver {
       init: RequestInit
     },
   ): Promise<{ response: Response; endpoint: string; connection: ReceiverConnection }> {
-    const send = async (forceRefresh: boolean) => {
-      const connection = await this.connectionProvider.get(forceRefresh)
+    return requestWithRefreshingConnection(this.connectionProvider, async connection => {
       const { endpoint, init } = buildRequest(connection)
       const headers = new Headers(init.headers)
       headers.set("Authorization", `Bearer ${connection.token}`)
@@ -834,12 +458,7 @@ class PullCommandReceiver implements CommandReceiver {
         endpoint,
         connection,
       }
-    }
-    let result = await send(false)
-    if (result.response.status === 401 && this.connectionProvider.refreshable) {
-      result = await send(true)
-    }
-    return result
+    })
   }
 
   /**

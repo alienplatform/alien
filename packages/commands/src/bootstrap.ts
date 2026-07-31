@@ -46,18 +46,47 @@ interface HostedConnectionOptions {
   fetch?: typeof fetch
 }
 
-export interface CommandConnectionProvider {
-  readonly refreshable: boolean
-  get(forceRefresh?: boolean): Promise<CommandConnection>
+export interface RefreshingConnectionProvider<Connection> {
+  get(): Promise<Connection>
+  /**
+   * Refresh credentials after an authentication failure. Returns `undefined`
+   * when this connection is fixed and the request must not be retried.
+   */
+  refresh(): Promise<Connection | undefined>
+}
+
+export type CommandConnectionProvider = RefreshingConnectionProvider<CommandConnection>
+
+/**
+ * Execute an authenticated request and retry it once when the server rejects
+ * credentials that the provider can refresh.
+ */
+export async function requestWithRefreshingConnection<
+  Connection,
+  Result extends { response: Response },
+>(
+  provider: RefreshingConnectionProvider<Connection>,
+  request: (connection: Connection) => Promise<Result>,
+): Promise<Result> {
+  let result = await request(await provider.get())
+  if (result.response.status !== 401) return result
+
+  const refreshed = await provider.refresh()
+  if (refreshed === undefined) return result
+
+  result = await request(refreshed)
+  return result
 }
 
 export class FixedCommandConnectionProvider implements CommandConnectionProvider {
-  readonly refreshable = false
-
   constructor(private readonly connection: CommandConnection) {}
 
   get(): Promise<CommandConnection> {
     return Promise.resolve(this.connection)
+  }
+
+  refresh(): Promise<undefined> {
+    return Promise.resolve(undefined)
   }
 }
 
@@ -67,7 +96,6 @@ export class FixedCommandConnectionProvider implements CommandConnectionProvider
  * bootstrap endpoint.
  */
 export class HostedCommandConnectionProvider implements CommandConnectionProvider {
-  readonly refreshable = true
   private readonly deploymentId: string
   private readonly apiKey: string
   private readonly role: CommandBootstrapRole
@@ -90,14 +118,17 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
     this.fetchImpl = options.fetch ?? globalThis.fetch
   }
 
-  async get(forceRefresh = false): Promise<CommandConnection> {
+  async get(): Promise<CommandConnection> {
     if (
-      !forceRefresh &&
       this.current !== undefined &&
       this.current.expiresAt.getTime() - Date.now() > REFRESH_SKEW_MS
     ) {
       return this.current
     }
+    return this.refresh()
+  }
+
+  async refresh(): Promise<CommandConnection> {
     if (this.refreshInFlight !== undefined) {
       return this.refreshInFlight
     }

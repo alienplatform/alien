@@ -23,6 +23,7 @@ import {
   type CommandConnectionProvider,
   FixedCommandConnectionProvider,
   HostedCommandConnectionProvider,
+  requestWithRefreshingConnection,
 } from "./bootstrap.js"
 import {
   CommandCreationFailedError,
@@ -353,23 +354,19 @@ export class CommandsClient {
     },
   ): Promise<T> {
     try {
-      const send = async (forceRefresh: boolean) => {
-        const connection = await this.connectionProvider.get(forceRefresh)
-        const url = this.buildManagerUrl(connection.managerUrl, path)
-        const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` }
-        const init: RequestInit = { method, headers }
-        if (options.body !== undefined) {
-          headers["Content-Type"] = "application/json"
-          init.body = JSON.stringify(options.body)
-        }
-        return { response: await this.fetchImpl(url, init), url }
-      }
-
-      let result = await send(false)
-      if (result.response.status === 401 && this.connectionProvider.refreshable) {
-        result = await send(true)
-      }
-      const { response, url } = result
+      const { response, url } = await requestWithRefreshingConnection(
+        this.connectionProvider,
+        async connection => {
+          const url = this.buildManagerUrl(connection.managerUrl, path)
+          const headers: Record<string, string> = { Authorization: `Bearer ${connection.token}` }
+          const init: RequestInit = { method, headers }
+          if (options.body !== undefined) {
+            headers["Content-Type"] = "application/json"
+            init.body = JSON.stringify(options.body)
+          }
+          return { response: await this.fetchImpl(url, init), url }
+        },
+      )
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "")
         throw new AlienError(

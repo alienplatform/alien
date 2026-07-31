@@ -4,9 +4,7 @@
 //! The Subject's `workspace_id` is always `"default"` here; we don't gate on
 //! it. Authz boils down to role × scope.
 
-use crate::auth::{
-    Authz, CommandCapability, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind,
-};
+use crate::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use crate::traits::deployment_store::{DeploymentGroupRecord, DeploymentRecord};
 use crate::traits::release_store::ReleaseRecord;
 
@@ -139,18 +137,10 @@ impl Authz for OssAuthz {
     // -- Commands ----------------------------------------------------------
 
     fn can_dispatch_command(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if matches!(
-            &s.scope,
-            Scope::Commands {
-                project_id,
-                deployment_id,
-                capability: CommandCapability::Send,
-            } if s.workspace_id == deployment.workspace_id
-                && project_id == &deployment.project_id
-                && deployment_id == &deployment.id
-                && s.role == Role::CommandCapability
-        ) {
-            return true;
+        if let Some(allowed) =
+            crate::auth::command_capability::sender_deployment_decision(s, deployment)
+        {
+            return allowed;
         }
         if !self.can_read_deployment(s, deployment) {
             return false;
@@ -165,18 +155,10 @@ impl Authz for OssAuthz {
     }
 
     fn can_read_command(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if matches!(
-            &s.scope,
-            Scope::Commands {
-                project_id,
-                deployment_id,
-                capability: CommandCapability::Send,
-            } if s.workspace_id == deployment.workspace_id
-                && project_id == &deployment.project_id
-                && deployment_id == &deployment.id
-                && s.role == Role::CommandCapability
-        ) {
-            return true;
+        if let Some(allowed) =
+            crate::auth::command_capability::sender_deployment_decision(s, deployment)
+        {
+            return allowed;
         }
         self.can_read_deployment(s, deployment)
     }
@@ -186,6 +168,10 @@ impl Authz for OssAuthz {
         s: &Subject,
         command: &alien_commands::server::CommandAccessContext,
     ) -> bool {
+        if let Some(allowed) = crate::auth::command_capability::sender_context_decision(s, command)
+        {
+            return allowed;
+        }
         match &s.scope {
             Scope::Workspace => true,
             Scope::Project { project_id } => project_id == &command.project_id,
@@ -194,16 +180,6 @@ impl Authz for OssAuthz {
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
             Scope::DeploymentGroup { .. } => false,
-            Scope::Commands {
-                project_id,
-                deployment_id,
-                capability: CommandCapability::Send,
-            } => {
-                s.workspace_id == command.workspace_id
-                    && project_id == &command.project_id
-                    && deployment_id == &command.deployment_id
-                    && s.role == Role::CommandCapability
-            }
             Scope::Commands { .. } => false,
         }
     }
@@ -214,23 +190,12 @@ impl Authz for OssAuthz {
         deployment: &DeploymentRecord,
         target: &alien_core::CommandTarget,
     ) -> bool {
-        match &s.scope {
-            Scope::Commands {
-                project_id,
-                deployment_id,
-                capability:
-                    CommandCapability::Receive {
-                        target: allowed_target,
-                    },
-            } => {
-                s.workspace_id == deployment.workspace_id
-                    && project_id == &deployment.project_id
-                    && deployment_id == &deployment.id
-                    && allowed_target == target
-                    && s.role == Role::CommandCapability
-            }
-            _ => self.can_execute_command(s, deployment),
+        if let Some(allowed) =
+            crate::auth::command_capability::receiver_deployment_decision(s, deployment, target)
+        {
+            return allowed;
         }
+        self.can_execute_command(s, deployment)
     }
 
     fn can_execute_command_context(
@@ -238,18 +203,7 @@ impl Authz for OssAuthz {
         s: &Subject,
         command: &alien_commands::server::CommandAccessContext,
     ) -> bool {
-        matches!(
-            &s.scope,
-            Scope::Commands {
-                project_id,
-                deployment_id,
-                capability: CommandCapability::Receive { target },
-            } if s.workspace_id == command.workspace_id
-                && project_id == &command.project_id
-                && deployment_id == &command.deployment_id
-                && target == &command.target
-                && s.role == Role::CommandCapability
-        )
+        crate::auth::command_capability::receiver_context_allowed(s, command)
     }
 
     // -- Sync protocol -----------------------------------------------------
@@ -312,7 +266,7 @@ impl Authz for OssAuthz {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::SubjectKind;
+    use crate::auth::{CommandCapability, SubjectKind};
     use chrono::Utc;
 
     fn admin() -> Subject {

@@ -141,6 +141,20 @@ async fn preflight_commands_scope_deployment(
     Ok(())
 }
 
+/// Authenticate a command request and run the manager-assignment preflight
+/// before any assignment-filtered command or lease lookup can turn a stale
+/// capability into a misleading 404.
+async fn require_command_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::Subject, Response> {
+    let subject = auth::require_auth(state, headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    preflight_commands_scope_deployment(state, &subject).await?;
+    Ok(subject)
+}
+
 async fn require_command_execution_access(
     state: &AppState,
     subject: &crate::auth::Subject,
@@ -243,13 +257,10 @@ async fn get_command_status(
     headers: HeaderMap,
     Path(command_id): Path<String>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
-    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
-        return response;
-    }
     let command = match state
         .command_server
         .get_command_access_context(&command_id)
@@ -286,13 +297,10 @@ async fn upload_complete(
     Path(command_id): Path<String>,
     Json(upload_request): Json<UploadCompleteRequest>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
-    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
-        return response;
-    }
     let deployment_id = match get_command_owner(&state, &command_id).await {
         Ok(id) => id,
         Err(e) => return e,
@@ -402,13 +410,10 @@ async fn get_command_payload(
     headers: HeaderMap,
     Path(command_id): Path<String>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
-    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
-        return response;
-    }
     // Verify the caller has access to this command's deployment via Authz.
     // If the command isn't in the local registry (e.g. when command metadata
     // is managed externally), fall back to requiring workspace-write
@@ -552,13 +557,10 @@ async fn release_lease(
     headers: HeaderMap,
     Path(lease_id): Path<String>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
-    if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
-        return response;
-    }
 
     let (command_id, owner) = match state.command_server.get_lease_owner(&lease_id).await {
         Ok(Some((command_id, owner))) => (command_id, owner),

@@ -9,6 +9,7 @@
 //!   table; embedders inject their own when they need stricter policy.
 
 pub mod authz;
+pub mod command_capability;
 pub mod subject;
 
 pub use authz::{Authz, DeploymentCreateCtx};
