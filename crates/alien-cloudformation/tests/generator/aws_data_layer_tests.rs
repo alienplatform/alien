@@ -240,6 +240,80 @@ fn aws_queue_without_grants_emits_no_iam_policies() {
 }
 
 #[test]
+fn aws_kv_resource_permissions_attach_to_service_account_role() {
+    let stack = Stack::new("kv-permissions".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("store", ["kv/data-read", "kv/data-write"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Kv::new("store".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws kv service account permissions",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+
+    let read_policy = &template["Resources"]["StoreExecutionSaRoleKvPermission00"];
+    let write_policy = &template["Resources"]["StoreExecutionSaRoleKvPermission01"];
+    assert_eq!(read_policy["Type"], "AWS::IAM::Policy");
+    assert_eq!(write_policy["Type"], "AWS::IAM::Policy");
+
+    let read_actions = read_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
+        .as_array()
+        .expect("read statement should list actions");
+    assert!(read_actions.contains(&serde_json::json!("dynamodb:GetItem")));
+    assert!(read_actions.contains(&serde_json::json!("dynamodb:Query")));
+    let write_actions = write_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
+        .as_array()
+        .expect("write statement should list actions");
+    assert!(write_actions.contains(&serde_json::json!("dynamodb:PutItem")));
+
+    // Statements must be pinned to the table ARN: the physical table name is
+    // CloudFormation-generated, so a name-pattern binding would never match.
+    for policy in [read_policy, write_policy] {
+        assert_eq!(
+            policy["Properties"]["PolicyDocument"]["Statement"][0]["Resource"]["Fn::GetAtt"],
+            serde_json::json!(["Store", "Arn"])
+        );
+        assert_eq!(
+            policy["Properties"]["Roles"][0]["Ref"],
+            serde_json::json!("ExecutionSaRole")
+        );
+    }
+}
+
+#[test]
+fn aws_kv_without_grants_emits_no_iam_policies() {
+    let stack = Stack::new("kv-plain".to_string())
+        .add(
+            Kv::new("store".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws kv without grants",
+    );
+
+    assert!(!yaml.contains("KvPermission"));
+}
+
+#[test]
 fn aws_vault_resource_permissions_attach_to_service_account_role() {
     let stack = Stack::new("vault-permissions".to_string())
         .permission(

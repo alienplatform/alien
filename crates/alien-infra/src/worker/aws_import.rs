@@ -28,6 +28,13 @@ impl ResourceImporter for AwsWorkerImporter {
         data: AwsWorkerImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
+        // A worker is V1 xor V2: a REST (V1) worker reuses the controller's
+        // `stage_name` field for its REST stage.
+        let stage_name = if data.rest_api_id.is_some() {
+            data.rest_stage_name
+        } else {
+            data.stage_name
+        };
         let controller = AwsWorkerController {
             state: AwsWorkerState::Ready,
             arn: Some(data.function_arn),
@@ -36,15 +43,23 @@ impl ResourceImporter for AwsWorkerImporter {
             event_source_mappings: data.event_source_mappings,
             // Domain / TLS metadata is rebuilt by the controller at heartbeat
             // time from `DeploymentConfig::domain_metadata`; ImportData only
-            // carries identifiers, not certificate ARNs.
+            // carries identifiers, not certificate ARNs. The REST create-time
+            // ids (root/proxy resource, deployment, base path) are likewise
+            // left `None` — the heartbeat never reads them, same as the V2
+            // mapping/domain fields.
             fqdn: None,
             certificate_id: None,
             certificate_arn: None,
             api_id: data.api_id,
             integration_id: data.integration_id,
             route_id: data.route_id,
-            stage_name: data.stage_name,
+            stage_name,
             api_mapping_id: None,
+            rest_api_id: data.rest_api_id,
+            rest_root_resource_id: None,
+            rest_proxy_resource_id: None,
+            rest_deployment_id: None,
+            rest_base_path: None,
             domain_name: None,
             load_balancer: None,
             certificate_issued_at: None,

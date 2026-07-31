@@ -108,7 +108,7 @@ pub fn bindings_from_env_map(env: &HashMap<String, String>) -> Result<Vec<Gatewa
 
 /// The `service` tags `AiBinding` deserializes. A binding carrying any other tag belongs to
 /// another resource type sharing the `ALIEN_<NAME>_BINDING` namespace.
-const AI_SERVICE_TAGS: [&str; 4] = ["bedrock", "vertex", "foundry", "external"];
+const AI_SERVICE_TAGS: [&str; 4] = ["bedrock", "vertex", "foundry", "external-ai"];
 
 #[derive(serde::Deserialize)]
 struct ServiceTag {
@@ -266,6 +266,22 @@ mod tests {
     #[test]
     fn skips_external_byo_key_binding() {
         assert!(gateway_binding("llm", AiBinding::external("openai", "sk-x")).is_none());
+    }
+
+    /// An external Postgres binding shares the `ALIEN_*_BINDING` namespace but
+    /// tags itself `external` — the gateway must leave it to its own resource
+    /// type instead of failing to parse it as an AI binding.
+    #[test]
+    fn ignores_another_resource_types_external_binding() {
+        temp_env::with_var(
+            "ALIEN_DB_BINDING",
+            Some(r#"{"service":"external","host":"db.example.com","port":5432}"#),
+            || {
+                let bindings = bindings_from_env()
+                    .expect("a non-AI external binding must be skipped, not fatal");
+                assert!(bindings.is_empty());
+            },
+        );
     }
 
     #[test]

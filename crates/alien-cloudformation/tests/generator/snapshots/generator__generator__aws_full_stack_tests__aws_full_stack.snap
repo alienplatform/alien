@@ -817,6 +817,7 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
           Sid: CreateHttpApiEndpoints
         - Action:
@@ -831,7 +832,20 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: CreateHttpApiRoutes
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Action:
           - apigateway:PUT
           - apigateway:TagResource
@@ -846,19 +860,9 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
           Sid: TagHttpApiEndpoints
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - ManagementRole
-  ManagementRoleManagementPolicy2:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: Application management permissions
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
         - Action:
           - apigateway:DELETE
           - apigateway:GET
@@ -875,6 +879,9 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/basepathmappings/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
           Sid: ManageHttpApiEndpoints
         - Action:
           - events:PutRule

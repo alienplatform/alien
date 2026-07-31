@@ -11,8 +11,8 @@
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesCluster;
 use alien_core::{
-    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage, Vault,
-    Worker,
+    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage,
+    Vault, Worker,
 };
 use alien_core::{RemoteStackManagement, ServiceAccount};
 
