@@ -33,10 +33,7 @@ impl GcpAiController {
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
     )]
-    async fn create_start(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
+    async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<Ai>()?;
 
@@ -61,10 +58,7 @@ impl GcpAiController {
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
     )]
-    async fn enabling_api(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
+    async fn enabling_api(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<Ai>()?;
         let client = ctx
@@ -223,13 +217,11 @@ impl GcpAiController {
             controller_platform: Platform::Gcp,
             backend: HeartbeatBackend::Gcp,
             observed_at: Utc::now(),
-            data: ResourceHeartbeatData::Ai(AiHeartbeatData::GcpVertex(
-                GcpVertexAiHeartbeatData {
-                    status: AiHeartbeatStatus::default(),
-                    project: project.clone(),
-                    location: location.clone(),
-                },
-            )),
+            data: ResourceHeartbeatData::Ai(AiHeartbeatData::GcpVertex(GcpVertexAiHeartbeatData {
+                status: AiHeartbeatStatus::default(),
+                project: project.clone(),
+                location: location.clone(),
+            })),
             raw: vec![],
         });
         Ok(HandlerAction::Continue {
@@ -247,10 +239,7 @@ impl GcpAiController {
         on_failure = UpdateFailed,
         status = ResourceStatus::Updating,
     )]
-    async fn update_start(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
+    async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
         info!(id = %config.id, "GCP AI update (no-op -- no mutable fields)");
         Ok(HandlerAction::Continue {
@@ -269,10 +258,7 @@ impl GcpAiController {
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting,
     )]
-    async fn delete_start(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<HandlerAction> {
+    async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
         info!(
             id = %config.id,

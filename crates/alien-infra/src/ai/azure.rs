@@ -32,7 +32,13 @@ fn make_account_name(prefix: &str, id: &str) -> String {
     // Keep only alphanumeric chars and hyphens; collapse leading/trailing hyphens.
     let cleaned: String = raw
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('-').to_string();
     if trimmed.len() > 64 {
@@ -104,7 +110,10 @@ impl AzureAiController {
             .create_account(&resource_group_name, &account_name, &parameters)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Azure AIServices account '{}'", account_name),
+                message: format!(
+                    "Failed to create Azure AIServices account '{}'",
+                    account_name
+                ),
                 resource_id: Some(config.id.clone()),
             })?;
 
@@ -115,9 +124,7 @@ impl AzureAiController {
 
         match operation_result {
             OperationResult::Completed(account) => {
-                self.endpoint = account
-                    .properties
-                    .and_then(|p| p.endpoint);
+                self.endpoint = account.properties.and_then(|p| p.endpoint);
 
                 info!(account_name = %account_name, "Azure AIServices account created (synchronous)");
 
@@ -314,7 +321,8 @@ impl AzureAiController {
 
         // PUT is idempotent, so re-entering this state (e.g. after a retry) re-issues
         // the same deployments harmlessly.
-        for (deployment_name, model_name, model_version) in alien_core::ai_catalog::azure_deployments()
+        for (deployment_name, model_name, model_version) in
+            alien_core::ai_catalog::azure_deployments()
         {
             info!(
                 account_name = %account_name,
@@ -594,7 +602,10 @@ impl AzureAiController {
                 })
             }
             Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete Azure AIServices account '{}'", account_name),
+                message: format!(
+                    "Failed to delete Azure AIServices account '{}'",
+                    account_name
+                ),
                 resource_id: Some(config.id.clone()),
             })),
         }
@@ -786,7 +797,9 @@ mod tests {
         }
     }
 
-    fn setup_mock_provider_for_deletion(expect_not_found: bool) -> Arc<MockPlatformServiceProvider> {
+    fn setup_mock_provider_for_deletion(
+        expect_not_found: bool,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
@@ -796,27 +809,27 @@ mod tests {
 
                 if expect_not_found {
                     // Simulate account already deleted.
-                    mock_cognitive
-                        .expect_delete_account()
-                        .returning(|_, _| {
-                            Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    mock_cognitive.expect_delete_account().returning(|_, _| {
+                        Err(AlienError::new(
+                            CloudClientErrorData::RemoteResourceNotFound {
                                 resource_type: "CognitiveServicesAccount".to_string(),
                                 resource_name: "my-ai".to_string(),
-                            }))
-                        });
+                            },
+                        ))
+                    });
                 } else {
                     // Successful delete then polling confirms deletion.
                     mock_cognitive
                         .expect_delete_account()
                         .returning(|_, _| Ok(()));
-                    mock_cognitive
-                        .expect_get_account()
-                        .returning(|_, _| {
-                            Err(AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    mock_cognitive.expect_get_account().returning(|_, _| {
+                        Err(AlienError::new(
+                            CloudClientErrorData::RemoteResourceNotFound {
                                 resource_type: "CognitiveServicesAccount".to_string(),
                                 resource_name: "my-ai".to_string(),
-                            }))
-                        });
+                            },
+                        ))
+                    });
                 }
 
                 Ok(Arc::new(mock_cognitive))

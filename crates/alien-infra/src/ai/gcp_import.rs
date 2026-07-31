@@ -20,11 +20,7 @@ pub struct GcpAiImporter;
 impl ResourceImporter for GcpAiImporter {
     type ImportData = GcpAiImportData;
 
-    fn import(
-        &self,
-        data: GcpAiImportData,
-        ctx: &ImportContext<'_>,
-    ) -> Result<StackResourceState> {
+    fn import(&self, data: GcpAiImportData, ctx: &ImportContext<'_>) -> Result<StackResourceState> {
         let controller = GcpAiController {
             state: GcpAiState::Ready,
             project: Some(data.project_id),

@@ -63,14 +63,14 @@ mod ai;
 pub use ai::AwsAiController;
 #[cfg(feature = "aws")]
 pub use ai::AwsAiImporter;
-#[cfg(feature = "gcp")]
-pub use ai::GcpAiController;
-#[cfg(feature = "gcp")]
-pub use ai::GcpAiImporter;
 #[cfg(feature = "azure")]
 pub use ai::AzureAiController;
 #[cfg(feature = "azure")]
 pub use ai::AzureAiImporter;
+#[cfg(feature = "gcp")]
+pub use ai::GcpAiController;
+#[cfg(feature = "gcp")]
+pub use ai::GcpAiImporter;
 
 mod kv;
 #[cfg(feature = "aws")]

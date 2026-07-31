@@ -1,6 +1,6 @@
 /**
  * Parsing for the `ALIEN_<NAME>_BINDING` env var an `ai` resource projects. The client only
- * routes on the binding: a BYO-key (`external`) binding is validated strictly here because the
+ * routes on the binding: a BYO-key (`external-ai`) binding is validated strictly here because the
  * client itself uses its fields, while every other service tag — the ambient variants, including
  * ones added to the platform after this SDK shipped — is passed through for the Rust gateway to
  * validate and serve. Mirrors the Rust `AiBinding` (serde tag "service", lowercase, camelCase
@@ -14,7 +14,7 @@ import * as z from "zod/v4"
 // reads directly, so an unexpected key fails loudly rather than being silently dropped.
 const externalAiBindingSchema = z
   .object({
-    service: z.literal("external"),
+    service: z.literal("external-ai"),
     provider: z.string(),
     apiKey: z.string(),
   })
@@ -32,7 +32,7 @@ export type AiBinding = ExternalAiBinding | AmbientAiBinding
 
 /** Narrow an `AiBinding` to the BYO-key variant the client handles itself. */
 export function isExternalAiBinding(binding: AiBinding): binding is ExternalAiBinding {
-  return binding.service === "external"
+  return binding.service === "external-ai"
 }
 
 /** The env var an `ai` binding is projected into: `ALIEN_<NAME>_BINDING` (uppercased, `-`→`_`). */
@@ -63,7 +63,7 @@ export async function parseAiBinding(name: string): Promise<AiBinding | undefine
       }),
     )
   }
-  if (service !== "external") {
+  if (service !== "external-ai") {
     return parsed as AmbientAiBinding
   }
   const result = externalAiBindingSchema.safeParse(parsed)

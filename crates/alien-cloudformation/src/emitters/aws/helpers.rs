@@ -8,13 +8,14 @@
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings,
-    RemoteStackManagement, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
-    Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    PermissionProfile, PermissionSetReference, RemoteStackManagement, ResourceDefinition,
+    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
@@ -619,4 +620,47 @@ fn storage_events(events: &[String]) -> Vec<String> {
             other => format!("s3:{other}"),
         })
         .collect()
+}
+
+/// Service-account roles whose permission profile grants permission sets with
+/// this prefix for the resource — directly by resource id or through a `*`
+/// wildcard grant.
+pub fn resource_permission_owners(
+    ctx: &EmitContext<'_>,
+    permission_set_prefix: &str,
+) -> Vec<(String, Vec<PermissionSetReference>)> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = prefixed_permission_refs(profile, ctx.resource_id, permission_set_prefix);
+        if refs.is_empty() {
+            continue;
+        }
+        if let Some(role_id) = service_account_role_id(ctx, profile_name) {
+            owners.push((role_id, refs));
+        }
+    }
+    owners
+}
+
+fn prefixed_permission_refs(
+    profile: &PermissionProfile,
+    resource_id: &str,
+    permission_set_prefix: &str,
+) -> Vec<PermissionSetReference> {
+    let mut refs = Vec::new();
+    let mut seen_ids = HashSet::new();
+    for key in [resource_id, "*"] {
+        let Some(scoped_refs) = profile.0.get(key) else {
+            continue;
+        };
+        for permission_ref in scoped_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with(permission_set_prefix))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+    refs
 }

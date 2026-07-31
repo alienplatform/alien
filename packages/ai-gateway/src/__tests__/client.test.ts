@@ -13,7 +13,7 @@ import type { RawAiGatewayHandle } from "../loader.js"
 // binding resolution, including the URL seam (`<gateway>/<segment>/v1/...`).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EXTERNAL = JSON.stringify({ service: "external", provider: "openai", apiKey: "sk-test" })
+const EXTERNAL = JSON.stringify({ service: "external-ai", provider: "openai", apiKey: "sk-test" })
 
 const GATEWAY_URL = "http://127.0.0.1:41999"
 
@@ -107,7 +107,7 @@ describe("getAiConnection", () => {
   it("resolves a BYO anthropic provider to the Anthropic API", async () => {
     vi.stubEnv(
       "ALIEN_LLM_BINDING",
-      JSON.stringify({ service: "external", provider: "anthropic", apiKey: "sk-ant" }),
+      JSON.stringify({ service: "external-ai", provider: "anthropic", apiKey: "sk-ant" }),
     )
     expect((await getAiConnection("llm")).baseURL).toBe("https://api.anthropic.com/v1")
   })
@@ -117,7 +117,7 @@ describe("getAiConnection", () => {
     // instead of defaulting to OpenAI's endpoint.
     vi.stubEnv(
       "ALIEN_LLM_BINDING",
-      JSON.stringify({ service: "external", provider: "google", apiKey: "sk-test" }),
+      JSON.stringify({ service: "external-ai", provider: "google", apiKey: "sk-test" }),
     )
     await expect(getAiConnection("llm")).rejects.toMatchObject({
       code: "AI_UNSUPPORTED_PROVIDER",
@@ -128,7 +128,7 @@ describe("getAiConnection", () => {
   it("lets ALIEN_AI_LOCAL_BASE_URL override an otherwise-unknown provider", async () => {
     vi.stubEnv(
       "ALIEN_LLM_BINDING",
-      JSON.stringify({ service: "external", provider: "google", apiKey: "sk-test" }),
+      JSON.stringify({ service: "external-ai", provider: "google", apiKey: "sk-test" }),
     )
     vi.stubEnv("ALIEN_AI_LOCAL_BASE_URL", "http://localhost:8080")
     expect((await getAiConnection("llm")).baseURL).toBe("http://localhost:8080/v1")
@@ -157,7 +157,12 @@ describe("getAiConnection", () => {
   it("rejects an external binding with an unexpected key (strict at the trust boundary)", async () => {
     vi.stubEnv(
       "ALIEN_LLM_BINDING",
-      JSON.stringify({ service: "external", provider: "openai", apiKey: "sk", extra: "tampered" }),
+      JSON.stringify({
+        service: "external-ai",
+        provider: "openai",
+        apiKey: "sk",
+        extra: "tampered",
+      }),
     )
     await expect(getAiConnection("llm")).rejects.toMatchObject({
       code: "INVALID_BINDING_CONFIG",
@@ -242,7 +247,7 @@ describe("Ai.getAvailableModels", () => {
   it("returns current-generation Anthropic ids for a BYO anthropic provider, no retired 3.5", async () => {
     vi.stubEnv(
       "ALIEN_LLM_BINDING",
-      JSON.stringify({ service: "external", provider: "anthropic", apiKey: "sk-ant" }),
+      JSON.stringify({ service: "external-ai", provider: "anthropic", apiKey: "sk-ant" }),
     )
     const fetchMock = stubFetch({ data: [] })
     const models = await ai("llm").getAvailableModels()
@@ -286,7 +291,7 @@ describe("Ai.getAvailableModels", () => {
 
 describe("Ai.responses.create", () => {
   const ANTHROPIC_BYO = JSON.stringify({
-    service: "external",
+    service: "external-ai",
     provider: "anthropic",
     apiKey: "sk-ant",
   })

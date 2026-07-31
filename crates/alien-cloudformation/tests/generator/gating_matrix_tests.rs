@@ -99,7 +99,9 @@ fn assert_live_gate_ignored_by_setup(resource_type: &str) {
     );
 
     assert!(
-        !template.conditions.contains_key("InputFixtureEnabledIsTrue"),
+        !template
+            .conditions
+            .contains_key("InputFixtureEnabledIsTrue"),
         "{resource_type}: setup never declares a condition for a Live gate"
     );
     assert!(
@@ -110,8 +112,7 @@ fn assert_live_gate_ignored_by_setup(resource_type: &str) {
         "{resource_type}: a Live resource contributes nothing to setup"
     );
     let payload = registration_payload(&template);
-    let text =
-        serde_json::to_string(&payload).expect("registration payload should serialize");
+    let text = serde_json::to_string(&payload).expect("registration payload should serialize");
     assert!(
         !text.contains("\"fixture\""),
         "{resource_type}: a Live resource has no setup registration entry:\n{text}"
@@ -161,8 +162,7 @@ fn assert_gated_render(resource_type: &str, stack: &Stack) {
         .resources
         .iter()
         .filter(|(logical_id, resource)| {
-            resource.condition.is_none()
-                && logical_id.to_ascii_lowercase().contains("fixture")
+            resource.condition.is_none() && logical_id.to_ascii_lowercase().contains("fixture")
         })
         .map(|(logical_id, _)| logical_id.as_str())
         .collect();
@@ -330,7 +330,11 @@ fn a_gate_on_a_policy_refused_type_fails_at_render() {
     )
     .expect_err("the policy should refuse a gated service account at render");
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
-    assert!(error.message.contains("service-account"), "{}", error.message);
+    assert!(
+        error.message.contains("service-account"),
+        "{}",
+        error.message
+    );
     assert!(error.message.contains("robot"), "{}", error.message);
 }
 

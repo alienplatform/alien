@@ -10,17 +10,14 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, service_account_role_id, tags,
+            cf_from_json, required_logical_id, resource_config, resource_permission_owners, tags,
             uniquify_iam_statement_sids,
         },
         service_account::permission_context,
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference, Queue, Result,
-    ServiceAccount, Worker, WorkerTrigger,
-};
+use alien_core::{import::EmitContext, ErrorData, Queue, Result, Worker, WorkerTrigger};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
 
@@ -115,7 +112,10 @@ fn queue_iam_policies(
     let context =
         permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", queue.id()));
 
-    for (owner_index, (role_id, permission_refs)) in permission_owners(ctx).into_iter().enumerate()
+    for (owner_index, (role_id, permission_refs)) in
+        resource_permission_owners(ctx, PERMISSION_SET_PREFIX)
+            .into_iter()
+            .enumerate()
     {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
             let Some(permission_set) =
@@ -202,68 +202,4 @@ fn pin_statement_to_queue(statement: CfExpression, queue_id: &str) -> CfExpressi
         CfExpression::get_att(queue_id, "Arn"),
     );
     CfExpression::Object(statement_object)
-}
-
-/// Service-account roles whose permission profile references a `queue/*`
-/// permission set for this resource (either directly by resource id or
-/// through a `*` wildcard grant).
-fn permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
-    let mut owners = Vec::new();
-    for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = resource_permission_refs(profile, ctx.resource_id);
-        if refs.is_empty() {
-            continue;
-        }
-
-        let service_account_id = format!("{profile_name}-sa");
-        if service_account_for_id(ctx, &service_account_id).is_some() {
-            if let Some(role_id) = service_account_role_id(ctx, profile_name) {
-                owners.push((role_id, refs));
-            }
-        }
-    }
-    owners
-}
-
-fn resource_permission_refs(
-    profile: &PermissionProfile,
-    resource_id: &str,
-) -> Vec<PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-
-    if let Some(resource_refs) = profile.0.get(resource_id) {
-        for permission_ref in resource_refs
-            .iter()
-            .filter(|permission_ref| permission_ref.id().starts_with(PERMISSION_SET_PREFIX))
-        {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
-            }
-        }
-    }
-
-    if let Some(wildcard_refs) = profile.0.get("*") {
-        for permission_ref in wildcard_refs
-            .iter()
-            .filter(|permission_ref| permission_ref.id().starts_with(PERMISSION_SET_PREFIX))
-        {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
-            }
-        }
-    }
-
-    refs
-}
-
-fn service_account_for_id<'a>(
-    ctx: &'a EmitContext<'_>,
-    service_account_id: &str,
-) -> Option<&'a ServiceAccount> {
-    let (_id, entry) = ctx
-        .stack
-        .resources()
-        .find(|(id, _entry)| id.as_str() == service_account_id)?;
-    entry.config.downcast_ref::<ServiceAccount>()
 }

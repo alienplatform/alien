@@ -67,6 +67,7 @@ pub trait AwsClientConfigExt {
 }
 
 pub mod acm;
+pub mod apigateway;
 pub mod apigatewayv2;
 pub mod autoscaling;
 pub mod aws_request_utils;

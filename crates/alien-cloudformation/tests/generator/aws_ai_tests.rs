@@ -15,7 +15,10 @@ fn aws_ai_invoke_permissions_attach_to_service_account_role() {
             ServiceAccount::new("execution-sa".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
 
     let yaml = render_built_ins(
@@ -56,7 +59,10 @@ fn aws_ai_without_permissions_emits_no_iam_policy() {
     // An Ai resource with no permission profile referencing it should emit
     // zero IAM resources (the AI itself creates no cloud resource on AWS).
     let stack = Stack::new("ai-no-permissions".to_string())
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
 
     let yaml = render_built_ins(

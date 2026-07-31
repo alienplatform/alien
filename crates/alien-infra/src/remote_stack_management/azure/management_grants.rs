@@ -274,7 +274,9 @@ mod tests {
                 [PermissionSetReference::from_name("worker/dispatch-command")],
             );
 
-        let live: HashSet<String> = ["api".to_string(), "jobs".to_string()].into_iter().collect();
+        let live: HashSet<String> = ["api".to_string(), "jobs".to_string()]
+            .into_iter()
+            .collect();
         let grant_plan =
             generate_stack_management_grant_plan(&profile, &permission_context(), &live).unwrap();
 
