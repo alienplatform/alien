@@ -29,28 +29,6 @@ pub trait AwsClientConfigExt {
     /// Get credentials for web identity token authentication
     async fn get_web_identity_credentials(&self) -> Result<AwsClientConfig>;
 
-    /// Assumes a target role with an inline session policy. The returned
-    /// permissions are the intersection of the role and policy.
-    async fn assume_role_with_session_policy(
-        &self,
-        role_arn: &str,
-        role_session_name: &str,
-        duration_seconds: i32,
-        policy: &str,
-        target_account_id: &str,
-        target_region: &str,
-    ) -> Result<AwsClientConfig>;
-
-    /// Exchanges this config's own web-identity token with an inline session
-    /// policy. Other credential sources are rejected because their existing
-    /// session cannot be proven to carry the requested restriction.
-    async fn materialize_web_identity_session_with_policy(
-        &self,
-        role_session_name: &str,
-        duration_seconds: i32,
-        policy: &str,
-    ) -> Result<AwsClientConfig>;
-
     /// Get service endpoint, checking for overrides first
     fn get_service_endpoint(&self, service_name: &str, default_endpoint: &str) -> String;
 
@@ -84,7 +62,6 @@ pub mod eventbridge;
 pub mod iam;
 pub mod lambda;
 pub mod rds;
-mod remote_storage_credentials;
 pub mod resourcegroupstagging;
 pub mod s3;
 pub mod secrets_manager;
@@ -291,41 +268,6 @@ impl AwsClientConfigExt for AwsClientConfig {
         }
     }
 
-    async fn assume_role_with_session_policy(
-        &self,
-        role_arn: &str,
-        role_session_name: &str,
-        duration_seconds: i32,
-        policy: &str,
-        target_account_id: &str,
-        target_region: &str,
-    ) -> Result<AwsClientConfig> {
-        remote_storage_credentials::assume_role_with_session_policy(
-            self,
-            role_arn,
-            role_session_name,
-            duration_seconds,
-            policy,
-            target_account_id,
-            target_region,
-        )
-        .await
-    }
-
-    async fn materialize_web_identity_session_with_policy(
-        &self,
-        role_session_name: &str,
-        duration_seconds: i32,
-        policy: &str,
-    ) -> Result<AwsClientConfig> {
-        remote_storage_credentials::materialize_web_identity_session_with_policy(
-            self,
-            role_session_name,
-            duration_seconds,
-            policy,
-        )
-        .await
-    }
     /// Get service endpoint, checking for overrides first
     fn get_service_endpoint(&self, service_name: &str, default_endpoint: &str) -> String {
         self.service_overrides

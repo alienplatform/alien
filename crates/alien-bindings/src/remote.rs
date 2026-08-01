@@ -403,29 +403,16 @@ fn validate_azure_remote_client_config(config: &alien_core::AzureClientConfig) -
             "service endpoint overrides are forbidden",
         ));
     }
-    let alien_core::AzureCredentials::SasToken { query_parameters } = &config.credentials else {
+    let alien_core::AzureCredentials::AccessToken { token } = &config.credentials else {
         return Err(invalid_remote_lease(
             "Azure",
-            "an exact container SAS is required",
+            "a storage-audience access token is required",
         ));
     };
-    const REQUIRED_PARAMETERS: [&str; 13] = [
-        "sp", "st", "se", "skoid", "sktid", "skt", "ske", "sks", "skv", "spr", "sv", "sr", "sig",
-    ];
-    if query_parameters.len() != REQUIRED_PARAMETERS.len()
-        || REQUIRED_PARAMETERS.iter().any(|name| {
-            !query_parameters
-                .get(*name)
-                .is_some_and(|value| !value.is_empty())
-        })
-        || query_parameters.get("sp").map(String::as_str) != Some("rcwdl")
-        || query_parameters.get("spr").map(String::as_str) != Some("https")
-        || query_parameters.get("sr").map(String::as_str) != Some("c")
-        || query_parameters.get("sks").map(String::as_str) != Some("b")
-    {
+    if token.is_empty() {
         return Err(invalid_remote_lease(
             "Azure",
-            "the credential must contain only one exact container SAS",
+            "the storage-audience access token must be nonempty",
         ));
     }
     Ok(())

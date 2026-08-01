@@ -1,5 +1,4 @@
 use crate::error::{ErrorData, Result};
-use crate::remote_storage::{resource_ids, REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID};
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
@@ -61,8 +60,6 @@ impl StackMutation for ManagementPermissionProfileMutation {
             }));
         }
 
-        let remote_storage_resource_ids = resource_ids(&stack, stack_state.platform);
-
         match current_management {
             ManagementPermissions::Auto => {
                 // Auto-generate management permissions based on resource lifecycles
@@ -103,11 +100,6 @@ impl StackMutation for ManagementPermissionProfileMutation {
             }
         }
 
-        add_remote_storage_data_write_permissions(
-            &mut stack.permissions.management,
-            &remote_storage_resource_ids,
-        );
-
         Ok(stack)
     }
 }
@@ -128,41 +120,6 @@ fn management_profile_contains(
         .values()
         .flatten()
         .any(|permission| permission.id() == permission_set_id)
-}
-
-/// Grants management explicit data access only for storage resources whose
-/// bindings are exposed for remote use. The concrete resource scope is needed
-/// because this grant can read and write customer object contents.
-fn add_remote_storage_data_write_permissions(
-    management_permissions: &mut ManagementPermissions,
-    remote_storage_resource_ids: &[String],
-) {
-    if remote_storage_resource_ids.is_empty() {
-        return;
-    }
-
-    // `Auto` survives this mutation when nothing else needs a management grant
-    // (for example telemetry and heartbeats are both off). Emitters read
-    // `ManagementPermissions::profile()`, which is `None` for `Auto`, so leaving
-    // it alone would silently drop the remote data grant and the deployment
-    // would fail later with an opaque access error. Promote instead.
-    if matches!(management_permissions, ManagementPermissions::Auto) {
-        *management_permissions = ManagementPermissions::Extend(PermissionProfile::new());
-    }
-
-    // `Override` profiles are authored explicitly and are never extended.
-    let ManagementPermissions::Extend(profile) = management_permissions else {
-        return;
-    };
-
-    for resource_id in remote_storage_resource_ids {
-        let permissions = profile.0.entry(resource_id.clone()).or_default();
-        let data_write_permission =
-            PermissionSetReference::from_name(REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID);
-        if !permissions.contains(&data_write_permission) {
-            permissions.push(data_write_permission);
-        }
-    }
 }
 
 /// Generates the default management permission profile from resource ownership
@@ -487,7 +444,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_storage_gets_concrete_data_write_management_permissions() {
+    async fn remote_storage_never_adds_data_access_to_management() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             for mode in ["auto", "extend"] {
                 let storage = Storage::new("uploads".to_string()).build();
@@ -506,148 +463,13 @@ mod tests {
                     .await
                     .expect("management permission mutation should succeed");
 
-                let profile = match result_stack.management() {
-                    ManagementPermissions::Extend(profile) => profile,
-                    _ => panic!("unexpected management permissions for {platform:?} {mode}"),
-                };
-                let storage_permission_names: Vec<&str> = profile
-                    .0
-                    .get("uploads")
-                    .expect("remote storage should have concrete management permissions")
-                    .iter()
-                    .map(|permission| permission.id())
-                    .collect();
-                assert_eq!(
-                    storage_permission_names,
-                    vec![REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID],
-                    "{platform:?} {mode} should grant data access only to the remote storage resource"
-                );
                 assert!(
-                    !profile.0.get("*").is_some_and(|permissions| permissions
-                        .iter()
-                        .any(|permission| permission.id()
-                            == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID)),
-                    "{platform:?} {mode} must not grant storage data access with wildcard scope"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn remote_storage_does_not_rewrite_management_override() {
-        let storage = Storage::new("uploads".to_string()).build();
-        let stack = Stack::new("test-stack".to_string())
-            .add_with_remote_access(storage, ResourceLifecycle::Frozen)
-            .management(management_permissions_for_test("override"))
-            .build();
-
-        let result_stack = ManagementPermissionProfileMutation
-            .mutate(
-                stack,
-                &StackState::new(Platform::Aws),
-                &deployment_config_for_management_permission_test(),
-            )
-            .await
-            .expect("management permission mutation should succeed");
-
-        let ManagementPermissions::Override(profile) = result_stack.management() else {
-            panic!("override mode must be preserved");
-        };
-        assert!(!profile.0.get("uploads").is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|permission| permission.id() == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID)
-        }));
-    }
-
-    #[tokio::test]
-    async fn remote_storage_data_write_survives_an_otherwise_empty_auto_profile() {
-        // Turning telemetry and heartbeats off leaves a frozen storage resource
-        // with no derived management grant, so the auto profile is empty and the
-        // stack would stay `Auto`. Emitters read `profile()`, which is `None` for
-        // `Auto`, so the remote data grant has to promote the profile itself.
-        let stack = Stack::new("test-stack".to_string())
-            .add_with_remote_access(
-                Storage::new("uploads".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .management(ManagementPermissions::Auto)
-            .build();
-        let config = DeploymentConfig::builder()
-            .stack_settings(StackSettings {
-                telemetry: TelemetryMode::Off,
-                heartbeats: HeartbeatsMode::Off,
-                ..StackSettings::default()
-            })
-            .environment_variables(empty_env_snapshot())
-            .allow_frozen_changes(false)
-            .external_bindings(ExternalBindings::default())
-            .build();
-
-        let result_stack = ManagementPermissionProfileMutation
-            .mutate(stack, &StackState::new(Platform::Aws), &config)
-            .await
-            .expect("management permission mutation should succeed");
-
-        let ManagementPermissions::Extend(profile) = result_stack.management() else {
-            panic!("remote storage must still receive a scoped data-write grant");
-        };
-        let storage_permissions: Vec<&str> = profile
-            .0
-            .get("uploads")
-            .expect("remote storage should have concrete management permissions")
-            .iter()
-            .map(|permission| permission.id())
-            .collect();
-        assert_eq!(
-            storage_permissions,
-            vec![REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID]
-        );
-        assert!(
-            !profile
-                .0
-                .get("*")
-                .is_some_and(|permissions| !permissions.is_empty()),
-            "no global grant should be invented alongside the scoped data grant"
-        );
-    }
-
-    #[tokio::test]
-    async fn endpoint_ineligible_storage_gets_no_remote_data_management_permission() {
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            for (remote_access, lifecycle) in [
-                (false, ResourceLifecycle::Frozen),
-                (true, ResourceLifecycle::Live),
-            ] {
-                let storage = Storage::new("uploads".to_string()).build();
-                let mut stack_builder = Stack::new("test-stack".to_string());
-                stack_builder = if remote_access {
-                    stack_builder.add_with_remote_access(storage, lifecycle)
-                } else {
-                    stack_builder.add(storage, lifecycle)
-                };
-                let stack = stack_builder
-                    .management(ManagementPermissions::Auto)
-                    .build();
-                let stack_state = StackState::new(platform);
-
-                let result_stack = ManagementPermissionProfileMutation
-                    .mutate(
-                        stack,
-                        &stack_state,
-                        &deployment_config_for_management_permission_test(),
-                    )
-                    .await
-                    .expect("management permission mutation should succeed");
-
-                let ManagementPermissions::Extend(profile) = result_stack.management() else {
-                    panic!("Auto management permissions should become Extend");
-                };
-                assert!(
-                    !profile.0.values().flatten().any(|permission| {
-                        permission.id() == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID
-                    }),
-                    "{platform:?} remote_access={remote_access} {lifecycle:?} storage must not grant remote data access"
+                    !result_stack.management().profile().is_some_and(|profile| profile
+                        .0
+                        .values()
+                        .flatten()
+                        .any(|permission| permission.id() == "storage/remote-data-write")),
+                    "{platform:?} {mode} must keep remote binding data access off the management identity"
                 );
             }
         }

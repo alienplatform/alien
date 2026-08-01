@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use super::{auth, current_release_resource, load_current_release, AppState};
 use crate::credential_materialization::{
     materialize_remote_storage_lease, MaterializedCredentialLease, RemoteStorageCredentialScope,
-    AZURE_REMOTE_STORAGE_PERMISSIONS,
 };
 use crate::error::ErrorData;
 use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseStore};
@@ -177,8 +176,8 @@ pub enum RemoteGcpCredentials {
     },
 }
 
-/// Response-safe Azure client configuration. It contains one container-bound
-/// user-delegation SAS and no OAuth or refreshable identity source.
+/// Response-safe Azure client configuration containing one storage-audience
+/// access token for the stack's Remote Bindings identity.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -189,7 +188,7 @@ pub struct RemoteAzureClientConfig {
     pub tenant_id: String,
     /// Azure region configured for the deployment.
     pub region: Option<String>,
-    /// A short-lived SAS bound to the requested Blob container.
+    /// A short-lived Azure Storage access token.
     pub credentials: RemoteAzureCredentials,
 }
 
@@ -198,50 +197,8 @@ pub struct RemoteAzureClientConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum RemoteAzureCredentials {
-    /// User-delegation SAS signed for exactly one container.
-    ContainerSas {
-        /// Explicit signed fields required to reconstruct the SAS query.
-        sas: RemoteAzureContainerSas,
-    },
-}
-
-/// Explicit fields of an Azure user-delegation SAS. Keeping the fields typed
-/// lets clients independently validate container scope, permissions, protocol,
-/// and expiry before constructing query parameters.
-#[derive(Serialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RemoteAzureContainerSas {
-    /// Storage account named by the signed canonical resource.
-    pub account_name: String,
-    /// Blob container named by the signed canonical resource.
-    pub container_name: String,
-    /// Canonically ordered SAS permissions (`sp`).
-    pub permissions: String,
-    /// SAS validity start (`st`).
-    pub starts_at: String,
-    /// SAS validity end (`se`).
-    pub expires_at: String,
-    /// Object ID that requested the delegation key (`skoid`).
-    pub signed_object_id: String,
-    /// Tenant ID that issued the delegation key (`sktid`).
-    pub signed_tenant_id: String,
-    /// Delegation-key validity start (`skt`).
-    pub signed_key_start: String,
-    /// Delegation-key validity end (`ske`).
-    pub signed_key_expiry: String,
-    /// Delegation-key service (`sks`).
-    pub signed_key_service: String,
-    /// Delegation-key version (`skv`).
-    pub signed_key_version: String,
-    /// Required transport protocol (`spr`).
-    pub protocol: String,
-    /// Storage authorization version (`sv`).
-    pub service_version: String,
-    /// Signed resource kind (`sr`).
-    pub signed_resource: String,
-    /// HMAC-SHA256 signature (`sig`).
-    pub signature: String,
+    /// OAuth bearer token for `https://storage.azure.com/.default`.
+    AccessToken { token: String },
 }
 
 /// Storage binding variants supported by the first hosted remote-bindings release.
@@ -260,16 +217,9 @@ pub enum RemoteStorageBinding {
 impl RemoteStorageBinding {
     fn credential_scope(&self) -> RemoteStorageCredentialScope {
         match self {
-            Self::S3(binding) => RemoteStorageCredentialScope::AwsS3 {
-                bucket_name: binding.bucket_name.clone(),
-            },
-            Self::Gcs(binding) => RemoteStorageCredentialScope::GcpGcs {
-                bucket_name: binding.bucket_name.clone(),
-            },
-            Self::Blob(binding) => RemoteStorageCredentialScope::AzureBlob {
-                account_name: binding.account_name.clone(),
-                container_name: binding.container_name.clone(),
-            },
+            Self::S3(_) => RemoteStorageCredentialScope::AwsS3,
+            Self::Gcs(_) => RemoteStorageCredentialScope::GcpGcs,
+            Self::Blob(_) => RemoteStorageCredentialScope::AzureBlob,
         }
     }
 }
@@ -342,71 +292,30 @@ impl TryFrom<GcpClientConfig> for RemoteGcpClientConfig {
     }
 }
 
-impl TryFrom<(AzureClientConfig, &RemoteBlobStorageBinding)> for RemoteAzureClientConfig {
+impl TryFrom<AzureClientConfig> for RemoteAzureClientConfig {
     type Error = alien_error::AlienError<ErrorData>;
 
     fn try_from(
-        (config, binding): (AzureClientConfig, &RemoteBlobStorageBinding),
+        config: AzureClientConfig,
     ) -> Result<Self, Self::Error> {
         if config.service_overrides.is_some() {
             return Err(ErrorData::internal(
                 "Remote Azure Storage response contains service endpoint overrides",
             ));
         }
-        let AzureCredentials::SasToken {
-            mut query_parameters,
-        } = config.credentials
-        else {
+        let AzureCredentials::AccessToken { token } = config.credentials else {
             return Err(ErrorData::internal(
-                "Remote Azure Storage response credentials are not a container SAS",
+                "Remote Azure Storage response credentials are not a short-lived access token",
             ));
         };
-        let credentials = RemoteAzureContainerSas {
-            account_name: binding.account_name.clone(),
-            container_name: binding.container_name.clone(),
-            permissions: take_sas_parameter(&mut query_parameters, "sp")?,
-            starts_at: take_sas_parameter(&mut query_parameters, "st")?,
-            expires_at: take_sas_parameter(&mut query_parameters, "se")?,
-            signed_object_id: take_sas_parameter(&mut query_parameters, "skoid")?,
-            signed_tenant_id: take_sas_parameter(&mut query_parameters, "sktid")?,
-            signed_key_start: take_sas_parameter(&mut query_parameters, "skt")?,
-            signed_key_expiry: take_sas_parameter(&mut query_parameters, "ske")?,
-            signed_key_service: take_sas_parameter(&mut query_parameters, "sks")?,
-            signed_key_version: take_sas_parameter(&mut query_parameters, "skv")?,
-            protocol: take_sas_parameter(&mut query_parameters, "spr")?,
-            service_version: take_sas_parameter(&mut query_parameters, "sv")?,
-            signed_resource: take_sas_parameter(&mut query_parameters, "sr")?,
-            signature: take_sas_parameter(&mut query_parameters, "sig")?,
-        };
-        if !query_parameters.is_empty()
-            || credentials.permissions != AZURE_REMOTE_STORAGE_PERMISSIONS
-            || credentials.protocol != "https"
-            || credentials.signed_resource != "c"
-            || credentials.signed_key_service != "b"
-        {
-            return Err(ErrorData::internal(
-                "Remote Azure Storage SAS is not exactly container scoped",
-            ));
-        }
 
         Ok(Self {
             subscription_id: config.subscription_id,
             tenant_id: config.tenant_id,
             region: config.region,
-            credentials: RemoteAzureCredentials::ContainerSas { sas: credentials },
+            credentials: RemoteAzureCredentials::AccessToken { token },
         })
     }
-}
-
-fn take_sas_parameter(
-    parameters: &mut std::collections::HashMap<String, String>,
-    name: &str,
-) -> Result<String, alien_error::AlienError<ErrorData>> {
-    parameters.remove(name).ok_or_else(|| {
-        ErrorData::internal(format!(
-            "Remote Azure Storage SAS is missing required parameter '{name}'"
-        ))
-    })
 }
 
 fn concrete_binding_value(
@@ -435,7 +344,7 @@ impl ResolveBindingResponse {
             }),
             (RemoteStorageBinding::Blob(binding), ClientConfig::Azure(client_config)) => {
                 Ok(Self::Blob {
-                    client_config: ((*client_config), &binding).try_into()?,
+                    client_config: (*client_config).try_into()?,
                     binding,
                     expires_at,
                 })

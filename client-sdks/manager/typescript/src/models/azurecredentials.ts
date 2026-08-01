@@ -69,22 +69,6 @@ export type AzureCredentialsVMManagedIdentity = {
 };
 
 /**
- * A short-lived Azure Storage shared access signature.
- *
- * @remarks
- *
- * Query parameter values are kept decoded. Azure clients must encode them
- * when attaching them to a request URL.
- */
-export type AzureCredentialsSasToken = {
-  /**
-   * Exact SAS query parameters, including the signature and expiry.
-   */
-  queryParameters: { [k: string]: string };
-  type: "sasToken";
-};
-
-/**
  * Short-lived bearer tokens keyed by their exact Azure OAuth scope.
  *
  * @remarks
@@ -138,7 +122,6 @@ export type AzureCredentials =
   | AzureCredentialsServicePrincipal
   | AzureCredentialsAccessToken
   | AzureCredentialsScopedAccessTokens
-  | AzureCredentialsSasToken
   | AzureCredentialsVMManagedIdentity
   | AzureCredentialsWorkloadIdentity
   | AzureCredentialsManagedIdentity;
@@ -225,29 +208,6 @@ export function azureCredentialsVMManagedIdentityFromJSON(
 }
 
 /** @internal */
-export const AzureCredentialsSasToken$inboundSchema: z.ZodType<
-  AzureCredentialsSasToken,
-  unknown
-> = z.object({
-  query_parameters: z.record(z.string(), z.string()),
-  type: z.literal("sasToken"),
-}).transform((v) => {
-  return remap$(v, {
-    "query_parameters": "queryParameters",
-  });
-});
-
-export function azureCredentialsSasTokenFromJSON(
-  jsonString: string,
-): SafeParseResult<AzureCredentialsSasToken, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => AzureCredentialsSasToken$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'AzureCredentialsSasToken' from JSON`,
-  );
-}
-
-/** @internal */
 export const AzureCredentialsScopedAccessTokens$inboundSchema: z.ZodType<
   AzureCredentialsScopedAccessTokens,
   unknown
@@ -319,7 +279,6 @@ export const AzureCredentials$inboundSchema: z.ZodType<
   z.lazy(() => AzureCredentialsServicePrincipal$inboundSchema),
   z.lazy(() => AzureCredentialsAccessToken$inboundSchema),
   z.lazy(() => AzureCredentialsScopedAccessTokens$inboundSchema),
-  z.lazy(() => AzureCredentialsSasToken$inboundSchema),
   z.lazy(() => AzureCredentialsVMManagedIdentity$inboundSchema),
   z.lazy(() => AzureCredentialsWorkloadIdentity$inboundSchema),
   z.lazy(() => AzureCredentialsManagedIdentity$inboundSchema),

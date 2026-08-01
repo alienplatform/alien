@@ -5,11 +5,11 @@
 ```typescript
 import { RemoteAzureCredentialsType } from "@alienplatform/manager-api/models";
 
-let value: RemoteAzureCredentialsType = "containerSas";
+let value: RemoteAzureCredentialsType = "accessToken";
 ```
 
 ## Values
 
 ```typescript
-"containerSas"
+"accessToken"
 ```

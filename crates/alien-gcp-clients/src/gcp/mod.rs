@@ -16,7 +16,6 @@ pub mod iam;
 pub mod longrunning;
 pub mod monitoring;
 pub mod pubsub;
-mod remote_storage_credentials;
 pub mod resource_manager;
 pub mod secret_manager;
 pub mod service_usage;
@@ -203,14 +202,6 @@ pub trait GcpClientConfigExt {
 
     /// Materialize an impersonated service-account token and authoritative expiry.
     async fn get_impersonated_access_token_with_expiry(&self) -> Result<ExpiringAccessToken>;
-
-    /// Exchanges an access token for a Credential Access Boundary token that
-    /// is confined to one Cloud Storage bucket.
-    async fn downscope_access_token_for_bucket(
-        &self,
-        bucket_name: &str,
-        available_role: &str,
-    ) -> Result<ExpiringAccessToken>;
 
     /// Generate an OAuth2 access token from service account credentials
     async fn generate_jwt_token(&self, service_account_json: &str) -> Result<String>;
@@ -505,19 +496,6 @@ impl GcpClientConfigExt for GcpClientConfig {
         materialize_impersonated_access_token(source, config)
             .await?
             .into_expiring()
-    }
-
-    async fn downscope_access_token_for_bucket(
-        &self,
-        bucket_name: &str,
-        available_role: &str,
-    ) -> Result<ExpiringAccessToken> {
-        remote_storage_credentials::downscope_access_token_for_bucket(
-            self,
-            bucket_name,
-            available_role,
-        )
-        .await
     }
 
     /// Get service endpoint, checking for overrides first

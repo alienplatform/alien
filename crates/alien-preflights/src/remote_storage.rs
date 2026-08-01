@@ -2,8 +2,6 @@ use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 
-pub(crate) const REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID: &str = "storage/remote-data-write";
-
 /// Remote Storage is supported only for setup-owned cloud resources that opt
 /// into publication. This is shared by permission derivation and validation so
 /// the two preflight phases cannot disagree about which resources are exposed.

@@ -59,10 +59,10 @@ export type ResolveBindingResponseBlob = {
    */
   binding: RemoteBlobStorageBinding;
   /**
-   * Response-safe Azure client configuration. It contains one container-bound
+   * Response-safe Azure client configuration containing one storage-audience
    *
    * @remarks
-   * user-delegation SAS and no OAuth or refreshable identity source.
+   * access token for the stack's Remote Bindings identity.
    */
   clientConfig: RemoteAzureClientConfig;
   expiresAt: string;

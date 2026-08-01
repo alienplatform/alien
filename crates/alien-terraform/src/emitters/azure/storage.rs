@@ -244,14 +244,19 @@ fn emit_storage_permissions(
 
     let principal_id_expr = expr::traversal([
         "azurerm_user_assigned_identity",
-        management_label,
+        &format!("{management_label}_remote_bindings"),
         "principal_id",
     ]);
 
-    for permission_set_ref in management_permission_refs(ctx) {
+    let remote_permission = PermissionSetReference::from_name("storage/remote-data-write");
+    if let Some(permission_set_ref) = ctx
+        .resource
+        .is_remote_frozen_storage()
+        .then_some(&remote_permission)
+    {
         let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
         if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none() {
-            continue;
+            return Ok(());
         }
 
         let generator = AzureRuntimePermissionsGenerator::new();
@@ -382,13 +387,6 @@ fn storage_permission_owners<'a>(
         owners.push((profile_name.clone(), refs));
     }
     owners
-}
-
-fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
-    let Some(profile) = ctx.stack.management().profile() else {
-        return Vec::new();
-    };
-    resource_permission_refs(profile, ctx.resource_id)
 }
 
 fn resource_permission_refs<'a>(
@@ -562,10 +560,8 @@ mod tests {
     }
 
     #[test]
-    fn setup_owns_exact_remote_storage_management_grants() {
-        let permissions = PermissionProfile::new().resource("files", ["storage/remote-data-write"]);
+    fn setup_grants_remote_storage_only_to_remote_bindings_identity() {
         let stack = Stack::new("azure-remote-storage-scopes".to_string())
-            .management(ManagementPermissions::override_(permissions))
             .add(
                 AzureResourceGroup::new("default-resource-group".to_string()).build(),
                 ResourceLifecycle::Frozen,
@@ -574,7 +570,7 @@ mod tests {
                 AzureStorageAccount::new("default-storage-account".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
-            .add(
+            .add_with_remote_access(
                 Storage::new("files".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
@@ -604,7 +600,9 @@ mod tests {
             .skip(1)
             .filter_map(|chunk| chunk.split_once("\n}\n").map(|(block, _)| block))
             .filter(|block| {
-                block.contains("azurerm_user_assigned_identity.management.principal_id")
+                block.contains(
+                    "azurerm_user_assigned_identity.management_remote_bindings.principal_id",
+                )
             })
             .collect::<Vec<_>>();
 
@@ -619,6 +617,9 @@ mod tests {
         assert!(assignments.iter().any(|block| block.contains(
             "/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}",
         ) && !block.contains("blobServices/default/containers")));
+        assert!(!storage_module.contains(
+            "azurerm_user_assigned_identity.management.principal_id"
+        ));
     }
 
     fn assert_principal_assignment_scopes(rendered: &str, principal_id: &str) {

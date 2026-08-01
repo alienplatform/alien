@@ -146,20 +146,11 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
     assert_eq!(client_config.tenant_id, "tenant-id");
     assert_eq!(client_config.region.as_deref(), Some("eastus"));
     assert!(client_config.service_overrides.is_none());
-    let alien_core::AzureCredentials::SasToken { query_parameters } = client_config.credentials
+    let alien_core::AzureCredentials::AccessToken { token } = client_config.credentials
     else {
         panic!("generated client returned the wrong Azure credential type");
     };
-    assert_eq!(query_parameters.len(), 13);
-    assert_eq!(
-        query_parameters.get("sp").map(String::as_str),
-        Some("rcwdl")
-    );
-    assert_eq!(query_parameters.get("sr").map(String::as_str), Some("c"));
-    assert_eq!(
-        query_parameters.get("sig").map(String::as_str),
-        Some("azure-sas-signature")
-    );
+    assert_eq!(token, "azure-storage-token");
     assert_eq!(expires_at, at(3600));
 
     *response.write().expect("generated contract response lock") = (

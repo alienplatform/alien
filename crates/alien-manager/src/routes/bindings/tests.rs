@@ -164,27 +164,6 @@ fn lease(client_config: ClientConfig) -> MaterializedCredentialLease {
     }
 }
 
-fn azure_sas_parameters() -> HashMap<String, String> {
-    HashMap::from([
-        (
-            "sp".to_string(),
-            AZURE_REMOTE_STORAGE_PERMISSIONS.to_string(),
-        ),
-        ("st".to_string(), "2030-01-01T00:00:00Z".to_string()),
-        ("se".to_string(), "2030-01-01T01:00:00Z".to_string()),
-        ("skoid".to_string(), "object-id".to_string()),
-        ("sktid".to_string(), "tenant-id".to_string()),
-        ("skt".to_string(), "2030-01-01T00:00:00Z".to_string()),
-        ("ske".to_string(), "2030-01-01T01:00:00Z".to_string()),
-        ("sks".to_string(), "b".to_string()),
-        ("skv".to_string(), "2023-11-03".to_string()),
-        ("spr".to_string(), "https".to_string()),
-        ("sv".to_string(), "2023-11-03".to_string()),
-        ("sr".to_string(), "c".to_string()),
-        ("sig".to_string(), "signature".to_string()),
-    ])
-}
-
 #[test]
 fn remote_storage_validation_accepts_only_running_frozen_storage_with_binding() {
     let binding = StorageBinding::s3("files");
@@ -504,8 +483,8 @@ fn response_contract_constructs_only_materialized_provider_credentials() {
             subscription_id: "subscription".to_string(),
             tenant_id: "tenant".to_string(),
             region: Some("eastus".to_string()),
-            credentials: AzureCredentials::SasToken {
-                query_parameters: azure_sas_parameters(),
+            credentials: AzureCredentials::AccessToken {
+                token: "storage-token".to_string(),
             },
             service_overrides: None,
         }))),
@@ -515,15 +494,11 @@ fn response_contract_constructs_only_materialized_provider_credentials() {
     let azure = serde_json::to_value(azure).unwrap();
     assert_eq!(
         azure.pointer("/clientConfig/credentials/type"),
-        Some(&serde_json::json!("containerSas"))
+        Some(&serde_json::json!("accessToken"))
     );
     assert_eq!(
-        azure.pointer("/clientConfig/credentials/sas/accountName"),
-        Some(&serde_json::json!("account"))
-    );
-    assert_eq!(
-        azure.pointer("/clientConfig/credentials/sas/containerName"),
-        Some(&serde_json::json!("container"))
+        azure.pointer("/clientConfig/credentials/token"),
+        Some(&serde_json::json!("storage-token"))
     );
     assert_eq!(
         azure.pointer("/clientConfig/credentials/sas/signedResource"),

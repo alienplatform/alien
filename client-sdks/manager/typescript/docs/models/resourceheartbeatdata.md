@@ -205,9 +205,9 @@ const value: models.ResourceHeartbeatDataQueue = {
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "deleted",
-      partial: true,
-      stale: false,
+      lifecycle: "running",
+      partial: false,
+      stale: true,
     },
     subscriptionLabels: {
       "key": "<value>",
@@ -503,13 +503,20 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
   data: {
     name: "<value>",
     status: {
-      collectionIssues: [],
-      health: "healthy",
-      lifecycle: "scaling",
-      partial: true,
-      stale: false,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
+      lifecycle: "running",
+      partial: false,
+      stale: true,
     },
-    workloadProfileCount: 324464,
+    workloadProfileCount: 314341,
     workloadProfiles: [
       {
         name: "<value>",
@@ -527,16 +534,41 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
 const value: models.ResourceHeartbeatDataAzureServiceBusNamespace = {
   data: {
     name: "<value>",
-    privateEndpointConnectionCount: 24724,
+    privateEndpointConnectionCount: 289000,
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "deleted",
-      partial: true,
-      stale: false,
+      lifecycle: "running",
+      partial: false,
+      stale: true,
     },
   },
   resourceType: "azure_service_bus_namespace",
 };
 ```
 
+### `models.ResourceHeartbeatDataAi`
+
+```typescript
+const value: models.ResourceHeartbeatDataAi = {
+  data: {
+    accountName: "<value>",
+    status: {
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "unhealthy",
+      lifecycle: "creating",
+      partial: false,
+      stale: true,
+    },
+    backend: "azureFoundry",
+  },
+  resourceType: "ai",
+};
+```

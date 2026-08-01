@@ -1,7 +1,7 @@
 # RemoteAzureClientConfig
 
-Response-safe Azure client configuration. It contains one container-bound
-user-delegation SAS and no OAuth or refreshable identity source.
+Response-safe Azure client configuration containing one storage-audience
+access token for the stack's Remote Bindings identity.
 
 ## Example Usage
 
@@ -10,24 +10,8 @@ import { RemoteAzureClientConfig } from "@alienplatform/manager-api/models";
 
 let value: RemoteAzureClientConfig = {
   credentials: {
-    sas: {
-      accountName: "<value>",
-      containerName: "<value>",
-      expiresAt: "1762181110811",
-      permissions: "<value>",
-      protocol: "<value>",
-      serviceVersion: "<value>",
-      signature: "<value>",
-      signedKeyExpiry: "<value>",
-      signedKeyService: "<value>",
-      signedKeyStart: "<value>",
-      signedKeyVersion: "<value>",
-      signedObjectId: "<id>",
-      signedResource: "<value>",
-      signedTenantId: "<id>",
-      startsAt: "<value>",
-    },
-    type: "containerSas",
+    token: "<value>",
+    type: "accessToken",
   },
   subscriptionId: "<id>",
   tenantId: "<id>",

@@ -7,6 +7,7 @@ import { syncAgentSync } from "../funcs/syncAgentSync.js";
 import { syncInitialize } from "../funcs/syncInitialize.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
+import { syncRenew } from "../funcs/syncRenew.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import { unwrapAsync } from "../types/fp.js";
@@ -86,6 +87,20 @@ export class Sync extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(syncRelease(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Renew an acquired deployment lease without writing deployment state.
+   */
+  async renew(
+    request: models.RenewRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(syncRenew(
       this,
       request,
       options,

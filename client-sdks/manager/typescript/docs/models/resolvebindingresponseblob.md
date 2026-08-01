@@ -14,38 +14,22 @@ let value: ResolveBindingResponseBlob = {
   },
   clientConfig: {
     credentials: {
-      sas: {
-        accountName: "<value>",
-        containerName: "<value>",
-        expiresAt: "1762181110811",
-        permissions: "<value>",
-        protocol: "<value>",
-        serviceVersion: "<value>",
-        signature: "<value>",
-        signedKeyExpiry: "<value>",
-        signedKeyService: "<value>",
-        signedKeyStart: "<value>",
-        signedKeyVersion: "<value>",
-        signedObjectId: "<id>",
-        signedResource: "<value>",
-        signedTenantId: "<id>",
-        startsAt: "<value>",
-      },
-      type: "containerSas",
+      token: "<value>",
+      type: "accessToken",
     },
     subscriptionId: "<id>",
     tenantId: "<id>",
   },
-  expiresAt: "1759301232953",
+  expiresAt: "1762181110811",
   service: "blob",
 };
 ```
 
 ## Fields
 
-| Field                                                                                                                                      | Type                                                                                                                                       | Required                                                                                                                                   | Description                                                                                                                                |
-| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `binding`                                                                                                                                  | [models.RemoteBlobStorageBinding](../models/remoteblobstoragebinding.md)                                                                   | :heavy_check_mark:                                                                                                                         | Concrete Azure Blob Storage topology returned to remote clients.                                                                           |
-| `clientConfig`                                                                                                                             | [models.RemoteAzureClientConfig](../models/remoteazureclientconfig.md)                                                                     | :heavy_check_mark:                                                                                                                         | Response-safe Azure client configuration. It contains one container-bound<br/>user-delegation SAS and no OAuth or refreshable identity source. |
-| `expiresAt`                                                                                                                                | *string*                                                                                                                                   | :heavy_check_mark:                                                                                                                         | N/A                                                                                                                                        |
-| `service`                                                                                                                                  | *"blob"*                                                                                                                                   | :heavy_check_mark:                                                                                                                         | N/A                                                                                                                                        |
+| Field                                                                                                                           | Type                                                                                                                            | Required                                                                                                                        | Description                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `binding`                                                                                                                       | [models.RemoteBlobStorageBinding](../models/remoteblobstoragebinding.md)                                                        | :heavy_check_mark:                                                                                                              | Concrete Azure Blob Storage topology returned to remote clients.                                                                |
+| `clientConfig`                                                                                                                  | [models.RemoteAzureClientConfig](../models/remoteazureclientconfig.md)                                                          | :heavy_check_mark:                                                                                                              | Response-safe Azure client configuration containing one storage-audience<br/>access token for the stack's Remote Bindings identity. |
+| `expiresAt`                                                                                                                     | *string*                                                                                                                        | :heavy_check_mark:                                                                                                              | N/A                                                                                                                             |
+| `service`                                                                                                                       | *"blob"*                                                                                                                        | :heavy_check_mark:                                                                                                              | N/A                                                                                                                             |

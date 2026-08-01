@@ -7,37 +7,26 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import {
-  RemoteAzureContainerSas,
-  RemoteAzureContainerSas$inboundSchema,
-} from "./remoteazurecontainersas.js";
 
 export const RemoteAzureCredentialsType = {
-  ContainerSas: "containerSas",
+  AccessToken: "accessToken",
 } as const;
 export type RemoteAzureCredentialsType = ClosedEnum<
   typeof RemoteAzureCredentialsType
 >;
 
 /**
- * User-delegation SAS signed for exactly one container.
+ * OAuth bearer token for `https://storage.azure.com/.default`.
  */
-export type RemoteAzureCredentialsContainerSas = {
-  /**
-   * Explicit fields of an Azure user-delegation SAS. Keeping the fields typed
-   *
-   * @remarks
-   * lets clients independently validate container scope, permissions, protocol,
-   * and expiry before constructing query parameters.
-   */
-  sas: RemoteAzureContainerSas;
+export type RemoteAzureCredentialsAccessToken = {
+  token: string;
   type: RemoteAzureCredentialsType;
 };
 
 /**
  * The only Azure credential form remote binding resolution can return.
  */
-export type RemoteAzureCredentials = RemoteAzureCredentialsContainerSas;
+export type RemoteAzureCredentials = RemoteAzureCredentialsAccessToken;
 
 /** @internal */
 export const RemoteAzureCredentialsType$inboundSchema: z.ZodEnum<
@@ -45,22 +34,21 @@ export const RemoteAzureCredentialsType$inboundSchema: z.ZodEnum<
 > = z.enum(RemoteAzureCredentialsType);
 
 /** @internal */
-export const RemoteAzureCredentialsContainerSas$inboundSchema: z.ZodType<
-  RemoteAzureCredentialsContainerSas,
+export const RemoteAzureCredentialsAccessToken$inboundSchema: z.ZodType<
+  RemoteAzureCredentialsAccessToken,
   unknown
 > = z.object({
-  sas: RemoteAzureContainerSas$inboundSchema,
+  token: z.string(),
   type: RemoteAzureCredentialsType$inboundSchema,
 });
 
-export function remoteAzureCredentialsContainerSasFromJSON(
+export function remoteAzureCredentialsAccessTokenFromJSON(
   jsonString: string,
-): SafeParseResult<RemoteAzureCredentialsContainerSas, SDKValidationError> {
+): SafeParseResult<RemoteAzureCredentialsAccessToken, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      RemoteAzureCredentialsContainerSas$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'RemoteAzureCredentialsContainerSas' from JSON`,
+    (x) => RemoteAzureCredentialsAccessToken$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteAzureCredentialsAccessToken' from JSON`,
   );
 }
 
@@ -68,7 +56,7 @@ export function remoteAzureCredentialsContainerSasFromJSON(
 export const RemoteAzureCredentials$inboundSchema: z.ZodType<
   RemoteAzureCredentials,
   unknown
-> = z.lazy(() => RemoteAzureCredentialsContainerSas$inboundSchema);
+> = z.lazy(() => RemoteAzureCredentialsAccessToken$inboundSchema);
 
 export function remoteAzureCredentialsFromJSON(
   jsonString: string,

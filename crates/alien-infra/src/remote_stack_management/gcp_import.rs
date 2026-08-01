@@ -31,6 +31,7 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             state: GcpRemoteStackManagementState::Ready,
             service_account_email: Some(data.service_account_email),
             service_account_unique_id: Some(data.service_account_unique_id),
+            remote_bindings_service_account_email: data.remote_bindings_service_account_email,
             role_bound: data.management_permissions_applied,
             impersonation_granted: data.management_permissions_applied,
             applied_management_grant_fingerprint: None,

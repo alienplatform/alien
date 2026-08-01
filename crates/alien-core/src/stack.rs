@@ -32,6 +32,15 @@ pub struct ResourceEntry {
 }
 
 impl ResourceEntry {
+    /// Returns whether this resource is published through Remote Bindings.
+    ///
+    /// Provider emitters use this generic signal to create the stack-level
+    /// Remote Bindings identity. Each resource emitter remains responsible for
+    /// granting that identity only the resource's declared data-plane access.
+    pub fn has_remote_bindings(&self) -> bool {
+        self.remote_access
+    }
+
     /// Returns whether this entry is Frozen Storage published for remote access.
     pub fn is_remote_frozen_storage(&self) -> bool {
         self.lifecycle == ResourceLifecycle::Frozen
@@ -381,6 +390,23 @@ mod tests {
             true,
         )
         .is_remote_frozen_storage());
+    }
+
+    #[test]
+    fn remote_bindings_opt_in_is_resource_agnostic() {
+        let worker = resource_entry(
+            Worker::new("worker".to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/worker:latest".to_string(),
+                })
+                .permissions("worker-execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+            true,
+        );
+
+        assert!(worker.has_remote_bindings());
+        assert!(!worker.is_remote_frozen_storage());
     }
 
     #[test]

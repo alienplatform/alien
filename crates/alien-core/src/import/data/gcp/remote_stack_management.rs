@@ -20,4 +20,7 @@ pub struct GcpRemoteStackManagementImportData {
     /// generated stack.
     #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub management_permissions_applied: bool,
+    /// Setup-owned service account used only for opted-in remote bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_bindings_service_account_email: Option<String>,
 }

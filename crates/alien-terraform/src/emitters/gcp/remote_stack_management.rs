@@ -60,6 +60,63 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 ),
             ],
         ));
+        if has_remote_bindings(ctx) {
+            let bindings_label = format!("{label}_remote_bindings");
+            fragment.resource_blocks.push(resource_block(
+                "google_service_account",
+                &bindings_label,
+                [
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "account_id",
+                        service_account_id_template(&bindings_label),
+                    ),
+                    attr(
+                        "display_name",
+                        expr::template(
+                            "${local.deployment_name}: Remote Bindings service account"
+                                .to_string(),
+                        ),
+                    ),
+                    attr(
+                        "description",
+                        expr::template(
+                            "Data-plane identity for opted-in remote bindings in ${local.deployment_name}. Resource prefix: ${local.resource_prefix}.".to_string(),
+                        ),
+                    ),
+                ],
+            ));
+            for (suffix, role) in [
+                ("token_creator", "roles/iam.serviceAccountTokenCreator"),
+                ("user", "roles/iam.serviceAccountUser"),
+            ] {
+                fragment.resource_blocks.push(resource_block(
+                    "google_service_account_iam_member",
+                    &format!("{bindings_label}_manager_{suffix}"),
+                    [
+                        attr(
+                            "for_each",
+                            expr::raw(
+                                "toset(compact([var.managing_service_account_email]))",
+                            ),
+                        ),
+                        attr(
+                            "service_account_id",
+                            expr::traversal([
+                                "google_service_account",
+                                bindings_label.as_str(),
+                                "id",
+                            ]),
+                        ),
+                        attr("role", Expression::String(role.to_string())),
+                        attr(
+                            "member",
+                            expr::template("serviceAccount:${each.value}".to_string()),
+                        ),
+                    ],
+                ));
+            }
+        }
         fragment.data_blocks.push(data_block(
             "google_project",
             "current",
@@ -143,7 +200,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([
+        let mut fields = vec![
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "projectNumber",
@@ -158,8 +215,26 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 expr::traversal(["google_service_account", label, "unique_id"]),
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
-        ]))
+        ];
+        if has_remote_bindings(ctx) {
+            let bindings_label = format!("{label}_remote_bindings");
+            fields.push((
+                "remoteBindingsServiceAccountEmail",
+                expr::traversal([
+                    "google_service_account",
+                    bindings_label.as_str(),
+                    "email",
+                ]),
+            ));
+        }
+        Ok(expr::object(fields))
     }
+}
+
+fn has_remote_bindings(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack
+        .resources()
+        .any(|(_, entry)| entry.has_remote_bindings())
 }
 
 fn emit_project_management_bindings(

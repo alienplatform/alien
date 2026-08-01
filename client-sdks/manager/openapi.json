@@ -1559,6 +1559,130 @@
           "target": {}
         }
       },
+      "AiHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsBedrockAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "awsBedrock"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpVertexAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "gcpVertex"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureFoundryAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "azureFoundry"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "external"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "AiHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
       "AlienError": {
         "type": "object",
         "description": "Canonical error container that provides a structured way to represent errors\nwith rich metadata including error codes, human-readable messages, context,\nand chaining capabilities for error propagation.\n\nThis struct is designed to be both machine-readable and user-friendly,\nsupporting serialization for API responses and detailed error reporting\nin distributed systems.",
@@ -1776,6 +1900,21 @@
           },
           "status": {
             "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          }
+        }
+      },
+      "AwsBedrockAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
           }
         }
       },
@@ -4042,32 +4181,6 @@
           },
           {
             "type": "object",
-            "description": "A short-lived Azure Storage shared access signature.\n\nQuery parameter values are kept decoded. Azure clients must encode them\nwhen attaching them to a request URL.",
-            "required": [
-              "query_parameters",
-              "type"
-            ],
-            "properties": {
-              "query_parameters": {
-                "type": "object",
-                "description": "Exact SAS query parameters, including the signature and expiry.",
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "propertyNames": {
-                  "type": "string"
-                }
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "sasToken"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
             "description": "Azure VM IMDS managed identity.",
             "required": [
               "client_id",
@@ -4292,6 +4405,39 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "AzureFoundryAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "accountName"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceGroup": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
           }
         }
       },
@@ -7270,6 +7416,22 @@
           "tcp"
         ]
       },
+      "ExternalAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "The BYO-key provider serving this binding (e.g. \"openai\"). Used on the Local\nplatform, where the app brings its own provider key instead of an ambient cloud."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
+          }
+        }
+      },
       "FailureDomainSelection": {
         "type": "object",
         "description": "Failure-domain policy selected for a compute pool.",
@@ -8685,6 +8847,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "GcpVertexAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "project",
+          "location"
+        ],
+        "properties": {
+          "location": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
           }
         }
       },
@@ -13724,7 +13905,7 @@
       },
       "RemoteAzureClientConfig": {
         "type": "object",
-        "description": "Response-safe Azure client configuration. It contains one container-bound\nuser-delegation SAS and no OAuth or refreshable identity source.",
+        "description": "Response-safe Azure client configuration containing one storage-audience\naccess token for the stack's Remote Bindings identity.",
         "required": [
           "subscriptionId",
           "tenantId",
@@ -13733,7 +13914,7 @@
         "properties": {
           "credentials": {
             "$ref": "#/components/schemas/RemoteAzureCredentials",
-            "description": "A short-lived SAS bound to the requested Blob container."
+            "description": "A short-lived Azure Storage access token."
           },
           "region": {
             "type": [
@@ -13753,108 +13934,23 @@
         },
         "additionalProperties": false
       },
-      "RemoteAzureContainerSas": {
-        "type": "object",
-        "description": "Explicit fields of an Azure user-delegation SAS. Keeping the fields typed\nlets clients independently validate container scope, permissions, protocol,\nand expiry before constructing query parameters.",
-        "required": [
-          "accountName",
-          "containerName",
-          "permissions",
-          "startsAt",
-          "expiresAt",
-          "signedObjectId",
-          "signedTenantId",
-          "signedKeyStart",
-          "signedKeyExpiry",
-          "signedKeyService",
-          "signedKeyVersion",
-          "protocol",
-          "serviceVersion",
-          "signedResource",
-          "signature"
-        ],
-        "properties": {
-          "accountName": {
-            "type": "string",
-            "description": "Storage account named by the signed canonical resource."
-          },
-          "containerName": {
-            "type": "string",
-            "description": "Blob container named by the signed canonical resource."
-          },
-          "expiresAt": {
-            "type": "string",
-            "description": "SAS validity end (`se`)."
-          },
-          "permissions": {
-            "type": "string",
-            "description": "Canonically ordered SAS permissions (`sp`)."
-          },
-          "protocol": {
-            "type": "string",
-            "description": "Required transport protocol (`spr`)."
-          },
-          "serviceVersion": {
-            "type": "string",
-            "description": "Storage authorization version (`sv`)."
-          },
-          "signature": {
-            "type": "string",
-            "description": "HMAC-SHA256 signature (`sig`)."
-          },
-          "signedKeyExpiry": {
-            "type": "string",
-            "description": "Delegation-key validity end (`ske`)."
-          },
-          "signedKeyService": {
-            "type": "string",
-            "description": "Delegation-key service (`sks`)."
-          },
-          "signedKeyStart": {
-            "type": "string",
-            "description": "Delegation-key validity start (`skt`)."
-          },
-          "signedKeyVersion": {
-            "type": "string",
-            "description": "Delegation-key version (`skv`)."
-          },
-          "signedObjectId": {
-            "type": "string",
-            "description": "Object ID that requested the delegation key (`skoid`)."
-          },
-          "signedResource": {
-            "type": "string",
-            "description": "Signed resource kind (`sr`)."
-          },
-          "signedTenantId": {
-            "type": "string",
-            "description": "Tenant ID that issued the delegation key (`sktid`)."
-          },
-          "startsAt": {
-            "type": "string",
-            "description": "SAS validity start (`st`)."
-          }
-        },
-        "additionalProperties": false
-      },
       "RemoteAzureCredentials": {
         "oneOf": [
           {
             "type": "object",
-            "description": "User-delegation SAS signed for exactly one container.",
+            "description": "OAuth bearer token for `https://storage.azure.com/.default`.",
             "required": [
-              "sas",
+              "token",
               "type"
             ],
             "properties": {
-              "sas": {
-                "$ref": "#/components/schemas/RemoteAzureContainerSas",
-                "description": "Explicit signed fields required to reconstruct the SAS query."
+              "token": {
+                "type": "string"
               },
               "type": {
                 "type": "string",
                 "enum": [
-                  "containerSas"
+                  "accessToken"
                 ]
               }
             }
@@ -14618,6 +14714,24 @@
                 "type": "string",
                 "enum": [
                   "azure_service_bus_namespace"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/AiHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "ai"
                 ]
               }
             }

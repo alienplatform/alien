@@ -677,6 +677,8 @@ impl AzureRemoteStackManagementController {
             )),
             uami_client_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
             uami_principal_id: Some("87654321-4321-4321-4321-210987654321".to_string()),
+            remote_bindings_identity_id: None,
+            remote_bindings_client_id: None,
             tenant_id: Some("tenant-1234".to_string()),
             fic_name: Some(format!("{}-management-fic", prefix)),
             role_definition_id: Some(format!(

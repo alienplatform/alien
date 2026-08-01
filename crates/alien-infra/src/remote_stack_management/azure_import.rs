@@ -46,6 +46,8 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             uami_resource_id: Some(data.identity_id),
             uami_client_id: Some(data.client_id),
             uami_principal_id: Some(data.principal_id),
+            remote_bindings_identity_id: data.remote_bindings_identity_id,
+            remote_bindings_client_id: data.remote_bindings_client_id,
             tenant_id: Some(data.tenant_id),
             // Setup owns the FIC and role assignments, so runtime teardown must
             // not claim their names or IDs.

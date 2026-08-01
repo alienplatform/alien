@@ -42,6 +42,9 @@ pub struct GcpRemoteStackManagementController {
     pub(crate) service_account_email: Option<String>,
     /// The unique ID of the created management service account.
     pub(crate) service_account_unique_id: Option<String>,
+    /// Setup-owned service account exported only for remote bindings.
+    #[serde(default)]
+    pub(crate) remote_bindings_service_account_email: Option<String>,
     /// Whether the service account has been bound to the role.
     pub(crate) role_bound: bool,
     /// Whether impersonation permissions have been granted
@@ -710,6 +713,13 @@ impl GcpRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: email.clone(),
                 access_configuration: email.clone(),
+                remote_bindings_access: self
+                    .remote_bindings_service_account_email
+                    .as_ref()
+                    .map(|email| alien_core::RemoteBindingsAccessOutputs {
+                        resource_id: email.clone(),
+                        access_configuration: email.clone(),
+                    }),
             }))
         } else {
             None
@@ -921,6 +931,7 @@ impl GcpRemoteStackManagementController {
                 service_account_name
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
+            remote_bindings_service_account_email: None,
             role_bound: true,
             impersonation_granted: true,
             applied_management_grant_fingerprint: None,

@@ -16,8 +16,7 @@ pub(crate) fn default_string() -> String {
 
 pub use auth_validator::{AuthValidator, TokenType};
 pub use credential_resolver::{
-    CredentialResolver, GcpCredentialAccessBoundarySource, RemoteStorageCredentialSource,
-    ResolvedCredentials,
+    CredentialResolver, RemoteStorageCredentialSource, ResolvedCredentials,
 };
 pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{

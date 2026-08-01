@@ -21,6 +21,7 @@ embedders can authorize against the inbound caller's scope.
 bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 * [release](#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
 `caller: &Subject` is threaded into `DeploymentStore::release`.
+* [renew](#renew) - Renew an acquired deployment lease without writing deployment state.
 
 ## initialize
 
@@ -585,7 +586,7 @@ async function run() {
         "stack": {
           "id": "<id>",
           "resources": {
-  
+
           },
         },
       },
@@ -649,7 +650,7 @@ async function run() {
         "stack": {
           "id": "<id>",
           "resources": {
-  
+
           },
         },
       },
@@ -735,7 +736,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("syncRelease failed:", res.error);
   }
@@ -749,6 +750,83 @@ run();
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `request`                                                                                                                                                                      | [models.ReleaseRequest](../../models/releaserequest.md)                                                                                                                        | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<void\>**
+
+### Errors
+
+| Error Type                      | Status Code                     | Content Type                    |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+
+## renew
+
+Renew an acquired deployment lease without writing deployment state.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="renew" method="post" path="/v1/sync/renew" -->
+```typescript
+import { AlienManager } from "@alienplatform/manager-api";
+
+const alienManager = new AlienManager({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  await alienManager.sync.renew({
+    deploymentId: "<id>",
+    session: "<value>",
+  });
+
+
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
+import { syncRenew } from "@alienplatform/manager-api/funcs/syncRenew.js";
+
+// Use `AlienManagerCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alienManager = new AlienManagerCore({
+  serverURL: "https://api.example.com",
+  bearer: process.env["ALIEN_MANAGER_BEARER"] ?? "",
+});
+
+async function run() {
+  const res = await syncRenew(alienManager, {
+    deploymentId: "<id>",
+    session: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+
+  } else {
+    console.log("syncRenew failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.RenewRequest](../../models/renewrequest.md)                                                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
