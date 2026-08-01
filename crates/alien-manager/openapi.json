@@ -14229,7 +14229,7 @@
           },
           {
             "type": "object",
-            "description": "Azure Blob Storage and an exact container-scoped SAS.",
+            "description": "Azure Blob Storage and a storage-audience access token.",
             "required": [
               "binding",
               "clientConfig",
@@ -14256,7 +14256,7 @@
           },
           {
             "type": "object",
-            "description": "Google Cloud Storage and a bucket-downscoped access token.",
+            "description": "Google Cloud Storage and a Remote Bindings identity access token.",
             "required": [
               "binding",
               "clientConfig",

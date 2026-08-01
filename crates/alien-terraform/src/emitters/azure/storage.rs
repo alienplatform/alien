@@ -675,17 +675,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            assignments.len(),
-            2,
-            "expected container and account grants"
-        );
+        assert_eq!(assignments.len(), 1, "expected one container-scoped grant");
         assert!(assignments.iter().any(|block| block.contains(
             "blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}",
         )));
-        assert!(assignments.iter().any(|block| block.contains(
-            "/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}",
-        ) && !block.contains("blobServices/default/containers")));
         assert!(!storage_module.contains("azurerm_user_assigned_identity.management.principal_id"));
     }
 
