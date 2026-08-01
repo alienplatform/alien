@@ -76,10 +76,27 @@
           }
         }
       },
-      // AWS requires Resource: "*" for DescribeVolumes.
+      // AWS requires Resource: "*" for EC2 Describe actions.
       {
+        "label": "observe-ec2-runtime-state",
         "grant": {
-          "actions": ["ec2:DescribeVolumes"]
+          "actions": ["ec2:DescribeTags", "ec2:DescribeVolumes"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      // Horizon observes the target state after deregistration before stopping the workload.
+      // DescribeTargetHealth does not support resource-level IAM permissions.
+      {
+        "label": "observe-load-balancer-target-health",
+        "grant": {
+          "actions": ["elasticloadbalancing:DescribeTargetHealth"]
         },
         "binding": {
           "stack": {
