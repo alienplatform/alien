@@ -3,123 +3,123 @@
 
 ## Supported Types
 
-### `models.EventDataLoadingConfiguration`
+### `models.DataLoadingConfiguration`
 
 ```typescript
-const value: models.EventDataLoadingConfiguration = {
+const value: models.DataLoadingConfiguration = {
   type: "LoadingConfiguration",
 };
 ```
 
-### `models.EventDataFinished`
+### `models.DataFinished`
 
 ```typescript
-const value: models.EventDataFinished = {
+const value: models.DataFinished = {
   type: "Finished",
 };
 ```
 
-### `models.EventDataBuildingStack`
+### `models.DataBuildingStack`
 
 ```typescript
-const value: models.EventDataBuildingStack = {
+const value: models.DataBuildingStack = {
   stack: "<value>",
   type: "BuildingStack",
 };
 ```
 
-### `models.EventDataRunningPreflights`
+### `models.DataRunningPreflights`
 
 ```typescript
-const value: models.EventDataRunningPreflights = {
+const value: models.DataRunningPreflights = {
   platform: "<value>",
   stack: "<value>",
   type: "RunningPreflights",
 };
 ```
 
-### `models.EventDataDownloadingAlienRuntime`
+### `models.DataDownloadingAlienRuntime`
 
 ```typescript
-const value: models.EventDataDownloadingAlienRuntime = {
+const value: models.DataDownloadingAlienRuntime = {
   targetTriple: "<value>",
   type: "DownloadingAlienRuntime",
-  url: "https://unlawful-skyline.com",
+  url: "https://dim-jellyfish.com/",
 };
 ```
 
-### `models.EventDataBuildingResource`
+### `models.DataBuildingResource`
 
 ```typescript
-const value: models.EventDataBuildingResource = {
+const value: models.DataBuildingResource = {
   resourceName: "<value>",
   resourceType: "<value>",
   type: "BuildingResource",
 };
 ```
 
-### `models.EventDataBuildingImage`
+### `models.DataBuildingImage`
 
 ```typescript
-const value: models.EventDataBuildingImage = {
-  image: "https://loremflickr.com/1460/1419?lock=7755903317896576",
+const value: models.DataBuildingImage = {
+  image: "https://loremflickr.com/965/1538?lock=536245262441792",
   type: "BuildingImage",
 };
 ```
 
-### `models.EventDataPushingImage`
+### `models.DataPushingImage`
 
 ```typescript
-const value: models.EventDataPushingImage = {
-  image: "https://picsum.photos/seed/3ETRvL33XQ/3838/1575",
+const value: models.DataPushingImage = {
+  image: "https://picsum.photos/seed/bgd6b4HoNE/948/3236",
   type: "PushingImage",
 };
 ```
 
-### `models.EventDataPushingStack`
+### `models.DataPushingStack`
 
 ```typescript
-const value: models.EventDataPushingStack = {
+const value: models.DataPushingStack = {
   platform: "<value>",
   stack: "<value>",
   type: "PushingStack",
 };
 ```
 
-### `models.EventDataPushingResource`
+### `models.DataPushingResource`
 
 ```typescript
-const value: models.EventDataPushingResource = {
+const value: models.DataPushingResource = {
   resourceName: "<value>",
   resourceType: "<value>",
   type: "PushingResource",
 };
 ```
 
-### `models.EventDataCreatingRelease`
+### `models.DataCreatingRelease`
 
 ```typescript
-const value: models.EventDataCreatingRelease = {
+const value: models.DataCreatingRelease = {
   project: "<value>",
   type: "CreatingRelease",
 };
 ```
 
-### `models.EventDataCompilingCode`
+### `models.DataCompilingCode`
 
 ```typescript
-const value: models.EventDataCompilingCode = {
+const value: models.DataCompilingCode = {
   language: "<value>",
   type: "CompilingCode",
 };
 ```
 
-### `models.EventDataStackStep`
+### `models.DataStackStep`
 
 ```typescript
-const value: models.EventDataStackStep = {
+const value: models.DataStackStep = {
   nextState: {
-    platform: "kubernetes",
+    platform: "test",
     resourcePrefix: "<value>",
     resources: {
       "key": {
@@ -127,7 +127,7 @@ const value: models.EventDataStackStep = {
           id: "<id>",
           type: "<value>",
         },
-        status: "pending",
+        status: "running",
         type: "<value>",
       },
     },
@@ -136,301 +136,300 @@ const value: models.EventDataStackStep = {
 };
 ```
 
-### `models.EventDataGeneratingCloudFormationTemplate`
+### `models.DataGeneratingCloudFormationTemplate`
 
 ```typescript
-const value: models.EventDataGeneratingCloudFormationTemplate = {
+const value: models.DataGeneratingCloudFormationTemplate = {
   type: "GeneratingCloudFormationTemplate",
 };
 ```
 
-### `models.EventDataGeneratingTemplate`
+### `models.DataGeneratingTemplate`
 
 ```typescript
-const value: models.EventDataGeneratingTemplate = {
+const value: models.DataGeneratingTemplate = {
   platform: "<value>",
   type: "GeneratingTemplate",
 };
 ```
 
-### `models.EventDataProvisioningAgent`
+### `models.DataProvisioningAgent`
 
 ```typescript
-const value: models.EventDataProvisioningAgent = {
+const value: models.DataProvisioningAgent = {
   agentId: "<id>",
   releaseId: "<id>",
   type: "ProvisioningAgent",
 };
 ```
 
-### `models.EventDataUpdatingAgent`
+### `models.DataUpdatingAgent`
 
 ```typescript
-const value: models.EventDataUpdatingAgent = {
+const value: models.DataUpdatingAgent = {
   agentId: "<id>",
   releaseId: "<id>",
   type: "UpdatingAgent",
 };
 ```
 
-### `models.EventDataDeletingAgent`
+### `models.DataDeletingAgent`
 
 ```typescript
-const value: models.EventDataDeletingAgent = {
+const value: models.DataDeletingAgent = {
   agentId: "<id>",
   releaseId: "<id>",
   type: "DeletingAgent",
 };
 ```
 
-### `models.EventDataDebuggingAgent`
+### `models.DataDebuggingAgent`
 
 ```typescript
-const value: models.EventDataDebuggingAgent = {
+const value: models.DataDebuggingAgent = {
   agentId: "<id>",
   debugSessionId: "<id>",
   type: "DebuggingAgent",
 };
 ```
 
-### `models.EventDataPreparingEnvironment`
+### `models.DataPreparingEnvironment`
 
 ```typescript
-const value: models.EventDataPreparingEnvironment = {
+const value: models.DataPreparingEnvironment = {
   strategyName: "<value>",
   type: "PreparingEnvironment",
 };
 ```
 
-### `models.EventDataDeployingStack`
+### `models.DataDeployingStack`
 
 ```typescript
-const value: models.EventDataDeployingStack = {
+const value: models.DataDeployingStack = {
   stackName: "<value>",
   type: "DeployingStack",
 };
 ```
 
-### `models.EventDataRunningTestWorker`
+### `models.DataRunningTestWorker`
 
 ```typescript
-const value: models.EventDataRunningTestWorker = {
+const value: models.DataRunningTestWorker = {
   stackName: "<value>",
   type: "RunningTestWorker",
 };
 ```
 
-### `models.EventDataCleaningUpStack`
+### `models.DataCleaningUpStack`
 
 ```typescript
-const value: models.EventDataCleaningUpStack = {
+const value: models.DataCleaningUpStack = {
   stackName: "<value>",
   strategyName: "<value>",
   type: "CleaningUpStack",
 };
 ```
 
-### `models.EventDataCleaningUpEnvironment`
+### `models.DataCleaningUpEnvironment`
 
 ```typescript
-const value: models.EventDataCleaningUpEnvironment = {
+const value: models.DataCleaningUpEnvironment = {
   stackName: "<value>",
   strategyName: "<value>",
   type: "CleaningUpEnvironment",
 };
 ```
 
-### `models.EventDataSettingUpPlatformContext`
+### `models.DataSettingUpPlatformContext`
 
 ```typescript
-const value: models.EventDataSettingUpPlatformContext = {
+const value: models.DataSettingUpPlatformContext = {
   platformName: "<value>",
   type: "SettingUpPlatformContext",
 };
 ```
 
-### `models.EventDataEnsuringDockerRepository`
+### `models.DataEnsuringDockerRepository`
 
 ```typescript
-const value: models.EventDataEnsuringDockerRepository = {
+const value: models.DataEnsuringDockerRepository = {
   repositoryName: "<value>",
   type: "EnsuringDockerRepository",
 };
 ```
 
-### `models.EventDataDeployingCloudFormationStack`
+### `models.DataDeployingCloudFormationStack`
 
 ```typescript
-const value: models.EventDataDeployingCloudFormationStack = {
+const value: models.DataDeployingCloudFormationStack = {
   cfnStackName: "<value>",
   currentStatus: "<value>",
   type: "DeployingCloudFormationStack",
 };
 ```
 
-### `models.EventDataAssumingRole`
+### `models.DataAssumingRole`
 
 ```typescript
-const value: models.EventDataAssumingRole = {
+const value: models.DataAssumingRole = {
   roleArn: "<value>",
   type: "AssumingRole",
 };
 ```
 
-### `models.EventDataImportingStackStateFromCloudFormation`
+### `models.DataImportingStackStateFromCloudFormation`
 
 ```typescript
-const value: models.EventDataImportingStackStateFromCloudFormation = {
+const value: models.DataImportingStackStateFromCloudFormation = {
   cfnStackName: "<value>",
   type: "ImportingStackStateFromCloudFormation",
 };
 ```
 
-### `models.EventDataDeletingCloudFormationStack`
+### `models.DataDeletingCloudFormationStack`
 
 ```typescript
-const value: models.EventDataDeletingCloudFormationStack = {
+const value: models.DataDeletingCloudFormationStack = {
   cfnStackName: "<value>",
   currentStatus: "<value>",
   type: "DeletingCloudFormationStack",
 };
 ```
 
-### `models.EventDataEmptyingBuckets`
+### `models.DataEmptyingBuckets`
 
 ```typescript
-const value: models.EventDataEmptyingBuckets = {
-  bucketNames: [],
+const value: models.DataEmptyingBuckets = {
+  bucketNames: [
+    "<value 1>",
+  ],
   type: "EmptyingBuckets",
 };
 ```
 
-### `models.EventDataDeploymentCreated`
+### `models.DataDeploymentCreated`
 
 ```typescript
-const value: models.EventDataDeploymentCreated = {
+const value: models.DataDeploymentCreated = {
   deploymentGroupId: "<id>",
   deploymentId: "<id>",
   type: "DeploymentCreated",
 };
 ```
 
-### `models.EventDataDeploymentReleased`
+### `models.DataDeploymentReleased`
 
 ```typescript
-const value: models.EventDataDeploymentReleased = {
+const value: models.DataDeploymentReleased = {
   deploymentId: "<id>",
   releaseId: "<id>",
   type: "DeploymentReleased",
 };
 ```
 
-### `models.EventDataDeploymentFailed`
+### `models.DataDeploymentFailed`
 
 ```typescript
-const value: models.EventDataDeploymentFailed = {
+const value: models.DataDeploymentFailed = {
   deploymentId: "<id>",
   error: {
     code: "<value>",
     internal: true,
     message: "<value>",
   },
-  phase: "deleting",
+  phase: "preflights",
   type: "DeploymentFailed",
 };
 ```
 
-### `models.EventDataDeploymentDegraded`
+### `models.DataDeploymentDegraded`
 
 ```typescript
-const value: models.EventDataDeploymentDegraded = {
+const value: models.DataDeploymentDegraded = {
   deploymentId: "<id>",
   error: {
     code: "<value>",
-    internal: true,
+    internal: false,
     message: "<value>",
   },
   type: "DeploymentDegraded",
 };
 ```
 
-### `models.EventDataDeploymentRecovered`
+### `models.DataDeploymentRecovered`
 
 ```typescript
-const value: models.EventDataDeploymentRecovered = {
+const value: models.DataDeploymentRecovered = {
   deploymentId: "<id>",
   releaseId: "<id>",
   type: "DeploymentRecovered",
 };
 ```
 
-### `models.EventDataDeploymentDeleted`
+### `models.DataDeploymentDeleted`
 
 ```typescript
-const value: models.EventDataDeploymentDeleted = {
+const value: models.DataDeploymentDeleted = {
   deploymentId: "<id>",
   type: "DeploymentDeleted",
 };
 ```
 
-### `models.EventDataDeploymentRetryRequested`
+### `models.DataDeploymentRetryRequested`
 
 ```typescript
-const value: models.EventDataDeploymentRetryRequested = {
+const value: models.DataDeploymentRetryRequested = {
   deploymentId: "<id>",
   type: "DeploymentRetryRequested",
 };
 ```
 
-### `models.EventDataDeploymentRedeployRequested`
+### `models.DataDeploymentRedeployRequested`
 
 ```typescript
-const value: models.EventDataDeploymentRedeployRequested = {
+const value: models.DataDeploymentRedeployRequested = {
   deploymentId: "<id>",
   releaseId: "<id>",
   type: "DeploymentRedeployRequested",
 };
 ```
 
-### `models.EventDataDeploymentReleasePinned`
+### `models.DataDeploymentReleasePinned`
 
 ```typescript
-const value: models.EventDataDeploymentReleasePinned = {
+const value: models.DataDeploymentReleasePinned = {
   deploymentId: "<id>",
   pinnedReleaseId: "<id>",
   type: "DeploymentReleasePinned",
 };
 ```
 
-### `models.EventDataDeploymentReleaseUnpinned`
+### `models.DataDeploymentReleaseUnpinned`
 
 ```typescript
-const value: models.EventDataDeploymentReleaseUnpinned = {
+const value: models.DataDeploymentReleaseUnpinned = {
   deploymentId: "<id>",
   previousPinnedReleaseId: "<id>",
   type: "DeploymentReleaseUnpinned",
 };
 ```
 
-### `models.EventDataDeploymentEnvironmentUpdated`
+### `models.DataDeploymentEnvironmentUpdated`
 
 ```typescript
-const value: models.EventDataDeploymentEnvironmentUpdated = {
-  changedKeys: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
+const value: models.DataDeploymentEnvironmentUpdated = {
+  changedKeys: [],
   deploymentId: "<id>",
   type: "DeploymentEnvironmentUpdated",
 };
 ```
 
-### `models.EventDataDeploymentDeletionRequested`
+### `models.DataDeploymentDeletionRequested`
 
 ```typescript
-const value: models.EventDataDeploymentDeletionRequested = {
+const value: models.DataDeploymentDeletionRequested = {
   deploymentId: "<id>",
   type: "DeploymentDeletionRequested",
 };
 ```
+

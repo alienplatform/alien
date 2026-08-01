@@ -91,10 +91,8 @@ async function $do(
   const query = encodeFormQuery({
     "cursor": payload?.cursor,
     "deploymentId": payload?.deploymentId,
-    "include": payload?.include,
     "limit": payload?.limit,
     "project": payload?.project,
-    "releaseId": payload?.releaseId,
     "workspace": payload?.workspace,
   });
 

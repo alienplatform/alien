@@ -11,16 +11,10 @@ import {
   SetupFingerprintInfo,
   SetupFingerprintInfo$inboundSchema,
 } from "./setupfingerprintinfo.js";
-
-export type ReleaseStack = {
-  aws?: any | null | undefined;
-  gcp?: any | null | undefined;
-  azure?: any | null | undefined;
-  kubernetes?: any | null | undefined;
-  machines?: any | null | undefined;
-  local?: any | null | undefined;
-  test?: any | null | undefined;
-};
+import {
+  StackByPlatform,
+  StackByPlatform$inboundSchema,
+} from "./stackbyplatform.js";
 
 export type Release = {
   /**
@@ -31,37 +25,11 @@ export type Release = {
   version: string;
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
-  stack?: ReleaseStack | null | undefined;
+  stack?: StackByPlatform | null | undefined;
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
   rootDirectory?: string | null | undefined;
-  /**
-   * ID of the platform user who created the release, if known
-   */
-  createdByUserId?: string | null | undefined;
   workspaceId: string;
 };
-
-/** @internal */
-export const ReleaseStack$inboundSchema: z.ZodType<ReleaseStack, unknown> = z
-  .object({
-    aws: z.nullable(z.any()).optional(),
-    gcp: z.nullable(z.any()).optional(),
-    azure: z.nullable(z.any()).optional(),
-    kubernetes: z.nullable(z.any()).optional(),
-    machines: z.nullable(z.any()).optional(),
-    local: z.nullable(z.any()).optional(),
-    test: z.nullable(z.any()).optional(),
-  });
-
-export function releaseStackFromJSON(
-  jsonString: string,
-): SafeParseResult<ReleaseStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ReleaseStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ReleaseStack' from JSON`,
-  );
-}
 
 /** @internal */
 export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
@@ -70,10 +38,9 @@ export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
   version: z.string(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  stack: z.nullable(z.lazy(() => ReleaseStack$inboundSchema)).optional(),
+  stack: z.nullable(StackByPlatform$inboundSchema).optional(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   rootDirectory: z.nullable(z.string()).optional(),
-  createdByUserId: z.nullable(z.string()).optional(),
   workspaceId: z.string(),
 });
 

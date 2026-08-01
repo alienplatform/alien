@@ -7,7 +7,6 @@ import { syncContext } from "../funcs/syncContext.js";
 import { syncList } from "../funcs/syncList.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
-import { syncRenew } from "../funcs/syncRenew.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -64,17 +63,6 @@ export class Sync extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.SyncReconcileResponse> {
     return unwrapAsync(syncReconcile(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async renew(
-    request: operations.SyncRenewRequest,
-    options?: RequestOptions,
-  ): Promise<operations.SyncRenewResponse> {
-    return unwrapAsync(syncRenew(
       this,
       request,
       options,

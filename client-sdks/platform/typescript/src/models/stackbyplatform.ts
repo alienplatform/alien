@@ -3,6 +3,9 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type StackByPlatform = {
   aws?: any | null | undefined;
@@ -14,6 +17,19 @@ export type StackByPlatform = {
   test?: any | null | undefined;
 };
 
+/** @internal */
+export const StackByPlatform$inboundSchema: z.ZodType<
+  StackByPlatform,
+  unknown
+> = z.object({
+  aws: z.nullable(z.any()).optional(),
+  gcp: z.nullable(z.any()).optional(),
+  azure: z.nullable(z.any()).optional(),
+  kubernetes: z.nullable(z.any()).optional(),
+  machines: z.nullable(z.any()).optional(),
+  local: z.nullable(z.any()).optional(),
+  test: z.nullable(z.any()).optional(),
+});
 /** @internal */
 export type StackByPlatform$Outbound = {
   aws?: any | null | undefined;
@@ -43,4 +59,13 @@ export function stackByPlatformToJSON(
   stackByPlatform: StackByPlatform,
 ): string {
   return JSON.stringify(StackByPlatform$outboundSchema.parse(stackByPlatform));
+}
+export function stackByPlatformFromJSON(
+  jsonString: string,
+): SafeParseResult<StackByPlatform, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StackByPlatform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StackByPlatform' from JSON`,
+  );
 }

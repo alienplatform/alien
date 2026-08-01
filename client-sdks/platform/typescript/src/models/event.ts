@@ -12,7 +12,7 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-export type EventDataDeploymentDeletionRequested = {
+export type DataDeploymentDeletionRequested = {
   /**
    * ID of the deployment
    */
@@ -35,7 +35,7 @@ export type EventKind2 = ClosedEnum<typeof EventKind2>;
 /**
  * Authenticated principal that requested a deployment intent event.
  */
-export type EventActor2 = {
+export type Actor2 = {
   /**
    * User email when the principal is a user.
    */
@@ -50,10 +50,10 @@ export type EventActor2 = {
   kind: EventKind2;
 };
 
-export type EventActorUnion2 = EventActor2 | any;
+export type ActorUnion2 = Actor2 | any;
 
-export type EventDataDeploymentEnvironmentUpdated = {
-  actor?: EventActor2 | any | null | undefined;
+export type DataDeploymentEnvironmentUpdated = {
+  actor?: Actor2 | any | null | undefined;
   /**
    * Names of the environment variables that changed (added, removed, or modified)
    */
@@ -65,7 +65,7 @@ export type EventDataDeploymentEnvironmentUpdated = {
   type: "DeploymentEnvironmentUpdated";
 };
 
-export type EventDataDeploymentReleaseUnpinned = {
+export type DataDeploymentReleaseUnpinned = {
   /**
    * ID of the deployment
    */
@@ -77,7 +77,7 @@ export type EventDataDeploymentReleaseUnpinned = {
   type: "DeploymentReleaseUnpinned";
 };
 
-export type EventDataDeploymentReleasePinned = {
+export type DataDeploymentReleasePinned = {
   /**
    * ID of the deployment
    */
@@ -93,7 +93,7 @@ export type EventDataDeploymentReleasePinned = {
   type: "DeploymentReleasePinned";
 };
 
-export type EventDataDeploymentRedeployRequested = {
+export type DataDeploymentRedeployRequested = {
   /**
    * ID of the deployment
    */
@@ -120,7 +120,7 @@ export type EventKind1 = ClosedEnum<typeof EventKind1>;
 /**
  * Authenticated principal that requested a deployment intent event.
  */
-export type EventActor1 = {
+export type Actor1 = {
   /**
    * User email when the principal is a user.
    */
@@ -135,7 +135,7 @@ export type EventActor1 = {
   kind: EventKind1;
 };
 
-export type EventActorUnion1 = EventActor1 | any;
+export type ActorUnion1 = Actor1 | any;
 
 /**
  * Canonical error container that provides a structured way to represent errors
@@ -148,7 +148,7 @@ export type EventActorUnion1 = EventActor1 | any;
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type EventPreviousError = {
+export type PreviousError = {
   /**
    * A unique identifier for the type of error.
    *
@@ -223,10 +223,10 @@ export type EventPreviousError = {
   source?: any | null | undefined;
 };
 
-export type EventPreviousErrorUnion = EventPreviousError | any;
+export type PreviousErrorUnion = PreviousError | any;
 
-export type EventDataDeploymentRetryRequested = {
-  actor?: EventActor1 | any | null | undefined;
+export type DataDeploymentRetryRequested = {
+  actor?: Actor1 | any | null | undefined;
   /**
    * ID of the release that the failed attempt was targeting, if known
    */
@@ -235,11 +235,11 @@ export type EventDataDeploymentRetryRequested = {
    * ID of the deployment
    */
   deploymentId: string;
-  previousError?: EventPreviousError | any | null | undefined;
+  previousError?: PreviousError | any | null | undefined;
   type: "DeploymentRetryRequested";
 };
 
-export type EventDataDeploymentDeleted = {
+export type DataDeploymentDeleted = {
   /**
    * ID of the deployment that was deleted
    */
@@ -247,7 +247,7 @@ export type EventDataDeploymentDeleted = {
   type: "DeploymentDeleted";
 };
 
-export type EventDataDeploymentRecovered = {
+export type DataDeploymentRecovered = {
   /**
    * ID of the deployment
    */
@@ -270,7 +270,7 @@ export type EventDataDeploymentRecovered = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type EventDataError2 = {
+export type DataError2 = {
   /**
    * A unique identifier for the type of error.
    *
@@ -345,7 +345,7 @@ export type EventDataError2 = {
   source?: any | null | undefined;
 };
 
-export type EventDataDeploymentDegraded = {
+export type DataDeploymentDegraded = {
   /**
    * ID of the deployment
    */
@@ -361,7 +361,7 @@ export type EventDataDeploymentDegraded = {
    * supporting serialization for API responses and detailed error reporting
    * in distributed systems.
    */
-  error: EventDataError2;
+  error: DataError2;
   type: "DeploymentDegraded";
 };
 
@@ -376,7 +376,7 @@ export type EventDataDeploymentDegraded = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type EventDataError1 = {
+export type DataError1 = {
   /**
    * A unique identifier for the type of error.
    *
@@ -461,7 +461,7 @@ export type EventDataError1 = {
  * `Updating`, `delete-failed` → `Deleting`.
  * `refresh-failed` is modelled separately via `DeploymentDegraded`.
  */
-export const EventPhase = {
+export const Phase = {
   Preflights: "preflights",
   Provisioning: "provisioning",
   Updating: "updating",
@@ -477,9 +477,9 @@ export const EventPhase = {
  * `Updating`, `delete-failed` → `Deleting`.
  * `refresh-failed` is modelled separately via `DeploymentDegraded`.
  */
-export type EventPhase = ClosedEnum<typeof EventPhase>;
+export type Phase = ClosedEnum<typeof Phase>;
 
-export type EventDataDeploymentFailed = {
+export type DataDeploymentFailed = {
   /**
    * ID of the release the platform was trying to deploy, if known
    */
@@ -499,7 +499,7 @@ export type EventDataDeploymentFailed = {
    * supporting serialization for API responses and detailed error reporting
    * in distributed systems.
    */
-  error: EventDataError1;
+  error: DataError1;
   /**
    * Phase of a deployment at which a failure occurred.
    *
@@ -510,11 +510,11 @@ export type EventDataDeploymentFailed = {
    * `Updating`, `delete-failed` → `Deleting`.
    * `refresh-failed` is modelled separately via `DeploymentDegraded`.
    */
-  phase: EventPhase;
+  phase: Phase;
   type: "DeploymentFailed";
 };
 
-export type EventDataDeploymentReleased = {
+export type DataDeploymentReleased = {
   /**
    * ID of the deployment
    */
@@ -530,7 +530,7 @@ export type EventDataDeploymentReleased = {
   type: "DeploymentReleased";
 };
 
-export type EventDataDeploymentCreated = {
+export type DataDeploymentCreated = {
   /**
    * ID of the deployment group this slot belongs to
    */
@@ -546,7 +546,7 @@ export type EventDataDeploymentCreated = {
   type: "DeploymentCreated";
 };
 
-export type EventDataEmptyingBuckets = {
+export type DataEmptyingBuckets = {
   /**
    * Names of the S3 buckets being emptied
    */
@@ -554,7 +554,7 @@ export type EventDataEmptyingBuckets = {
   type: "EmptyingBuckets";
 };
 
-export type EventDataDeletingCloudFormationStack = {
+export type DataDeletingCloudFormationStack = {
   /**
    * Name of the CloudFormation stack
    */
@@ -566,7 +566,7 @@ export type EventDataDeletingCloudFormationStack = {
   type: "DeletingCloudFormationStack";
 };
 
-export type EventDataImportingStackStateFromCloudFormation = {
+export type DataImportingStackStateFromCloudFormation = {
   /**
    * Name of the CloudFormation stack
    */
@@ -574,7 +574,7 @@ export type EventDataImportingStackStateFromCloudFormation = {
   type: "ImportingStackStateFromCloudFormation";
 };
 
-export type EventDataAssumingRole = {
+export type DataAssumingRole = {
   /**
    * ARN of the role to assume
    */
@@ -582,7 +582,7 @@ export type EventDataAssumingRole = {
   type: "AssumingRole";
 };
 
-export type EventDataDeployingCloudFormationStack = {
+export type DataDeployingCloudFormationStack = {
   /**
    * Name of the CloudFormation stack
    */
@@ -594,7 +594,7 @@ export type EventDataDeployingCloudFormationStack = {
   type: "DeployingCloudFormationStack";
 };
 
-export type EventDataEnsuringDockerRepository = {
+export type DataEnsuringDockerRepository = {
   /**
    * Name of the docker repository
    */
@@ -602,7 +602,7 @@ export type EventDataEnsuringDockerRepository = {
   type: "EnsuringDockerRepository";
 };
 
-export type EventDataSettingUpPlatformContext = {
+export type DataSettingUpPlatformContext = {
   /**
    * Name of the platform (e.g., "AWS", "GCP")
    */
@@ -610,7 +610,7 @@ export type EventDataSettingUpPlatformContext = {
   type: "SettingUpPlatformContext";
 };
 
-export type EventDataCleaningUpEnvironment = {
+export type DataCleaningUpEnvironment = {
   /**
    * Name of the stack being cleaned up
    */
@@ -622,7 +622,7 @@ export type EventDataCleaningUpEnvironment = {
   type: "CleaningUpEnvironment";
 };
 
-export type EventDataCleaningUpStack = {
+export type DataCleaningUpStack = {
   /**
    * Name of the stack being cleaned up
    */
@@ -634,7 +634,7 @@ export type EventDataCleaningUpStack = {
   type: "CleaningUpStack";
 };
 
-export type EventDataRunningTestWorker = {
+export type DataRunningTestWorker = {
   /**
    * Name of the stack being tested
    */
@@ -642,7 +642,7 @@ export type EventDataRunningTestWorker = {
   type: "RunningTestWorker";
 };
 
-export type EventDataDeployingStack = {
+export type DataDeployingStack = {
   /**
    * Name of the stack being deployed
    */
@@ -650,7 +650,7 @@ export type EventDataDeployingStack = {
   type: "DeployingStack";
 };
 
-export type EventDataPreparingEnvironment = {
+export type DataPreparingEnvironment = {
   /**
    * Name of the deployment strategy being used
    */
@@ -658,7 +658,7 @@ export type EventDataPreparingEnvironment = {
   type: "PreparingEnvironment";
 };
 
-export type EventDataDebuggingAgent = {
+export type DataDebuggingAgent = {
   /**
    * ID of the agent being debugged
    */
@@ -670,7 +670,7 @@ export type EventDataDebuggingAgent = {
   type: "DebuggingAgent";
 };
 
-export type EventDataDeletingAgent = {
+export type DataDeletingAgent = {
   /**
    * ID of the agent being deleted
    */
@@ -682,7 +682,7 @@ export type EventDataDeletingAgent = {
   type: "DeletingAgent";
 };
 
-export type EventDataUpdatingAgent = {
+export type DataUpdatingAgent = {
   /**
    * ID of the agent being updated
    */
@@ -694,7 +694,7 @@ export type EventDataUpdatingAgent = {
   type: "UpdatingAgent";
 };
 
-export type EventDataProvisioningAgent = {
+export type DataProvisioningAgent = {
   /**
    * ID of the agent being provisioned
    */
@@ -706,7 +706,7 @@ export type EventDataProvisioningAgent = {
   type: "ProvisioningAgent";
 };
 
-export type EventDataGeneratingTemplate = {
+export type DataGeneratingTemplate = {
   /**
    * Platform for which the template is being generated
    */
@@ -714,7 +714,7 @@ export type EventDataGeneratingTemplate = {
   type: "GeneratingTemplate";
 };
 
-export type EventDataGeneratingCloudFormationTemplate = {
+export type DataGeneratingCloudFormationTemplate = {
   type: "GeneratingCloudFormationTemplate";
 };
 
@@ -793,7 +793,7 @@ export type EventDependency = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type EventErrorNextState = {
+export type ErrorNextState = {
   /**
    * A unique identifier for the type of error.
    *
@@ -868,7 +868,7 @@ export type EventErrorNextState = {
   source?: any | null | undefined;
 };
 
-export type EventNextStateErrorUnion = EventErrorNextState | any;
+export type NextStateErrorUnion = ErrorNextState | any;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -959,7 +959,7 @@ export type EventResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<EventDependency> | undefined;
-  error?: EventErrorNextState | any | null | undefined;
+  error?: ErrorNextState | any | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -997,7 +997,7 @@ export type EventResources = {
 /**
  * Represents the collective state of all resources in a stack, including platform and pending actions.
  */
-export type EventNextState = {
+export type NextState = {
   /**
    * Represents the target cloud platform.
    */
@@ -1012,11 +1012,11 @@ export type EventNextState = {
   resources: { [k: string]: EventResources };
 };
 
-export type EventDataStackStep = {
+export type DataStackStep = {
   /**
    * Represents the collective state of all resources in a stack, including platform and pending actions.
    */
-  nextState: EventNextState;
+  nextState: NextState;
   /**
    * An suggested duration to wait before executing the next step.
    */
@@ -1024,7 +1024,7 @@ export type EventDataStackStep = {
   type: "StackStep";
 };
 
-export type EventDataCompilingCode = {
+export type DataCompilingCode = {
   /**
    * Language being compiled (rust, typescript, etc.)
    */
@@ -1036,7 +1036,7 @@ export type EventDataCompilingCode = {
   type: "CompilingCode";
 };
 
-export type EventDataCreatingRelease = {
+export type DataCreatingRelease = {
   /**
    * Project name
    */
@@ -1044,7 +1044,7 @@ export type EventDataCreatingRelease = {
   type: "CreatingRelease";
 };
 
-export type EventDataPushingResource = {
+export type DataPushingResource = {
   /**
    * Name of the resource being pushed
    */
@@ -1056,7 +1056,7 @@ export type EventDataPushingResource = {
   type: "PushingResource";
 };
 
-export type EventDataPushingStack = {
+export type DataPushingStack = {
   /**
    * Human-readable destination for pushed images
    */
@@ -1075,7 +1075,7 @@ export type EventDataPushingStack = {
 /**
  * Progress information for image push operations
  */
-export type EventProgress = {
+export type Progress = {
   /**
    * Bytes uploaded so far
    */
@@ -1098,18 +1098,18 @@ export type EventProgress = {
   totalLayers: number;
 };
 
-export type EventProgressUnion = EventProgress | any;
+export type ProgressUnion = Progress | any;
 
-export type EventDataPushingImage = {
+export type DataPushingImage = {
   /**
    * Name of the image being pushed
    */
   image: string;
-  progress?: EventProgress | any | null | undefined;
+  progress?: Progress | any | null | undefined;
   type: "PushingImage";
 };
 
-export type EventDataBuildingImage = {
+export type DataBuildingImage = {
   /**
    * Name of the image being built
    */
@@ -1117,7 +1117,7 @@ export type EventDataBuildingImage = {
   type: "BuildingImage";
 };
 
-export type EventDataBuildingResource = {
+export type DataBuildingResource = {
   /**
    * All resource names sharing this build (for deduped container groups)
    */
@@ -1133,7 +1133,7 @@ export type EventDataBuildingResource = {
   type: "BuildingResource";
 };
 
-export type EventDataDownloadingAlienRuntime = {
+export type DataDownloadingAlienRuntime = {
   /**
    * Target triple for the runtime
    */
@@ -1145,7 +1145,7 @@ export type EventDataDownloadingAlienRuntime = {
   url: string;
 };
 
-export type EventDataRunningPreflights = {
+export type DataRunningPreflights = {
   /**
    * Platform being targeted
    */
@@ -1157,7 +1157,7 @@ export type EventDataRunningPreflights = {
   type: "RunningPreflights";
 };
 
-export type EventDataBuildingStack = {
+export type DataBuildingStack = {
   /**
    * Name of the stack being built
    */
@@ -1165,73 +1165,73 @@ export type EventDataBuildingStack = {
   type: "BuildingStack";
 };
 
-export type EventDataFinished = {
+export type DataFinished = {
   type: "Finished";
 };
 
-export type EventDataLoadingConfiguration = {
+export type DataLoadingConfiguration = {
   type: "LoadingConfiguration";
 };
 
 export type EventDataUnion =
-  | EventDataLoadingConfiguration
-  | EventDataFinished
-  | EventDataBuildingStack
-  | EventDataRunningPreflights
-  | EventDataDownloadingAlienRuntime
-  | EventDataBuildingResource
-  | EventDataBuildingImage
-  | EventDataPushingImage
-  | EventDataPushingStack
-  | EventDataPushingResource
-  | EventDataCreatingRelease
-  | EventDataCompilingCode
-  | EventDataStackStep
-  | EventDataGeneratingCloudFormationTemplate
-  | EventDataGeneratingTemplate
-  | EventDataProvisioningAgent
-  | EventDataUpdatingAgent
-  | EventDataDeletingAgent
-  | EventDataDebuggingAgent
-  | EventDataPreparingEnvironment
-  | EventDataDeployingStack
-  | EventDataRunningTestWorker
-  | EventDataCleaningUpStack
-  | EventDataCleaningUpEnvironment
-  | EventDataSettingUpPlatformContext
-  | EventDataEnsuringDockerRepository
-  | EventDataDeployingCloudFormationStack
-  | EventDataAssumingRole
-  | EventDataImportingStackStateFromCloudFormation
-  | EventDataDeletingCloudFormationStack
-  | EventDataEmptyingBuckets
-  | EventDataDeploymentCreated
-  | EventDataDeploymentReleased
-  | EventDataDeploymentFailed
-  | EventDataDeploymentDegraded
-  | EventDataDeploymentRecovered
-  | EventDataDeploymentDeleted
-  | EventDataDeploymentRetryRequested
-  | EventDataDeploymentRedeployRequested
-  | EventDataDeploymentReleasePinned
-  | EventDataDeploymentReleaseUnpinned
-  | EventDataDeploymentEnvironmentUpdated
-  | EventDataDeploymentDeletionRequested;
+  | DataLoadingConfiguration
+  | DataFinished
+  | DataBuildingStack
+  | DataRunningPreflights
+  | DataDownloadingAlienRuntime
+  | DataBuildingResource
+  | DataBuildingImage
+  | DataPushingImage
+  | DataPushingStack
+  | DataPushingResource
+  | DataCreatingRelease
+  | DataCompilingCode
+  | DataStackStep
+  | DataGeneratingCloudFormationTemplate
+  | DataGeneratingTemplate
+  | DataProvisioningAgent
+  | DataUpdatingAgent
+  | DataDeletingAgent
+  | DataDebuggingAgent
+  | DataPreparingEnvironment
+  | DataDeployingStack
+  | DataRunningTestWorker
+  | DataCleaningUpStack
+  | DataCleaningUpEnvironment
+  | DataSettingUpPlatformContext
+  | DataEnsuringDockerRepository
+  | DataDeployingCloudFormationStack
+  | DataAssumingRole
+  | DataImportingStackStateFromCloudFormation
+  | DataDeletingCloudFormationStack
+  | DataEmptyingBuckets
+  | DataDeploymentCreated
+  | DataDeploymentReleased
+  | DataDeploymentFailed
+  | DataDeploymentDegraded
+  | DataDeploymentRecovered
+  | DataDeploymentDeleted
+  | DataDeploymentRetryRequested
+  | DataDeploymentRedeployRequested
+  | DataDeploymentReleasePinned
+  | DataDeploymentReleaseUnpinned
+  | DataDeploymentEnvironmentUpdated
+  | DataDeploymentDeletionRequested;
 
-export const EventStateSuccess = {
+export const StateSuccess = {
   Success: "success",
 } as const;
-export type EventStateSuccess = ClosedEnum<typeof EventStateSuccess>;
+export type StateSuccess = ClosedEnum<typeof StateSuccess>;
 
-export const EventStateStarted = {
+export const StateStarted = {
   Started: "started",
 } as const;
-export type EventStateStarted = ClosedEnum<typeof EventStateStarted>;
+export type StateStarted = ClosedEnum<typeof StateStarted>;
 
-export const EventStateNone = {
+export const StateNone = {
   None: "none",
 } as const;
-export type EventStateNone = ClosedEnum<typeof EventStateNone>;
+export type StateNone = ClosedEnum<typeof StateNone>;
 
 /**
  * Canonical error container that provides a structured way to represent errors
@@ -1244,7 +1244,7 @@ export type EventStateNone = ClosedEnum<typeof EventStateNone>;
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type EventErrorFailed = {
+export type ErrorFailed = {
   /**
    * A unique identifier for the type of error.
    *
@@ -1319,30 +1319,26 @@ export type EventErrorFailed = {
   source?: any | null | undefined;
 };
 
-export type EventFailedErrorUnion = EventErrorFailed | any;
+export type FailedErrorUnion = ErrorFailed | any;
 
 /**
  * Event failed with an error
  */
-export type EventFailed = {
-  error?: EventErrorFailed | any | null | undefined;
+export type Failed = {
+  error?: ErrorFailed | any | null | undefined;
 };
 
 export type EventState = {
   /**
    * Event failed with an error
    */
-  failed: EventFailed;
+  failed: Failed;
 };
 
 /**
  * Represents the state of an event
  */
-export type EventStateUnion =
-  | EventState
-  | EventStateNone
-  | EventStateStarted
-  | EventStateSuccess;
+export type State = EventState | StateNone | StateStarted | StateSuccess;
 
 export type Event = {
   /**
@@ -1362,53 +1358,53 @@ export type Event = {
    */
   debugSessionId?: string | null | undefined;
   data:
-    | EventDataLoadingConfiguration
-    | EventDataFinished
-    | EventDataBuildingStack
-    | EventDataRunningPreflights
-    | EventDataDownloadingAlienRuntime
-    | EventDataBuildingResource
-    | EventDataBuildingImage
-    | EventDataPushingImage
-    | EventDataPushingStack
-    | EventDataPushingResource
-    | EventDataCreatingRelease
-    | EventDataCompilingCode
-    | EventDataStackStep
-    | EventDataGeneratingCloudFormationTemplate
-    | EventDataGeneratingTemplate
-    | EventDataProvisioningAgent
-    | EventDataUpdatingAgent
-    | EventDataDeletingAgent
-    | EventDataDebuggingAgent
-    | EventDataPreparingEnvironment
-    | EventDataDeployingStack
-    | EventDataRunningTestWorker
-    | EventDataCleaningUpStack
-    | EventDataCleaningUpEnvironment
-    | EventDataSettingUpPlatformContext
-    | EventDataEnsuringDockerRepository
-    | EventDataDeployingCloudFormationStack
-    | EventDataAssumingRole
-    | EventDataImportingStackStateFromCloudFormation
-    | EventDataDeletingCloudFormationStack
-    | EventDataEmptyingBuckets
-    | EventDataDeploymentCreated
-    | EventDataDeploymentReleased
-    | EventDataDeploymentFailed
-    | EventDataDeploymentDegraded
-    | EventDataDeploymentRecovered
-    | EventDataDeploymentDeleted
-    | EventDataDeploymentRetryRequested
-    | EventDataDeploymentRedeployRequested
-    | EventDataDeploymentReleasePinned
-    | EventDataDeploymentReleaseUnpinned
-    | EventDataDeploymentEnvironmentUpdated
-    | EventDataDeploymentDeletionRequested;
+    | DataLoadingConfiguration
+    | DataFinished
+    | DataBuildingStack
+    | DataRunningPreflights
+    | DataDownloadingAlienRuntime
+    | DataBuildingResource
+    | DataBuildingImage
+    | DataPushingImage
+    | DataPushingStack
+    | DataPushingResource
+    | DataCreatingRelease
+    | DataCompilingCode
+    | DataStackStep
+    | DataGeneratingCloudFormationTemplate
+    | DataGeneratingTemplate
+    | DataProvisioningAgent
+    | DataUpdatingAgent
+    | DataDeletingAgent
+    | DataDebuggingAgent
+    | DataPreparingEnvironment
+    | DataDeployingStack
+    | DataRunningTestWorker
+    | DataCleaningUpStack
+    | DataCleaningUpEnvironment
+    | DataSettingUpPlatformContext
+    | DataEnsuringDockerRepository
+    | DataDeployingCloudFormationStack
+    | DataAssumingRole
+    | DataImportingStackStateFromCloudFormation
+    | DataDeletingCloudFormationStack
+    | DataEmptyingBuckets
+    | DataDeploymentCreated
+    | DataDeploymentReleased
+    | DataDeploymentFailed
+    | DataDeploymentDegraded
+    | DataDeploymentRecovered
+    | DataDeploymentDeleted
+    | DataDeploymentRetryRequested
+    | DataDeploymentRedeployRequested
+    | DataDeploymentReleasePinned
+    | DataDeploymentReleaseUnpinned
+    | DataDeploymentEnvironmentUpdated
+    | DataDeploymentDeletionRequested;
   /**
    * Represents the state of an event
    */
-  state: EventState | EventStateNone | EventStateStarted | EventStateSuccess;
+  state: EventState | StateNone | StateStarted | StateSuccess;
   /**
    * Unique identifier for the project.
    */
@@ -1421,22 +1417,21 @@ export type Event = {
 };
 
 /** @internal */
-export const EventDataDeploymentDeletionRequested$inboundSchema: z.ZodType<
-  EventDataDeploymentDeletionRequested,
+export const DataDeploymentDeletionRequested$inboundSchema: z.ZodType<
+  DataDeploymentDeletionRequested,
   unknown
 > = z.object({
   deploymentId: z.string(),
   type: z.literal("DeploymentDeletionRequested"),
 });
 
-export function eventDataDeploymentDeletionRequestedFromJSON(
+export function dataDeploymentDeletionRequestedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentDeletionRequested, SDKValidationError> {
+): SafeParseResult<DataDeploymentDeletionRequested, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      EventDataDeploymentDeletionRequested$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentDeletionRequested' from JSON`,
+    (x) => DataDeploymentDeletionRequested$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentDeletionRequested' from JSON`,
   );
 }
 
@@ -1446,65 +1441,61 @@ export const EventKind2$inboundSchema: z.ZodEnum<typeof EventKind2> = z.enum(
 );
 
 /** @internal */
-export const EventActor2$inboundSchema: z.ZodType<EventActor2, unknown> = z
-  .object({
-    email: z.nullable(z.string()).optional(),
-    id: z.string(),
-    kind: EventKind2$inboundSchema,
-  });
+export const Actor2$inboundSchema: z.ZodType<Actor2, unknown> = z.object({
+  email: z.nullable(z.string()).optional(),
+  id: z.string(),
+  kind: EventKind2$inboundSchema,
+});
 
-export function eventActor2FromJSON(
+export function actor2FromJSON(
   jsonString: string,
-): SafeParseResult<EventActor2, SDKValidationError> {
+): SafeParseResult<Actor2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventActor2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventActor2' from JSON`,
+    (x) => Actor2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Actor2' from JSON`,
   );
 }
 
 /** @internal */
-export const EventActorUnion2$inboundSchema: z.ZodType<
-  EventActorUnion2,
-  unknown
-> = z.union([z.lazy(() => EventActor2$inboundSchema), z.any()]);
+export const ActorUnion2$inboundSchema: z.ZodType<ActorUnion2, unknown> = z
+  .union([z.lazy(() => Actor2$inboundSchema), z.any()]);
 
-export function eventActorUnion2FromJSON(
+export function actorUnion2FromJSON(
   jsonString: string,
-): SafeParseResult<EventActorUnion2, SDKValidationError> {
+): SafeParseResult<ActorUnion2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventActorUnion2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventActorUnion2' from JSON`,
+    (x) => ActorUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ActorUnion2' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
-  EventDataDeploymentEnvironmentUpdated,
+export const DataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
+  DataDeploymentEnvironmentUpdated,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor2$inboundSchema), z.any()]))
+  actor: z.nullable(z.union([z.lazy(() => Actor2$inboundSchema), z.any()]))
     .optional(),
   changedKeys: z.array(z.string()),
   deploymentId: z.string(),
   type: z.literal("DeploymentEnvironmentUpdated"),
 });
 
-export function eventDataDeploymentEnvironmentUpdatedFromJSON(
+export function dataDeploymentEnvironmentUpdatedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentEnvironmentUpdated, SDKValidationError> {
+): SafeParseResult<DataDeploymentEnvironmentUpdated, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      EventDataDeploymentEnvironmentUpdated$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentEnvironmentUpdated' from JSON`,
+    (x) => DataDeploymentEnvironmentUpdated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentEnvironmentUpdated' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
-  EventDataDeploymentReleaseUnpinned,
+export const DataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
+  DataDeploymentReleaseUnpinned,
   unknown
 > = z.object({
   deploymentId: z.string(),
@@ -1512,20 +1503,19 @@ export const EventDataDeploymentReleaseUnpinned$inboundSchema: z.ZodType<
   type: z.literal("DeploymentReleaseUnpinned"),
 });
 
-export function eventDataDeploymentReleaseUnpinnedFromJSON(
+export function dataDeploymentReleaseUnpinnedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentReleaseUnpinned, SDKValidationError> {
+): SafeParseResult<DataDeploymentReleaseUnpinned, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      EventDataDeploymentReleaseUnpinned$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentReleaseUnpinned' from JSON`,
+    (x) => DataDeploymentReleaseUnpinned$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentReleaseUnpinned' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentReleasePinned$inboundSchema: z.ZodType<
-  EventDataDeploymentReleasePinned,
+export const DataDeploymentReleasePinned$inboundSchema: z.ZodType<
+  DataDeploymentReleasePinned,
   unknown
 > = z.object({
   deploymentId: z.string(),
@@ -1534,19 +1524,19 @@ export const EventDataDeploymentReleasePinned$inboundSchema: z.ZodType<
   type: z.literal("DeploymentReleasePinned"),
 });
 
-export function eventDataDeploymentReleasePinnedFromJSON(
+export function dataDeploymentReleasePinnedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentReleasePinned, SDKValidationError> {
+): SafeParseResult<DataDeploymentReleasePinned, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentReleasePinned$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentReleasePinned' from JSON`,
+    (x) => DataDeploymentReleasePinned$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentReleasePinned' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentRedeployRequested$inboundSchema: z.ZodType<
-  EventDataDeploymentRedeployRequested,
+export const DataDeploymentRedeployRequested$inboundSchema: z.ZodType<
+  DataDeploymentRedeployRequested,
   unknown
 > = z.object({
   deploymentId: z.string(),
@@ -1554,14 +1544,13 @@ export const EventDataDeploymentRedeployRequested$inboundSchema: z.ZodType<
   type: z.literal("DeploymentRedeployRequested"),
 });
 
-export function eventDataDeploymentRedeployRequestedFromJSON(
+export function dataDeploymentRedeployRequestedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentRedeployRequested, SDKValidationError> {
+): SafeParseResult<DataDeploymentRedeployRequested, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      EventDataDeploymentRedeployRequested$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentRedeployRequested' from JSON`,
+    (x) => DataDeploymentRedeployRequested$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRedeployRequested' from JSON`,
   );
 }
 
@@ -1571,127 +1560,122 @@ export const EventKind1$inboundSchema: z.ZodEnum<typeof EventKind1> = z.enum(
 );
 
 /** @internal */
-export const EventActor1$inboundSchema: z.ZodType<EventActor1, unknown> = z
-  .object({
-    email: z.nullable(z.string()).optional(),
-    id: z.string(),
-    kind: EventKind1$inboundSchema,
-  });
-
-export function eventActor1FromJSON(
-  jsonString: string,
-): SafeParseResult<EventActor1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EventActor1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventActor1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventActorUnion1$inboundSchema: z.ZodType<
-  EventActorUnion1,
-  unknown
-> = z.union([z.lazy(() => EventActor1$inboundSchema), z.any()]);
-
-export function eventActorUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<EventActorUnion1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EventActorUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventActorUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventPreviousError$inboundSchema: z.ZodType<
-  EventPreviousError,
-  unknown
-> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
+export const Actor1$inboundSchema: z.ZodType<Actor1, unknown> = z.object({
+  email: z.nullable(z.string()).optional(),
+  id: z.string(),
+  kind: EventKind1$inboundSchema,
 });
 
-export function eventPreviousErrorFromJSON(
+export function actor1FromJSON(
   jsonString: string,
-): SafeParseResult<EventPreviousError, SDKValidationError> {
+): SafeParseResult<Actor1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventPreviousError$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventPreviousError' from JSON`,
+    (x) => Actor1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Actor1' from JSON`,
   );
 }
 
 /** @internal */
-export const EventPreviousErrorUnion$inboundSchema: z.ZodType<
-  EventPreviousErrorUnion,
+export const ActorUnion1$inboundSchema: z.ZodType<ActorUnion1, unknown> = z
+  .union([z.lazy(() => Actor1$inboundSchema), z.any()]);
+
+export function actorUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<ActorUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ActorUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ActorUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreviousError$inboundSchema: z.ZodType<PreviousError, unknown> = z
+  .object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
+
+export function previousErrorFromJSON(
+  jsonString: string,
+): SafeParseResult<PreviousError, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PreviousError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreviousError' from JSON`,
+  );
+}
+
+/** @internal */
+export const PreviousErrorUnion$inboundSchema: z.ZodType<
+  PreviousErrorUnion,
   unknown
-> = z.union([z.lazy(() => EventPreviousError$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => PreviousError$inboundSchema), z.any()]);
 
-export function eventPreviousErrorUnionFromJSON(
+export function previousErrorUnionFromJSON(
   jsonString: string,
-): SafeParseResult<EventPreviousErrorUnion, SDKValidationError> {
+): SafeParseResult<PreviousErrorUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventPreviousErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventPreviousErrorUnion' from JSON`,
+    (x) => PreviousErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PreviousErrorUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentRetryRequested$inboundSchema: z.ZodType<
-  EventDataDeploymentRetryRequested,
+export const DataDeploymentRetryRequested$inboundSchema: z.ZodType<
+  DataDeploymentRetryRequested,
   unknown
 > = z.object({
-  actor: z.nullable(z.union([z.lazy(() => EventActor1$inboundSchema), z.any()]))
+  actor: z.nullable(z.union([z.lazy(() => Actor1$inboundSchema), z.any()]))
     .optional(),
   attemptedReleaseId: z.nullable(z.string()).optional(),
   deploymentId: z.string(),
   previousError: z.nullable(
-    z.union([z.lazy(() => EventPreviousError$inboundSchema), z.any()]),
+    z.union([z.lazy(() => PreviousError$inboundSchema), z.any()]),
   ).optional(),
   type: z.literal("DeploymentRetryRequested"),
 });
 
-export function eventDataDeploymentRetryRequestedFromJSON(
+export function dataDeploymentRetryRequestedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentRetryRequested, SDKValidationError> {
+): SafeParseResult<DataDeploymentRetryRequested, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentRetryRequested$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentRetryRequested' from JSON`,
+    (x) => DataDeploymentRetryRequested$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRetryRequested' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentDeleted$inboundSchema: z.ZodType<
-  EventDataDeploymentDeleted,
+export const DataDeploymentDeleted$inboundSchema: z.ZodType<
+  DataDeploymentDeleted,
   unknown
 > = z.object({
   deploymentId: z.string(),
   type: z.literal("DeploymentDeleted"),
 });
 
-export function eventDataDeploymentDeletedFromJSON(
+export function dataDeploymentDeletedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentDeleted, SDKValidationError> {
+): SafeParseResult<DataDeploymentDeleted, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentDeleted$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentDeleted' from JSON`,
+    (x) => DataDeploymentDeleted$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentDeleted' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentRecovered$inboundSchema: z.ZodType<
-  EventDataDeploymentRecovered,
+export const DataDeploymentRecovered$inboundSchema: z.ZodType<
+  DataDeploymentRecovered,
   unknown
 > = z.object({
   deploymentId: z.string(),
@@ -1699,116 +1683,110 @@ export const EventDataDeploymentRecovered$inboundSchema: z.ZodType<
   type: z.literal("DeploymentRecovered"),
 });
 
-export function eventDataDeploymentRecoveredFromJSON(
+export function dataDeploymentRecoveredFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentRecovered, SDKValidationError> {
+): SafeParseResult<DataDeploymentRecovered, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentRecovered$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentRecovered' from JSON`,
+    (x) => DataDeploymentRecovered$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentRecovered' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataError2$inboundSchema: z.ZodType<
-  EventDataError2,
-  unknown
-> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
-});
+export const DataError2$inboundSchema: z.ZodType<DataError2, unknown> = z
+  .object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
 
-export function eventDataError2FromJSON(
+export function dataError2FromJSON(
   jsonString: string,
-): SafeParseResult<EventDataError2, SDKValidationError> {
+): SafeParseResult<DataError2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataError2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataError2' from JSON`,
+    (x) => DataError2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataError2' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentDegraded$inboundSchema: z.ZodType<
-  EventDataDeploymentDegraded,
+export const DataDeploymentDegraded$inboundSchema: z.ZodType<
+  DataDeploymentDegraded,
   unknown
 > = z.object({
   deploymentId: z.string(),
-  error: z.lazy(() => EventDataError2$inboundSchema),
+  error: z.lazy(() => DataError2$inboundSchema),
   type: z.literal("DeploymentDegraded"),
 });
 
-export function eventDataDeploymentDegradedFromJSON(
+export function dataDeploymentDegradedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentDegraded, SDKValidationError> {
+): SafeParseResult<DataDeploymentDegraded, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentDegraded$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentDegraded' from JSON`,
+    (x) => DataDeploymentDegraded$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentDegraded' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataError1$inboundSchema: z.ZodType<
-  EventDataError1,
-  unknown
-> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
-});
+export const DataError1$inboundSchema: z.ZodType<DataError1, unknown> = z
+  .object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
 
-export function eventDataError1FromJSON(
+export function dataError1FromJSON(
   jsonString: string,
-): SafeParseResult<EventDataError1, SDKValidationError> {
+): SafeParseResult<DataError1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataError1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataError1' from JSON`,
+    (x) => DataError1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataError1' from JSON`,
   );
 }
 
 /** @internal */
-export const EventPhase$inboundSchema: z.ZodEnum<typeof EventPhase> = z.enum(
-  EventPhase,
-);
+export const Phase$inboundSchema: z.ZodEnum<typeof Phase> = z.enum(Phase);
 
 /** @internal */
-export const EventDataDeploymentFailed$inboundSchema: z.ZodType<
-  EventDataDeploymentFailed,
+export const DataDeploymentFailed$inboundSchema: z.ZodType<
+  DataDeploymentFailed,
   unknown
 > = z.object({
   attemptedReleaseId: z.nullable(z.string()).optional(),
   deploymentId: z.string(),
-  error: z.lazy(() => EventDataError1$inboundSchema),
-  phase: EventPhase$inboundSchema,
+  error: z.lazy(() => DataError1$inboundSchema),
+  phase: Phase$inboundSchema,
   type: z.literal("DeploymentFailed"),
 });
 
-export function eventDataDeploymentFailedFromJSON(
+export function dataDeploymentFailedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentFailed, SDKValidationError> {
+): SafeParseResult<DataDeploymentFailed, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentFailed$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentFailed' from JSON`,
+    (x) => DataDeploymentFailed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentFailed' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentReleased$inboundSchema: z.ZodType<
-  EventDataDeploymentReleased,
+export const DataDeploymentReleased$inboundSchema: z.ZodType<
+  DataDeploymentReleased,
   unknown
 > = z.object({
   deploymentId: z.string(),
@@ -1817,19 +1795,19 @@ export const EventDataDeploymentReleased$inboundSchema: z.ZodType<
   type: z.literal("DeploymentReleased"),
 });
 
-export function eventDataDeploymentReleasedFromJSON(
+export function dataDeploymentReleasedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentReleased, SDKValidationError> {
+): SafeParseResult<DataDeploymentReleased, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentReleased$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentReleased' from JSON`,
+    (x) => DataDeploymentReleased$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentReleased' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeploymentCreated$inboundSchema: z.ZodType<
-  EventDataDeploymentCreated,
+export const DataDeploymentCreated$inboundSchema: z.ZodType<
+  DataDeploymentCreated,
   unknown
 > = z.object({
   deploymentGroupId: z.string(),
@@ -1838,38 +1816,38 @@ export const EventDataDeploymentCreated$inboundSchema: z.ZodType<
   type: z.literal("DeploymentCreated"),
 });
 
-export function eventDataDeploymentCreatedFromJSON(
+export function dataDeploymentCreatedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeploymentCreated, SDKValidationError> {
+): SafeParseResult<DataDeploymentCreated, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeploymentCreated$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeploymentCreated' from JSON`,
+    (x) => DataDeploymentCreated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentCreated' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataEmptyingBuckets$inboundSchema: z.ZodType<
-  EventDataEmptyingBuckets,
+export const DataEmptyingBuckets$inboundSchema: z.ZodType<
+  DataEmptyingBuckets,
   unknown
 > = z.object({
   bucketNames: z.array(z.string()),
   type: z.literal("EmptyingBuckets"),
 });
 
-export function eventDataEmptyingBucketsFromJSON(
+export function dataEmptyingBucketsFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataEmptyingBuckets, SDKValidationError> {
+): SafeParseResult<DataEmptyingBuckets, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataEmptyingBuckets$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataEmptyingBuckets' from JSON`,
+    (x) => DataEmptyingBuckets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataEmptyingBuckets' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeletingCloudFormationStack$inboundSchema: z.ZodType<
-  EventDataDeletingCloudFormationStack,
+export const DataDeletingCloudFormationStack$inboundSchema: z.ZodType<
+  DataDeletingCloudFormationStack,
   unknown
 > = z.object({
   cfnStackName: z.string(),
@@ -1877,64 +1855,63 @@ export const EventDataDeletingCloudFormationStack$inboundSchema: z.ZodType<
   type: z.literal("DeletingCloudFormationStack"),
 });
 
-export function eventDataDeletingCloudFormationStackFromJSON(
+export function dataDeletingCloudFormationStackFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeletingCloudFormationStack, SDKValidationError> {
+): SafeParseResult<DataDeletingCloudFormationStack, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      EventDataDeletingCloudFormationStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeletingCloudFormationStack' from JSON`,
+    (x) => DataDeletingCloudFormationStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeletingCloudFormationStack' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataImportingStackStateFromCloudFormation$inboundSchema:
-  z.ZodType<EventDataImportingStackStateFromCloudFormation, unknown> = z.object(
-    {
-      cfnStackName: z.string(),
-      type: z.literal("ImportingStackStateFromCloudFormation"),
-    },
-  );
+export const DataImportingStackStateFromCloudFormation$inboundSchema: z.ZodType<
+  DataImportingStackStateFromCloudFormation,
+  unknown
+> = z.object({
+  cfnStackName: z.string(),
+  type: z.literal("ImportingStackStateFromCloudFormation"),
+});
 
-export function eventDataImportingStackStateFromCloudFormationFromJSON(
+export function dataImportingStackStateFromCloudFormationFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  EventDataImportingStackStateFromCloudFormation,
+  DataImportingStackStateFromCloudFormation,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      EventDataImportingStackStateFromCloudFormation$inboundSchema.parse(
+      DataImportingStackStateFromCloudFormation$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'EventDataImportingStackStateFromCloudFormation' from JSON`,
+    `Failed to parse 'DataImportingStackStateFromCloudFormation' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataAssumingRole$inboundSchema: z.ZodType<
-  EventDataAssumingRole,
+export const DataAssumingRole$inboundSchema: z.ZodType<
+  DataAssumingRole,
   unknown
 > = z.object({
   roleArn: z.string(),
   type: z.literal("AssumingRole"),
 });
 
-export function eventDataAssumingRoleFromJSON(
+export function dataAssumingRoleFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataAssumingRole, SDKValidationError> {
+): SafeParseResult<DataAssumingRole, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataAssumingRole$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataAssumingRole' from JSON`,
+    (x) => DataAssumingRole$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAssumingRole' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeployingCloudFormationStack$inboundSchema: z.ZodType<
-  EventDataDeployingCloudFormationStack,
+export const DataDeployingCloudFormationStack$inboundSchema: z.ZodType<
+  DataDeployingCloudFormationStack,
   unknown
 > = z.object({
   cfnStackName: z.string(),
@@ -1942,58 +1919,57 @@ export const EventDataDeployingCloudFormationStack$inboundSchema: z.ZodType<
   type: z.literal("DeployingCloudFormationStack"),
 });
 
-export function eventDataDeployingCloudFormationStackFromJSON(
+export function dataDeployingCloudFormationStackFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeployingCloudFormationStack, SDKValidationError> {
+): SafeParseResult<DataDeployingCloudFormationStack, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      EventDataDeployingCloudFormationStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeployingCloudFormationStack' from JSON`,
+    (x) => DataDeployingCloudFormationStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeployingCloudFormationStack' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataEnsuringDockerRepository$inboundSchema: z.ZodType<
-  EventDataEnsuringDockerRepository,
+export const DataEnsuringDockerRepository$inboundSchema: z.ZodType<
+  DataEnsuringDockerRepository,
   unknown
 > = z.object({
   repositoryName: z.string(),
   type: z.literal("EnsuringDockerRepository"),
 });
 
-export function eventDataEnsuringDockerRepositoryFromJSON(
+export function dataEnsuringDockerRepositoryFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataEnsuringDockerRepository, SDKValidationError> {
+): SafeParseResult<DataEnsuringDockerRepository, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataEnsuringDockerRepository$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataEnsuringDockerRepository' from JSON`,
+    (x) => DataEnsuringDockerRepository$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataEnsuringDockerRepository' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataSettingUpPlatformContext$inboundSchema: z.ZodType<
-  EventDataSettingUpPlatformContext,
+export const DataSettingUpPlatformContext$inboundSchema: z.ZodType<
+  DataSettingUpPlatformContext,
   unknown
 > = z.object({
   platformName: z.string(),
   type: z.literal("SettingUpPlatformContext"),
 });
 
-export function eventDataSettingUpPlatformContextFromJSON(
+export function dataSettingUpPlatformContextFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataSettingUpPlatformContext, SDKValidationError> {
+): SafeParseResult<DataSettingUpPlatformContext, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataSettingUpPlatformContext$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataSettingUpPlatformContext' from JSON`,
+    (x) => DataSettingUpPlatformContext$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataSettingUpPlatformContext' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataCleaningUpEnvironment$inboundSchema: z.ZodType<
-  EventDataCleaningUpEnvironment,
+export const DataCleaningUpEnvironment$inboundSchema: z.ZodType<
+  DataCleaningUpEnvironment,
   unknown
 > = z.object({
   stackName: z.string(),
@@ -2001,19 +1977,19 @@ export const EventDataCleaningUpEnvironment$inboundSchema: z.ZodType<
   type: z.literal("CleaningUpEnvironment"),
 });
 
-export function eventDataCleaningUpEnvironmentFromJSON(
+export function dataCleaningUpEnvironmentFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataCleaningUpEnvironment, SDKValidationError> {
+): SafeParseResult<DataCleaningUpEnvironment, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataCleaningUpEnvironment$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataCleaningUpEnvironment' from JSON`,
+    (x) => DataCleaningUpEnvironment$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataCleaningUpEnvironment' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataCleaningUpStack$inboundSchema: z.ZodType<
-  EventDataCleaningUpStack,
+export const DataCleaningUpStack$inboundSchema: z.ZodType<
+  DataCleaningUpStack,
   unknown
 > = z.object({
   stackName: z.string(),
@@ -2021,76 +1997,76 @@ export const EventDataCleaningUpStack$inboundSchema: z.ZodType<
   type: z.literal("CleaningUpStack"),
 });
 
-export function eventDataCleaningUpStackFromJSON(
+export function dataCleaningUpStackFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataCleaningUpStack, SDKValidationError> {
+): SafeParseResult<DataCleaningUpStack, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataCleaningUpStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataCleaningUpStack' from JSON`,
+    (x) => DataCleaningUpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataCleaningUpStack' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataRunningTestWorker$inboundSchema: z.ZodType<
-  EventDataRunningTestWorker,
+export const DataRunningTestWorker$inboundSchema: z.ZodType<
+  DataRunningTestWorker,
   unknown
 > = z.object({
   stackName: z.string(),
   type: z.literal("RunningTestWorker"),
 });
 
-export function eventDataRunningTestWorkerFromJSON(
+export function dataRunningTestWorkerFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataRunningTestWorker, SDKValidationError> {
+): SafeParseResult<DataRunningTestWorker, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataRunningTestWorker$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataRunningTestWorker' from JSON`,
+    (x) => DataRunningTestWorker$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataRunningTestWorker' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeployingStack$inboundSchema: z.ZodType<
-  EventDataDeployingStack,
+export const DataDeployingStack$inboundSchema: z.ZodType<
+  DataDeployingStack,
   unknown
 > = z.object({
   stackName: z.string(),
   type: z.literal("DeployingStack"),
 });
 
-export function eventDataDeployingStackFromJSON(
+export function dataDeployingStackFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeployingStack, SDKValidationError> {
+): SafeParseResult<DataDeployingStack, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeployingStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeployingStack' from JSON`,
+    (x) => DataDeployingStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeployingStack' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataPreparingEnvironment$inboundSchema: z.ZodType<
-  EventDataPreparingEnvironment,
+export const DataPreparingEnvironment$inboundSchema: z.ZodType<
+  DataPreparingEnvironment,
   unknown
 > = z.object({
   strategyName: z.string(),
   type: z.literal("PreparingEnvironment"),
 });
 
-export function eventDataPreparingEnvironmentFromJSON(
+export function dataPreparingEnvironmentFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataPreparingEnvironment, SDKValidationError> {
+): SafeParseResult<DataPreparingEnvironment, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataPreparingEnvironment$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataPreparingEnvironment' from JSON`,
+    (x) => DataPreparingEnvironment$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataPreparingEnvironment' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDebuggingAgent$inboundSchema: z.ZodType<
-  EventDataDebuggingAgent,
+export const DataDebuggingAgent$inboundSchema: z.ZodType<
+  DataDebuggingAgent,
   unknown
 > = z.object({
   agentId: z.string(),
@@ -2098,19 +2074,19 @@ export const EventDataDebuggingAgent$inboundSchema: z.ZodType<
   type: z.literal("DebuggingAgent"),
 });
 
-export function eventDataDebuggingAgentFromJSON(
+export function dataDebuggingAgentFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDebuggingAgent, SDKValidationError> {
+): SafeParseResult<DataDebuggingAgent, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDebuggingAgent$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDebuggingAgent' from JSON`,
+    (x) => DataDebuggingAgent$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDebuggingAgent' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDeletingAgent$inboundSchema: z.ZodType<
-  EventDataDeletingAgent,
+export const DataDeletingAgent$inboundSchema: z.ZodType<
+  DataDeletingAgent,
   unknown
 > = z.object({
   agentId: z.string(),
@@ -2118,19 +2094,19 @@ export const EventDataDeletingAgent$inboundSchema: z.ZodType<
   type: z.literal("DeletingAgent"),
 });
 
-export function eventDataDeletingAgentFromJSON(
+export function dataDeletingAgentFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDeletingAgent, SDKValidationError> {
+): SafeParseResult<DataDeletingAgent, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDeletingAgent$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDeletingAgent' from JSON`,
+    (x) => DataDeletingAgent$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeletingAgent' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataUpdatingAgent$inboundSchema: z.ZodType<
-  EventDataUpdatingAgent,
+export const DataUpdatingAgent$inboundSchema: z.ZodType<
+  DataUpdatingAgent,
   unknown
 > = z.object({
   agentId: z.string(),
@@ -2138,19 +2114,19 @@ export const EventDataUpdatingAgent$inboundSchema: z.ZodType<
   type: z.literal("UpdatingAgent"),
 });
 
-export function eventDataUpdatingAgentFromJSON(
+export function dataUpdatingAgentFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataUpdatingAgent, SDKValidationError> {
+): SafeParseResult<DataUpdatingAgent, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataUpdatingAgent$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataUpdatingAgent' from JSON`,
+    (x) => DataUpdatingAgent$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUpdatingAgent' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataProvisioningAgent$inboundSchema: z.ZodType<
-  EventDataProvisioningAgent,
+export const DataProvisioningAgent$inboundSchema: z.ZodType<
+  DataProvisioningAgent,
   unknown
 > = z.object({
   agentId: z.string(),
@@ -2158,56 +2134,51 @@ export const EventDataProvisioningAgent$inboundSchema: z.ZodType<
   type: z.literal("ProvisioningAgent"),
 });
 
-export function eventDataProvisioningAgentFromJSON(
+export function dataProvisioningAgentFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataProvisioningAgent, SDKValidationError> {
+): SafeParseResult<DataProvisioningAgent, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataProvisioningAgent$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataProvisioningAgent' from JSON`,
+    (x) => DataProvisioningAgent$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataProvisioningAgent' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataGeneratingTemplate$inboundSchema: z.ZodType<
-  EventDataGeneratingTemplate,
+export const DataGeneratingTemplate$inboundSchema: z.ZodType<
+  DataGeneratingTemplate,
   unknown
 > = z.object({
   platform: z.string(),
   type: z.literal("GeneratingTemplate"),
 });
 
-export function eventDataGeneratingTemplateFromJSON(
+export function dataGeneratingTemplateFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataGeneratingTemplate, SDKValidationError> {
+): SafeParseResult<DataGeneratingTemplate, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataGeneratingTemplate$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataGeneratingTemplate' from JSON`,
+    (x) => DataGeneratingTemplate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGeneratingTemplate' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataGeneratingCloudFormationTemplate$inboundSchema: z.ZodType<
-  EventDataGeneratingCloudFormationTemplate,
+export const DataGeneratingCloudFormationTemplate$inboundSchema: z.ZodType<
+  DataGeneratingCloudFormationTemplate,
   unknown
 > = z.object({
   type: z.literal("GeneratingCloudFormationTemplate"),
 });
 
-export function eventDataGeneratingCloudFormationTemplateFromJSON(
+export function dataGeneratingCloudFormationTemplateFromJSON(
   jsonString: string,
-): SafeParseResult<
-  EventDataGeneratingCloudFormationTemplate,
-  SDKValidationError
-> {
+): SafeParseResult<DataGeneratingCloudFormationTemplate, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      EventDataGeneratingCloudFormationTemplate$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'EventDataGeneratingCloudFormationTemplate' from JSON`,
+      DataGeneratingCloudFormationTemplate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGeneratingCloudFormationTemplate' from JSON`,
   );
 }
 
@@ -2277,43 +2248,41 @@ export function eventDependencyFromJSON(
 }
 
 /** @internal */
-export const EventErrorNextState$inboundSchema: z.ZodType<
-  EventErrorNextState,
-  unknown
-> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
-});
+export const ErrorNextState$inboundSchema: z.ZodType<ErrorNextState, unknown> =
+  z.object({
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
+  });
 
-export function eventErrorNextStateFromJSON(
+export function errorNextStateFromJSON(
   jsonString: string,
-): SafeParseResult<EventErrorNextState, SDKValidationError> {
+): SafeParseResult<ErrorNextState, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventErrorNextState$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventErrorNextState' from JSON`,
+    (x) => ErrorNextState$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ErrorNextState' from JSON`,
   );
 }
 
 /** @internal */
-export const EventNextStateErrorUnion$inboundSchema: z.ZodType<
-  EventNextStateErrorUnion,
+export const NextStateErrorUnion$inboundSchema: z.ZodType<
+  NextStateErrorUnion,
   unknown
-> = z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => ErrorNextState$inboundSchema), z.any()]);
 
-export function eventNextStateErrorUnionFromJSON(
+export function nextStateErrorUnionFromJSON(
   jsonString: string,
-): SafeParseResult<EventNextStateErrorUnion, SDKValidationError> {
+): SafeParseResult<NextStateErrorUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventNextStateErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventNextStateErrorUnion' from JSON`,
+    (x) => NextStateErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NextStateErrorUnion' from JSON`,
   );
 }
 
@@ -2429,7 +2398,7 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     dependencies: z.array(z.lazy(() => EventDependency$inboundSchema))
       .optional(),
     error: z.nullable(
-      z.union([z.lazy(() => EventErrorNextState$inboundSchema), z.any()]),
+      z.union([z.lazy(() => ErrorNextState$inboundSchema), z.any()]),
     ).optional(),
     lastFailedState: z.nullable(z.any()).optional(),
     lifecycle: z.nullable(z.union([EventLifecycleEnum$inboundSchema, z.any()]))
@@ -2461,46 +2430,43 @@ export function eventResourcesFromJSON(
 }
 
 /** @internal */
-export const EventNextState$inboundSchema: z.ZodType<EventNextState, unknown> =
-  z.object({
-    platform: EventPlatform$inboundSchema,
-    resourcePrefix: z.string(),
-    resources: z.record(z.string(), z.lazy(() => EventResources$inboundSchema)),
-  });
-
-export function eventNextStateFromJSON(
-  jsonString: string,
-): SafeParseResult<EventNextState, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EventNextState$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventNextState' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventDataStackStep$inboundSchema: z.ZodType<
-  EventDataStackStep,
-  unknown
-> = z.object({
-  nextState: z.lazy(() => EventNextState$inboundSchema),
-  suggestedDelayMs: z.nullable(z.int()).optional(),
-  type: z.literal("StackStep"),
+export const NextState$inboundSchema: z.ZodType<NextState, unknown> = z.object({
+  platform: EventPlatform$inboundSchema,
+  resourcePrefix: z.string(),
+  resources: z.record(z.string(), z.lazy(() => EventResources$inboundSchema)),
 });
 
-export function eventDataStackStepFromJSON(
+export function nextStateFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataStackStep, SDKValidationError> {
+): SafeParseResult<NextState, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataStackStep$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataStackStep' from JSON`,
+    (x) => NextState$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'NextState' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataCompilingCode$inboundSchema: z.ZodType<
-  EventDataCompilingCode,
+export const DataStackStep$inboundSchema: z.ZodType<DataStackStep, unknown> = z
+  .object({
+    nextState: z.lazy(() => NextState$inboundSchema),
+    suggestedDelayMs: z.nullable(z.int()).optional(),
+    type: z.literal("StackStep"),
+  });
+
+export function dataStackStepFromJSON(
+  jsonString: string,
+): SafeParseResult<DataStackStep, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStackStep$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStackStep' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataCompilingCode$inboundSchema: z.ZodType<
+  DataCompilingCode,
   unknown
 > = z.object({
   language: z.string(),
@@ -2508,38 +2474,38 @@ export const EventDataCompilingCode$inboundSchema: z.ZodType<
   type: z.literal("CompilingCode"),
 });
 
-export function eventDataCompilingCodeFromJSON(
+export function dataCompilingCodeFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataCompilingCode, SDKValidationError> {
+): SafeParseResult<DataCompilingCode, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataCompilingCode$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataCompilingCode' from JSON`,
+    (x) => DataCompilingCode$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataCompilingCode' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataCreatingRelease$inboundSchema: z.ZodType<
-  EventDataCreatingRelease,
+export const DataCreatingRelease$inboundSchema: z.ZodType<
+  DataCreatingRelease,
   unknown
 > = z.object({
   project: z.string(),
   type: z.literal("CreatingRelease"),
 });
 
-export function eventDataCreatingReleaseFromJSON(
+export function dataCreatingReleaseFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataCreatingRelease, SDKValidationError> {
+): SafeParseResult<DataCreatingRelease, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataCreatingRelease$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataCreatingRelease' from JSON`,
+    (x) => DataCreatingRelease$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataCreatingRelease' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataPushingResource$inboundSchema: z.ZodType<
-  EventDataPushingResource,
+export const DataPushingResource$inboundSchema: z.ZodType<
+  DataPushingResource,
   unknown
 > = z.object({
   resourceName: z.string(),
@@ -2547,19 +2513,19 @@ export const EventDataPushingResource$inboundSchema: z.ZodType<
   type: z.literal("PushingResource"),
 });
 
-export function eventDataPushingResourceFromJSON(
+export function dataPushingResourceFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataPushingResource, SDKValidationError> {
+): SafeParseResult<DataPushingResource, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataPushingResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataPushingResource' from JSON`,
+    (x) => DataPushingResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataPushingResource' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataPushingStack$inboundSchema: z.ZodType<
-  EventDataPushingStack,
+export const DataPushingStack$inboundSchema: z.ZodType<
+  DataPushingStack,
   unknown
 > = z.object({
   destination: z.nullable(z.string()).optional(),
@@ -2568,96 +2534,92 @@ export const EventDataPushingStack$inboundSchema: z.ZodType<
   type: z.literal("PushingStack"),
 });
 
-export function eventDataPushingStackFromJSON(
+export function dataPushingStackFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataPushingStack, SDKValidationError> {
+): SafeParseResult<DataPushingStack, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataPushingStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataPushingStack' from JSON`,
+    (x) => DataPushingStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataPushingStack' from JSON`,
   );
 }
 
 /** @internal */
-export const EventProgress$inboundSchema: z.ZodType<EventProgress, unknown> = z
-  .object({
-    bytesUploaded: z.int(),
-    layersUploaded: z.int(),
-    operation: z.string(),
-    totalBytes: z.int(),
-    totalLayers: z.int(),
-  });
+export const Progress$inboundSchema: z.ZodType<Progress, unknown> = z.object({
+  bytesUploaded: z.int(),
+  layersUploaded: z.int(),
+  operation: z.string(),
+  totalBytes: z.int(),
+  totalLayers: z.int(),
+});
 
-export function eventProgressFromJSON(
+export function progressFromJSON(
   jsonString: string,
-): SafeParseResult<EventProgress, SDKValidationError> {
+): SafeParseResult<Progress, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventProgress$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventProgress' from JSON`,
+    (x) => Progress$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Progress' from JSON`,
   );
 }
 
 /** @internal */
-export const EventProgressUnion$inboundSchema: z.ZodType<
-  EventProgressUnion,
-  unknown
-> = z.union([z.lazy(() => EventProgress$inboundSchema), z.any()]);
+export const ProgressUnion$inboundSchema: z.ZodType<ProgressUnion, unknown> = z
+  .union([z.lazy(() => Progress$inboundSchema), z.any()]);
 
-export function eventProgressUnionFromJSON(
+export function progressUnionFromJSON(
   jsonString: string,
-): SafeParseResult<EventProgressUnion, SDKValidationError> {
+): SafeParseResult<ProgressUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventProgressUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventProgressUnion' from JSON`,
+    (x) => ProgressUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProgressUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataPushingImage$inboundSchema: z.ZodType<
-  EventDataPushingImage,
+export const DataPushingImage$inboundSchema: z.ZodType<
+  DataPushingImage,
   unknown
 > = z.object({
   image: z.string(),
-  progress: z.nullable(
-    z.union([z.lazy(() => EventProgress$inboundSchema), z.any()]),
-  ).optional(),
+  progress: z.nullable(z.union([z.lazy(() => Progress$inboundSchema), z.any()]))
+    .optional(),
   type: z.literal("PushingImage"),
 });
 
-export function eventDataPushingImageFromJSON(
+export function dataPushingImageFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataPushingImage, SDKValidationError> {
+): SafeParseResult<DataPushingImage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataPushingImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataPushingImage' from JSON`,
+    (x) => DataPushingImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataPushingImage' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataBuildingImage$inboundSchema: z.ZodType<
-  EventDataBuildingImage,
+export const DataBuildingImage$inboundSchema: z.ZodType<
+  DataBuildingImage,
   unknown
 > = z.object({
   image: z.string(),
   type: z.literal("BuildingImage"),
 });
 
-export function eventDataBuildingImageFromJSON(
+export function dataBuildingImageFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataBuildingImage, SDKValidationError> {
+): SafeParseResult<DataBuildingImage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataBuildingImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataBuildingImage' from JSON`,
+    (x) => DataBuildingImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataBuildingImage' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataBuildingResource$inboundSchema: z.ZodType<
-  EventDataBuildingResource,
+export const DataBuildingResource$inboundSchema: z.ZodType<
+  DataBuildingResource,
   unknown
 > = z.object({
   relatedResources: z.array(z.string()).optional(),
@@ -2666,19 +2628,19 @@ export const EventDataBuildingResource$inboundSchema: z.ZodType<
   type: z.literal("BuildingResource"),
 });
 
-export function eventDataBuildingResourceFromJSON(
+export function dataBuildingResourceFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataBuildingResource, SDKValidationError> {
+): SafeParseResult<DataBuildingResource, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataBuildingResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataBuildingResource' from JSON`,
+    (x) => DataBuildingResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataBuildingResource' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataDownloadingAlienRuntime$inboundSchema: z.ZodType<
-  EventDataDownloadingAlienRuntime,
+export const DataDownloadingAlienRuntime$inboundSchema: z.ZodType<
+  DataDownloadingAlienRuntime,
   unknown
 > = z.object({
   targetTriple: z.string(),
@@ -2686,19 +2648,19 @@ export const EventDataDownloadingAlienRuntime$inboundSchema: z.ZodType<
   url: z.string(),
 });
 
-export function eventDataDownloadingAlienRuntimeFromJSON(
+export function dataDownloadingAlienRuntimeFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataDownloadingAlienRuntime, SDKValidationError> {
+): SafeParseResult<DataDownloadingAlienRuntime, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataDownloadingAlienRuntime$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataDownloadingAlienRuntime' from JSON`,
+    (x) => DataDownloadingAlienRuntime$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDownloadingAlienRuntime' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataRunningPreflights$inboundSchema: z.ZodType<
-  EventDataRunningPreflights,
+export const DataRunningPreflights$inboundSchema: z.ZodType<
+  DataRunningPreflights,
   unknown
 > = z.object({
   platform: z.string(),
@@ -2706,117 +2668,115 @@ export const EventDataRunningPreflights$inboundSchema: z.ZodType<
   type: z.literal("RunningPreflights"),
 });
 
-export function eventDataRunningPreflightsFromJSON(
+export function dataRunningPreflightsFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataRunningPreflights, SDKValidationError> {
+): SafeParseResult<DataRunningPreflights, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataRunningPreflights$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataRunningPreflights' from JSON`,
+    (x) => DataRunningPreflights$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataRunningPreflights' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataBuildingStack$inboundSchema: z.ZodType<
-  EventDataBuildingStack,
+export const DataBuildingStack$inboundSchema: z.ZodType<
+  DataBuildingStack,
   unknown
 > = z.object({
   stack: z.string(),
   type: z.literal("BuildingStack"),
 });
 
-export function eventDataBuildingStackFromJSON(
+export function dataBuildingStackFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataBuildingStack, SDKValidationError> {
+): SafeParseResult<DataBuildingStack, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataBuildingStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataBuildingStack' from JSON`,
+    (x) => DataBuildingStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataBuildingStack' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataFinished$inboundSchema: z.ZodType<
-  EventDataFinished,
-  unknown
-> = z.object({
-  type: z.literal("Finished"),
-});
+export const DataFinished$inboundSchema: z.ZodType<DataFinished, unknown> = z
+  .object({
+    type: z.literal("Finished"),
+  });
 
-export function eventDataFinishedFromJSON(
+export function dataFinishedFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataFinished, SDKValidationError> {
+): SafeParseResult<DataFinished, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataFinished$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataFinished' from JSON`,
+    (x) => DataFinished$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataFinished' from JSON`,
   );
 }
 
 /** @internal */
-export const EventDataLoadingConfiguration$inboundSchema: z.ZodType<
-  EventDataLoadingConfiguration,
+export const DataLoadingConfiguration$inboundSchema: z.ZodType<
+  DataLoadingConfiguration,
   unknown
 > = z.object({
   type: z.literal("LoadingConfiguration"),
 });
 
-export function eventDataLoadingConfigurationFromJSON(
+export function dataLoadingConfigurationFromJSON(
   jsonString: string,
-): SafeParseResult<EventDataLoadingConfiguration, SDKValidationError> {
+): SafeParseResult<DataLoadingConfiguration, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventDataLoadingConfiguration$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventDataLoadingConfiguration' from JSON`,
+    (x) => DataLoadingConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLoadingConfiguration' from JSON`,
   );
 }
 
 /** @internal */
 export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
   z.union([
-    z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
-    z.lazy(() => EventDataFinished$inboundSchema),
-    z.lazy(() => EventDataBuildingStack$inboundSchema),
-    z.lazy(() => EventDataRunningPreflights$inboundSchema),
-    z.lazy(() => EventDataDownloadingAlienRuntime$inboundSchema),
-    z.lazy(() => EventDataBuildingResource$inboundSchema),
-    z.lazy(() => EventDataBuildingImage$inboundSchema),
-    z.lazy(() => EventDataPushingImage$inboundSchema),
-    z.lazy(() => EventDataPushingStack$inboundSchema),
-    z.lazy(() => EventDataPushingResource$inboundSchema),
-    z.lazy(() => EventDataCreatingRelease$inboundSchema),
-    z.lazy(() => EventDataCompilingCode$inboundSchema),
-    z.lazy(() => EventDataStackStep$inboundSchema),
-    z.lazy(() => EventDataGeneratingCloudFormationTemplate$inboundSchema),
-    z.lazy(() => EventDataGeneratingTemplate$inboundSchema),
-    z.lazy(() => EventDataProvisioningAgent$inboundSchema),
-    z.lazy(() => EventDataUpdatingAgent$inboundSchema),
-    z.lazy(() => EventDataDeletingAgent$inboundSchema),
-    z.lazy(() => EventDataDebuggingAgent$inboundSchema),
-    z.lazy(() => EventDataPreparingEnvironment$inboundSchema),
-    z.lazy(() => EventDataDeployingStack$inboundSchema),
-    z.lazy(() => EventDataRunningTestWorker$inboundSchema),
-    z.lazy(() => EventDataCleaningUpStack$inboundSchema),
-    z.lazy(() => EventDataCleaningUpEnvironment$inboundSchema),
-    z.lazy(() => EventDataSettingUpPlatformContext$inboundSchema),
-    z.lazy(() => EventDataEnsuringDockerRepository$inboundSchema),
-    z.lazy(() => EventDataDeployingCloudFormationStack$inboundSchema),
-    z.lazy(() => EventDataAssumingRole$inboundSchema),
-    z.lazy(() => EventDataImportingStackStateFromCloudFormation$inboundSchema),
-    z.lazy(() => EventDataDeletingCloudFormationStack$inboundSchema),
-    z.lazy(() => EventDataEmptyingBuckets$inboundSchema),
-    z.lazy(() => EventDataDeploymentCreated$inboundSchema),
-    z.lazy(() => EventDataDeploymentReleased$inboundSchema),
-    z.lazy(() => EventDataDeploymentFailed$inboundSchema),
-    z.lazy(() => EventDataDeploymentDegraded$inboundSchema),
-    z.lazy(() => EventDataDeploymentRecovered$inboundSchema),
-    z.lazy(() => EventDataDeploymentDeleted$inboundSchema),
-    z.lazy(() => EventDataDeploymentRetryRequested$inboundSchema),
-    z.lazy(() => EventDataDeploymentRedeployRequested$inboundSchema),
-    z.lazy(() => EventDataDeploymentReleasePinned$inboundSchema),
-    z.lazy(() => EventDataDeploymentReleaseUnpinned$inboundSchema),
-    z.lazy(() => EventDataDeploymentEnvironmentUpdated$inboundSchema),
-    z.lazy(() => EventDataDeploymentDeletionRequested$inboundSchema),
+    z.lazy(() => DataLoadingConfiguration$inboundSchema),
+    z.lazy(() => DataFinished$inboundSchema),
+    z.lazy(() => DataBuildingStack$inboundSchema),
+    z.lazy(() => DataRunningPreflights$inboundSchema),
+    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
+    z.lazy(() => DataBuildingResource$inboundSchema),
+    z.lazy(() => DataBuildingImage$inboundSchema),
+    z.lazy(() => DataPushingImage$inboundSchema),
+    z.lazy(() => DataPushingStack$inboundSchema),
+    z.lazy(() => DataPushingResource$inboundSchema),
+    z.lazy(() => DataCreatingRelease$inboundSchema),
+    z.lazy(() => DataCompilingCode$inboundSchema),
+    z.lazy(() => DataStackStep$inboundSchema),
+    z.lazy(() => DataGeneratingCloudFormationTemplate$inboundSchema),
+    z.lazy(() => DataGeneratingTemplate$inboundSchema),
+    z.lazy(() => DataProvisioningAgent$inboundSchema),
+    z.lazy(() => DataUpdatingAgent$inboundSchema),
+    z.lazy(() => DataDeletingAgent$inboundSchema),
+    z.lazy(() => DataDebuggingAgent$inboundSchema),
+    z.lazy(() => DataPreparingEnvironment$inboundSchema),
+    z.lazy(() => DataDeployingStack$inboundSchema),
+    z.lazy(() => DataRunningTestWorker$inboundSchema),
+    z.lazy(() => DataCleaningUpStack$inboundSchema),
+    z.lazy(() => DataCleaningUpEnvironment$inboundSchema),
+    z.lazy(() => DataSettingUpPlatformContext$inboundSchema),
+    z.lazy(() => DataEnsuringDockerRepository$inboundSchema),
+    z.lazy(() => DataDeployingCloudFormationStack$inboundSchema),
+    z.lazy(() => DataAssumingRole$inboundSchema),
+    z.lazy(() => DataImportingStackStateFromCloudFormation$inboundSchema),
+    z.lazy(() => DataDeletingCloudFormationStack$inboundSchema),
+    z.lazy(() => DataEmptyingBuckets$inboundSchema),
+    z.lazy(() => DataDeploymentCreated$inboundSchema),
+    z.lazy(() => DataDeploymentReleased$inboundSchema),
+    z.lazy(() => DataDeploymentFailed$inboundSchema),
+    z.lazy(() => DataDeploymentDegraded$inboundSchema),
+    z.lazy(() => DataDeploymentRecovered$inboundSchema),
+    z.lazy(() => DataDeploymentDeleted$inboundSchema),
+    z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
+    z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
+    z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
+    z.lazy(() => DataDeploymentReleaseUnpinned$inboundSchema),
+    z.lazy(() => DataDeploymentEnvironmentUpdated$inboundSchema),
+    z.lazy(() => DataDeploymentDeletionRequested$inboundSchema),
   ]);
 
 export function eventDataUnionFromJSON(
@@ -2830,82 +2790,77 @@ export function eventDataUnionFromJSON(
 }
 
 /** @internal */
-export const EventStateSuccess$inboundSchema: z.ZodEnum<
-  typeof EventStateSuccess
-> = z.enum(EventStateSuccess);
+export const StateSuccess$inboundSchema: z.ZodEnum<typeof StateSuccess> = z
+  .enum(StateSuccess);
 
 /** @internal */
-export const EventStateStarted$inboundSchema: z.ZodEnum<
-  typeof EventStateStarted
-> = z.enum(EventStateStarted);
+export const StateStarted$inboundSchema: z.ZodEnum<typeof StateStarted> = z
+  .enum(StateStarted);
 
 /** @internal */
-export const EventStateNone$inboundSchema: z.ZodEnum<typeof EventStateNone> = z
-  .enum(EventStateNone);
+export const StateNone$inboundSchema: z.ZodEnum<typeof StateNone> = z.enum(
+  StateNone,
+);
 
 /** @internal */
-export const EventErrorFailed$inboundSchema: z.ZodType<
-  EventErrorFailed,
-  unknown
-> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
-});
-
-export function eventErrorFailedFromJSON(
-  jsonString: string,
-): SafeParseResult<EventErrorFailed, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EventErrorFailed$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventErrorFailed' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventFailedErrorUnion$inboundSchema: z.ZodType<
-  EventFailedErrorUnion,
-  unknown
-> = z.union([z.lazy(() => EventErrorFailed$inboundSchema), z.any()]);
-
-export function eventFailedErrorUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<EventFailedErrorUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => EventFailedErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventFailedErrorUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventFailed$inboundSchema: z.ZodType<EventFailed, unknown> = z
+export const ErrorFailed$inboundSchema: z.ZodType<ErrorFailed, unknown> = z
   .object({
-    error: z.nullable(
-      z.union([z.lazy(() => EventErrorFailed$inboundSchema), z.any()]),
-    ).optional(),
+    code: z.string(),
+    context: z.nullable(z.any()).optional(),
+    hint: z.nullable(z.string()).optional(),
+    httpStatusCode: z.nullable(z.int()).optional(),
+    internal: z.boolean(),
+    message: z.string(),
+    retryable: z.boolean().default(false),
+    source: z.nullable(z.any()).optional(),
   });
 
-export function eventFailedFromJSON(
+export function errorFailedFromJSON(
   jsonString: string,
-): SafeParseResult<EventFailed, SDKValidationError> {
+): SafeParseResult<ErrorFailed, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventFailed$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventFailed' from JSON`,
+    (x) => ErrorFailed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ErrorFailed' from JSON`,
+  );
+}
+
+/** @internal */
+export const FailedErrorUnion$inboundSchema: z.ZodType<
+  FailedErrorUnion,
+  unknown
+> = z.union([z.lazy(() => ErrorFailed$inboundSchema), z.any()]);
+
+export function failedErrorUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<FailedErrorUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => FailedErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'FailedErrorUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const Failed$inboundSchema: z.ZodType<Failed, unknown> = z.object({
+  error: z.nullable(z.union([z.lazy(() => ErrorFailed$inboundSchema), z.any()]))
+    .optional(),
+});
+
+export function failedFromJSON(
+  jsonString: string,
+): SafeParseResult<Failed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Failed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Failed' from JSON`,
   );
 }
 
 /** @internal */
 export const EventState$inboundSchema: z.ZodType<EventState, unknown> = z
   .object({
-    failed: z.lazy(() => EventFailed$inboundSchema),
+    failed: z.lazy(() => Failed$inboundSchema),
   });
 
 export function eventStateFromJSON(
@@ -2919,23 +2874,20 @@ export function eventStateFromJSON(
 }
 
 /** @internal */
-export const EventStateUnion$inboundSchema: z.ZodType<
-  EventStateUnion,
-  unknown
-> = z.union([
+export const State$inboundSchema: z.ZodType<State, unknown> = z.union([
   z.lazy(() => EventState$inboundSchema),
-  EventStateNone$inboundSchema,
-  EventStateStarted$inboundSchema,
-  EventStateSuccess$inboundSchema,
+  StateNone$inboundSchema,
+  StateStarted$inboundSchema,
+  StateSuccess$inboundSchema,
 ]);
 
-export function eventStateUnionFromJSON(
+export function stateFromJSON(
   jsonString: string,
-): SafeParseResult<EventStateUnion, SDKValidationError> {
+): SafeParseResult<State, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventStateUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventStateUnion' from JSON`,
+    (x) => State$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'State' from JSON`,
   );
 }
 
@@ -2946,55 +2898,55 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
   releaseId: z.nullable(z.string()).optional(),
   debugSessionId: z.nullable(z.string()).optional(),
   data: z.union([
-    z.lazy(() => EventDataLoadingConfiguration$inboundSchema),
-    z.lazy(() => EventDataFinished$inboundSchema),
-    z.lazy(() => EventDataBuildingStack$inboundSchema),
-    z.lazy(() => EventDataRunningPreflights$inboundSchema),
-    z.lazy(() => EventDataDownloadingAlienRuntime$inboundSchema),
-    z.lazy(() => EventDataBuildingResource$inboundSchema),
-    z.lazy(() => EventDataBuildingImage$inboundSchema),
-    z.lazy(() => EventDataPushingImage$inboundSchema),
-    z.lazy(() => EventDataPushingStack$inboundSchema),
-    z.lazy(() => EventDataPushingResource$inboundSchema),
-    z.lazy(() => EventDataCreatingRelease$inboundSchema),
-    z.lazy(() => EventDataCompilingCode$inboundSchema),
-    z.lazy(() => EventDataStackStep$inboundSchema),
-    z.lazy(() => EventDataGeneratingCloudFormationTemplate$inboundSchema),
-    z.lazy(() => EventDataGeneratingTemplate$inboundSchema),
-    z.lazy(() => EventDataProvisioningAgent$inboundSchema),
-    z.lazy(() => EventDataUpdatingAgent$inboundSchema),
-    z.lazy(() => EventDataDeletingAgent$inboundSchema),
-    z.lazy(() => EventDataDebuggingAgent$inboundSchema),
-    z.lazy(() => EventDataPreparingEnvironment$inboundSchema),
-    z.lazy(() => EventDataDeployingStack$inboundSchema),
-    z.lazy(() => EventDataRunningTestWorker$inboundSchema),
-    z.lazy(() => EventDataCleaningUpStack$inboundSchema),
-    z.lazy(() => EventDataCleaningUpEnvironment$inboundSchema),
-    z.lazy(() => EventDataSettingUpPlatformContext$inboundSchema),
-    z.lazy(() => EventDataEnsuringDockerRepository$inboundSchema),
-    z.lazy(() => EventDataDeployingCloudFormationStack$inboundSchema),
-    z.lazy(() => EventDataAssumingRole$inboundSchema),
-    z.lazy(() => EventDataImportingStackStateFromCloudFormation$inboundSchema),
-    z.lazy(() => EventDataDeletingCloudFormationStack$inboundSchema),
-    z.lazy(() => EventDataEmptyingBuckets$inboundSchema),
-    z.lazy(() => EventDataDeploymentCreated$inboundSchema),
-    z.lazy(() => EventDataDeploymentReleased$inboundSchema),
-    z.lazy(() => EventDataDeploymentFailed$inboundSchema),
-    z.lazy(() => EventDataDeploymentDegraded$inboundSchema),
-    z.lazy(() => EventDataDeploymentRecovered$inboundSchema),
-    z.lazy(() => EventDataDeploymentDeleted$inboundSchema),
-    z.lazy(() => EventDataDeploymentRetryRequested$inboundSchema),
-    z.lazy(() => EventDataDeploymentRedeployRequested$inboundSchema),
-    z.lazy(() => EventDataDeploymentReleasePinned$inboundSchema),
-    z.lazy(() => EventDataDeploymentReleaseUnpinned$inboundSchema),
-    z.lazy(() => EventDataDeploymentEnvironmentUpdated$inboundSchema),
-    z.lazy(() => EventDataDeploymentDeletionRequested$inboundSchema),
+    z.lazy(() => DataLoadingConfiguration$inboundSchema),
+    z.lazy(() => DataFinished$inboundSchema),
+    z.lazy(() => DataBuildingStack$inboundSchema),
+    z.lazy(() => DataRunningPreflights$inboundSchema),
+    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
+    z.lazy(() => DataBuildingResource$inboundSchema),
+    z.lazy(() => DataBuildingImage$inboundSchema),
+    z.lazy(() => DataPushingImage$inboundSchema),
+    z.lazy(() => DataPushingStack$inboundSchema),
+    z.lazy(() => DataPushingResource$inboundSchema),
+    z.lazy(() => DataCreatingRelease$inboundSchema),
+    z.lazy(() => DataCompilingCode$inboundSchema),
+    z.lazy(() => DataStackStep$inboundSchema),
+    z.lazy(() => DataGeneratingCloudFormationTemplate$inboundSchema),
+    z.lazy(() => DataGeneratingTemplate$inboundSchema),
+    z.lazy(() => DataProvisioningAgent$inboundSchema),
+    z.lazy(() => DataUpdatingAgent$inboundSchema),
+    z.lazy(() => DataDeletingAgent$inboundSchema),
+    z.lazy(() => DataDebuggingAgent$inboundSchema),
+    z.lazy(() => DataPreparingEnvironment$inboundSchema),
+    z.lazy(() => DataDeployingStack$inboundSchema),
+    z.lazy(() => DataRunningTestWorker$inboundSchema),
+    z.lazy(() => DataCleaningUpStack$inboundSchema),
+    z.lazy(() => DataCleaningUpEnvironment$inboundSchema),
+    z.lazy(() => DataSettingUpPlatformContext$inboundSchema),
+    z.lazy(() => DataEnsuringDockerRepository$inboundSchema),
+    z.lazy(() => DataDeployingCloudFormationStack$inboundSchema),
+    z.lazy(() => DataAssumingRole$inboundSchema),
+    z.lazy(() => DataImportingStackStateFromCloudFormation$inboundSchema),
+    z.lazy(() => DataDeletingCloudFormationStack$inboundSchema),
+    z.lazy(() => DataEmptyingBuckets$inboundSchema),
+    z.lazy(() => DataDeploymentCreated$inboundSchema),
+    z.lazy(() => DataDeploymentReleased$inboundSchema),
+    z.lazy(() => DataDeploymentFailed$inboundSchema),
+    z.lazy(() => DataDeploymentDegraded$inboundSchema),
+    z.lazy(() => DataDeploymentRecovered$inboundSchema),
+    z.lazy(() => DataDeploymentDeleted$inboundSchema),
+    z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
+    z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
+    z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
+    z.lazy(() => DataDeploymentReleaseUnpinned$inboundSchema),
+    z.lazy(() => DataDeploymentEnvironmentUpdated$inboundSchema),
+    z.lazy(() => DataDeploymentDeletionRequested$inboundSchema),
   ]),
   state: z.union([
     z.lazy(() => EventState$inboundSchema),
-    EventStateNone$inboundSchema,
-    EventStateStarted$inboundSchema,
-    EventStateSuccess$inboundSchema,
+    StateNone$inboundSchema,
+    StateStarted$inboundSchema,
+    StateSuccess$inboundSchema,
   ]),
   projectId: z.string(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),

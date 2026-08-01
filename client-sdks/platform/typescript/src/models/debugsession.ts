@@ -11,14 +11,6 @@ import {
   DebugPackagePresignedURLs$inboundSchema,
 } from "./debugpackagepresignedurls.js";
 import {
-  DebugSessionDeployment,
-  DebugSessionDeployment$inboundSchema,
-} from "./debugsessiondeployment.js";
-import {
-  DebugSessionPublicError,
-  DebugSessionPublicError$inboundSchema,
-} from "./debugsessionpublicerror.js";
-import {
   DebugSessionState,
   DebugSessionState$inboundSchema,
 } from "./debugsessionstate.js";
@@ -69,14 +61,13 @@ export type DebugSession = {
    */
   provider?: DebugSessionProvider | null | undefined;
   presignedUrls: { [k: string]: DebugPackagePresignedURLs };
-  error?: DebugSessionPublicError | null | undefined;
+  error?: any | null | undefined;
   createdAt: Date;
   expiresAt: Date;
   /**
    * Unique identifier for the deployment.
    */
   deploymentId: string;
-  deployment: DebugSessionDeployment;
   /**
    * Unique identifier for the project.
    */
@@ -109,11 +100,10 @@ export const DebugSession$inboundSchema: z.ZodType<DebugSession, unknown> = z
       z.string(),
       DebugPackagePresignedURLs$inboundSchema,
     ),
-    error: z.nullable(DebugSessionPublicError$inboundSchema).optional(),
+    error: z.nullable(z.any()).optional(),
     createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     expiresAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     deploymentId: z.string(),
-    deployment: DebugSessionDeployment$inboundSchema,
     projectId: z.string(),
     workspaceId: z.string(),
   });

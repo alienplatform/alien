@@ -10,21 +10,9 @@ let value: CreateDeploymentGroupTokenRequest = {
     metadata: {},
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [
-        "google-oauth",
-      ],
+      allowedSetupMethods: [],
     },
-    environmentVariables: [
-      {
-        name: "<value>",
-        value: "<value>",
-        type: "plain",
-        targetResources: [
-          "<value 1>",
-          "<value 2>",
-        ],
-      },
-    ],
+    environmentVariables: [],
   },
 };
 ```

@@ -7,7 +7,6 @@ import { releasesGet } from "../funcs/releasesGet.js";
 import { releasesList } from "../funcs/releasesList.js";
 import { releasesListAuthors } from "../funcs/releasesListAuthors.js";
 import { releasesListBranches } from "../funcs/releasesListBranches.js";
-import { releasesListDeployments } from "../funcs/releasesListDeployments.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -78,20 +77,6 @@ export class Releases extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ReleaseListItemResponse> {
     return unwrapAsync(releasesGet(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * List the project's deployments with their rollout state relative to this release.
-   */
-  async listDeployments(
-    request: operations.ListReleaseDeploymentsRequest,
-    options?: RequestOptions,
-  ): Promise<models.ReleaseDeploymentsResponse> {
-    return unwrapAsync(releasesListDeployments(
       this,
       request,
       options,

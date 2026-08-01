@@ -4,15 +4,9 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
-import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
-
-export const ListEventsInclude = {
-  ReleaseCreatedAt: "releaseCreatedAt",
-} as const;
-export type ListEventsInclude = ClosedEnum<typeof ListEventsInclude>;
 
 export type ListEventsRequest = {
   /**
@@ -27,14 +21,6 @@ export type ListEventsRequest = {
    * Filter events to a single deployment.
    */
   deploymentId?: string | undefined;
-  /**
-   * Filter events to a single release.
-   */
-  releaseId?: string | undefined;
-  /**
-   * Optional fields to include: releaseCreatedAt
-   */
-  include?: Array<ListEventsInclude> | undefined;
   /**
    * Maximum number of items to return per page
    */
@@ -52,7 +38,7 @@ export type ListEventsResponse = {
   /**
    * Items in this page
    */
-  items: Array<models.EventListItemResponse>;
+  items: Array<models.Event>;
   /**
    * Cursor for the next page, null if last page
    */
@@ -60,17 +46,10 @@ export type ListEventsResponse = {
 };
 
 /** @internal */
-export const ListEventsInclude$outboundSchema: z.ZodEnum<
-  typeof ListEventsInclude
-> = z.enum(ListEventsInclude);
-
-/** @internal */
 export type ListEventsRequest$Outbound = {
   workspace?: string | undefined;
   project?: string | undefined;
   deploymentId?: string | undefined;
-  releaseId?: string | undefined;
-  include?: Array<string> | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -83,8 +62,6 @@ export const ListEventsRequest$outboundSchema: z.ZodType<
   workspace: z.string().optional(),
   project: z.string().optional(),
   deploymentId: z.string().optional(),
-  releaseId: z.string().optional(),
-  include: z.array(ListEventsInclude$outboundSchema).optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });
@@ -102,7 +79,7 @@ export const ListEventsResponse$inboundSchema: z.ZodType<
   ListEventsResponse,
   unknown
 > = z.object({
-  items: z.array(models.EventListItemResponse$inboundSchema),
+  items: z.array(models.Event$inboundSchema),
   nextCursor: z.nullable(z.string()),
 });
 

@@ -12,9 +12,7 @@ let value: CreateManagerResponseSetupConfig = {
   },
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [
-      "google-oauth",
-    ],
+    allowedSetupMethods: [],
   },
   environmentVariables: [],
 };

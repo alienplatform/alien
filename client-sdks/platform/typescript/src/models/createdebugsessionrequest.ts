@@ -3,6 +3,10 @@
  */
 
 import * as z from "zod/v4";
+import {
+  DebugSessionState,
+  DebugSessionState$outboundSchema,
+} from "./debugsessionstate.js";
 
 export type CreateDebugSessionRequest = {
   /**
@@ -13,24 +17,18 @@ export type CreateDebugSessionRequest = {
    * Unique identifier for the deployment.
    */
   deploymentId: string;
-  /**
-   * Original actor label attested by the assigned manager.
-   */
-  owner: string;
+  owner?: string | null | undefined;
   expiresAt: Date;
-  /**
-   * Provider-owned target used for exact restart reconciliation.
-   */
-  backendTargetId?: string | undefined;
+  state?: DebugSessionState | undefined;
 };
 
 /** @internal */
 export type CreateDebugSessionRequest$Outbound = {
   id?: string | undefined;
   deploymentId: string;
-  owner: string;
+  owner?: string | null | undefined;
   expiresAt: string;
-  backendTargetId?: string | undefined;
+  state?: string | undefined;
 };
 
 /** @internal */
@@ -40,9 +38,9 @@ export const CreateDebugSessionRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string().optional(),
   deploymentId: z.string(),
-  owner: z.string(),
+  owner: z.nullable(z.string()).optional(),
   expiresAt: z.date().transform(v => v.toISOString()),
-  backendTargetId: z.string().optional(),
+  state: DebugSessionState$outboundSchema.optional(),
 });
 
 export function createDebugSessionRequestToJSON(

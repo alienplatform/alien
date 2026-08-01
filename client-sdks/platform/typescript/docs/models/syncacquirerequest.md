@@ -10,7 +10,6 @@ import { SyncAcquireRequest } from "@alienplatform/platform-api/models";
 let value: SyncAcquireRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   session: "<value>",
-  requestId: "<id>",
   deploymentIds: [
     "dep_0c29fq4a2yjb7kx3smwdgxlc",
   ],

@@ -1,0 +1,23 @@
+# DeploymentDetailResponseOverride
+
+A permission set that can be applied across different cloud platforms
+
+## Example Usage
+
+```typescript
+import { DeploymentDetailResponseOverride } from "@alienplatform/platform-api/models";
+
+let value: DeploymentDetailResponseOverride = {
+  description: "skeletal swear indelible than french boo tune-up yahoo yum",
+  id: "<id>",
+  platforms: {},
+};
+```
+
+## Fields
+
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `description`                                                                                              | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Human-readable description of what this permission set allows                                              |
+| `id`                                                                                                       | *string*                                                                                                   | :heavy_check_mark:                                                                                         | Unique identifier for the permission set (e.g., "storage/data-read")                                       |
+| `platforms`                                                                                                | [models.DeploymentDetailResponseOverridePlatforms](../models/deploymentdetailresponseoverrideplatforms.md) | :heavy_check_mark:                                                                                         | Platform-specific permission configurations                                                                |

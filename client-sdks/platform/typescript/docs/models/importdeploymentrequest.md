@@ -26,11 +26,7 @@ const value: models.ForwardImportRequest = {
       {
         id: "<id>",
         type: "<value>",
-        importData: {
-          "key": "<value>",
-          "key1": "<value>",
-          "key2": "<value>",
-        },
+        importData: {},
       },
     ],
   },
@@ -56,3 +52,4 @@ const value: models.PersistImportedDeploymentRequest = {
   setupFingerprintVersion: 119877,
 };
 ```
+

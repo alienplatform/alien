@@ -43,33 +43,7 @@ export type PersistImportedDeploymentRequestPlatformEnum = ClosedEnum<
   typeof PersistImportedDeploymentRequestPlatformEnum
 >;
 
-/**
- * Failure-domain policy selected for a compute pool.
- */
-export type PersistImportedDeploymentRequestFailureDomains2 = {
-  /**
-   * Concrete provider domains selected during setup.
-   *
-   * @remarks
-   * Empty delegates deterministic selection to the provider setup implementation.
-   */
-  selectedFailureDomains?: Array<string> | undefined;
-  /**
-   * Number of distinct failure domains across which new stateful replicas may be spread.
-   */
-  spread: number;
-};
-
-export type PersistImportedDeploymentRequestFailureDomainsUnion2 =
-  | PersistImportedDeploymentRequestFailureDomains2
-  | any;
-
 export type PersistImportedDeploymentRequestPoolsAutoscale = {
-  failureDomains?:
-    | PersistImportedDeploymentRequestFailureDomains2
-    | any
-    | null
-    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -85,33 +59,7 @@ export type PersistImportedDeploymentRequestPoolsAutoscale = {
   mode: "autoscale";
 };
 
-/**
- * Failure-domain policy selected for a compute pool.
- */
-export type PersistImportedDeploymentRequestFailureDomains1 = {
-  /**
-   * Concrete provider domains selected during setup.
-   *
-   * @remarks
-   * Empty delegates deterministic selection to the provider setup implementation.
-   */
-  selectedFailureDomains?: Array<string> | undefined;
-  /**
-   * Number of distinct failure domains across which new stateful replicas may be spread.
-   */
-  spread: number;
-};
-
-export type PersistImportedDeploymentRequestFailureDomainsUnion1 =
-  | PersistImportedDeploymentRequestFailureDomains1
-  | any;
-
 export type PersistImportedDeploymentRequestPoolsFixed = {
-  failureDomains?:
-    | PersistImportedDeploymentRequestFailureDomains1
-    | any
-    | null
-    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1387,1759 +1335,95 @@ export type PersistImportedDeploymentRequestEnvironmentInfoUnion =
   | PersistImportedDeploymentRequestEnvironmentInfoTest
   | any;
 
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeStringList =
-  {
-    StringList: "stringList",
-  } as const;
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeStringList =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeStringList
-  >;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList =
-  {
-    type: PersistImportedDeploymentRequestPendingPreparedStackTypeStringList;
-    /**
-     * String list default.
-     */
-    value: Array<string>;
-  };
-
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean = {
-  Boolean: "boolean",
-} as const;
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean
-  >;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean =
-  {
-    type: PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean;
-    /**
-     * Boolean default.
-     */
-    value: boolean;
-  };
-
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeNumber = {
-  Number: "number",
-} as const;
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeNumber =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeNumber
-  >;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber =
-  {
-    type: PersistImportedDeploymentRequestPendingPreparedStackTypeNumber;
-    /**
-     * Number default.
-     */
-    value: string;
-  };
-
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeString = {
-  String: "string",
-} as const;
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeString =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeString
-  >;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultString =
-  {
-    type: PersistImportedDeploymentRequestPendingPreparedStackTypeString;
-    /**
-     * String default.
-     */
-    value: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultString
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList
-  | any;
-
-/**
- * Environment variable handling for a stack input mapping.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum = {
-  Plain: "plain",
-  Secret: "secret",
-} as const;
-/**
- * Environment variable handling for a stack input mapping.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum
-  >;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum
-  | any;
-
-/**
- * How a resolved stack input is injected into runtime environment variables.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackEnv = {
-  /**
-   * Environment variable name.
-   */
-  name: string;
-  /**
-   * Target resource IDs or patterns. None means every env-capable resource.
-   */
-  targetResources?: Array<string> | null | undefined;
-  type?:
-    | PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum
-    | any
-    | null
-    | undefined;
-};
-
-/**
- * Primitive stack input kind.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackKind = {
-  String: "string",
-  Secret: "secret",
-  Number: "number",
-  Integer: "integer",
-  Boolean: "boolean",
-  Enum: "enum",
+export const PersistImportedDeploymentRequestTypeStringList = {
   StringList: "stringList",
 } as const;
-/**
- * Primitive stack input kind.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackKind =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPendingPreparedStackKind>;
-
-/**
- * Represents the target cloud platform.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackPlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Machines: "machines",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Represents the target cloud platform.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackPlatform =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackPlatform
-  >;
-
-/**
- * Who can provide a stack input value.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackProvidedBy = {
-  Developer: "developer",
-  Deployer: "deployer",
-} as const;
-/**
- * Who can provide a stack input value.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProvidedBy =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackProvidedBy
-  >;
-
-/**
- * Portable stack input validation constraints.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackValidation = {
-  /**
-   * Semantic format hint such as url.
-   */
-  format?: string | null | undefined;
-  /**
-   * Maximum number.
-   */
-  max?: string | null | undefined;
-  /**
-   * Maximum string-list items.
-   */
-  maxItems?: number | null | undefined;
-  /**
-   * Maximum string length.
-   */
-  maxLength?: number | null | undefined;
-  /**
-   * Minimum number.
-   */
-  min?: string | null | undefined;
-  /**
-   * Minimum string-list items.
-   */
-  minItems?: number | null | undefined;
-  /**
-   * Minimum string length.
-   */
-  minLength?: number | null | undefined;
-  /**
-   * Portable whole-value regex pattern.
-   */
-  pattern?: string | null | undefined;
-  /**
-   * Allowed string enum values.
-   */
-  values?: Array<string> | null | undefined;
-};
-
-export type PersistImportedDeploymentRequestPendingPreparedStackValidationUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackValidation
-  | any;
-
-/**
- * Stack input definition serialized into a release stack.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackInput = {
-  default?:
-    | PersistImportedDeploymentRequestPendingPreparedStackDefaultString
-    | PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber
-    | PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean
-    | PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList
-    | any
-    | null
-    | undefined;
-  /**
-   * Human-facing helper text.
-   */
-  description: string;
-  /**
-   * Runtime env-var mappings for v1 input resolution.
-   */
-  env?:
-    | Array<PersistImportedDeploymentRequestPendingPreparedStackEnv>
-    | undefined;
-  /**
-   * Stable input ID used by CLI/API calls.
-   */
-  id: string;
-  /**
-   * Primitive stack input kind.
-   */
-  kind: PersistImportedDeploymentRequestPendingPreparedStackKind;
-  /**
-   * Human-facing field label.
-   */
-  label: string;
-  /**
-   * Example placeholder shown in UI.
-   */
-  placeholder?: string | null | undefined;
-  /**
-   * Platforms where this input applies.
-   */
-  platforms?:
-    | Array<PersistImportedDeploymentRequestPendingPreparedStackPlatform>
-    | null
-    | undefined;
-  /**
-   * Who can provide this value.
-   */
-  providedBy: Array<
-    PersistImportedDeploymentRequestPendingPreparedStackProvidedBy
-  >;
-  /**
-   * Whether a resolved value is required before deployment can proceed.
-   */
-  required: boolean;
-  validation?:
-    | PersistImportedDeploymentRequestPendingPreparedStackValidation
-    | any
-    | null
-    | undefined;
-};
-
-export const PersistImportedDeploymentRequestPendingPreparedStackManagementEnum =
-  {
-    Auto: "auto",
-  } as const;
-export type PersistImportedDeploymentRequestPendingPreparedStackManagementEnum =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackManagementEnum
-  >;
-
-/**
- * AWS-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource =
-  {
-    /**
-     * Optional condition for additional filtering (rare)
-     */
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    /**
-     * Resource ARNs to bind to
-     */
-    resources: Array<string>;
-  };
-
-/**
- * AWS-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack =
-  {
-    /**
-     * Optional condition for additional filtering (rare)
-     */
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    /**
-     * Resource ARNs to bind to
-     */
-    resources: Array<string>;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding =
-  {
-    /**
-     * AWS-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource
-      | undefined;
-    /**
-     * AWS-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack
-      | undefined;
-  };
-
-/**
- * IAM effect. Defaults to Allow.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect =
-  {
-    Allow: "Allow",
-    Deny: "Deny",
-  } as const;
-/**
- * IAM effect. Defaults to Allow.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect
-  >;
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * AWS-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAw = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * IAM effect. Defaults to Allow.
-   */
-  effect?:
-    | PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect
-    | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * Azure-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Azure-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding =
-  {
-    /**
-     * Azure-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource
-      | undefined;
-    /**
-     * Azure-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack
-      | undefined;
-  };
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * Azure-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure =
-  {
-    /**
-     * Generic binding configuration for permissions
-     */
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding;
-    /**
-     * Short admin-facing description of why this entry exists.
-     */
-    description?: string | null | undefined;
-    /**
-     * Grant permissions for a specific cloud platform
-     */
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant;
-    /**
-     * Stable admin-facing label for this permission entry.
-     */
-    label?: string | null | undefined;
-  };
-
-/**
- * GCP IAM condition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource =
-  {
-    expression: string;
-    title: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource
-  | any;
-
-/**
- * GCP-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource
-      | any
-      | null
-      | undefined;
-    /**
-     * Scope (project/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * GCP IAM condition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack =
-  {
-    expression: string;
-    title: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack
-  | any;
-
-/**
- * GCP-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack
-      | any
-      | null
-      | undefined;
-    /**
-     * Scope (project/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding =
-  {
-    /**
-     * GCP-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource
-      | undefined;
-    /**
-     * GCP-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack
-      | undefined;
-  };
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * GCP-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * Platform-specific permission configurations
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms =
-  {
-    /**
-     * AWS permission configurations
-     */
-    aws?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackOverrideAw>
-      | null
-      | undefined;
-    /**
-     * Azure permission configurations
-     */
-    azure?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure>
-      | null
-      | undefined;
-    /**
-     * GCP permission configurations
-     */
-    gcp?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp>
-      | null
-      | undefined;
-  };
-
-/**
- * A permission set that can be applied across different cloud platforms
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverride = {
-  /**
-   * Human-readable description of what this permission set allows
-   */
-  description: string;
-  /**
-   * Unique identifier for the permission set (e.g., "storage/data-read")
-   */
-  id: string;
-  /**
-   * Platform-specific permission configurations
-   */
-  platforms:
-    PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms;
-};
-
-/**
- * Reference to a permission set - either by name or inline definition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackOverride
-  | string;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackManagement2 = {
-  /**
-   * Permission profile that maps resources to permission sets
-   *
-   * @remarks
-   * Key can be "*" for all resources or resource name for specific resource
-   */
-  override: {
-    [k: string]: Array<
-      PersistImportedDeploymentRequestPendingPreparedStackOverride | string
-    >;
-  };
-};
-
-/**
- * AWS-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource =
-  {
-    /**
-     * Optional condition for additional filtering (rare)
-     */
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    /**
-     * Resource ARNs to bind to
-     */
-    resources: Array<string>;
-  };
-
-/**
- * AWS-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack =
-  {
-    /**
-     * Optional condition for additional filtering (rare)
-     */
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    /**
-     * Resource ARNs to bind to
-     */
-    resources: Array<string>;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding =
-  {
-    /**
-     * AWS-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource
-      | undefined;
-    /**
-     * AWS-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack
-      | undefined;
-  };
-
-/**
- * IAM effect. Defaults to Allow.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendEffect =
-  {
-    Allow: "Allow",
-    Deny: "Deny",
-  } as const;
-/**
- * IAM effect. Defaults to Allow.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendEffect =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackExtendEffect
-  >;
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * AWS-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAw = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding: PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * IAM effect. Defaults to Allow.
-   */
-  effect?:
-    | PersistImportedDeploymentRequestPendingPreparedStackExtendEffect
-    | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * Azure-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Azure-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding =
-  {
-    /**
-     * Azure-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource
-      | undefined;
-    /**
-     * Azure-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack
-      | undefined;
-  };
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * Azure-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzure = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * GCP IAM condition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource =
-  {
-    expression: string;
-    title: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource
-  | any;
-
-/**
- * GCP-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource
-      | any
-      | null
-      | undefined;
-    /**
-     * Scope (project/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * GCP IAM condition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack =
-  {
-    expression: string;
-    title: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack
-  | any;
-
-/**
- * GCP-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack
-      | any
-      | null
-      | undefined;
-    /**
-     * Scope (project/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding =
-  {
-    /**
-     * GCP-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource
-      | undefined;
-    /**
-     * GCP-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack
-      | undefined;
-  };
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * GCP-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcp = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding: PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * Platform-specific permission configurations
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms =
-  {
-    /**
-     * AWS permission configurations
-     */
-    aws?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackExtendAw>
-      | null
-      | undefined;
-    /**
-     * Azure permission configurations
-     */
-    azure?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackExtendAzure>
-      | null
-      | undefined;
-    /**
-     * GCP permission configurations
-     */
-    gcp?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackExtendGcp>
-      | null
-      | undefined;
-  };
-
-/**
- * A permission set that can be applied across different cloud platforms
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtend = {
-  /**
-   * Human-readable description of what this permission set allows
-   */
-  description: string;
-  /**
-   * Unique identifier for the permission set (e.g., "storage/data-read")
-   */
-  id: string;
-  /**
-   * Platform-specific permission configurations
-   */
-  platforms:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms;
-};
-
-/**
- * Reference to a permission set - either by name or inline definition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackExtend
-  | string;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackManagement1 = {
-  /**
-   * Permission profile that maps resources to permission sets
-   *
-   * @remarks
-   * Key can be "*" for all resources or resource name for specific resource
-   */
-  extend: {
-    [k: string]: Array<
-      PersistImportedDeploymentRequestPendingPreparedStackExtend | string
-    >;
-  };
-};
-
-/**
- * Management permissions configuration for stack management access
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackManagementUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackManagement1
-  | PersistImportedDeploymentRequestPendingPreparedStackManagement2
-  | PersistImportedDeploymentRequestPendingPreparedStackManagementEnum;
-
-/**
- * AWS-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource =
-  {
-    /**
-     * Optional condition for additional filtering (rare)
-     */
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    /**
-     * Resource ARNs to bind to
-     */
-    resources: Array<string>;
-  };
-
-/**
- * AWS-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack =
-  {
-    /**
-     * Optional condition for additional filtering (rare)
-     */
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    /**
-     * Resource ARNs to bind to
-     */
-    resources: Array<string>;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding =
-  {
-    /**
-     * AWS-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource
-      | undefined;
-    /**
-     * AWS-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack
-      | undefined;
-  };
-
-/**
- * IAM effect. Defaults to Allow.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileEffect =
-  {
-    Allow: "Allow",
-    Deny: "Deny",
-  } as const;
-/**
- * IAM effect. Defaults to Allow.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileEffect =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackProfileEffect
-  >;
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * AWS-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAw = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding: PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * IAM effect. Defaults to Allow.
-   */
-  effect?:
-    | PersistImportedDeploymentRequestPendingPreparedStackProfileEffect
-    | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * Azure-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Azure-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding =
-  {
-    /**
-     * Azure-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource
-      | undefined;
-    /**
-     * Azure-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack
-      | undefined;
-  };
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * Azure-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzure = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * GCP IAM condition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource =
-  {
-    expression: string;
-    title: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource
-  | any;
-
-/**
- * GCP-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource
-      | any
-      | null
-      | undefined;
-    /**
-     * Scope (project/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * GCP IAM condition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack =
-  {
-    expression: string;
-    title: string;
-  };
-
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack
-  | any;
-
-/**
- * GCP-specific binding specification
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack
-      | any
-      | null
-      | undefined;
-    /**
-     * Scope (project/resource level)
-     */
-    scope: string;
-  };
-
-/**
- * Generic binding configuration for permissions
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding =
-  {
-    /**
-     * GCP-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource
-      | undefined;
-    /**
-     * GCP-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack
-      | undefined;
-  };
-
-/**
- * Grant permissions for a specific cloud platform
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant =
-  {
-    /**
-     * AWS IAM actions (only for AWS)
-     */
-    actions?: Array<string> | null | undefined;
-    /**
-     * Azure actions (only for Azure)
-     */
-    dataActions?: Array<string> | null | undefined;
-    /**
-     * GCP permissions that require an exact residual custom role.
-     */
-    permissions?: Array<string> | null | undefined;
-    /**
-     * Provider predefined roles to bind directly.
-     */
-    predefinedRoles?: Array<string> | null | undefined;
-    /**
-     * GCP residual custom permissions to pair with predefined roles.
-     */
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/**
- * GCP-specific platform permission configuration
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcp = {
-  /**
-   * Generic binding configuration for permissions
-   */
-  binding:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding;
-  /**
-   * Short admin-facing description of why this entry exists.
-   */
-  description?: string | null | undefined;
-  /**
-   * Grant permissions for a specific cloud platform
-   */
-  grant: PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant;
-  /**
-   * Stable admin-facing label for this permission entry.
-   */
-  label?: string | null | undefined;
-};
-
-/**
- * Platform-specific permission configurations
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms =
-  {
-    /**
-     * AWS permission configurations
-     */
-    aws?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackProfileAw>
-      | null
-      | undefined;
-    /**
-     * Azure permission configurations
-     */
-    azure?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackProfileAzure>
-      | null
-      | undefined;
-    /**
-     * GCP permission configurations
-     */
-    gcp?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackProfileGcp>
-      | null
-      | undefined;
-  };
-
-/**
- * A permission set that can be applied across different cloud platforms
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfile = {
-  /**
-   * Human-readable description of what this permission set allows
-   */
-  description: string;
-  /**
-   * Unique identifier for the permission set (e.g., "storage/data-read")
-   */
-  id: string;
-  /**
-   * Platform-specific permission configurations
-   */
-  platforms:
-    PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms;
-};
-
-/**
- * Reference to a permission set - either by name or inline definition
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStackProfile
-  | string;
-
-/**
- * Combined permissions configuration that contains both profiles and management
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackPermissions = {
-  /**
-   * Management permissions configuration for stack management access
-   */
-  management?:
-    | PersistImportedDeploymentRequestPendingPreparedStackManagement1
-    | PersistImportedDeploymentRequestPendingPreparedStackManagement2
-    | PersistImportedDeploymentRequestPendingPreparedStackManagementEnum
-    | undefined;
-  /**
-   * Permission profiles that define access control for compute services
-   *
-   * @remarks
-   * Key is the profile name, value is the permission configuration
-   */
-  profiles: {
-    [k: string]: {
-      [k: string]: Array<
-        PersistImportedDeploymentRequestPendingPreparedStackProfile | string
-      >;
-    };
-  };
-};
-
-/**
- * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackConfig = {
-  /**
-   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
-   */
-  id: string;
-  /**
-   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
-   */
-  type: string;
-  additionalProperties?: { [k: string]: any | null } | undefined;
-};
-
-/**
- * Reference to a resource by its stable id and resource type.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackDependency = {
-  id: string;
-  /**
-   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
-   */
-  type: string;
-};
-
-/**
- * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackLifecycle = {
-  Frozen: "frozen",
-  Live: "live",
-} as const;
-/**
- * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackLifecycle =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackLifecycle
-  >;
-
-export type PersistImportedDeploymentRequestPendingPreparedStackResources = {
-  /**
-   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
-   */
-  config: PersistImportedDeploymentRequestPendingPreparedStackConfig;
-  /**
-   * Additional dependencies for this resource beyond those defined in the resource itself.
-   *
-   * @remarks
-   * The total dependencies are: resource.get_dependencies() + this list
-   */
-  dependencies: Array<
-    PersistImportedDeploymentRequestPendingPreparedStackDependency
-  >;
-  /**
-   * Id of the boolean stack input that decides whether this resource is
-   *
-   * @remarks
-   * created at all. `None` means always create it.
-   *
-   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
-   * conditionally on the matching template variable, so a deployer who says no
-   * never gets the resource, its outputs, or anything derived from it.
-   */
-  enabledWhen?: string | null | undefined;
-  /**
-   * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
-   */
-  lifecycle: PersistImportedDeploymentRequestPendingPreparedStackLifecycle;
-  /**
-   * Enable remote bindings for this resource (BYOB use case).
-   *
-   * @remarks
-   * When true, binding params are synced to StackState's `remote_binding_params`.
-   * Default: false (prevents sensitive data in synced state).
-   */
-  remoteAccess?: boolean | undefined;
-};
-
-/**
- * Represents the target cloud platform.
- */
-export const PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform =
-  {
-    Aws: "aws",
-    Gcp: "gcp",
-    Azure: "azure",
-    Kubernetes: "kubernetes",
-    Machines: "machines",
-    Local: "local",
-    Test: "test",
-  } as const;
-/**
- * Represents the target cloud platform.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform
-  >;
-
-/**
- * A bag of resources, unaware of any cloud.
- */
-export type PersistImportedDeploymentRequestPendingPreparedStack = {
-  /**
-   * Unique identifier for the stack
-   */
-  id: string;
-  /**
-   * Input definitions required before setup or deployment can proceed.
-   */
-  inputs?:
-    | Array<PersistImportedDeploymentRequestPendingPreparedStackInput>
-    | undefined;
-  /**
-   * Combined permissions configuration that contains both profiles and management
-   */
-  permissions?:
-    | PersistImportedDeploymentRequestPendingPreparedStackPermissions
-    | undefined;
-  /**
-   * Map of resource IDs to their configurations and lifecycle settings
-   */
-  resources: {
-    [k: string]: PersistImportedDeploymentRequestPendingPreparedStackResources;
-  };
-  /**
-   * Which platforms this stack supports. When None, all platforms are supported.
-   */
-  supportedPlatforms?:
-    | Array<
-      PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform
-    >
-    | null
-    | undefined;
-};
-
-export type PersistImportedDeploymentRequestPendingPreparedStackUnion =
-  | PersistImportedDeploymentRequestPendingPreparedStack
-  | any;
-
-export const PersistImportedDeploymentRequestPreparedStackTypeStringList = {
-  StringList: "stringList",
-} as const;
-export type PersistImportedDeploymentRequestPreparedStackTypeStringList =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackTypeStringList
-  >;
-
-export type PersistImportedDeploymentRequestPreparedStackDefaultStringList = {
-  type: PersistImportedDeploymentRequestPreparedStackTypeStringList;
+export type PersistImportedDeploymentRequestTypeStringList = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeStringList
+>;
+
+export type PersistImportedDeploymentRequestDefaultStringList = {
+  type: PersistImportedDeploymentRequestTypeStringList;
   /**
    * String list default.
    */
   value: Array<string>;
 };
 
-export const PersistImportedDeploymentRequestPreparedStackTypeBoolean = {
+export const PersistImportedDeploymentRequestTypeBoolean = {
   Boolean: "boolean",
 } as const;
-export type PersistImportedDeploymentRequestPreparedStackTypeBoolean =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeBoolean>;
+export type PersistImportedDeploymentRequestTypeBoolean = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeBoolean
+>;
 
-export type PersistImportedDeploymentRequestPreparedStackDefaultBoolean = {
-  type: PersistImportedDeploymentRequestPreparedStackTypeBoolean;
+export type PersistImportedDeploymentRequestDefaultBoolean = {
+  type: PersistImportedDeploymentRequestTypeBoolean;
   /**
    * Boolean default.
    */
   value: boolean;
 };
 
-export const PersistImportedDeploymentRequestPreparedStackTypeNumber = {
+export const PersistImportedDeploymentRequestTypeNumber = {
   Number: "number",
 } as const;
-export type PersistImportedDeploymentRequestPreparedStackTypeNumber =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeNumber>;
+export type PersistImportedDeploymentRequestTypeNumber = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeNumber
+>;
 
-export type PersistImportedDeploymentRequestPreparedStackDefaultNumber = {
-  type: PersistImportedDeploymentRequestPreparedStackTypeNumber;
+export type PersistImportedDeploymentRequestDefaultNumber = {
+  type: PersistImportedDeploymentRequestTypeNumber;
   /**
    * Number default.
    */
   value: string;
 };
 
-export const PersistImportedDeploymentRequestPreparedStackTypeString = {
+export const PersistImportedDeploymentRequestTypeString = {
   String: "string",
 } as const;
-export type PersistImportedDeploymentRequestPreparedStackTypeString =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeString>;
+export type PersistImportedDeploymentRequestTypeString = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeString
+>;
 
-export type PersistImportedDeploymentRequestPreparedStackDefaultString = {
-  type: PersistImportedDeploymentRequestPreparedStackTypeString;
+export type PersistImportedDeploymentRequestDefaultString = {
+  type: PersistImportedDeploymentRequestTypeString;
   /**
    * String default.
    */
   value: string;
 };
 
-export type PersistImportedDeploymentRequestPreparedStackDefaultUnion =
-  | PersistImportedDeploymentRequestPreparedStackDefaultString
-  | PersistImportedDeploymentRequestPreparedStackDefaultNumber
-  | PersistImportedDeploymentRequestPreparedStackDefaultBoolean
-  | PersistImportedDeploymentRequestPreparedStackDefaultStringList
+export type PersistImportedDeploymentRequestDefaultUnion =
+  | PersistImportedDeploymentRequestDefaultString
+  | PersistImportedDeploymentRequestDefaultNumber
+  | PersistImportedDeploymentRequestDefaultBoolean
+  | PersistImportedDeploymentRequestDefaultStringList
   | any;
 
 /**
  * Environment variable handling for a stack input mapping.
  */
-export const PersistImportedDeploymentRequestPreparedStackTypeEnvEnum = {
+export const PersistImportedDeploymentRequestTypeEnvEnum = {
   Plain: "plain",
   Secret: "secret",
 } as const;
 /**
  * Environment variable handling for a stack input mapping.
  */
-export type PersistImportedDeploymentRequestPreparedStackTypeEnvEnum =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeEnvEnum>;
+export type PersistImportedDeploymentRequestTypeEnvEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestTypeEnvEnum
+>;
 
-export type PersistImportedDeploymentRequestPreparedStackTypeUnion =
-  | PersistImportedDeploymentRequestPreparedStackTypeEnvEnum
+export type PersistImportedDeploymentRequestTypeUnion =
+  | PersistImportedDeploymentRequestTypeEnvEnum
   | any;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
  */
-export type PersistImportedDeploymentRequestPreparedStackEnv = {
+export type PersistImportedDeploymentRequestEnv = {
   /**
    * Environment variable name.
    */
@@ -3148,17 +1432,13 @@ export type PersistImportedDeploymentRequestPreparedStackEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?:
-    | PersistImportedDeploymentRequestPreparedStackTypeEnvEnum
-    | any
-    | null
-    | undefined;
+  type?: PersistImportedDeploymentRequestTypeEnvEnum | any | null | undefined;
 };
 
 /**
  * Primitive stack input kind.
  */
-export const PersistImportedDeploymentRequestPreparedStackKind = {
+export const PersistImportedDeploymentRequestKind = {
   String: "string",
   Secret: "secret",
   Number: "number",
@@ -3170,8 +1450,8 @@ export const PersistImportedDeploymentRequestPreparedStackKind = {
 /**
  * Primitive stack input kind.
  */
-export type PersistImportedDeploymentRequestPreparedStackKind = ClosedEnum<
-  typeof PersistImportedDeploymentRequestPreparedStackKind
+export type PersistImportedDeploymentRequestKind = ClosedEnum<
+  typeof PersistImportedDeploymentRequestKind
 >;
 
 /**
@@ -3196,20 +1476,21 @@ export type PersistImportedDeploymentRequestPreparedStackPlatform = ClosedEnum<
 /**
  * Who can provide a stack input value.
  */
-export const PersistImportedDeploymentRequestPreparedStackProvidedBy = {
+export const PersistImportedDeploymentRequestProvidedBy = {
   Developer: "developer",
   Deployer: "deployer",
 } as const;
 /**
  * Who can provide a stack input value.
  */
-export type PersistImportedDeploymentRequestPreparedStackProvidedBy =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackProvidedBy>;
+export type PersistImportedDeploymentRequestProvidedBy = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProvidedBy
+>;
 
 /**
  * Portable stack input validation constraints.
  */
-export type PersistImportedDeploymentRequestPreparedStackValidation = {
+export type PersistImportedDeploymentRequestValidation = {
   /**
    * Semantic format hint such as url.
    */
@@ -3248,19 +1529,19 @@ export type PersistImportedDeploymentRequestPreparedStackValidation = {
   values?: Array<string> | null | undefined;
 };
 
-export type PersistImportedDeploymentRequestPreparedStackValidationUnion =
-  | PersistImportedDeploymentRequestPreparedStackValidation
+export type PersistImportedDeploymentRequestValidationUnion =
+  | PersistImportedDeploymentRequestValidation
   | any;
 
 /**
  * Stack input definition serialized into a release stack.
  */
-export type PersistImportedDeploymentRequestPreparedStackInput = {
+export type PersistImportedDeploymentRequestInput = {
   default?:
-    | PersistImportedDeploymentRequestPreparedStackDefaultString
-    | PersistImportedDeploymentRequestPreparedStackDefaultNumber
-    | PersistImportedDeploymentRequestPreparedStackDefaultBoolean
-    | PersistImportedDeploymentRequestPreparedStackDefaultStringList
+    | PersistImportedDeploymentRequestDefaultString
+    | PersistImportedDeploymentRequestDefaultNumber
+    | PersistImportedDeploymentRequestDefaultBoolean
+    | PersistImportedDeploymentRequestDefaultStringList
     | any
     | null
     | undefined;
@@ -3271,7 +1552,7 @@ export type PersistImportedDeploymentRequestPreparedStackInput = {
   /**
    * Runtime env-var mappings for v1 input resolution.
    */
-  env?: Array<PersistImportedDeploymentRequestPreparedStackEnv> | undefined;
+  env?: Array<PersistImportedDeploymentRequestEnv> | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -3279,7 +1560,7 @@ export type PersistImportedDeploymentRequestPreparedStackInput = {
   /**
    * Primitive stack input kind.
    */
-  kind: PersistImportedDeploymentRequestPreparedStackKind;
+  kind: PersistImportedDeploymentRequestKind;
   /**
    * Human-facing field label.
    */
@@ -3298,30 +1579,29 @@ export type PersistImportedDeploymentRequestPreparedStackInput = {
   /**
    * Who can provide this value.
    */
-  providedBy: Array<PersistImportedDeploymentRequestPreparedStackProvidedBy>;
+  providedBy: Array<PersistImportedDeploymentRequestProvidedBy>;
   /**
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
   validation?:
-    | PersistImportedDeploymentRequestPreparedStackValidation
+    | PersistImportedDeploymentRequestValidation
     | any
     | null
     | undefined;
 };
 
-export const PersistImportedDeploymentRequestPreparedStackManagementEnum = {
+export const PersistImportedDeploymentRequestManagementEnum = {
   Auto: "auto",
 } as const;
-export type PersistImportedDeploymentRequestPreparedStackManagementEnum =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackManagementEnum
-  >;
+export type PersistImportedDeploymentRequestManagementEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestManagementEnum
+>;
 
 /**
  * AWS-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource = {
+export type PersistImportedDeploymentRequestOverrideAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -3335,7 +1615,7 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack = {
+export type PersistImportedDeploymentRequestOverrideAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -3349,40 +1629,35 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwBinding = {
+export type PersistImportedDeploymentRequestOverrideAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideAwResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestOverrideAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideAwStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestOverrideAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const PersistImportedDeploymentRequestPreparedStackOverrideEffect = {
+export const PersistImportedDeploymentRequestOverrideEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideEffect =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackOverrideEffect
-  >;
+export type PersistImportedDeploymentRequestOverrideEffect = ClosedEnum<
+  typeof PersistImportedDeploymentRequestOverrideEffect
+>;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwGrant = {
+export type PersistImportedDeploymentRequestOverrideAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -3408,11 +1683,11 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAw = {
+export type PersistImportedDeploymentRequestOverrideAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackOverrideAwBinding;
+  binding: PersistImportedDeploymentRequestOverrideAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -3420,13 +1695,11 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideEffect
-    | undefined;
+  effect?: PersistImportedDeploymentRequestOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackOverrideAwGrant;
+  grant: PersistImportedDeploymentRequestOverrideAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -3436,18 +1709,17 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAw = {
 /**
  * Azure-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureResource =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestOverrideAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
 
 /**
  * Azure-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureStack = {
+export type PersistImportedDeploymentRequestOverrideAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -3457,26 +1729,21 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding =
-  {
-    /**
-     * Azure-specific binding specification
-     */
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideAzureResource
-      | undefined;
-    /**
-     * Azure-specific binding specification
-     */
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideAzureStack
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: PersistImportedDeploymentRequestOverrideAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: PersistImportedDeploymentRequestOverrideAzureStack | undefined;
+};
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant = {
+export type PersistImportedDeploymentRequestOverrideAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -3502,11 +1769,11 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzure = {
+export type PersistImportedDeploymentRequestOverrideAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding;
+  binding: PersistImportedDeploymentRequestOverrideAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -3514,7 +1781,7 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant;
+  grant: PersistImportedDeploymentRequestOverrideAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -3524,22 +1791,21 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideAzure = {
 /**
  * GCP IAM condition
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideConditionResource =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestOverrideConditionResource = {
+  expression: string;
+  title: string;
+};
 
-export type PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackOverrideConditionResource
+export type PersistImportedDeploymentRequestOverrideResourceConditionUnion =
+  | PersistImportedDeploymentRequestOverrideConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpResource = {
+export type PersistImportedDeploymentRequestOverrideGcpResource = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideConditionResource
+    | PersistImportedDeploymentRequestOverrideConditionResource
     | any
     | null
     | undefined;
@@ -3552,22 +1818,21 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideGcpResource = {
 /**
  * GCP IAM condition
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideConditionStack =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestOverrideConditionStack = {
+  expression: string;
+  title: string;
+};
 
-export type PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
+export type PersistImportedDeploymentRequestOverrideStackConditionUnion =
+  | PersistImportedDeploymentRequestOverrideConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpStack = {
+export type PersistImportedDeploymentRequestOverrideGcpStack = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
+    | PersistImportedDeploymentRequestOverrideConditionStack
     | any
     | null
     | undefined;
@@ -3580,25 +1845,21 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding = {
+export type PersistImportedDeploymentRequestOverrideGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideGcpResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestOverrideGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackOverrideGcpStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestOverrideGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant = {
+export type PersistImportedDeploymentRequestOverrideGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -3624,11 +1885,11 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcp = {
+export type PersistImportedDeploymentRequestOverrideGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding;
+  binding: PersistImportedDeploymentRequestOverrideGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -3636,7 +1897,7 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant;
+  grant: PersistImportedDeploymentRequestOverrideGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -3646,34 +1907,28 @@ export type PersistImportedDeploymentRequestPreparedStackOverrideGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type PersistImportedDeploymentRequestPreparedStackOverridePlatforms = {
+export type PersistImportedDeploymentRequestOverridePlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?:
-    | Array<PersistImportedDeploymentRequestPreparedStackOverrideAw>
-    | null
-    | undefined;
+  aws?: Array<PersistImportedDeploymentRequestOverrideAw> | null | undefined;
   /**
    * Azure permission configurations
    */
   azure?:
-    | Array<PersistImportedDeploymentRequestPreparedStackOverrideAzure>
+    | Array<PersistImportedDeploymentRequestOverrideAzure>
     | null
     | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?:
-    | Array<PersistImportedDeploymentRequestPreparedStackOverrideGcp>
-    | null
-    | undefined;
+  gcp?: Array<PersistImportedDeploymentRequestOverrideGcp> | null | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type PersistImportedDeploymentRequestPreparedStackOverride = {
+export type PersistImportedDeploymentRequestOverride = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -3685,17 +1940,17 @@ export type PersistImportedDeploymentRequestPreparedStackOverride = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: PersistImportedDeploymentRequestPreparedStackOverridePlatforms;
+  platforms: PersistImportedDeploymentRequestOverridePlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type PersistImportedDeploymentRequestPreparedStackOverrideUnion =
-  | PersistImportedDeploymentRequestPreparedStackOverride
+export type PersistImportedDeploymentRequestOverrideUnion =
+  | PersistImportedDeploymentRequestOverride
   | string;
 
-export type PersistImportedDeploymentRequestPreparedStackManagement2 = {
+export type PersistImportedDeploymentRequestManagement2 = {
   /**
    * Permission profile that maps resources to permission sets
    *
@@ -3703,16 +1958,14 @@ export type PersistImportedDeploymentRequestPreparedStackManagement2 = {
    * Key can be "*" for all resources or resource name for specific resource
    */
   override: {
-    [k: string]: Array<
-      PersistImportedDeploymentRequestPreparedStackOverride | string
-    >;
+    [k: string]: Array<PersistImportedDeploymentRequestOverride | string>;
   };
 };
 
 /**
  * AWS-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwResource = {
+export type PersistImportedDeploymentRequestExtendAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -3726,7 +1979,7 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwStack = {
+export type PersistImportedDeploymentRequestExtendAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -3740,38 +1993,35 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwBinding = {
+export type PersistImportedDeploymentRequestExtendAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackExtendAwResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestExtendAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackExtendAwStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestExtendAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const PersistImportedDeploymentRequestPreparedStackExtendEffect = {
+export const PersistImportedDeploymentRequestExtendEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendEffect =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackExtendEffect>;
+export type PersistImportedDeploymentRequestExtendEffect = ClosedEnum<
+  typeof PersistImportedDeploymentRequestExtendEffect
+>;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwGrant = {
+export type PersistImportedDeploymentRequestExtendAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -3797,11 +2047,11 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAw = {
+export type PersistImportedDeploymentRequestExtendAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackExtendAwBinding;
+  binding: PersistImportedDeploymentRequestExtendAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -3809,13 +2059,11 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?:
-    | PersistImportedDeploymentRequestPreparedStackExtendEffect
-    | undefined;
+  effect?: PersistImportedDeploymentRequestExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackExtendAwGrant;
+  grant: PersistImportedDeploymentRequestExtendAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -3825,7 +2073,7 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAw = {
 /**
  * Azure-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureResource = {
+export type PersistImportedDeploymentRequestExtendAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -3835,7 +2083,7 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureStack = {
+export type PersistImportedDeploymentRequestExtendAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -3845,25 +2093,21 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureBinding = {
+export type PersistImportedDeploymentRequestExtendAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackExtendAzureResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestExtendAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackExtendAzureStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestExtendAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureGrant = {
+export type PersistImportedDeploymentRequestExtendAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -3889,11 +2133,11 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzure = {
+export type PersistImportedDeploymentRequestExtendAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackExtendAzureBinding;
+  binding: PersistImportedDeploymentRequestExtendAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -3901,7 +2145,7 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackExtendAzureGrant;
+  grant: PersistImportedDeploymentRequestExtendAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -3911,22 +2155,21 @@ export type PersistImportedDeploymentRequestPreparedStackExtendAzure = {
 /**
  * GCP IAM condition
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendConditionResource =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestExtendConditionResource = {
+  expression: string;
+  title: string;
+};
 
-export type PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackExtendConditionResource
+export type PersistImportedDeploymentRequestExtendResourceConditionUnion =
+  | PersistImportedDeploymentRequestExtendConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpResource = {
+export type PersistImportedDeploymentRequestExtendGcpResource = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackExtendConditionResource
+    | PersistImportedDeploymentRequestExtendConditionResource
     | any
     | null
     | undefined;
@@ -3939,22 +2182,21 @@ export type PersistImportedDeploymentRequestPreparedStackExtendGcpResource = {
 /**
  * GCP IAM condition
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendConditionStack =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestExtendConditionStack = {
+  expression: string;
+  title: string;
+};
 
-export type PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackExtendConditionStack
+export type PersistImportedDeploymentRequestExtendStackConditionUnion =
+  | PersistImportedDeploymentRequestExtendConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpStack = {
+export type PersistImportedDeploymentRequestExtendGcpStack = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackExtendConditionStack
+    | PersistImportedDeploymentRequestExtendConditionStack
     | any
     | null
     | undefined;
@@ -3967,25 +2209,21 @@ export type PersistImportedDeploymentRequestPreparedStackExtendGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpBinding = {
+export type PersistImportedDeploymentRequestExtendGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackExtendGcpResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestExtendGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackExtendGcpStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestExtendGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpGrant = {
+export type PersistImportedDeploymentRequestExtendGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -4011,11 +2249,11 @@ export type PersistImportedDeploymentRequestPreparedStackExtendGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcp = {
+export type PersistImportedDeploymentRequestExtendGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackExtendGcpBinding;
+  binding: PersistImportedDeploymentRequestExtendGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -4023,7 +2261,7 @@ export type PersistImportedDeploymentRequestPreparedStackExtendGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackExtendGcpGrant;
+  grant: PersistImportedDeploymentRequestExtendGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -4033,34 +2271,25 @@ export type PersistImportedDeploymentRequestPreparedStackExtendGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendPlatforms = {
+export type PersistImportedDeploymentRequestExtendPlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?:
-    | Array<PersistImportedDeploymentRequestPreparedStackExtendAw>
-    | null
-    | undefined;
+  aws?: Array<PersistImportedDeploymentRequestExtendAw> | null | undefined;
   /**
    * Azure permission configurations
    */
-  azure?:
-    | Array<PersistImportedDeploymentRequestPreparedStackExtendAzure>
-    | null
-    | undefined;
+  azure?: Array<PersistImportedDeploymentRequestExtendAzure> | null | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?:
-    | Array<PersistImportedDeploymentRequestPreparedStackExtendGcp>
-    | null
-    | undefined;
+  gcp?: Array<PersistImportedDeploymentRequestExtendGcp> | null | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type PersistImportedDeploymentRequestPreparedStackExtend = {
+export type PersistImportedDeploymentRequestExtend = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -4072,17 +2301,17 @@ export type PersistImportedDeploymentRequestPreparedStackExtend = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: PersistImportedDeploymentRequestPreparedStackExtendPlatforms;
+  platforms: PersistImportedDeploymentRequestExtendPlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type PersistImportedDeploymentRequestPreparedStackExtendUnion =
-  | PersistImportedDeploymentRequestPreparedStackExtend
+export type PersistImportedDeploymentRequestExtendUnion =
+  | PersistImportedDeploymentRequestExtend
   | string;
 
-export type PersistImportedDeploymentRequestPreparedStackManagement1 = {
+export type PersistImportedDeploymentRequestManagement1 = {
   /**
    * Permission profile that maps resources to permission sets
    *
@@ -4090,24 +2319,22 @@ export type PersistImportedDeploymentRequestPreparedStackManagement1 = {
    * Key can be "*" for all resources or resource name for specific resource
    */
   extend: {
-    [k: string]: Array<
-      PersistImportedDeploymentRequestPreparedStackExtend | string
-    >;
+    [k: string]: Array<PersistImportedDeploymentRequestExtend | string>;
   };
 };
 
 /**
  * Management permissions configuration for stack management access
  */
-export type PersistImportedDeploymentRequestPreparedStackManagementUnion =
-  | PersistImportedDeploymentRequestPreparedStackManagement1
-  | PersistImportedDeploymentRequestPreparedStackManagement2
-  | PersistImportedDeploymentRequestPreparedStackManagementEnum;
+export type PersistImportedDeploymentRequestManagementUnion =
+  | PersistImportedDeploymentRequestManagement1
+  | PersistImportedDeploymentRequestManagement2
+  | PersistImportedDeploymentRequestManagementEnum;
 
 /**
  * AWS-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwResource = {
+export type PersistImportedDeploymentRequestProfileAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -4121,7 +2348,7 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwStack = {
+export type PersistImportedDeploymentRequestProfileAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -4135,38 +2362,35 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwBinding = {
+export type PersistImportedDeploymentRequestProfileAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackProfileAwResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestProfileAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackProfileAwStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestProfileAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const PersistImportedDeploymentRequestPreparedStackProfileEffect = {
+export const PersistImportedDeploymentRequestProfileEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileEffect =
-  ClosedEnum<typeof PersistImportedDeploymentRequestPreparedStackProfileEffect>;
+export type PersistImportedDeploymentRequestProfileEffect = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProfileEffect
+>;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwGrant = {
+export type PersistImportedDeploymentRequestProfileAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -4192,11 +2416,11 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAw = {
+export type PersistImportedDeploymentRequestProfileAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackProfileAwBinding;
+  binding: PersistImportedDeploymentRequestProfileAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -4204,13 +2428,11 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?:
-    | PersistImportedDeploymentRequestPreparedStackProfileEffect
-    | undefined;
+  effect?: PersistImportedDeploymentRequestProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackProfileAwGrant;
+  grant: PersistImportedDeploymentRequestProfileAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -4220,18 +2442,17 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAw = {
 /**
  * Azure-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureResource =
-  {
-    /**
-     * Scope (subscription/resource group/resource level)
-     */
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestProfileAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
 
 /**
  * Azure-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureStack = {
+export type PersistImportedDeploymentRequestProfileAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -4241,25 +2462,21 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureBinding = {
+export type PersistImportedDeploymentRequestProfileAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackProfileAzureResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestProfileAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackProfileAzureStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestProfileAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureGrant = {
+export type PersistImportedDeploymentRequestProfileAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -4285,11 +2502,11 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzure = {
+export type PersistImportedDeploymentRequestProfileAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackProfileAzureBinding;
+  binding: PersistImportedDeploymentRequestProfileAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -4297,7 +2514,7 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackProfileAzureGrant;
+  grant: PersistImportedDeploymentRequestProfileAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -4307,22 +2524,21 @@ export type PersistImportedDeploymentRequestPreparedStackProfileAzure = {
 /**
  * GCP IAM condition
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileConditionResource =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestProfileConditionResource = {
+  expression: string;
+  title: string;
+};
 
-export type PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackProfileConditionResource
+export type PersistImportedDeploymentRequestProfileResourceConditionUnion =
+  | PersistImportedDeploymentRequestProfileConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpResource = {
+export type PersistImportedDeploymentRequestProfileGcpResource = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackProfileConditionResource
+    | PersistImportedDeploymentRequestProfileConditionResource
     | any
     | null
     | undefined;
@@ -4335,22 +2551,21 @@ export type PersistImportedDeploymentRequestPreparedStackProfileGcpResource = {
 /**
  * GCP IAM condition
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileConditionStack =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestProfileConditionStack = {
+  expression: string;
+  title: string;
+};
 
-export type PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion =
-  | PersistImportedDeploymentRequestPreparedStackProfileConditionStack
+export type PersistImportedDeploymentRequestProfileStackConditionUnion =
+  | PersistImportedDeploymentRequestProfileConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpStack = {
+export type PersistImportedDeploymentRequestProfileGcpStack = {
   condition?:
-    | PersistImportedDeploymentRequestPreparedStackProfileConditionStack
+    | PersistImportedDeploymentRequestProfileConditionStack
     | any
     | null
     | undefined;
@@ -4363,25 +2578,21 @@ export type PersistImportedDeploymentRequestPreparedStackProfileGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpBinding = {
+export type PersistImportedDeploymentRequestProfileGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?:
-    | PersistImportedDeploymentRequestPreparedStackProfileGcpResource
-    | undefined;
+  resource?: PersistImportedDeploymentRequestProfileGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?:
-    | PersistImportedDeploymentRequestPreparedStackProfileGcpStack
-    | undefined;
+  stack?: PersistImportedDeploymentRequestProfileGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpGrant = {
+export type PersistImportedDeploymentRequestProfileGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -4407,11 +2618,11 @@ export type PersistImportedDeploymentRequestPreparedStackProfileGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcp = {
+export type PersistImportedDeploymentRequestProfileGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: PersistImportedDeploymentRequestPreparedStackProfileGcpBinding;
+  binding: PersistImportedDeploymentRequestProfileGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -4419,7 +2630,7 @@ export type PersistImportedDeploymentRequestPreparedStackProfileGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: PersistImportedDeploymentRequestPreparedStackProfileGcpGrant;
+  grant: PersistImportedDeploymentRequestProfileGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -4429,34 +2640,28 @@ export type PersistImportedDeploymentRequestPreparedStackProfileGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type PersistImportedDeploymentRequestPreparedStackProfilePlatforms = {
+export type PersistImportedDeploymentRequestProfilePlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?:
-    | Array<PersistImportedDeploymentRequestPreparedStackProfileAw>
-    | null
-    | undefined;
+  aws?: Array<PersistImportedDeploymentRequestProfileAw> | null | undefined;
   /**
    * Azure permission configurations
    */
   azure?:
-    | Array<PersistImportedDeploymentRequestPreparedStackProfileAzure>
+    | Array<PersistImportedDeploymentRequestProfileAzure>
     | null
     | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?:
-    | Array<PersistImportedDeploymentRequestPreparedStackProfileGcp>
-    | null
-    | undefined;
+  gcp?: Array<PersistImportedDeploymentRequestProfileGcp> | null | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type PersistImportedDeploymentRequestPreparedStackProfile = {
+export type PersistImportedDeploymentRequestProfile = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -4468,27 +2673,27 @@ export type PersistImportedDeploymentRequestPreparedStackProfile = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: PersistImportedDeploymentRequestPreparedStackProfilePlatforms;
+  platforms: PersistImportedDeploymentRequestProfilePlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type PersistImportedDeploymentRequestPreparedStackProfileUnion =
-  | PersistImportedDeploymentRequestPreparedStackProfile
+export type PersistImportedDeploymentRequestProfileUnion =
+  | PersistImportedDeploymentRequestProfile
   | string;
 
 /**
  * Combined permissions configuration that contains both profiles and management
  */
-export type PersistImportedDeploymentRequestPreparedStackPermissions = {
+export type PersistImportedDeploymentRequestPermissions = {
   /**
    * Management permissions configuration for stack management access
    */
   management?:
-    | PersistImportedDeploymentRequestPreparedStackManagement1
-    | PersistImportedDeploymentRequestPreparedStackManagement2
-    | PersistImportedDeploymentRequestPreparedStackManagementEnum
+    | PersistImportedDeploymentRequestManagement1
+    | PersistImportedDeploymentRequestManagement2
+    | PersistImportedDeploymentRequestManagementEnum
     | undefined;
   /**
    * Permission profiles that define access control for compute services
@@ -4498,9 +2703,7 @@ export type PersistImportedDeploymentRequestPreparedStackPermissions = {
    */
   profiles: {
     [k: string]: {
-      [k: string]: Array<
-        PersistImportedDeploymentRequestPreparedStackProfile | string
-      >;
+      [k: string]: Array<PersistImportedDeploymentRequestProfile | string>;
     };
   };
 };
@@ -4508,7 +2711,7 @@ export type PersistImportedDeploymentRequestPreparedStackPermissions = {
 /**
  * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
  */
-export type PersistImportedDeploymentRequestPreparedStackConfig = {
+export type PersistImportedDeploymentRequestConfig = {
   /**
    * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
    */
@@ -4523,7 +2726,7 @@ export type PersistImportedDeploymentRequestPreparedStackConfig = {
 /**
  * Reference to a resource by its stable id and resource type.
  */
-export type PersistImportedDeploymentRequestPreparedStackDependency = {
+export type PersistImportedDeploymentRequestDependency = {
   id: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
@@ -4534,44 +2737,33 @@ export type PersistImportedDeploymentRequestPreparedStackDependency = {
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
  */
-export const PersistImportedDeploymentRequestPreparedStackLifecycle = {
+export const PersistImportedDeploymentRequestLifecycle = {
   Frozen: "frozen",
   Live: "live",
 } as const;
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
  */
-export type PersistImportedDeploymentRequestPreparedStackLifecycle = ClosedEnum<
-  typeof PersistImportedDeploymentRequestPreparedStackLifecycle
+export type PersistImportedDeploymentRequestLifecycle = ClosedEnum<
+  typeof PersistImportedDeploymentRequestLifecycle
 >;
 
-export type PersistImportedDeploymentRequestPreparedStackResources = {
+export type PersistImportedDeploymentRequestResources = {
   /**
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
-  config: PersistImportedDeploymentRequestPreparedStackConfig;
+  config: PersistImportedDeploymentRequestConfig;
   /**
    * Additional dependencies for this resource beyond those defined in the resource itself.
    *
    * @remarks
    * The total dependencies are: resource.get_dependencies() + this list
    */
-  dependencies: Array<PersistImportedDeploymentRequestPreparedStackDependency>;
-  /**
-   * Id of the boolean stack input that decides whether this resource is
-   *
-   * @remarks
-   * created at all. `None` means always create it.
-   *
-   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
-   * conditionally on the matching template variable, so a deployer who says no
-   * never gets the resource, its outputs, or anything derived from it.
-   */
-  enabledWhen?: string | null | undefined;
+  dependencies: Array<PersistImportedDeploymentRequestDependency>;
   /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
-  lifecycle: PersistImportedDeploymentRequestPreparedStackLifecycle;
+  lifecycle: PersistImportedDeploymentRequestLifecycle;
   /**
    * Enable remote bindings for this resource (BYOB use case).
    *
@@ -4585,7 +2777,7 @@ export type PersistImportedDeploymentRequestPreparedStackResources = {
 /**
  * Represents the target cloud platform.
  */
-export const PersistImportedDeploymentRequestPreparedStackSupportedPlatform = {
+export const PersistImportedDeploymentRequestSupportedPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -4597,10 +2789,9 @@ export const PersistImportedDeploymentRequestPreparedStackSupportedPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type PersistImportedDeploymentRequestPreparedStackSupportedPlatform =
-  ClosedEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackSupportedPlatform
-  >;
+export type PersistImportedDeploymentRequestSupportedPlatform = ClosedEnum<
+  typeof PersistImportedDeploymentRequestSupportedPlatform
+>;
 
 /**
  * A bag of resources, unaware of any cloud.
@@ -4613,70 +2804,26 @@ export type PersistImportedDeploymentRequestPreparedStack = {
   /**
    * Input definitions required before setup or deployment can proceed.
    */
-  inputs?:
-    | Array<PersistImportedDeploymentRequestPreparedStackInput>
-    | undefined;
+  inputs?: Array<PersistImportedDeploymentRequestInput> | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
-  permissions?:
-    | PersistImportedDeploymentRequestPreparedStackPermissions
-    | undefined;
+  permissions?: PersistImportedDeploymentRequestPermissions | undefined;
   /**
    * Map of resource IDs to their configurations and lifecycle settings
    */
-  resources: {
-    [k: string]: PersistImportedDeploymentRequestPreparedStackResources;
-  };
+  resources: { [k: string]: PersistImportedDeploymentRequestResources };
   /**
    * Which platforms this stack supports. When None, all platforms are supported.
    */
   supportedPlatforms?:
-    | Array<PersistImportedDeploymentRequestPreparedStackSupportedPlatform>
+    | Array<PersistImportedDeploymentRequestSupportedPlatform>
     | null
     | undefined;
 };
 
 export type PersistImportedDeploymentRequestPreparedStackUnion =
   | PersistImportedDeploymentRequestPreparedStack
-  | any;
-
-/**
- * One-shot authority for a setup re-import to replace setup-owned resources.
- */
-export type PersistImportedDeploymentRequestSetupUpdateAuthorization = {
-  /**
-   * Frozen resource projection from the last successful deployment.
-   */
-  baselineFrozenDigest: string;
-  /**
-   * Unique revision used by persistence layers for compare-and-swap updates.
-   */
-  nonce: string;
-  /**
-   * Release whose stack was prepared by setup.
-   */
-  releaseId: string;
-  /**
-   * Exact setup artifact revision that authored this authority.
-   */
-  setupFingerprint: string;
-  /**
-   * Setup fingerprint contract version.
-   */
-  setupFingerprintVersion: number;
-  /**
-   * Stable setup target recorded on the imported deployment.
-   */
-  setupTarget: string;
-  /**
-   * Frozen resource projection prepared by the setup re-import.
-   */
-  targetFrozenDigest: string;
-};
-
-export type PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion =
-  | PersistImportedDeploymentRequestSetupUpdateAuthorization
   | any;
 
 /**
@@ -4702,23 +2849,6 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * touching unrelated values in the same vault.
    */
   lastSyncedSecretNames?: Array<string> | undefined;
-  pendingPreparedStack?:
-    | PersistImportedDeploymentRequestPendingPreparedStack
-    | any
-    | null
-    | undefined;
-  /**
-   * Canonical resolved answers for inputs that gate Frozen resources,
-   *
-   * @remarks
-   * keyed by input id, recorded when the deployment is created or its
-   * setup import registers.
-   *
-   * A frozen gate's answer is fixed for the deployment's lifetime: the
-   * update path refuses input values that conflict with these, and a Live
-   * resource sharing such an input resolves the persisted answer forever.
-   */
-  persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack
     | any
@@ -4733,11 +2863,6 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
-  setupUpdateAuthorization?:
-    | PersistImportedDeploymentRequestSetupUpdateAuthorization
-    | any
-    | null
-    | undefined;
 };
 
 /**
@@ -4899,7 +3024,6 @@ export type PersistImportedDeploymentRequest = {
    * Stores deployment state that needs to persist across step calls.
    */
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata;
-  scheduleReconciliation?: boolean | undefined;
   /**
    * DeploymentState protocol version owned by the runtime/manager
    */
@@ -4966,67 +3090,7 @@ export const PersistImportedDeploymentRequestPlatformEnum$outboundSchema:
   );
 
 /** @internal */
-export type PersistImportedDeploymentRequestFailureDomains2$Outbound = {
-  selectedFailureDomains?: Array<string> | undefined;
-  spread: number;
-};
-
-/** @internal */
-export const PersistImportedDeploymentRequestFailureDomains2$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestFailureDomains2$Outbound,
-    PersistImportedDeploymentRequestFailureDomains2
-  > = z.object({
-    selectedFailureDomains: z.array(z.string()).optional(),
-    spread: z.int(),
-  });
-
-export function persistImportedDeploymentRequestFailureDomains2ToJSON(
-  persistImportedDeploymentRequestFailureDomains2:
-    PersistImportedDeploymentRequestFailureDomains2,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestFailureDomains2$outboundSchema.parse(
-      persistImportedDeploymentRequestFailureDomains2,
-    ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestFailureDomainsUnion2$Outbound =
-  | PersistImportedDeploymentRequestFailureDomains2$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestFailureDomainsUnion2$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestFailureDomainsUnion2$Outbound,
-    PersistImportedDeploymentRequestFailureDomainsUnion2
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestFailureDomains2$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestFailureDomainsUnion2ToJSON(
-  persistImportedDeploymentRequestFailureDomainsUnion2:
-    PersistImportedDeploymentRequestFailureDomainsUnion2,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestFailureDomainsUnion2$outboundSchema.parse(
-      persistImportedDeploymentRequestFailureDomainsUnion2,
-    ),
-  );
-}
-
-/** @internal */
 export type PersistImportedDeploymentRequestPoolsAutoscale$Outbound = {
-  failure_domains?:
-    | PersistImportedDeploymentRequestFailureDomains2$Outbound
-    | any
-    | null
-    | undefined;
   machine?: string | null | undefined;
   max: number;
   min: number;
@@ -5039,22 +3103,10 @@ export const PersistImportedDeploymentRequestPoolsAutoscale$outboundSchema:
     PersistImportedDeploymentRequestPoolsAutoscale$Outbound,
     PersistImportedDeploymentRequestPoolsAutoscale
   > = z.object({
-    failureDomains: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestFailureDomains2$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
     machine: z.nullable(z.string()).optional(),
     max: z.int(),
     min: z.int(),
     mode: z.literal("autoscale"),
-  }).transform((v) => {
-    return remap$(v, {
-      failureDomains: "failure_domains",
-    });
   });
 
 export function persistImportedDeploymentRequestPoolsAutoscaleToJSON(
@@ -5069,67 +3121,7 @@ export function persistImportedDeploymentRequestPoolsAutoscaleToJSON(
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestFailureDomains1$Outbound = {
-  selectedFailureDomains?: Array<string> | undefined;
-  spread: number;
-};
-
-/** @internal */
-export const PersistImportedDeploymentRequestFailureDomains1$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestFailureDomains1$Outbound,
-    PersistImportedDeploymentRequestFailureDomains1
-  > = z.object({
-    selectedFailureDomains: z.array(z.string()).optional(),
-    spread: z.int(),
-  });
-
-export function persistImportedDeploymentRequestFailureDomains1ToJSON(
-  persistImportedDeploymentRequestFailureDomains1:
-    PersistImportedDeploymentRequestFailureDomains1,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestFailureDomains1$outboundSchema.parse(
-      persistImportedDeploymentRequestFailureDomains1,
-    ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestFailureDomainsUnion1$Outbound =
-  | PersistImportedDeploymentRequestFailureDomains1$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestFailureDomainsUnion1$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestFailureDomainsUnion1$Outbound,
-    PersistImportedDeploymentRequestFailureDomainsUnion1
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestFailureDomains1$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestFailureDomainsUnion1ToJSON(
-  persistImportedDeploymentRequestFailureDomainsUnion1:
-    PersistImportedDeploymentRequestFailureDomainsUnion1,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestFailureDomainsUnion1$outboundSchema.parse(
-      persistImportedDeploymentRequestFailureDomainsUnion1,
-    ),
-  );
-}
-
-/** @internal */
 export type PersistImportedDeploymentRequestPoolsFixed$Outbound = {
-  failure_domains?:
-    | PersistImportedDeploymentRequestFailureDomains1$Outbound
-    | any
-    | null
-    | undefined;
   machine?: string | null | undefined;
   machines: number;
   mode: "fixed";
@@ -5141,21 +3133,9 @@ export const PersistImportedDeploymentRequestPoolsFixed$outboundSchema:
     PersistImportedDeploymentRequestPoolsFixed$Outbound,
     PersistImportedDeploymentRequestPoolsFixed
   > = z.object({
-    failureDomains: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestFailureDomains1$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
     machine: z.nullable(z.string()).optional(),
     machines: z.int(),
     mode: z.literal("fixed"),
-  }).transform((v) => {
-    return remap$(v, {
-      failureDomains: "failure_domains",
-    });
   });
 
 export function persistImportedDeploymentRequestPoolsFixedToJSON(
@@ -8024,3344 +6004,237 @@ export function persistImportedDeploymentRequestEnvironmentInfoUnionToJSON(
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeStringList$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeStringList
-  > = z.enum(
-    PersistImportedDeploymentRequestPendingPreparedStackTypeStringList,
+export const PersistImportedDeploymentRequestTypeStringList$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeStringList> = z.enum(
+    PersistImportedDeploymentRequestTypeStringList,
   );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$Outbound =
-  {
-    type: string;
-    value: Array<string>;
-  };
+export type PersistImportedDeploymentRequestDefaultStringList$Outbound = {
+  type: string;
+  value: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultStringList$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList
+    PersistImportedDeploymentRequestDefaultStringList$Outbound,
+    PersistImportedDeploymentRequestDefaultStringList
   > = z.object({
-    type:
-      PersistImportedDeploymentRequestPendingPreparedStackTypeStringList$outboundSchema,
+    type: PersistImportedDeploymentRequestTypeStringList$outboundSchema,
     value: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPendingPreparedStackDefaultStringListToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackDefaultStringList:
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList,
+export function persistImportedDeploymentRequestDefaultStringListToJSON(
+  persistImportedDeploymentRequestDefaultStringList:
+    PersistImportedDeploymentRequestDefaultStringList,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackDefaultStringList,
-      ),
+    PersistImportedDeploymentRequestDefaultStringList$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultStringList,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean);
+export const PersistImportedDeploymentRequestTypeBoolean$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeBoolean> = z.enum(
+    PersistImportedDeploymentRequestTypeBoolean,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$Outbound =
-  {
-    type: string;
-    value: boolean;
-  };
+export type PersistImportedDeploymentRequestDefaultBoolean$Outbound = {
+  type: string;
+  value: boolean;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultBoolean$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean
+    PersistImportedDeploymentRequestDefaultBoolean$Outbound,
+    PersistImportedDeploymentRequestDefaultBoolean
   > = z.object({
-    type:
-      PersistImportedDeploymentRequestPendingPreparedStackTypeBoolean$outboundSchema,
+    type: PersistImportedDeploymentRequestTypeBoolean$outboundSchema,
     value: z.boolean(),
   });
 
-export function persistImportedDeploymentRequestPendingPreparedStackDefaultBooleanToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackDefaultBoolean:
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean,
+export function persistImportedDeploymentRequestDefaultBooleanToJSON(
+  persistImportedDeploymentRequestDefaultBoolean:
+    PersistImportedDeploymentRequestDefaultBoolean,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackDefaultBoolean,
-      ),
+    PersistImportedDeploymentRequestDefaultBoolean$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultBoolean,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeNumber$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeNumber
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackTypeNumber);
+export const PersistImportedDeploymentRequestTypeNumber$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeNumber> = z.enum(
+    PersistImportedDeploymentRequestTypeNumber,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$Outbound =
-  {
-    type: string;
-    value: string;
-  };
+export type PersistImportedDeploymentRequestDefaultNumber$Outbound = {
+  type: string;
+  value: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultNumber$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber
+    PersistImportedDeploymentRequestDefaultNumber$Outbound,
+    PersistImportedDeploymentRequestDefaultNumber
   > = z.object({
-    type:
-      PersistImportedDeploymentRequestPendingPreparedStackTypeNumber$outboundSchema,
+    type: PersistImportedDeploymentRequestTypeNumber$outboundSchema,
     value: z.string(),
   });
 
-export function persistImportedDeploymentRequestPendingPreparedStackDefaultNumberToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackDefaultNumber:
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber,
+export function persistImportedDeploymentRequestDefaultNumberToJSON(
+  persistImportedDeploymentRequestDefaultNumber:
+    PersistImportedDeploymentRequestDefaultNumber,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackDefaultNumber),
+    PersistImportedDeploymentRequestDefaultNumber$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultNumber,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeString$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeString
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackTypeString);
+export const PersistImportedDeploymentRequestTypeString$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeString> = z.enum(
+    PersistImportedDeploymentRequestTypeString,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultString$Outbound =
-  {
-    type: string;
-    value: string;
-  };
+export type PersistImportedDeploymentRequestDefaultString$Outbound = {
+  type: string;
+  value: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackDefaultString$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultString$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultString$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultString
+    PersistImportedDeploymentRequestDefaultString$Outbound,
+    PersistImportedDeploymentRequestDefaultString
   > = z.object({
-    type:
-      PersistImportedDeploymentRequestPendingPreparedStackTypeString$outboundSchema,
+    type: PersistImportedDeploymentRequestTypeString$outboundSchema,
     value: z.string(),
   });
 
-export function persistImportedDeploymentRequestPendingPreparedStackDefaultStringToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackDefaultString:
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultString,
+export function persistImportedDeploymentRequestDefaultStringToJSON(
+  persistImportedDeploymentRequestDefaultString:
+    PersistImportedDeploymentRequestDefaultString,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultString$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackDefaultString),
+    PersistImportedDeploymentRequestDefaultString$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultString,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultString$Outbound
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$Outbound
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$Outbound
-  | PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$Outbound
+export type PersistImportedDeploymentRequestDefaultUnion$Outbound =
+  | PersistImportedDeploymentRequestDefaultString$Outbound
+  | PersistImportedDeploymentRequestDefaultNumber$Outbound
+  | PersistImportedDeploymentRequestDefaultBoolean$Outbound
+  | PersistImportedDeploymentRequestDefaultStringList$Outbound
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion$outboundSchema:
+export const PersistImportedDeploymentRequestDefaultUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion
+    PersistImportedDeploymentRequestDefaultUnion$Outbound,
+    PersistImportedDeploymentRequestDefaultUnion
   > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestDefaultString$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestDefaultNumber$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestDefaultBoolean$outboundSchema),
     z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackDefaultString$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$outboundSchema
+      PersistImportedDeploymentRequestDefaultStringList$outboundSchema
     ),
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPendingPreparedStackDefaultUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackDefaultUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion,
+export function persistImportedDeploymentRequestDefaultUnionToJSON(
+  persistImportedDeploymentRequestDefaultUnion:
+    PersistImportedDeploymentRequestDefaultUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackDefaultUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackDefaultUnion),
+    PersistImportedDeploymentRequestDefaultUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestDefaultUnion,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum);
+export const PersistImportedDeploymentRequestTypeEnvEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestTypeEnvEnum> = z.enum(
+    PersistImportedDeploymentRequestTypeEnvEnum,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackTypeUnion$Outbound =
-  | string
-  | any;
+export type PersistImportedDeploymentRequestTypeUnion$Outbound = string | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackTypeUnion$outboundSchema:
+export const PersistImportedDeploymentRequestTypeUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackTypeUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackTypeUnion
+    PersistImportedDeploymentRequestTypeUnion$Outbound,
+    PersistImportedDeploymentRequestTypeUnion
   > = z.union([
-    PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum$outboundSchema,
+    PersistImportedDeploymentRequestTypeEnvEnum$outboundSchema,
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPendingPreparedStackTypeUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackTypeUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackTypeUnion,
+export function persistImportedDeploymentRequestTypeUnionToJSON(
+  persistImportedDeploymentRequestTypeUnion:
+    PersistImportedDeploymentRequestTypeUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackTypeUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackTypeUnion),
+    PersistImportedDeploymentRequestTypeUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestTypeUnion,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackEnv$Outbound = {
+export type PersistImportedDeploymentRequestEnv$Outbound = {
   name: string;
   targetResources?: Array<string> | null | undefined;
   type?: string | any | null | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackEnv$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackEnv$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackEnv
-  > = z.object({
-    name: z.string(),
-    targetResources: z.nullable(z.array(z.string())).optional(),
-    type: z.nullable(
-      z.union([
-        PersistImportedDeploymentRequestPendingPreparedStackTypeEnvEnum$outboundSchema,
-        z.any(),
-      ]),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackEnvToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackEnv:
-    PersistImportedDeploymentRequestPendingPreparedStackEnv,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackEnv$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackEnv),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackKind$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPendingPreparedStackKind> = z
-    .enum(PersistImportedDeploymentRequestPendingPreparedStackKind);
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackPlatform$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackPlatform
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackPlatform);
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProvidedBy$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackProvidedBy
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackProvidedBy);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackValidation$Outbound =
-  {
-    format?: string | null | undefined;
-    max?: string | null | undefined;
-    maxItems?: number | null | undefined;
-    maxLength?: number | null | undefined;
-    min?: string | null | undefined;
-    minItems?: number | null | undefined;
-    minLength?: number | null | undefined;
-    pattern?: string | null | undefined;
-    values?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackValidation$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackValidation$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackValidation
-  > = z.object({
-    format: z.nullable(z.string()).optional(),
-    max: z.nullable(z.string()).optional(),
-    maxItems: z.nullable(z.int()).optional(),
-    maxLength: z.nullable(z.int()).optional(),
-    min: z.nullable(z.string()).optional(),
-    minItems: z.nullable(z.int()).optional(),
-    minLength: z.nullable(z.int()).optional(),
-    pattern: z.nullable(z.string()).optional(),
-    values: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackValidationToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackValidation:
-    PersistImportedDeploymentRequestPendingPreparedStackValidation,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackValidation$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackValidation),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackValidationUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackValidation$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackValidationUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackValidationUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackValidationUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackValidation$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackValidationUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackValidationUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackValidationUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackValidationUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackValidationUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackInput$Outbound =
-  {
-    default?:
-      | PersistImportedDeploymentRequestPendingPreparedStackDefaultString$Outbound
-      | PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$Outbound
-      | PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$Outbound
-      | PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$Outbound
-      | any
-      | null
-      | undefined;
-    description: string;
-    env?:
-      | Array<PersistImportedDeploymentRequestPendingPreparedStackEnv$Outbound>
-      | undefined;
-    id: string;
-    kind: string;
-    label: string;
-    placeholder?: string | null | undefined;
-    platforms?: Array<string> | null | undefined;
-    providedBy: Array<string>;
-    required: boolean;
-    validation?:
-      | PersistImportedDeploymentRequestPendingPreparedStackValidation$Outbound
-      | any
-      | null
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackInput$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackInput$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackInput
-  > = z.object({
-    default: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackDefaultString$outboundSchema
-        ),
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackDefaultNumber$outboundSchema
-        ),
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackDefaultBoolean$outboundSchema
-        ),
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackDefaultStringList$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    description: z.string(),
-    env: z.array(
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackEnv$outboundSchema
-      ),
-    ).optional(),
-    id: z.string(),
-    kind:
-      PersistImportedDeploymentRequestPendingPreparedStackKind$outboundSchema,
-    label: z.string(),
-    placeholder: z.nullable(z.string()).optional(),
-    platforms: z.nullable(
-      z.array(
-        PersistImportedDeploymentRequestPendingPreparedStackPlatform$outboundSchema,
-      ),
-    ).optional(),
-    providedBy: z.array(
-      PersistImportedDeploymentRequestPendingPreparedStackProvidedBy$outboundSchema,
-    ),
-    required: z.boolean(),
-    validation: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackValidation$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackInputToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackInput:
-    PersistImportedDeploymentRequestPendingPreparedStackInput,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackInput$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackInput),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackManagementEnum$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackManagementEnum
-  > = z.enum(
-    PersistImportedDeploymentRequestPendingPreparedStackManagementEnum,
-  );
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAwResource:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAwResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAwStack:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAwStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAwResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAwStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding,
-      ),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect
-  > = z.enum(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect,
-  );
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAw$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding$Outbound;
-    description?: string | null | undefined;
-    effect?: string | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAw$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAw$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAw
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAwBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    effect:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideEffect$outboundSchema
-        .optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAwGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAwToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAw:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAw,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAw$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackOverrideAw),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource$Outbound =
-  {
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAzureResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack$Outbound =
-  {
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack
-  > = z.object({
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAzureStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAzureBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideAzureGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideAzureToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideAzure:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackOverrideAzure),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideConditionResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideResourceConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideGcpResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideConditionStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideStackConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackOverrideConditionStack$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideGcpStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideGcpBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverrideGcpGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideGcpToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideGcp:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackOverrideGcp),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms$Outbound =
-  {
-    aws?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackOverrideAw$Outbound
-      >
-      | null
-      | undefined;
-    azure?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure$Outbound
-      >
-      | null
-      | undefined;
-    gcp?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp$Outbound
-      >
-      | null
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms
-  > = z.object({
-    aws: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackOverrideAw$outboundSchema
-      )),
-    ).optional(),
-    azure: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackOverrideAzure$outboundSchema
-      )),
-    ).optional(),
-    gcp: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackOverrideGcp$outboundSchema
-      )),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverridePlatformsToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverridePlatforms:
-    PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackOverridePlatforms,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverride$Outbound =
-  {
-    description: string;
-    id: string;
-    platforms:
-      PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms$Outbound;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverride$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverride$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverride
-  > = z.object({
-    description: z.string(),
-    id: z.string(),
-    platforms: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverridePlatforms$outboundSchema
-    ),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverride:
-    PersistImportedDeploymentRequestPendingPreparedStackOverride,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverride$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackOverride),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackOverride$Outbound
-  | string;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackOverride$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackOverrideUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackOverrideUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackOverrideUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackOverrideUnion),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackManagement2$Outbound =
-  {
-    override: {
-      [k: string]: Array<
-        | PersistImportedDeploymentRequestPendingPreparedStackOverride$Outbound
-        | string
-      >;
-    };
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackManagement2$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackManagement2$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackManagement2
-  > = z.object({
-    override: z.record(
-      z.string(),
-      z.array(z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackOverride$outboundSchema
-        ),
-        z.string(),
-      ])),
-    ),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackManagement2ToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackManagement2:
-    PersistImportedDeploymentRequestPendingPreparedStackManagement2,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackManagement2$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackManagement2),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAwResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAwResource:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendAwResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAwStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAwStack:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtendAwStack),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAwResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAwStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAwBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAwBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendAwBinding,
-      ),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendEffect$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackExtendEffect
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackExtendEffect);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAwGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAwGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtendAwGrant),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAw$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding$Outbound;
-    description?: string | null | undefined;
-    effect?: string | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAw$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAw$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAw
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAwBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    effect:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendEffect$outboundSchema
-        .optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAwGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAwToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAw:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAw,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAw$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtendAw),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource$Outbound =
-  {
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAzureResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAzureResource:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendAzureResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack$Outbound =
-  {
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack
-  > = z.object({
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAzureStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAzureStack:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendAzureStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAzureResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAzureStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAzureBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAzureGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendAzure$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendAzure$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzure$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzure
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAzureBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendAzureGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendAzureToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendAzure:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzure,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendAzure$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtendAzure),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendConditionResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendConditionResource:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendConditionResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendResourceConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackExtendConditionResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendGcpResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendGcpResource:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendGcpResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendConditionStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendConditionStack:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendConditionStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendStackConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackExtendConditionStack$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendGcpStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendGcpStack:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendGcpStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendGcpResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendGcpStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendGcpBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendGcpGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendGcp$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendGcp$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcp$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcp
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendGcpBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendGcpGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendGcpToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendGcp:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcp,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendGcp$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtendGcp),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms$Outbound =
-  {
-    aws?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackExtendAw$Outbound
-      >
-      | null
-      | undefined;
-    azure?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackExtendAzure$Outbound
-      >
-      | null
-      | undefined;
-    gcp?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackExtendGcp$Outbound
-      >
-      | null
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms
-  > = z.object({
-    aws: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackExtendAw$outboundSchema
-      )),
-    ).optional(),
-    azure: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackExtendAzure$outboundSchema
-      )),
-    ).optional(),
-    gcp: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackExtendGcp$outboundSchema
-      )),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendPlatformsToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendPlatforms:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackExtendPlatforms,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtend$Outbound =
-  {
-    description: string;
-    id: string;
-    platforms:
-      PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms$Outbound;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtend$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtend$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtend
-  > = z.object({
-    description: z.string(),
-    id: z.string(),
-    platforms: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtendPlatforms$outboundSchema
-    ),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtend:
-    PersistImportedDeploymentRequestPendingPreparedStackExtend,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtend$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtend),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackExtendUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackExtend$Outbound
-  | string;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackExtendUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackExtendUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackExtendUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackExtend$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackExtendUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackExtendUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackExtendUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackExtendUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackExtendUnion),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackManagement1$Outbound =
-  {
-    extend: {
-      [k: string]: Array<
-        | PersistImportedDeploymentRequestPendingPreparedStackExtend$Outbound
-        | string
-      >;
-    };
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackManagement1$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackManagement1$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackManagement1
-  > = z.object({
-    extend: z.record(
-      z.string(),
-      z.array(z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackExtend$outboundSchema
-        ),
-        z.string(),
-      ])),
-    ),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackManagement1ToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackManagement1:
-    PersistImportedDeploymentRequestPendingPreparedStackManagement1,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackManagement1$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackManagement1),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackManagementUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackManagement1$Outbound
-  | PersistImportedDeploymentRequestPendingPreparedStackManagement2$Outbound
-  | string;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackManagementUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackManagementUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackManagementUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackManagement1$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackManagement2$outboundSchema
-    ),
-    PersistImportedDeploymentRequestPendingPreparedStackManagementEnum$outboundSchema,
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackManagementUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackManagementUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackManagementUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackManagementUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackManagementUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAwResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAwResource:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAwResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAwStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAwStack:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAwStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAwResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAwStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAwBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAwBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAwBinding,
-      ),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileEffect$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackProfileEffect
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackProfileEffect);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAwGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAwGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAwGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAw$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding$Outbound;
-    description?: string | null | undefined;
-    effect?: string | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAw$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAw$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAw
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAwBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    effect:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileEffect$outboundSchema
-        .optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAwGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAwToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAw:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAw,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAw$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackProfileAw),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource$Outbound =
-  {
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAzureResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAzureResource:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAzureResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack$Outbound =
-  {
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack
-  > = z.object({
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAzureStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAzureStack:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAzureStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAzureResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAzureStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAzureBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAzureGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileAzure$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileAzure$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzure$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzure
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAzureBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileAzureGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileAzureToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileAzure:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzure,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileAzure$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackProfileAzure),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileConditionResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileConditionResource:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileConditionResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileResourceConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackProfileConditionResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileGcpResourceToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileGcpResource:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileGcpResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileConditionStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileConditionStack:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileConditionStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileStackConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStackProfileConditionStack$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileGcpStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileGcpStack:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileGcpStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileGcpResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileGcpStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileGcpBindingToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileGcpGrantToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileGcp$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileGcp$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcp$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcp
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileGcpBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfileGcpGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileGcpToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileGcp:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcp,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileGcp$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackProfileGcp),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms$Outbound =
-  {
-    aws?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackProfileAw$Outbound
-      >
-      | null
-      | undefined;
-    azure?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackProfileAzure$Outbound
-      >
-      | null
-      | undefined;
-    gcp?:
-      | Array<
-        PersistImportedDeploymentRequestPendingPreparedStackProfileGcp$Outbound
-      >
-      | null
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms
-  > = z.object({
-    aws: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackProfileAw$outboundSchema
-      )),
-    ).optional(),
-    azure: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackProfileAzure$outboundSchema
-      )),
-    ).optional(),
-    gcp: z.nullable(
-      z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackProfileGcp$outboundSchema
-      )),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfilePlatformsToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfilePlatforms:
-    PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPendingPreparedStackProfilePlatforms,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfile$Outbound =
-  {
-    description: string;
-    id: string;
-    platforms:
-      PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms$Outbound;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfile$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfile$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfile
-  > = z.object({
-    description: z.string(),
-    id: z.string(),
-    platforms: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfilePlatforms$outboundSchema
-    ),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfile:
-    PersistImportedDeploymentRequestPendingPreparedStackProfile,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfile$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackProfile),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackProfileUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStackProfile$Outbound
-  | string;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackProfileUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackProfileUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackProfileUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackProfile$outboundSchema
-    ),
-    z.string(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackProfileUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackProfileUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackProfileUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackProfileUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackProfileUnion),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackPermissions$Outbound =
-  {
-    management?:
-      | PersistImportedDeploymentRequestPendingPreparedStackManagement1$Outbound
-      | PersistImportedDeploymentRequestPendingPreparedStackManagement2$Outbound
-      | string
-      | undefined;
-    profiles: {
-      [k: string]: {
-        [k: string]: Array<
-          | PersistImportedDeploymentRequestPendingPreparedStackProfile$Outbound
-          | string
-        >;
-      };
-    };
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackPermissions$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackPermissions$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackPermissions
-  > = z.object({
-    management: z.union([
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackManagement1$outboundSchema
-      ),
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackManagement2$outboundSchema
-      ),
-      PersistImportedDeploymentRequestPendingPreparedStackManagementEnum$outboundSchema,
-    ]).optional(),
-    profiles: z.record(
-      z.string(),
-      z.record(
-        z.string(),
-        z.array(
-          z.union([
-            z.lazy(() =>
-              PersistImportedDeploymentRequestPendingPreparedStackProfile$outboundSchema
-            ),
-            z.string(),
-          ]),
-        ),
-      ),
-    ),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackPermissionsToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackPermissions:
-    PersistImportedDeploymentRequestPendingPreparedStackPermissions,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackPermissions$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackPermissions),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackConfig$Outbound =
-  {
-    id: string;
-    type: string;
-    [additionalProperties: string]: unknown;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackConfig$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackConfig$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackConfig
-  > = z.object({
-    id: z.string(),
-    type: z.string(),
-    additionalProperties: z.record(z.string(), z.nullable(z.any())).optional(),
-  }).transform((v) => {
-    return {
-      ...v.additionalProperties,
-      ...remap$(v, {
-        additionalProperties: null,
-      }),
-    };
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackConfigToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackConfig:
-    PersistImportedDeploymentRequestPendingPreparedStackConfig,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackConfig$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackConfig),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackDependency$Outbound =
-  {
-    id: string;
-    type: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackDependency$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackDependency$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackDependency
-  > = z.object({
-    id: z.string(),
-    type: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackDependencyToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackDependency:
-    PersistImportedDeploymentRequestPendingPreparedStackDependency,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackDependency$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackDependency),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackLifecycle$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackLifecycle
-  > = z.enum(PersistImportedDeploymentRequestPendingPreparedStackLifecycle);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackResources$Outbound =
-  {
-    config: PersistImportedDeploymentRequestPendingPreparedStackConfig$Outbound;
-    dependencies: Array<
-      PersistImportedDeploymentRequestPendingPreparedStackDependency$Outbound
-    >;
-    enabledWhen?: string | null | undefined;
-    lifecycle: string;
-    remoteAccess?: boolean | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackResources$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackResources$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackResources
-  > = z.object({
-    config: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackConfig$outboundSchema
-    ),
-    dependencies: z.array(
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackDependency$outboundSchema
-      ),
-    ),
-    enabledWhen: z.nullable(z.string()).optional(),
-    lifecycle:
-      PersistImportedDeploymentRequestPendingPreparedStackLifecycle$outboundSchema,
-    remoteAccess: z.boolean().optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackResourcesToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackResources:
-    PersistImportedDeploymentRequestPendingPreparedStackResources,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackResources$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackResources),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform
-  > = z.enum(
-    PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform,
-  );
-
-/** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStack$Outbound = {
-  id: string;
-  inputs?:
-    | Array<PersistImportedDeploymentRequestPendingPreparedStackInput$Outbound>
-    | undefined;
-  permissions?:
-    | PersistImportedDeploymentRequestPendingPreparedStackPermissions$Outbound
-    | undefined;
-  resources: {
-    [k: string]:
-      PersistImportedDeploymentRequestPendingPreparedStackResources$Outbound;
-  };
-  supportedPlatforms?: Array<string> | null | undefined;
-};
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStack$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStack
-  > = z.object({
-    id: z.string(),
-    inputs: z.array(
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackInput$outboundSchema
-      ),
-    ).optional(),
-    permissions: z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStackPermissions$outboundSchema
-    ).optional(),
-    resources: z.record(
-      z.string(),
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPendingPreparedStackResources$outboundSchema
-      ),
-    ),
-    supportedPlatforms: z.nullable(
-      z.array(
-        PersistImportedDeploymentRequestPendingPreparedStackSupportedPlatform$outboundSchema,
-      ),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPendingPreparedStackToJSON(
-  persistImportedDeploymentRequestPendingPreparedStack:
-    PersistImportedDeploymentRequestPendingPreparedStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStack$outboundSchema.parse(
-      persistImportedDeploymentRequestPendingPreparedStack,
+export const PersistImportedDeploymentRequestEnv$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestEnv$Outbound,
+  PersistImportedDeploymentRequestEnv
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([
+      PersistImportedDeploymentRequestTypeEnvEnum$outboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function persistImportedDeploymentRequestEnvToJSON(
+  persistImportedDeploymentRequestEnv: PersistImportedDeploymentRequestEnv,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestEnv$outboundSchema.parse(
+      persistImportedDeploymentRequestEnv,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingPreparedStackUnion$Outbound =
-  | PersistImportedDeploymentRequestPendingPreparedStack$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPendingPreparedStackUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPendingPreparedStackUnion$Outbound,
-    PersistImportedDeploymentRequestPendingPreparedStackUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPendingPreparedStack$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPendingPreparedStackUnionToJSON(
-  persistImportedDeploymentRequestPendingPreparedStackUnion:
-    PersistImportedDeploymentRequestPendingPreparedStackUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPendingPreparedStackUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingPreparedStackUnion),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackTypeStringList$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackTypeStringList
-  > = z.enum(PersistImportedDeploymentRequestPreparedStackTypeStringList);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackDefaultStringList$Outbound =
-  {
-    type: string;
-    value: Array<string>;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackDefaultStringList$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackDefaultStringList$Outbound,
-    PersistImportedDeploymentRequestPreparedStackDefaultStringList
-  > = z.object({
-    type:
-      PersistImportedDeploymentRequestPreparedStackTypeStringList$outboundSchema,
-    value: z.array(z.string()),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackDefaultStringListToJSON(
-  persistImportedDeploymentRequestPreparedStackDefaultStringList:
-    PersistImportedDeploymentRequestPreparedStackDefaultStringList,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackDefaultStringList$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackDefaultStringList),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackTypeBoolean$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeBoolean> = z
-    .enum(PersistImportedDeploymentRequestPreparedStackTypeBoolean);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackDefaultBoolean$Outbound =
-  {
-    type: string;
-    value: boolean;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackDefaultBoolean$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackDefaultBoolean$Outbound,
-    PersistImportedDeploymentRequestPreparedStackDefaultBoolean
-  > = z.object({
-    type:
-      PersistImportedDeploymentRequestPreparedStackTypeBoolean$outboundSchema,
-    value: z.boolean(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackDefaultBooleanToJSON(
-  persistImportedDeploymentRequestPreparedStackDefaultBoolean:
-    PersistImportedDeploymentRequestPreparedStackDefaultBoolean,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackDefaultBoolean$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackDefaultBoolean),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackTypeNumber$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeNumber> = z
-    .enum(PersistImportedDeploymentRequestPreparedStackTypeNumber);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackDefaultNumber$Outbound =
-  {
-    type: string;
-    value: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackDefaultNumber$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackDefaultNumber$Outbound,
-    PersistImportedDeploymentRequestPreparedStackDefaultNumber
-  > = z.object({
-    type:
-      PersistImportedDeploymentRequestPreparedStackTypeNumber$outboundSchema,
-    value: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackDefaultNumberToJSON(
-  persistImportedDeploymentRequestPreparedStackDefaultNumber:
-    PersistImportedDeploymentRequestPreparedStackDefaultNumber,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackDefaultNumber$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackDefaultNumber),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackTypeString$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeString> = z
-    .enum(PersistImportedDeploymentRequestPreparedStackTypeString);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackDefaultString$Outbound =
-  {
-    type: string;
-    value: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackDefaultString$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackDefaultString$Outbound,
-    PersistImportedDeploymentRequestPreparedStackDefaultString
-  > = z.object({
-    type:
-      PersistImportedDeploymentRequestPreparedStackTypeString$outboundSchema,
-    value: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackDefaultStringToJSON(
-  persistImportedDeploymentRequestPreparedStackDefaultString:
-    PersistImportedDeploymentRequestPreparedStackDefaultString,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackDefaultString$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackDefaultString),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackDefaultUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackDefaultString$Outbound
-  | PersistImportedDeploymentRequestPreparedStackDefaultNumber$Outbound
-  | PersistImportedDeploymentRequestPreparedStackDefaultBoolean$Outbound
-  | PersistImportedDeploymentRequestPreparedStackDefaultStringList$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackDefaultUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackDefaultUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackDefaultUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackDefaultString$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackDefaultNumber$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackDefaultBoolean$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackDefaultStringList$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackDefaultUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackDefaultUnion:
-    PersistImportedDeploymentRequestPreparedStackDefaultUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackDefaultUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackDefaultUnion),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackTypeEnvEnum$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackTypeEnvEnum> = z
-    .enum(PersistImportedDeploymentRequestPreparedStackTypeEnvEnum);
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackTypeUnion$Outbound =
-  | string
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackTypeUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackTypeUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackTypeUnion
-  > = z.union([
-    PersistImportedDeploymentRequestPreparedStackTypeEnvEnum$outboundSchema,
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackTypeUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackTypeUnion:
-    PersistImportedDeploymentRequestPreparedStackTypeUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackTypeUnion$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackTypeUnion,
-    ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackEnv$Outbound = {
-  name: string;
-  targetResources?: Array<string> | null | undefined;
-  type?: string | any | null | undefined;
-};
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackEnv$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackEnv$Outbound,
-    PersistImportedDeploymentRequestPreparedStackEnv
-  > = z.object({
-    name: z.string(),
-    targetResources: z.nullable(z.array(z.string())).optional(),
-    type: z.nullable(
-      z.union([
-        PersistImportedDeploymentRequestPreparedStackTypeEnvEnum$outboundSchema,
-        z.any(),
-      ]),
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackEnvToJSON(
-  persistImportedDeploymentRequestPreparedStackEnv:
-    PersistImportedDeploymentRequestPreparedStackEnv,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackEnv$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackEnv,
-    ),
-  );
-}
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackKind$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackKind> = z.enum(
-    PersistImportedDeploymentRequestPreparedStackKind,
-  );
+export const PersistImportedDeploymentRequestKind$outboundSchema: z.ZodEnum<
+  typeof PersistImportedDeploymentRequestKind
+> = z.enum(PersistImportedDeploymentRequestKind);
 
 /** @internal */
 export const PersistImportedDeploymentRequestPreparedStackPlatform$outboundSchema:
@@ -11369,12 +6242,13 @@ export const PersistImportedDeploymentRequestPreparedStackPlatform$outboundSchem
     .enum(PersistImportedDeploymentRequestPreparedStackPlatform);
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProvidedBy$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackProvidedBy> = z
-    .enum(PersistImportedDeploymentRequestPreparedStackProvidedBy);
+export const PersistImportedDeploymentRequestProvidedBy$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProvidedBy> = z.enum(
+    PersistImportedDeploymentRequestProvidedBy,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackValidation$Outbound = {
+export type PersistImportedDeploymentRequestValidation$Outbound = {
   format?: string | null | undefined;
   max?: string | null | undefined;
   maxItems?: number | null | undefined;
@@ -11387,10 +6261,10 @@ export type PersistImportedDeploymentRequestPreparedStackValidation$Outbound = {
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackValidation$outboundSchema:
+export const PersistImportedDeploymentRequestValidation$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackValidation$Outbound,
-    PersistImportedDeploymentRequestPreparedStackValidation
+    PersistImportedDeploymentRequestValidation$Outbound,
+    PersistImportedDeploymentRequestValidation
   > = z.object({
     format: z.nullable(z.string()).optional(),
     max: z.nullable(z.string()).optional(),
@@ -11403,57 +6277,55 @@ export const PersistImportedDeploymentRequestPreparedStackValidation$outboundSch
     values: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackValidationToJSON(
-  persistImportedDeploymentRequestPreparedStackValidation:
-    PersistImportedDeploymentRequestPreparedStackValidation,
+export function persistImportedDeploymentRequestValidationToJSON(
+  persistImportedDeploymentRequestValidation:
+    PersistImportedDeploymentRequestValidation,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackValidation$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackValidation),
+    PersistImportedDeploymentRequestValidation$outboundSchema.parse(
+      persistImportedDeploymentRequestValidation,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackValidationUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackValidation$Outbound
+export type PersistImportedDeploymentRequestValidationUnion$Outbound =
+  | PersistImportedDeploymentRequestValidation$Outbound
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackValidationUnion$outboundSchema:
+export const PersistImportedDeploymentRequestValidationUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackValidationUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackValidationUnion
+    PersistImportedDeploymentRequestValidationUnion$Outbound,
+    PersistImportedDeploymentRequestValidationUnion
   > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackValidation$outboundSchema
-    ),
+    z.lazy(() => PersistImportedDeploymentRequestValidation$outboundSchema),
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackValidationUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackValidationUnion:
-    PersistImportedDeploymentRequestPreparedStackValidationUnion,
+export function persistImportedDeploymentRequestValidationUnionToJSON(
+  persistImportedDeploymentRequestValidationUnion:
+    PersistImportedDeploymentRequestValidationUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackValidationUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackValidationUnion),
+    PersistImportedDeploymentRequestValidationUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestValidationUnion,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackInput$Outbound = {
+export type PersistImportedDeploymentRequestInput$Outbound = {
   default?:
-    | PersistImportedDeploymentRequestPreparedStackDefaultString$Outbound
-    | PersistImportedDeploymentRequestPreparedStackDefaultNumber$Outbound
-    | PersistImportedDeploymentRequestPreparedStackDefaultBoolean$Outbound
-    | PersistImportedDeploymentRequestPreparedStackDefaultStringList$Outbound
+    | PersistImportedDeploymentRequestDefaultString$Outbound
+    | PersistImportedDeploymentRequestDefaultNumber$Outbound
+    | PersistImportedDeploymentRequestDefaultBoolean$Outbound
+    | PersistImportedDeploymentRequestDefaultStringList$Outbound
     | any
     | null
     | undefined;
   description: string;
-  env?:
-    | Array<PersistImportedDeploymentRequestPreparedStackEnv$Outbound>
-    | undefined;
+  env?: Array<PersistImportedDeploymentRequestEnv$Outbound> | undefined;
   id: string;
   kind: string;
   label: string;
@@ -11462,93 +6334,85 @@ export type PersistImportedDeploymentRequestPreparedStackInput$Outbound = {
   providedBy: Array<string>;
   required: boolean;
   validation?:
-    | PersistImportedDeploymentRequestPreparedStackValidation$Outbound
+    | PersistImportedDeploymentRequestValidation$Outbound
     | any
     | null
     | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackInput$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackInput$Outbound,
-    PersistImportedDeploymentRequestPreparedStackInput
-  > = z.object({
-    default: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackDefaultString$outboundSchema
-        ),
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackDefaultNumber$outboundSchema
-        ),
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackDefaultBoolean$outboundSchema
-        ),
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackDefaultStringList$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    description: z.string(),
-    env: z.array(
+export const PersistImportedDeploymentRequestInput$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestInput$Outbound,
+  PersistImportedDeploymentRequestInput
+> = z.object({
+  default: z.nullable(
+    z.union([
       z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackEnv$outboundSchema
+        PersistImportedDeploymentRequestDefaultString$outboundSchema
       ),
-    ).optional(),
-    id: z.string(),
-    kind: PersistImportedDeploymentRequestPreparedStackKind$outboundSchema,
-    label: z.string(),
-    placeholder: z.nullable(z.string()).optional(),
-    platforms: z.nullable(
-      z.array(
-        PersistImportedDeploymentRequestPreparedStackPlatform$outboundSchema,
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultNumber$outboundSchema
       ),
-    ).optional(),
-    providedBy: z.array(
-      PersistImportedDeploymentRequestPreparedStackProvidedBy$outboundSchema,
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultBoolean$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestDefaultStringList$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => PersistImportedDeploymentRequestEnv$outboundSchema))
+    .optional(),
+  id: z.string(),
+  kind: PersistImportedDeploymentRequestKind$outboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(
+      PersistImportedDeploymentRequestPreparedStackPlatform$outboundSchema,
     ),
-    required: z.boolean(),
-    validation: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackValidation$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-  });
+  ).optional(),
+  providedBy: z.array(
+    PersistImportedDeploymentRequestProvidedBy$outboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() => PersistImportedDeploymentRequestValidation$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
 
-export function persistImportedDeploymentRequestPreparedStackInputToJSON(
-  persistImportedDeploymentRequestPreparedStackInput:
-    PersistImportedDeploymentRequestPreparedStackInput,
+export function persistImportedDeploymentRequestInputToJSON(
+  persistImportedDeploymentRequestInput: PersistImportedDeploymentRequestInput,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackInput$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackInput,
+    PersistImportedDeploymentRequestInput$outboundSchema.parse(
+      persistImportedDeploymentRequestInput,
     ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackManagementEnum$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackManagementEnum
-  > = z.enum(PersistImportedDeploymentRequestPreparedStackManagementEnum);
+export const PersistImportedDeploymentRequestManagementEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestManagementEnum> = z.enum(
+    PersistImportedDeploymentRequestManagementEnum,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwResource$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
+export type PersistImportedDeploymentRequestOverrideAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAwResource$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAwResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAwResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAwResource
+    PersistImportedDeploymentRequestOverrideAwResource$Outbound,
+    PersistImportedDeploymentRequestOverrideAwResource
   > = z.object({
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -11556,28 +6420,28 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwResource$out
     resources: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAwResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAwResource:
-    PersistImportedDeploymentRequestPreparedStackOverrideAwResource,
+export function persistImportedDeploymentRequestOverrideAwResourceToJSON(
+  persistImportedDeploymentRequestOverrideAwResource:
+    PersistImportedDeploymentRequestOverrideAwResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAwResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAwResource),
+    PersistImportedDeploymentRequestOverrideAwResource$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAwResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwStack$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
+export type PersistImportedDeploymentRequestOverrideAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAwStack$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAwStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAwStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAwStack
+    PersistImportedDeploymentRequestOverrideAwStack$Outbound,
+    PersistImportedDeploymentRequestOverrideAwStack
   > = z.object({
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -11585,72 +6449,70 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwStack$outbou
     resources: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAwStackToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAwStack:
-    PersistImportedDeploymentRequestPreparedStackOverrideAwStack,
+export function persistImportedDeploymentRequestOverrideAwStackToJSON(
+  persistImportedDeploymentRequestOverrideAwStack:
+    PersistImportedDeploymentRequestOverrideAwStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAwStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAwStack),
+    PersistImportedDeploymentRequestOverrideAwStack$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAwStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideAwResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideAwStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideAwBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestOverrideAwResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestOverrideAwStack$Outbound | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAwBinding$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAwBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAwBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAwBinding
+    PersistImportedDeploymentRequestOverrideAwBinding$Outbound,
+    PersistImportedDeploymentRequestOverrideAwBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAwResource$outboundSchema
+      PersistImportedDeploymentRequestOverrideAwResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAwStack$outboundSchema
+      PersistImportedDeploymentRequestOverrideAwStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAwBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAwBinding:
-    PersistImportedDeploymentRequestPreparedStackOverrideAwBinding,
+export function persistImportedDeploymentRequestOverrideAwBindingToJSON(
+  persistImportedDeploymentRequestOverrideAwBinding:
+    PersistImportedDeploymentRequestOverrideAwBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAwBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAwBinding),
+    PersistImportedDeploymentRequestOverrideAwBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAwBinding,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideEffect$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackOverrideEffect
-  > = z.enum(PersistImportedDeploymentRequestPreparedStackOverrideEffect);
+export const PersistImportedDeploymentRequestOverrideEffect$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestOverrideEffect> = z.enum(
+    PersistImportedDeploymentRequestOverrideEffect,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAwGrant
+    PersistImportedDeploymentRequestOverrideAwGrant$Outbound,
+    PersistImportedDeploymentRequestOverrideAwGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -11659,157 +6521,154 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$outbou
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAwGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAwGrant:
-    PersistImportedDeploymentRequestPreparedStackOverrideAwGrant,
+export function persistImportedDeploymentRequestOverrideAwGrantToJSON(
+  persistImportedDeploymentRequestOverrideAwGrant:
+    PersistImportedDeploymentRequestOverrideAwGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAwGrant),
+    PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAwGrant,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAw$Outbound = {
-  binding:
-    PersistImportedDeploymentRequestPreparedStackOverrideAwBinding$Outbound;
+export type PersistImportedDeploymentRequestOverrideAw$Outbound = {
+  binding: PersistImportedDeploymentRequestOverrideAwBinding$Outbound;
   description?: string | null | undefined;
   effect?: string | undefined;
-  grant: PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$Outbound;
+  grant: PersistImportedDeploymentRequestOverrideAwGrant$Outbound;
   label?: string | null | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAw$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAw$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAw$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAw
+    PersistImportedDeploymentRequestOverrideAw$Outbound,
+    PersistImportedDeploymentRequestOverrideAw
   > = z.object({
     binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAwBinding$outboundSchema
+      PersistImportedDeploymentRequestOverrideAwBinding$outboundSchema
     ),
     description: z.nullable(z.string()).optional(),
-    effect:
-      PersistImportedDeploymentRequestPreparedStackOverrideEffect$outboundSchema
-        .optional(),
+    effect: PersistImportedDeploymentRequestOverrideEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAwGrant$outboundSchema
+      PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema
     ),
     label: z.nullable(z.string()).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAwToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAw:
-    PersistImportedDeploymentRequestPreparedStackOverrideAw,
+export function persistImportedDeploymentRequestOverrideAwToJSON(
+  persistImportedDeploymentRequestOverrideAw:
+    PersistImportedDeploymentRequestOverrideAw,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAw$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAw),
+    PersistImportedDeploymentRequestOverrideAw$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAw,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound =
-  {
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestOverrideAzureResource$Outbound = {
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAzureResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource
+    PersistImportedDeploymentRequestOverrideAzureResource$Outbound,
+    PersistImportedDeploymentRequestOverrideAzureResource
   > = z.object({
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAzureResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAzureResource:
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource,
+export function persistImportedDeploymentRequestOverrideAzureResourceToJSON(
+  persistImportedDeploymentRequestOverrideAzureResource:
+    PersistImportedDeploymentRequestOverrideAzureResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackOverrideAzureResource,
-      ),
+    PersistImportedDeploymentRequestOverrideAzureResource$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAzureResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$Outbound =
-  {
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestOverrideAzureStack$Outbound = {
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAzureStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureStack
+    PersistImportedDeploymentRequestOverrideAzureStack$Outbound,
+    PersistImportedDeploymentRequestOverrideAzureStack
   > = z.object({
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAzureStackToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAzureStack:
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureStack,
+export function persistImportedDeploymentRequestOverrideAzureStackToJSON(
+  persistImportedDeploymentRequestOverrideAzureStack:
+    PersistImportedDeploymentRequestOverrideAzureStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAzureStack),
+    PersistImportedDeploymentRequestOverrideAzureStack$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAzureStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideAzureBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestOverrideAzureResource$Outbound
+    | undefined;
+  stack?:
+    | PersistImportedDeploymentRequestOverrideAzureStack$Outbound
+    | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAzureBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding
+    PersistImportedDeploymentRequestOverrideAzureBinding$Outbound,
+    PersistImportedDeploymentRequestOverrideAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAzureResource$outboundSchema
+      PersistImportedDeploymentRequestOverrideAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAzureStack$outboundSchema
+      PersistImportedDeploymentRequestOverrideAzureStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAzureBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAzureBinding:
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding,
+export function persistImportedDeploymentRequestOverrideAzureBindingToJSON(
+  persistImportedDeploymentRequestOverrideAzureBinding:
+    PersistImportedDeploymentRequestOverrideAzureBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAzureBinding),
+    PersistImportedDeploymentRequestOverrideAzureBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAzureBinding,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant
+    PersistImportedDeploymentRequestOverrideAzureGrant$Outbound,
+    PersistImportedDeploymentRequestOverrideAzureGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -11818,132 +6677,126 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$out
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAzureGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAzureGrant:
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant,
+export function persistImportedDeploymentRequestOverrideAzureGrantToJSON(
+  persistImportedDeploymentRequestOverrideAzureGrant:
+    PersistImportedDeploymentRequestOverrideAzureGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAzureGrant),
+    PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAzureGrant,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideAzure$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$Outbound;
-    label?: string | null | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideAzure$Outbound = {
+  binding: PersistImportedDeploymentRequestOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: PersistImportedDeploymentRequestOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideAzure$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideAzure$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideAzure$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideAzure
+    PersistImportedDeploymentRequestOverrideAzure$Outbound,
+    PersistImportedDeploymentRequestOverrideAzure
   > = z.object({
     binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAzureBinding$outboundSchema
+      PersistImportedDeploymentRequestOverrideAzureBinding$outboundSchema
     ),
     description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideAzureGrant$outboundSchema
+      PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema
     ),
     label: z.nullable(z.string()).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideAzureToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideAzure:
-    PersistImportedDeploymentRequestPreparedStackOverrideAzure,
+export function persistImportedDeploymentRequestOverrideAzureToJSON(
+  persistImportedDeploymentRequestOverrideAzure:
+    PersistImportedDeploymentRequestOverrideAzure,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideAzure$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideAzure),
+    PersistImportedDeploymentRequestOverrideAzure$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideAzure,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$Outbound =
+export type PersistImportedDeploymentRequestOverrideConditionResource$Outbound =
   {
     expression: string;
     title: string;
   };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideConditionResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionResource
+    PersistImportedDeploymentRequestOverrideConditionResource$Outbound,
+    PersistImportedDeploymentRequestOverrideConditionResource
   > = z.object({
     expression: z.string(),
     title: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideConditionResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideConditionResource:
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionResource,
+export function persistImportedDeploymentRequestOverrideConditionResourceToJSON(
+  persistImportedDeploymentRequestOverrideConditionResource:
+    PersistImportedDeploymentRequestOverrideConditionResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackOverrideConditionResource,
-      ),
+    PersistImportedDeploymentRequestOverrideConditionResource$outboundSchema
+      .parse(persistImportedDeploymentRequestOverrideConditionResource),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$Outbound
+export type PersistImportedDeploymentRequestOverrideResourceConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestOverrideConditionResource$Outbound
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideResourceConditionUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion
+    PersistImportedDeploymentRequestOverrideResourceConditionUnion$Outbound,
+    PersistImportedDeploymentRequestOverrideResourceConditionUnion
   > = z.union([
     z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$outboundSchema
+      PersistImportedDeploymentRequestOverrideConditionResource$outboundSchema
     ),
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion,
+export function persistImportedDeploymentRequestOverrideResourceConditionUnionToJSON(
+  persistImportedDeploymentRequestOverrideResourceConditionUnion:
+    PersistImportedDeploymentRequestOverrideResourceConditionUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackOverrideResourceConditionUnion,
-      ),
+    PersistImportedDeploymentRequestOverrideResourceConditionUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestOverrideResourceConditionUnion),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestOverrideGcpResource$Outbound = {
+  condition?:
+    | PersistImportedDeploymentRequestOverrideConditionResource$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideGcpResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpResource
+    PersistImportedDeploymentRequestOverrideGcpResource$Outbound,
+    PersistImportedDeploymentRequestOverrideGcpResource
   > = z.object({
     condition: z.nullable(
       z.union([
         z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackOverrideConditionResource$outboundSchema
+          PersistImportedDeploymentRequestOverrideConditionResource$outboundSchema
         ),
         z.any(),
       ]),
@@ -11951,95 +6804,91 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$ou
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideGcpResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideGcpResource:
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpResource,
+export function persistImportedDeploymentRequestOverrideGcpResourceToJSON(
+  persistImportedDeploymentRequestOverrideGcpResource:
+    PersistImportedDeploymentRequestOverrideGcpResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideGcpResource),
+    PersistImportedDeploymentRequestOverrideGcpResource$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideGcpResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
+export type PersistImportedDeploymentRequestOverrideConditionStack$Outbound = {
+  expression: string;
+  title: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideConditionStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack
+    PersistImportedDeploymentRequestOverrideConditionStack$Outbound,
+    PersistImportedDeploymentRequestOverrideConditionStack
   > = z.object({
     expression: z.string(),
     title: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideConditionStackToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideConditionStack:
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack,
+export function persistImportedDeploymentRequestOverrideConditionStackToJSON(
+  persistImportedDeploymentRequestOverrideConditionStack:
+    PersistImportedDeploymentRequestOverrideConditionStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackOverrideConditionStack,
-      ),
+    PersistImportedDeploymentRequestOverrideConditionStack$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideConditionStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound
+export type PersistImportedDeploymentRequestOverrideStackConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestOverrideConditionStack$Outbound
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideStackConditionUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion
+    PersistImportedDeploymentRequestOverrideStackConditionUnion$Outbound,
+    PersistImportedDeploymentRequestOverrideStackConditionUnion
   > = z.union([
     z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema
+      PersistImportedDeploymentRequestOverrideConditionStack$outboundSchema
     ),
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackOverrideStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion,
+export function persistImportedDeploymentRequestOverrideStackConditionUnionToJSON(
+  persistImportedDeploymentRequestOverrideStackConditionUnion:
+    PersistImportedDeploymentRequestOverrideStackConditionUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackOverrideStackConditionUnion,
-      ),
+    PersistImportedDeploymentRequestOverrideStackConditionUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestOverrideStackConditionUnion),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestOverrideGcpStack$Outbound = {
+  condition?:
+    | PersistImportedDeploymentRequestOverrideConditionStack$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideGcpStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpStack
+    PersistImportedDeploymentRequestOverrideGcpStack$Outbound,
+    PersistImportedDeploymentRequestOverrideGcpStack
   > = z.object({
     condition: z.nullable(
       z.union([
         z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackOverrideConditionStack$outboundSchema
+          PersistImportedDeploymentRequestOverrideConditionStack$outboundSchema
         ),
         z.any(),
       ]),
@@ -12047,66 +6896,64 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$outbo
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideGcpStackToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideGcpStack:
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpStack,
+export function persistImportedDeploymentRequestOverrideGcpStackToJSON(
+  persistImportedDeploymentRequestOverrideGcpStack:
+    PersistImportedDeploymentRequestOverrideGcpStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideGcpStack),
+    PersistImportedDeploymentRequestOverrideGcpStack$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideGcpStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideGcpBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestOverrideGcpResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestOverrideGcpStack$Outbound | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideGcpBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding
+    PersistImportedDeploymentRequestOverrideGcpBinding$Outbound,
+    PersistImportedDeploymentRequestOverrideGcpBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideGcpResource$outboundSchema
+      PersistImportedDeploymentRequestOverrideGcpResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideGcpStack$outboundSchema
+      PersistImportedDeploymentRequestOverrideGcpStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideGcpBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideGcpBinding:
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding,
+export function persistImportedDeploymentRequestOverrideGcpBindingToJSON(
+  persistImportedDeploymentRequestOverrideGcpBinding:
+    PersistImportedDeploymentRequestOverrideGcpBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideGcpBinding),
+    PersistImportedDeploymentRequestOverrideGcpBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideGcpBinding,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant
+    PersistImportedDeploymentRequestOverrideGcpGrant$Outbound,
+    PersistImportedDeploymentRequestOverrideGcpGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -12115,213 +6962,204 @@ export const PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$outbo
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideGcpGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideGcpGrant:
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant,
+export function persistImportedDeploymentRequestOverrideGcpGrantToJSON(
+  persistImportedDeploymentRequestOverrideGcpGrant:
+    PersistImportedDeploymentRequestOverrideGcpGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideGcpGrant),
+    PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideGcpGrant,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideGcp$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$Outbound;
-    label?: string | null | undefined;
-  };
+export type PersistImportedDeploymentRequestOverrideGcp$Outbound = {
+  binding: PersistImportedDeploymentRequestOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: PersistImportedDeploymentRequestOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideGcp$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideGcp$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideGcp$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideGcp
+    PersistImportedDeploymentRequestOverrideGcp$Outbound,
+    PersistImportedDeploymentRequestOverrideGcp
   > = z.object({
     binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideGcpBinding$outboundSchema
+      PersistImportedDeploymentRequestOverrideGcpBinding$outboundSchema
     ),
     description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverrideGcpGrant$outboundSchema
+      PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema
     ),
     label: z.nullable(z.string()).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverrideGcpToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideGcp:
-    PersistImportedDeploymentRequestPreparedStackOverrideGcp,
+export function persistImportedDeploymentRequestOverrideGcpToJSON(
+  persistImportedDeploymentRequestOverrideGcp:
+    PersistImportedDeploymentRequestOverrideGcp,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideGcp$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideGcp),
+    PersistImportedDeploymentRequestOverrideGcp$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideGcp,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverridePlatforms$Outbound =
-  {
-    aws?:
-      | Array<PersistImportedDeploymentRequestPreparedStackOverrideAw$Outbound>
-      | null
-      | undefined;
-    azure?:
-      | Array<
-        PersistImportedDeploymentRequestPreparedStackOverrideAzure$Outbound
-      >
-      | null
-      | undefined;
-    gcp?:
-      | Array<PersistImportedDeploymentRequestPreparedStackOverrideGcp$Outbound>
-      | null
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestOverridePlatforms$Outbound = {
+  aws?:
+    | Array<PersistImportedDeploymentRequestOverrideAw$Outbound>
+    | null
+    | undefined;
+  azure?:
+    | Array<PersistImportedDeploymentRequestOverrideAzure$Outbound>
+    | null
+    | undefined;
+  gcp?:
+    | Array<PersistImportedDeploymentRequestOverrideGcp$Outbound>
+    | null
+    | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverridePlatforms$outboundSchema:
+export const PersistImportedDeploymentRequestOverridePlatforms$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverridePlatforms$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverridePlatforms
+    PersistImportedDeploymentRequestOverridePlatforms$Outbound,
+    PersistImportedDeploymentRequestOverridePlatforms
   > = z.object({
     aws: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackOverrideAw$outboundSchema
+        PersistImportedDeploymentRequestOverrideAw$outboundSchema
       )),
     ).optional(),
     azure: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackOverrideAzure$outboundSchema
+        PersistImportedDeploymentRequestOverrideAzure$outboundSchema
       )),
     ).optional(),
     gcp: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackOverrideGcp$outboundSchema
+        PersistImportedDeploymentRequestOverrideGcp$outboundSchema
       )),
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackOverridePlatformsToJSON(
-  persistImportedDeploymentRequestPreparedStackOverridePlatforms:
-    PersistImportedDeploymentRequestPreparedStackOverridePlatforms,
+export function persistImportedDeploymentRequestOverridePlatformsToJSON(
+  persistImportedDeploymentRequestOverridePlatforms:
+    PersistImportedDeploymentRequestOverridePlatforms,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverridePlatforms$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverridePlatforms),
+    PersistImportedDeploymentRequestOverridePlatforms$outboundSchema.parse(
+      persistImportedDeploymentRequestOverridePlatforms,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverride$Outbound = {
+export type PersistImportedDeploymentRequestOverride$Outbound = {
   description: string;
   id: string;
-  platforms:
-    PersistImportedDeploymentRequestPreparedStackOverridePlatforms$Outbound;
+  platforms: PersistImportedDeploymentRequestOverridePlatforms$Outbound;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverride$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverride$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverride
-  > = z.object({
-    description: z.string(),
-    id: z.string(),
-    platforms: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverridePlatforms$outboundSchema
-    ),
-  });
+export const PersistImportedDeploymentRequestOverride$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestOverride$Outbound,
+  PersistImportedDeploymentRequestOverride
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() =>
+    PersistImportedDeploymentRequestOverridePlatforms$outboundSchema
+  ),
+});
 
-export function persistImportedDeploymentRequestPreparedStackOverrideToJSON(
-  persistImportedDeploymentRequestPreparedStackOverride:
-    PersistImportedDeploymentRequestPreparedStackOverride,
+export function persistImportedDeploymentRequestOverrideToJSON(
+  persistImportedDeploymentRequestOverride:
+    PersistImportedDeploymentRequestOverride,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverride$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackOverride,
+    PersistImportedDeploymentRequestOverride$outboundSchema.parse(
+      persistImportedDeploymentRequestOverride,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackOverrideUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackOverride$Outbound
+export type PersistImportedDeploymentRequestOverrideUnion$Outbound =
+  | PersistImportedDeploymentRequestOverride$Outbound
   | string;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackOverrideUnion$outboundSchema:
+export const PersistImportedDeploymentRequestOverrideUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackOverrideUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackOverrideUnion
+    PersistImportedDeploymentRequestOverrideUnion$Outbound,
+    PersistImportedDeploymentRequestOverrideUnion
   > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackOverride$outboundSchema
-    ),
+    z.lazy(() => PersistImportedDeploymentRequestOverride$outboundSchema),
     z.string(),
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackOverrideUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackOverrideUnion:
-    PersistImportedDeploymentRequestPreparedStackOverrideUnion,
+export function persistImportedDeploymentRequestOverrideUnionToJSON(
+  persistImportedDeploymentRequestOverrideUnion:
+    PersistImportedDeploymentRequestOverrideUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackOverrideUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackOverrideUnion),
+    PersistImportedDeploymentRequestOverrideUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestOverrideUnion,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackManagement2$Outbound =
-  {
-    override: {
-      [k: string]: Array<
-        PersistImportedDeploymentRequestPreparedStackOverride$Outbound | string
-      >;
-    };
+export type PersistImportedDeploymentRequestManagement2$Outbound = {
+  override: {
+    [k: string]: Array<
+      PersistImportedDeploymentRequestOverride$Outbound | string
+    >;
   };
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackManagement2$outboundSchema:
+export const PersistImportedDeploymentRequestManagement2$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackManagement2$Outbound,
-    PersistImportedDeploymentRequestPreparedStackManagement2
+    PersistImportedDeploymentRequestManagement2$Outbound,
+    PersistImportedDeploymentRequestManagement2
   > = z.object({
     override: z.record(
       z.string(),
       z.array(z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackOverride$outboundSchema
-        ),
+        z.lazy(() => PersistImportedDeploymentRequestOverride$outboundSchema),
         z.string(),
       ])),
     ),
   });
 
-export function persistImportedDeploymentRequestPreparedStackManagement2ToJSON(
-  persistImportedDeploymentRequestPreparedStackManagement2:
-    PersistImportedDeploymentRequestPreparedStackManagement2,
+export function persistImportedDeploymentRequestManagement2ToJSON(
+  persistImportedDeploymentRequestManagement2:
+    PersistImportedDeploymentRequestManagement2,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackManagement2$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackManagement2),
+    PersistImportedDeploymentRequestManagement2$outboundSchema.parse(
+      persistImportedDeploymentRequestManagement2,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwResource$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
+export type PersistImportedDeploymentRequestExtendAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAwResource$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAwResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAwResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAwResource
+    PersistImportedDeploymentRequestExtendAwResource$Outbound,
+    PersistImportedDeploymentRequestExtendAwResource
   > = z.object({
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -12329,28 +7167,28 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwResource$outbo
     resources: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAwResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAwResource:
-    PersistImportedDeploymentRequestPreparedStackExtendAwResource,
+export function persistImportedDeploymentRequestExtendAwResourceToJSON(
+  persistImportedDeploymentRequestExtendAwResource:
+    PersistImportedDeploymentRequestExtendAwResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAwResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAwResource),
+    PersistImportedDeploymentRequestExtendAwResource$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAwResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwStack$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
+export type PersistImportedDeploymentRequestExtendAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAwStack$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAwStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAwStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAwStack
+    PersistImportedDeploymentRequestExtendAwStack$Outbound,
+    PersistImportedDeploymentRequestExtendAwStack
   > = z.object({
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -12358,71 +7196,70 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwStack$outbound
     resources: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAwStackToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAwStack:
-    PersistImportedDeploymentRequestPreparedStackExtendAwStack,
+export function persistImportedDeploymentRequestExtendAwStackToJSON(
+  persistImportedDeploymentRequestExtendAwStack:
+    PersistImportedDeploymentRequestExtendAwStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAwStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAwStack),
+    PersistImportedDeploymentRequestExtendAwStack$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAwStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackExtendAwResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackExtendAwStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestExtendAwBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestExtendAwResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestExtendAwStack$Outbound | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAwBinding$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAwBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAwBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAwBinding
+    PersistImportedDeploymentRequestExtendAwBinding$Outbound,
+    PersistImportedDeploymentRequestExtendAwBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAwResource$outboundSchema
+      PersistImportedDeploymentRequestExtendAwResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAwStack$outboundSchema
+      PersistImportedDeploymentRequestExtendAwStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAwBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAwBinding:
-    PersistImportedDeploymentRequestPreparedStackExtendAwBinding,
+export function persistImportedDeploymentRequestExtendAwBindingToJSON(
+  persistImportedDeploymentRequestExtendAwBinding:
+    PersistImportedDeploymentRequestExtendAwBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAwBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAwBinding),
+    PersistImportedDeploymentRequestExtendAwBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAwBinding,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendEffect$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackExtendEffect> =
-    z.enum(PersistImportedDeploymentRequestPreparedStackExtendEffect);
+export const PersistImportedDeploymentRequestExtendEffect$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestExtendEffect> = z.enum(
+    PersistImportedDeploymentRequestExtendEffect,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAwGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestExtendAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAwGrant$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAwGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAwGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAwGrant
+    PersistImportedDeploymentRequestExtendAwGrant$Outbound,
+    PersistImportedDeploymentRequestExtendAwGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -12431,156 +7268,151 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAwGrant$outbound
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAwGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAwGrant:
-    PersistImportedDeploymentRequestPreparedStackExtendAwGrant,
+export function persistImportedDeploymentRequestExtendAwGrantToJSON(
+  persistImportedDeploymentRequestExtendAwGrant:
+    PersistImportedDeploymentRequestExtendAwGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAwGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAwGrant),
+    PersistImportedDeploymentRequestExtendAwGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAwGrant,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAw$Outbound = {
-  binding:
-    PersistImportedDeploymentRequestPreparedStackExtendAwBinding$Outbound;
+export type PersistImportedDeploymentRequestExtendAw$Outbound = {
+  binding: PersistImportedDeploymentRequestExtendAwBinding$Outbound;
   description?: string | null | undefined;
   effect?: string | undefined;
-  grant: PersistImportedDeploymentRequestPreparedStackExtendAwGrant$Outbound;
+  grant: PersistImportedDeploymentRequestExtendAwGrant$Outbound;
   label?: string | null | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAw$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAw$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAw
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAwBinding$outboundSchema
-    ),
-    description: z.nullable(z.string()).optional(),
-    effect:
-      PersistImportedDeploymentRequestPreparedStackExtendEffect$outboundSchema
-        .optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAwGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
+export const PersistImportedDeploymentRequestExtendAw$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestExtendAw$Outbound,
+  PersistImportedDeploymentRequestExtendAw
+> = z.object({
+  binding: z.lazy(() =>
+    PersistImportedDeploymentRequestExtendAwBinding$outboundSchema
+  ),
+  description: z.nullable(z.string()).optional(),
+  effect: PersistImportedDeploymentRequestExtendEffect$outboundSchema
+    .optional(),
+  grant: z.lazy(() =>
+    PersistImportedDeploymentRequestExtendAwGrant$outboundSchema
+  ),
+  label: z.nullable(z.string()).optional(),
+});
 
-export function persistImportedDeploymentRequestPreparedStackExtendAwToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAw:
-    PersistImportedDeploymentRequestPreparedStackExtendAw,
+export function persistImportedDeploymentRequestExtendAwToJSON(
+  persistImportedDeploymentRequestExtendAw:
+    PersistImportedDeploymentRequestExtendAw,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAw$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackExtendAw,
+    PersistImportedDeploymentRequestExtendAw$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAw,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureResource$Outbound =
-  {
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestExtendAzureResource$Outbound = {
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAzureResource$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAzureResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAzureResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAzureResource
+    PersistImportedDeploymentRequestExtendAzureResource$Outbound,
+    PersistImportedDeploymentRequestExtendAzureResource
   > = z.object({
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAzureResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAzureResource:
-    PersistImportedDeploymentRequestPreparedStackExtendAzureResource,
+export function persistImportedDeploymentRequestExtendAzureResourceToJSON(
+  persistImportedDeploymentRequestExtendAzureResource:
+    PersistImportedDeploymentRequestExtendAzureResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAzureResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAzureResource),
+    PersistImportedDeploymentRequestExtendAzureResource$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAzureResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureStack$Outbound =
-  {
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestExtendAzureStack$Outbound = {
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAzureStack$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAzureStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAzureStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAzureStack
+    PersistImportedDeploymentRequestExtendAzureStack$Outbound,
+    PersistImportedDeploymentRequestExtendAzureStack
   > = z.object({
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAzureStackToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAzureStack:
-    PersistImportedDeploymentRequestPreparedStackExtendAzureStack,
+export function persistImportedDeploymentRequestExtendAzureStackToJSON(
+  persistImportedDeploymentRequestExtendAzureStack:
+    PersistImportedDeploymentRequestExtendAzureStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAzureStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAzureStack),
+    PersistImportedDeploymentRequestExtendAzureStack$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAzureStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackExtendAzureResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackExtendAzureStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestExtendAzureBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestExtendAzureResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestExtendAzureStack$Outbound | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAzureBinding$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAzureBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAzureBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAzureBinding
+    PersistImportedDeploymentRequestExtendAzureBinding$Outbound,
+    PersistImportedDeploymentRequestExtendAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAzureResource$outboundSchema
+      PersistImportedDeploymentRequestExtendAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAzureStack$outboundSchema
+      PersistImportedDeploymentRequestExtendAzureStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAzureBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAzureBinding:
-    PersistImportedDeploymentRequestPreparedStackExtendAzureBinding,
+export function persistImportedDeploymentRequestExtendAzureBindingToJSON(
+  persistImportedDeploymentRequestExtendAzureBinding:
+    PersistImportedDeploymentRequestExtendAzureBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAzureBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAzureBinding),
+    PersistImportedDeploymentRequestExtendAzureBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAzureBinding,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestExtendAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAzureGrant
+    PersistImportedDeploymentRequestExtendAzureGrant$Outbound,
+    PersistImportedDeploymentRequestExtendAzureGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -12589,536 +7421,516 @@ export const PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$outbo
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendAzureGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAzureGrant:
-    PersistImportedDeploymentRequestPreparedStackExtendAzureGrant,
+export function persistImportedDeploymentRequestExtendAzureGrantToJSON(
+  persistImportedDeploymentRequestExtendAzureGrant:
+    PersistImportedDeploymentRequestExtendAzureGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAzureGrant),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendAzure$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPreparedStackExtendAzureBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendAzure$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendAzure$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendAzure
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAzureBinding$outboundSchema
+    PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAzureGrant,
     ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendAzureGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendAzureToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendAzure:
-    PersistImportedDeploymentRequestPreparedStackExtendAzure,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendAzure$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendAzure),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendConditionResource$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendConditionResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendConditionResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendConditionResource
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendConditionResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendConditionResource:
-    PersistImportedDeploymentRequestPreparedStackExtendConditionResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendConditionResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackExtendConditionResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackExtendConditionResource$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendConditionResource$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackExtendResourceConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackExtendResourceConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpResource$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPreparedStackExtendConditionResource$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendGcpResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendGcpResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackExtendConditionResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendGcpResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendGcpResource:
-    PersistImportedDeploymentRequestPreparedStackExtendGcpResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendGcpResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendGcpResource),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendConditionStack$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendConditionStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendConditionStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendConditionStack
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendConditionStackToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendConditionStack:
-    PersistImportedDeploymentRequestPreparedStackExtendConditionStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendConditionStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendConditionStack),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackExtendConditionStack$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendConditionStack$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackExtendStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendStackConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackExtendStackConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpStack$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPreparedStackExtendConditionStack$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendGcpStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendGcpStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendGcpStack
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackExtendConditionStack$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendGcpStackToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendGcpStack:
-    PersistImportedDeploymentRequestPreparedStackExtendGcpStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendGcpStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendGcpStack),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackExtendGcpResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackExtendGcpStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendGcpBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendGcpBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendGcpBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendGcpResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendGcpStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendGcpBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendGcpBinding:
-    PersistImportedDeploymentRequestPreparedStackExtendGcpBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendGcpBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendGcpBinding),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcpGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendGcpGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendGcpGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendGcpGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackExtendGcpGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendGcpGrant:
-    PersistImportedDeploymentRequestPreparedStackExtendGcpGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendGcpGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendGcpGrant),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendGcp$Outbound = {
-  binding:
-    PersistImportedDeploymentRequestPreparedStackExtendGcpBinding$Outbound;
+export type PersistImportedDeploymentRequestExtendAzure$Outbound = {
+  binding: PersistImportedDeploymentRequestExtendAzureBinding$Outbound;
   description?: string | null | undefined;
-  grant: PersistImportedDeploymentRequestPreparedStackExtendGcpGrant$Outbound;
+  grant: PersistImportedDeploymentRequestExtendAzureGrant$Outbound;
   label?: string | null | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendGcp$outboundSchema:
+export const PersistImportedDeploymentRequestExtendAzure$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendGcp$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendGcp
+    PersistImportedDeploymentRequestExtendAzure$Outbound,
+    PersistImportedDeploymentRequestExtendAzure
   > = z.object({
     binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendGcpBinding$outboundSchema
+      PersistImportedDeploymentRequestExtendAzureBinding$outboundSchema
     ),
     description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendGcpGrant$outboundSchema
+      PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema
     ),
     label: z.nullable(z.string()).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendGcpToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendGcp:
-    PersistImportedDeploymentRequestPreparedStackExtendGcp,
+export function persistImportedDeploymentRequestExtendAzureToJSON(
+  persistImportedDeploymentRequestExtendAzure:
+    PersistImportedDeploymentRequestExtendAzure,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendGcp$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackExtendGcp,
+    PersistImportedDeploymentRequestExtendAzure$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendAzure,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendPlatforms$Outbound =
-  {
-    aws?:
-      | Array<PersistImportedDeploymentRequestPreparedStackExtendAw$Outbound>
-      | null
-      | undefined;
-    azure?:
-      | Array<PersistImportedDeploymentRequestPreparedStackExtendAzure$Outbound>
-      | null
-      | undefined;
-    gcp?:
-      | Array<PersistImportedDeploymentRequestPreparedStackExtendGcp$Outbound>
-      | null
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestExtendConditionResource$Outbound = {
+  expression: string;
+  title: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendPlatforms$outboundSchema:
+export const PersistImportedDeploymentRequestExtendConditionResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendPlatforms$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendPlatforms
+    PersistImportedDeploymentRequestExtendConditionResource$Outbound,
+    PersistImportedDeploymentRequestExtendConditionResource
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function persistImportedDeploymentRequestExtendConditionResourceToJSON(
+  persistImportedDeploymentRequestExtendConditionResource:
+    PersistImportedDeploymentRequestExtendConditionResource,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendConditionResource$outboundSchema
+      .parse(persistImportedDeploymentRequestExtendConditionResource),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendResourceConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestExtendConditionResource$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendResourceConditionUnion$Outbound,
+    PersistImportedDeploymentRequestExtendResourceConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestExtendConditionResource$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestExtendResourceConditionUnionToJSON(
+  persistImportedDeploymentRequestExtendResourceConditionUnion:
+    PersistImportedDeploymentRequestExtendResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendResourceConditionUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestExtendResourceConditionUnion),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendGcpResource$Outbound = {
+  condition?:
+    | PersistImportedDeploymentRequestExtendConditionResource$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendGcpResource$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendGcpResource$Outbound,
+    PersistImportedDeploymentRequestExtendGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestExtendConditionResource$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function persistImportedDeploymentRequestExtendGcpResourceToJSON(
+  persistImportedDeploymentRequestExtendGcpResource:
+    PersistImportedDeploymentRequestExtendGcpResource,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendGcpResource$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendGcpResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendConditionStack$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendConditionStack$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendConditionStack$Outbound,
+    PersistImportedDeploymentRequestExtendConditionStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function persistImportedDeploymentRequestExtendConditionStackToJSON(
+  persistImportedDeploymentRequestExtendConditionStack:
+    PersistImportedDeploymentRequestExtendConditionStack,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendConditionStack$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendConditionStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendStackConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestExtendConditionStack$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendStackConditionUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendStackConditionUnion$Outbound,
+    PersistImportedDeploymentRequestExtendStackConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestExtendConditionStack$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestExtendStackConditionUnionToJSON(
+  persistImportedDeploymentRequestExtendStackConditionUnion:
+    PersistImportedDeploymentRequestExtendStackConditionUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendStackConditionUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestExtendStackConditionUnion),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendGcpStack$Outbound = {
+  condition?:
+    | PersistImportedDeploymentRequestExtendConditionStack$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendGcpStack$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendGcpStack$Outbound,
+    PersistImportedDeploymentRequestExtendGcpStack
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestExtendConditionStack$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function persistImportedDeploymentRequestExtendGcpStackToJSON(
+  persistImportedDeploymentRequestExtendGcpStack:
+    PersistImportedDeploymentRequestExtendGcpStack,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendGcpStack$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendGcpStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendGcpBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestExtendGcpResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestExtendGcpStack$Outbound | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendGcpBinding$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendGcpBinding$Outbound,
+    PersistImportedDeploymentRequestExtendGcpBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PersistImportedDeploymentRequestExtendGcpResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      PersistImportedDeploymentRequestExtendGcpStack$outboundSchema
+    ).optional(),
+  });
+
+export function persistImportedDeploymentRequestExtendGcpBindingToJSON(
+  persistImportedDeploymentRequestExtendGcpBinding:
+    PersistImportedDeploymentRequestExtendGcpBinding,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendGcpBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendGcpBinding,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendGcpGrant$Outbound,
+    PersistImportedDeploymentRequestExtendGcpGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function persistImportedDeploymentRequestExtendGcpGrantToJSON(
+  persistImportedDeploymentRequestExtendGcpGrant:
+    PersistImportedDeploymentRequestExtendGcpGrant,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendGcpGrant,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendGcp$Outbound = {
+  binding: PersistImportedDeploymentRequestExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: PersistImportedDeploymentRequestExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendGcp$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendGcp$Outbound,
+    PersistImportedDeploymentRequestExtendGcp
+  > = z.object({
+    binding: z.lazy(() =>
+      PersistImportedDeploymentRequestExtendGcpBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestExtendGcpToJSON(
+  persistImportedDeploymentRequestExtendGcp:
+    PersistImportedDeploymentRequestExtendGcp,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExtendGcp$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendGcp,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExtendPlatforms$Outbound = {
+  aws?:
+    | Array<PersistImportedDeploymentRequestExtendAw$Outbound>
+    | null
+    | undefined;
+  azure?:
+    | Array<PersistImportedDeploymentRequestExtendAzure$Outbound>
+    | null
+    | undefined;
+  gcp?:
+    | Array<PersistImportedDeploymentRequestExtendGcp$Outbound>
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExtendPlatforms$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExtendPlatforms$Outbound,
+    PersistImportedDeploymentRequestExtendPlatforms
   > = z.object({
     aws: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackExtendAw$outboundSchema
+        PersistImportedDeploymentRequestExtendAw$outboundSchema
       )),
     ).optional(),
     azure: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackExtendAzure$outboundSchema
+        PersistImportedDeploymentRequestExtendAzure$outboundSchema
       )),
     ).optional(),
     gcp: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackExtendGcp$outboundSchema
+        PersistImportedDeploymentRequestExtendGcp$outboundSchema
       )),
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackExtendPlatformsToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendPlatforms:
-    PersistImportedDeploymentRequestPreparedStackExtendPlatforms,
+export function persistImportedDeploymentRequestExtendPlatformsToJSON(
+  persistImportedDeploymentRequestExtendPlatforms:
+    PersistImportedDeploymentRequestExtendPlatforms,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendPlatforms$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendPlatforms),
+    PersistImportedDeploymentRequestExtendPlatforms$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendPlatforms,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtend$Outbound = {
+export type PersistImportedDeploymentRequestExtend$Outbound = {
   description: string;
   id: string;
-  platforms:
-    PersistImportedDeploymentRequestPreparedStackExtendPlatforms$Outbound;
+  platforms: PersistImportedDeploymentRequestExtendPlatforms$Outbound;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtend$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtend$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtend
-  > = z.object({
-    description: z.string(),
-    id: z.string(),
-    platforms: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtendPlatforms$outboundSchema
-    ),
-  });
+export const PersistImportedDeploymentRequestExtend$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestExtend$Outbound,
+  PersistImportedDeploymentRequestExtend
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() =>
+    PersistImportedDeploymentRequestExtendPlatforms$outboundSchema
+  ),
+});
 
-export function persistImportedDeploymentRequestPreparedStackExtendToJSON(
-  persistImportedDeploymentRequestPreparedStackExtend:
-    PersistImportedDeploymentRequestPreparedStackExtend,
+export function persistImportedDeploymentRequestExtendToJSON(
+  persistImportedDeploymentRequestExtend:
+    PersistImportedDeploymentRequestExtend,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtend$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackExtend,
+    PersistImportedDeploymentRequestExtend$outboundSchema.parse(
+      persistImportedDeploymentRequestExtend,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackExtendUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackExtend$Outbound
+export type PersistImportedDeploymentRequestExtendUnion$Outbound =
+  | PersistImportedDeploymentRequestExtend$Outbound
   | string;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackExtendUnion$outboundSchema:
+export const PersistImportedDeploymentRequestExtendUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackExtendUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackExtendUnion
+    PersistImportedDeploymentRequestExtendUnion$Outbound,
+    PersistImportedDeploymentRequestExtendUnion
   > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackExtend$outboundSchema
-    ),
+    z.lazy(() => PersistImportedDeploymentRequestExtend$outboundSchema),
     z.string(),
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackExtendUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackExtendUnion:
-    PersistImportedDeploymentRequestPreparedStackExtendUnion,
+export function persistImportedDeploymentRequestExtendUnionToJSON(
+  persistImportedDeploymentRequestExtendUnion:
+    PersistImportedDeploymentRequestExtendUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackExtendUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackExtendUnion),
+    PersistImportedDeploymentRequestExtendUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestExtendUnion,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackManagement1$Outbound =
-  {
-    extend: {
-      [k: string]: Array<
-        PersistImportedDeploymentRequestPreparedStackExtend$Outbound | string
-      >;
-    };
+export type PersistImportedDeploymentRequestManagement1$Outbound = {
+  extend: {
+    [k: string]: Array<
+      PersistImportedDeploymentRequestExtend$Outbound | string
+    >;
   };
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackManagement1$outboundSchema:
+export const PersistImportedDeploymentRequestManagement1$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackManagement1$Outbound,
-    PersistImportedDeploymentRequestPreparedStackManagement1
+    PersistImportedDeploymentRequestManagement1$Outbound,
+    PersistImportedDeploymentRequestManagement1
   > = z.object({
     extend: z.record(
       z.string(),
       z.array(z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackExtend$outboundSchema
-        ),
+        z.lazy(() => PersistImportedDeploymentRequestExtend$outboundSchema),
         z.string(),
       ])),
     ),
   });
 
-export function persistImportedDeploymentRequestPreparedStackManagement1ToJSON(
-  persistImportedDeploymentRequestPreparedStackManagement1:
-    PersistImportedDeploymentRequestPreparedStackManagement1,
+export function persistImportedDeploymentRequestManagement1ToJSON(
+  persistImportedDeploymentRequestManagement1:
+    PersistImportedDeploymentRequestManagement1,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackManagement1$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackManagement1),
+    PersistImportedDeploymentRequestManagement1$outboundSchema.parse(
+      persistImportedDeploymentRequestManagement1,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackManagementUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackManagement1$Outbound
-  | PersistImportedDeploymentRequestPreparedStackManagement2$Outbound
+export type PersistImportedDeploymentRequestManagementUnion$Outbound =
+  | PersistImportedDeploymentRequestManagement1$Outbound
+  | PersistImportedDeploymentRequestManagement2$Outbound
   | string;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackManagementUnion$outboundSchema:
+export const PersistImportedDeploymentRequestManagementUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackManagementUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackManagementUnion
+    PersistImportedDeploymentRequestManagementUnion$Outbound,
+    PersistImportedDeploymentRequestManagementUnion
   > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackManagement1$outboundSchema
-    ),
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackManagement2$outboundSchema
-    ),
-    PersistImportedDeploymentRequestPreparedStackManagementEnum$outboundSchema,
+    z.lazy(() => PersistImportedDeploymentRequestManagement1$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestManagement2$outboundSchema),
+    PersistImportedDeploymentRequestManagementEnum$outboundSchema,
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackManagementUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackManagementUnion:
-    PersistImportedDeploymentRequestPreparedStackManagementUnion,
+export function persistImportedDeploymentRequestManagementUnionToJSON(
+  persistImportedDeploymentRequestManagementUnion:
+    PersistImportedDeploymentRequestManagementUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackManagementUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackManagementUnion),
+    PersistImportedDeploymentRequestManagementUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestManagementUnion,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwResource$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
+export type PersistImportedDeploymentRequestProfileAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAwResource$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAwResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAwResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAwResource
+    PersistImportedDeploymentRequestProfileAwResource$Outbound,
+    PersistImportedDeploymentRequestProfileAwResource
   > = z.object({
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -13126,28 +7938,28 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwResource$outb
     resources: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAwResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAwResource:
-    PersistImportedDeploymentRequestPreparedStackProfileAwResource,
+export function persistImportedDeploymentRequestProfileAwResourceToJSON(
+  persistImportedDeploymentRequestProfileAwResource:
+    PersistImportedDeploymentRequestProfileAwResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAwResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAwResource),
+    PersistImportedDeploymentRequestProfileAwResource$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAwResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwStack$Outbound =
-  {
-    condition?: { [k: string]: { [k: string]: string } } | null | undefined;
-    resources: Array<string>;
-  };
+export type PersistImportedDeploymentRequestProfileAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAwStack$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAwStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAwStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAwStack
+    PersistImportedDeploymentRequestProfileAwStack$Outbound,
+    PersistImportedDeploymentRequestProfileAwStack
   > = z.object({
     condition: z.nullable(
       z.record(z.string(), z.record(z.string(), z.string())),
@@ -13155,71 +7967,70 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwStack$outboun
     resources: z.array(z.string()),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAwStackToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAwStack:
-    PersistImportedDeploymentRequestPreparedStackProfileAwStack,
+export function persistImportedDeploymentRequestProfileAwStackToJSON(
+  persistImportedDeploymentRequestProfileAwStack:
+    PersistImportedDeploymentRequestProfileAwStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAwStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAwStack),
+    PersistImportedDeploymentRequestProfileAwStack$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAwStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackProfileAwResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackProfileAwStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestProfileAwBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestProfileAwResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestProfileAwStack$Outbound | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAwBinding$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAwBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAwBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAwBinding
+    PersistImportedDeploymentRequestProfileAwBinding$Outbound,
+    PersistImportedDeploymentRequestProfileAwBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAwResource$outboundSchema
+      PersistImportedDeploymentRequestProfileAwResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAwStack$outboundSchema
+      PersistImportedDeploymentRequestProfileAwStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAwBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAwBinding:
-    PersistImportedDeploymentRequestPreparedStackProfileAwBinding,
+export function persistImportedDeploymentRequestProfileAwBindingToJSON(
+  persistImportedDeploymentRequestProfileAwBinding:
+    PersistImportedDeploymentRequestProfileAwBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAwBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAwBinding),
+    PersistImportedDeploymentRequestProfileAwBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAwBinding,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileEffect$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackProfileEffect> =
-    z.enum(PersistImportedDeploymentRequestPreparedStackProfileEffect);
+export const PersistImportedDeploymentRequestProfileEffect$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProfileEffect> = z.enum(
+    PersistImportedDeploymentRequestProfileEffect,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAwGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestProfileAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAwGrant$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAwGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAwGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAwGrant
+    PersistImportedDeploymentRequestProfileAwGrant$Outbound,
+    PersistImportedDeploymentRequestProfileAwGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -13228,156 +8039,154 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAwGrant$outboun
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAwGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAwGrant:
-    PersistImportedDeploymentRequestPreparedStackProfileAwGrant,
+export function persistImportedDeploymentRequestProfileAwGrantToJSON(
+  persistImportedDeploymentRequestProfileAwGrant:
+    PersistImportedDeploymentRequestProfileAwGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAwGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAwGrant),
+    PersistImportedDeploymentRequestProfileAwGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAwGrant,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAw$Outbound = {
-  binding:
-    PersistImportedDeploymentRequestPreparedStackProfileAwBinding$Outbound;
+export type PersistImportedDeploymentRequestProfileAw$Outbound = {
+  binding: PersistImportedDeploymentRequestProfileAwBinding$Outbound;
   description?: string | null | undefined;
   effect?: string | undefined;
-  grant: PersistImportedDeploymentRequestPreparedStackProfileAwGrant$Outbound;
+  grant: PersistImportedDeploymentRequestProfileAwGrant$Outbound;
   label?: string | null | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAw$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAw$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAw$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAw
+    PersistImportedDeploymentRequestProfileAw$Outbound,
+    PersistImportedDeploymentRequestProfileAw
   > = z.object({
     binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAwBinding$outboundSchema
+      PersistImportedDeploymentRequestProfileAwBinding$outboundSchema
     ),
     description: z.nullable(z.string()).optional(),
-    effect:
-      PersistImportedDeploymentRequestPreparedStackProfileEffect$outboundSchema
-        .optional(),
+    effect: PersistImportedDeploymentRequestProfileEffect$outboundSchema
+      .optional(),
     grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAwGrant$outboundSchema
+      PersistImportedDeploymentRequestProfileAwGrant$outboundSchema
     ),
     label: z.nullable(z.string()).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAwToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAw:
-    PersistImportedDeploymentRequestPreparedStackProfileAw,
+export function persistImportedDeploymentRequestProfileAwToJSON(
+  persistImportedDeploymentRequestProfileAw:
+    PersistImportedDeploymentRequestProfileAw,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAw$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackProfileAw,
+    PersistImportedDeploymentRequestProfileAw$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAw,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureResource$Outbound =
-  {
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestProfileAzureResource$Outbound = {
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAzureResource$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAzureResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAzureResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAzureResource
+    PersistImportedDeploymentRequestProfileAzureResource$Outbound,
+    PersistImportedDeploymentRequestProfileAzureResource
   > = z.object({
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAzureResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAzureResource:
-    PersistImportedDeploymentRequestPreparedStackProfileAzureResource,
+export function persistImportedDeploymentRequestProfileAzureResourceToJSON(
+  persistImportedDeploymentRequestProfileAzureResource:
+    PersistImportedDeploymentRequestProfileAzureResource,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAzureResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAzureResource),
+    PersistImportedDeploymentRequestProfileAzureResource$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAzureResource,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureStack$Outbound =
-  {
-    scope: string;
-  };
+export type PersistImportedDeploymentRequestProfileAzureStack$Outbound = {
+  scope: string;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAzureStack$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAzureStack$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAzureStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAzureStack
+    PersistImportedDeploymentRequestProfileAzureStack$Outbound,
+    PersistImportedDeploymentRequestProfileAzureStack
   > = z.object({
     scope: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAzureStackToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAzureStack:
-    PersistImportedDeploymentRequestPreparedStackProfileAzureStack,
+export function persistImportedDeploymentRequestProfileAzureStackToJSON(
+  persistImportedDeploymentRequestProfileAzureStack:
+    PersistImportedDeploymentRequestProfileAzureStack,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAzureStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAzureStack),
+    PersistImportedDeploymentRequestProfileAzureStack$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAzureStack,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackProfileAzureResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackProfileAzureStack$Outbound
-      | undefined;
-  };
+export type PersistImportedDeploymentRequestProfileAzureBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestProfileAzureResource$Outbound
+    | undefined;
+  stack?:
+    | PersistImportedDeploymentRequestProfileAzureStack$Outbound
+    | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAzureBinding$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAzureBinding$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAzureBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAzureBinding
+    PersistImportedDeploymentRequestProfileAzureBinding$Outbound,
+    PersistImportedDeploymentRequestProfileAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAzureResource$outboundSchema
+      PersistImportedDeploymentRequestProfileAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAzureStack$outboundSchema
+      PersistImportedDeploymentRequestProfileAzureStack$outboundSchema
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAzureBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAzureBinding:
-    PersistImportedDeploymentRequestPreparedStackProfileAzureBinding,
+export function persistImportedDeploymentRequestProfileAzureBindingToJSON(
+  persistImportedDeploymentRequestProfileAzureBinding:
+    PersistImportedDeploymentRequestProfileAzureBinding,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAzureBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAzureBinding),
+    PersistImportedDeploymentRequestProfileAzureBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAzureBinding,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
+export type PersistImportedDeploymentRequestProfileAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAzureGrant
+    PersistImportedDeploymentRequestProfileAzureGrant$Outbound,
+    PersistImportedDeploymentRequestProfileAzureGrant
   > = z.object({
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
@@ -13386,490 +8195,469 @@ export const PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$outb
     residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileAzureGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAzureGrant:
-    PersistImportedDeploymentRequestPreparedStackProfileAzureGrant,
+export function persistImportedDeploymentRequestProfileAzureGrantToJSON(
+  persistImportedDeploymentRequestProfileAzureGrant:
+    PersistImportedDeploymentRequestProfileAzureGrant,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAzureGrant),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileAzure$Outbound =
-  {
-    binding:
-      PersistImportedDeploymentRequestPreparedStackProfileAzureBinding$Outbound;
-    description?: string | null | undefined;
-    grant:
-      PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$Outbound;
-    label?: string | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileAzure$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileAzure$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileAzure
-  > = z.object({
-    binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAzureBinding$outboundSchema
+    PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAzureGrant,
     ),
-    description: z.nullable(z.string()).optional(),
-    grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileAzureGrant$outboundSchema
-    ),
-    label: z.nullable(z.string()).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileAzureToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileAzure:
-    PersistImportedDeploymentRequestPreparedStackProfileAzure,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileAzure$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileAzure),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileConditionResource
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileConditionResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileConditionResource:
-    PersistImportedDeploymentRequestPreparedStackProfileConditionResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackProfileConditionResource,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackProfileResourceConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackProfileResourceConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpResource$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPreparedStackProfileConditionResource$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileGcpResource$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackProfileConditionResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileGcpResourceToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileGcpResource:
-    PersistImportedDeploymentRequestPreparedStackProfileGcpResource,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileGcpResource),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound =
-  {
-    expression: string;
-    title: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileConditionStack
-  > = z.object({
-    expression: z.string(),
-    title: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileConditionStackToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileConditionStack:
-    PersistImportedDeploymentRequestPreparedStackProfileConditionStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackProfileConditionStack,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestPreparedStackProfileStackConditionUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileStackConditionUnion:
-    PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileStackConditionUnion$outboundSchema
-      .parse(
-        persistImportedDeploymentRequestPreparedStackProfileStackConditionUnion,
-      ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpStack$Outbound =
-  {
-    condition?:
-      | PersistImportedDeploymentRequestPreparedStackProfileConditionStack$Outbound
-      | any
-      | null
-      | undefined;
-    scope: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileGcpStack$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileGcpStack$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileGcpStack
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPreparedStackProfileConditionStack$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileGcpStackToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileGcpStack:
-    PersistImportedDeploymentRequestPreparedStackProfileGcpStack,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileGcpStack$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileGcpStack),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$Outbound =
-  {
-    resource?:
-      | PersistImportedDeploymentRequestPreparedStackProfileGcpResource$Outbound
-      | undefined;
-    stack?:
-      | PersistImportedDeploymentRequestPreparedStackProfileGcpStack$Outbound
-      | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileGcpBinding
-  > = z.object({
-    resource: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileGcpResource$outboundSchema
-    ).optional(),
-    stack: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileGcpStack$outboundSchema
-    ).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileGcpBindingToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileGcpBinding:
-    PersistImportedDeploymentRequestPreparedStackProfileGcpBinding,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileGcpBinding),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcpGrant$Outbound =
-  {
-    actions?: Array<string> | null | undefined;
-    dataActions?: Array<string> | null | undefined;
-    permissions?: Array<string> | null | undefined;
-    predefinedRoles?: Array<string> | null | undefined;
-    residualPermissions?: Array<string> | null | undefined;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileGcpGrant$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileGcpGrant$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileGcpGrant
-  > = z.object({
-    actions: z.nullable(z.array(z.string())).optional(),
-    dataActions: z.nullable(z.array(z.string())).optional(),
-    permissions: z.nullable(z.array(z.string())).optional(),
-    predefinedRoles: z.nullable(z.array(z.string())).optional(),
-    residualPermissions: z.nullable(z.array(z.string())).optional(),
-  });
-
-export function persistImportedDeploymentRequestPreparedStackProfileGcpGrantToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileGcpGrant:
-    PersistImportedDeploymentRequestPreparedStackProfileGcpGrant,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileGcpGrant$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileGcpGrant),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileGcp$Outbound = {
-  binding:
-    PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$Outbound;
+export type PersistImportedDeploymentRequestProfileAzure$Outbound = {
+  binding: PersistImportedDeploymentRequestProfileAzureBinding$Outbound;
   description?: string | null | undefined;
-  grant: PersistImportedDeploymentRequestPreparedStackProfileGcpGrant$Outbound;
+  grant: PersistImportedDeploymentRequestProfileAzureGrant$Outbound;
   label?: string | null | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileGcp$outboundSchema:
+export const PersistImportedDeploymentRequestProfileAzure$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileGcp$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileGcp
+    PersistImportedDeploymentRequestProfileAzure$Outbound,
+    PersistImportedDeploymentRequestProfileAzure
   > = z.object({
     binding: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileGcpBinding$outboundSchema
+      PersistImportedDeploymentRequestProfileAzureBinding$outboundSchema
     ),
     description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfileGcpGrant$outboundSchema
+      PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema
     ),
     label: z.nullable(z.string()).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfileGcpToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileGcp:
-    PersistImportedDeploymentRequestPreparedStackProfileGcp,
+export function persistImportedDeploymentRequestProfileAzureToJSON(
+  persistImportedDeploymentRequestProfileAzure:
+    PersistImportedDeploymentRequestProfileAzure,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileGcp$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileGcp),
+    PersistImportedDeploymentRequestProfileAzure$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileAzure,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfilePlatforms$Outbound =
+export type PersistImportedDeploymentRequestProfileConditionResource$Outbound =
   {
-    aws?:
-      | Array<PersistImportedDeploymentRequestPreparedStackProfileAw$Outbound>
-      | null
-      | undefined;
-    azure?:
-      | Array<
-        PersistImportedDeploymentRequestPreparedStackProfileAzure$Outbound
-      >
-      | null
-      | undefined;
-    gcp?:
-      | Array<PersistImportedDeploymentRequestPreparedStackProfileGcp$Outbound>
-      | null
-      | undefined;
+    expression: string;
+    title: string;
   };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfilePlatforms$outboundSchema:
+export const PersistImportedDeploymentRequestProfileConditionResource$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfilePlatforms$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfilePlatforms
+    PersistImportedDeploymentRequestProfileConditionResource$Outbound,
+    PersistImportedDeploymentRequestProfileConditionResource
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProfileConditionResourceToJSON(
+  persistImportedDeploymentRequestProfileConditionResource:
+    PersistImportedDeploymentRequestProfileConditionResource,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileConditionResource$outboundSchema
+      .parse(persistImportedDeploymentRequestProfileConditionResource),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileResourceConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestProfileConditionResource$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileResourceConditionUnion$Outbound,
+    PersistImportedDeploymentRequestProfileResourceConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProfileConditionResource$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestProfileResourceConditionUnionToJSON(
+  persistImportedDeploymentRequestProfileResourceConditionUnion:
+    PersistImportedDeploymentRequestProfileResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileResourceConditionUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestProfileResourceConditionUnion),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileGcpResource$Outbound = {
+  condition?:
+    | PersistImportedDeploymentRequestProfileConditionResource$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileGcpResource$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileGcpResource$Outbound,
+    PersistImportedDeploymentRequestProfileGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProfileConditionResource$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProfileGcpResourceToJSON(
+  persistImportedDeploymentRequestProfileGcpResource:
+    PersistImportedDeploymentRequestProfileGcpResource,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileGcpResource$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileGcpResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileConditionStack$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileConditionStack$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileConditionStack$Outbound,
+    PersistImportedDeploymentRequestProfileConditionStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProfileConditionStackToJSON(
+  persistImportedDeploymentRequestProfileConditionStack:
+    PersistImportedDeploymentRequestProfileConditionStack,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileConditionStack$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileConditionStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileStackConditionUnion$Outbound =
+  | PersistImportedDeploymentRequestProfileConditionStack$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileStackConditionUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileStackConditionUnion$Outbound,
+    PersistImportedDeploymentRequestProfileStackConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProfileConditionStack$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestProfileStackConditionUnionToJSON(
+  persistImportedDeploymentRequestProfileStackConditionUnion:
+    PersistImportedDeploymentRequestProfileStackConditionUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileStackConditionUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestProfileStackConditionUnion),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileGcpStack$Outbound = {
+  condition?:
+    | PersistImportedDeploymentRequestProfileConditionStack$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileGcpStack$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileGcpStack$Outbound,
+    PersistImportedDeploymentRequestProfileGcpStack
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProfileConditionStack$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProfileGcpStackToJSON(
+  persistImportedDeploymentRequestProfileGcpStack:
+    PersistImportedDeploymentRequestProfileGcpStack,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileGcpStack$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileGcpStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileGcpBinding$Outbound = {
+  resource?:
+    | PersistImportedDeploymentRequestProfileGcpResource$Outbound
+    | undefined;
+  stack?: PersistImportedDeploymentRequestProfileGcpStack$Outbound | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileGcpBinding$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileGcpBinding$Outbound,
+    PersistImportedDeploymentRequestProfileGcpBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PersistImportedDeploymentRequestProfileGcpResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      PersistImportedDeploymentRequestProfileGcpStack$outboundSchema
+    ).optional(),
+  });
+
+export function persistImportedDeploymentRequestProfileGcpBindingToJSON(
+  persistImportedDeploymentRequestProfileGcpBinding:
+    PersistImportedDeploymentRequestProfileGcpBinding,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileGcpBinding$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileGcpBinding,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileGcpGrant$Outbound,
+    PersistImportedDeploymentRequestProfileGcpGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function persistImportedDeploymentRequestProfileGcpGrantToJSON(
+  persistImportedDeploymentRequestProfileGcpGrant:
+    PersistImportedDeploymentRequestProfileGcpGrant,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileGcpGrant,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfileGcp$Outbound = {
+  binding: PersistImportedDeploymentRequestProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: PersistImportedDeploymentRequestProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfileGcp$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfileGcp$Outbound,
+    PersistImportedDeploymentRequestProfileGcp
+  > = z.object({
+    binding: z.lazy(() =>
+      PersistImportedDeploymentRequestProfileGcpBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestProfileGcpToJSON(
+  persistImportedDeploymentRequestProfileGcp:
+    PersistImportedDeploymentRequestProfileGcp,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProfileGcp$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileGcp,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProfilePlatforms$Outbound = {
+  aws?:
+    | Array<PersistImportedDeploymentRequestProfileAw$Outbound>
+    | null
+    | undefined;
+  azure?:
+    | Array<PersistImportedDeploymentRequestProfileAzure$Outbound>
+    | null
+    | undefined;
+  gcp?:
+    | Array<PersistImportedDeploymentRequestProfileGcp$Outbound>
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProfilePlatforms$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProfilePlatforms$Outbound,
+    PersistImportedDeploymentRequestProfilePlatforms
   > = z.object({
     aws: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackProfileAw$outboundSchema
+        PersistImportedDeploymentRequestProfileAw$outboundSchema
       )),
     ).optional(),
     azure: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackProfileAzure$outboundSchema
+        PersistImportedDeploymentRequestProfileAzure$outboundSchema
       )),
     ).optional(),
     gcp: z.nullable(
       z.array(z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackProfileGcp$outboundSchema
+        PersistImportedDeploymentRequestProfileGcp$outboundSchema
       )),
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackProfilePlatformsToJSON(
-  persistImportedDeploymentRequestPreparedStackProfilePlatforms:
-    PersistImportedDeploymentRequestPreparedStackProfilePlatforms,
+export function persistImportedDeploymentRequestProfilePlatformsToJSON(
+  persistImportedDeploymentRequestProfilePlatforms:
+    PersistImportedDeploymentRequestProfilePlatforms,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfilePlatforms$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfilePlatforms),
+    PersistImportedDeploymentRequestProfilePlatforms$outboundSchema.parse(
+      persistImportedDeploymentRequestProfilePlatforms,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfile$Outbound = {
+export type PersistImportedDeploymentRequestProfile$Outbound = {
   description: string;
   id: string;
-  platforms:
-    PersistImportedDeploymentRequestPreparedStackProfilePlatforms$Outbound;
+  platforms: PersistImportedDeploymentRequestProfilePlatforms$Outbound;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfile$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfile$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfile
-  > = z.object({
-    description: z.string(),
-    id: z.string(),
-    platforms: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfilePlatforms$outboundSchema
-    ),
-  });
+export const PersistImportedDeploymentRequestProfile$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestProfile$Outbound,
+  PersistImportedDeploymentRequestProfile
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() =>
+    PersistImportedDeploymentRequestProfilePlatforms$outboundSchema
+  ),
+});
 
-export function persistImportedDeploymentRequestPreparedStackProfileToJSON(
-  persistImportedDeploymentRequestPreparedStackProfile:
-    PersistImportedDeploymentRequestPreparedStackProfile,
+export function persistImportedDeploymentRequestProfileToJSON(
+  persistImportedDeploymentRequestProfile:
+    PersistImportedDeploymentRequestProfile,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfile$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackProfile,
+    PersistImportedDeploymentRequestProfile$outboundSchema.parse(
+      persistImportedDeploymentRequestProfile,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackProfileUnion$Outbound =
-  | PersistImportedDeploymentRequestPreparedStackProfile$Outbound
+export type PersistImportedDeploymentRequestProfileUnion$Outbound =
+  | PersistImportedDeploymentRequestProfile$Outbound
   | string;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackProfileUnion$outboundSchema:
+export const PersistImportedDeploymentRequestProfileUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackProfileUnion$Outbound,
-    PersistImportedDeploymentRequestPreparedStackProfileUnion
+    PersistImportedDeploymentRequestProfileUnion$Outbound,
+    PersistImportedDeploymentRequestProfileUnion
   > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackProfile$outboundSchema
-    ),
+    z.lazy(() => PersistImportedDeploymentRequestProfile$outboundSchema),
     z.string(),
   ]);
 
-export function persistImportedDeploymentRequestPreparedStackProfileUnionToJSON(
-  persistImportedDeploymentRequestPreparedStackProfileUnion:
-    PersistImportedDeploymentRequestPreparedStackProfileUnion,
+export function persistImportedDeploymentRequestProfileUnionToJSON(
+  persistImportedDeploymentRequestProfileUnion:
+    PersistImportedDeploymentRequestProfileUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackProfileUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackProfileUnion),
+    PersistImportedDeploymentRequestProfileUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestProfileUnion,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackPermissions$Outbound =
-  {
-    management?:
-      | PersistImportedDeploymentRequestPreparedStackManagement1$Outbound
-      | PersistImportedDeploymentRequestPreparedStackManagement2$Outbound
-      | string
-      | undefined;
-    profiles: {
-      [k: string]: {
-        [k: string]: Array<
-          PersistImportedDeploymentRequestPreparedStackProfile$Outbound | string
-        >;
-      };
+export type PersistImportedDeploymentRequestPermissions$Outbound = {
+  management?:
+    | PersistImportedDeploymentRequestManagement1$Outbound
+    | PersistImportedDeploymentRequestManagement2$Outbound
+    | string
+    | undefined;
+  profiles: {
+    [k: string]: {
+      [k: string]: Array<
+        PersistImportedDeploymentRequestProfile$Outbound | string
+      >;
     };
   };
+};
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackPermissions$outboundSchema:
+export const PersistImportedDeploymentRequestPermissions$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackPermissions$Outbound,
-    PersistImportedDeploymentRequestPreparedStackPermissions
+    PersistImportedDeploymentRequestPermissions$Outbound,
+    PersistImportedDeploymentRequestPermissions
   > = z.object({
     management: z.union([
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackManagement1$outboundSchema
-      ),
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackManagement2$outboundSchema
-      ),
-      PersistImportedDeploymentRequestPreparedStackManagementEnum$outboundSchema,
+      z.lazy(() => PersistImportedDeploymentRequestManagement1$outboundSchema),
+      z.lazy(() => PersistImportedDeploymentRequestManagement2$outboundSchema),
+      PersistImportedDeploymentRequestManagementEnum$outboundSchema,
     ]).optional(),
     profiles: z.record(
       z.string(),
@@ -13878,7 +8666,7 @@ export const PersistImportedDeploymentRequestPreparedStackPermissions$outboundSc
         z.array(
           z.union([
             z.lazy(() =>
-              PersistImportedDeploymentRequestPreparedStackProfile$outboundSchema
+              PersistImportedDeploymentRequestProfile$outboundSchema
             ),
             z.string(),
           ]),
@@ -13887,143 +8675,133 @@ export const PersistImportedDeploymentRequestPreparedStackPermissions$outboundSc
     ),
   });
 
-export function persistImportedDeploymentRequestPreparedStackPermissionsToJSON(
-  persistImportedDeploymentRequestPreparedStackPermissions:
-    PersistImportedDeploymentRequestPreparedStackPermissions,
+export function persistImportedDeploymentRequestPermissionsToJSON(
+  persistImportedDeploymentRequestPermissions:
+    PersistImportedDeploymentRequestPermissions,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackPermissions$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackPermissions),
+    PersistImportedDeploymentRequestPermissions$outboundSchema.parse(
+      persistImportedDeploymentRequestPermissions,
+    ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackConfig$Outbound = {
+export type PersistImportedDeploymentRequestConfig$Outbound = {
   id: string;
   type: string;
   [additionalProperties: string]: unknown;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackConfig$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackConfig$Outbound,
-    PersistImportedDeploymentRequestPreparedStackConfig
-  > = z.object({
-    id: z.string(),
-    type: z.string(),
-    additionalProperties: z.record(z.string(), z.nullable(z.any())).optional(),
-  }).transform((v) => {
-    return {
-      ...v.additionalProperties,
-      ...remap$(v, {
-        additionalProperties: null,
-      }),
-    };
-  });
+export const PersistImportedDeploymentRequestConfig$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestConfig$Outbound,
+  PersistImportedDeploymentRequestConfig
+> = z.object({
+  id: z.string(),
+  type: z.string(),
+  additionalProperties: z.record(z.string(), z.nullable(z.any())).optional(),
+}).transform((v) => {
+  return {
+    ...v.additionalProperties,
+    ...remap$(v, {
+      additionalProperties: null,
+    }),
+  };
+});
 
-export function persistImportedDeploymentRequestPreparedStackConfigToJSON(
-  persistImportedDeploymentRequestPreparedStackConfig:
-    PersistImportedDeploymentRequestPreparedStackConfig,
+export function persistImportedDeploymentRequestConfigToJSON(
+  persistImportedDeploymentRequestConfig:
+    PersistImportedDeploymentRequestConfig,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackConfig$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackConfig,
+    PersistImportedDeploymentRequestConfig$outboundSchema.parse(
+      persistImportedDeploymentRequestConfig,
     ),
   );
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackDependency$Outbound = {
+export type PersistImportedDeploymentRequestDependency$Outbound = {
   id: string;
   type: string;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackDependency$outboundSchema:
+export const PersistImportedDeploymentRequestDependency$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackDependency$Outbound,
-    PersistImportedDeploymentRequestPreparedStackDependency
+    PersistImportedDeploymentRequestDependency$Outbound,
+    PersistImportedDeploymentRequestDependency
   > = z.object({
     id: z.string(),
     type: z.string(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackDependencyToJSON(
-  persistImportedDeploymentRequestPreparedStackDependency:
-    PersistImportedDeploymentRequestPreparedStackDependency,
+export function persistImportedDeploymentRequestDependencyToJSON(
+  persistImportedDeploymentRequestDependency:
+    PersistImportedDeploymentRequestDependency,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackDependency$outboundSchema
-      .parse(persistImportedDeploymentRequestPreparedStackDependency),
+    PersistImportedDeploymentRequestDependency$outboundSchema.parse(
+      persistImportedDeploymentRequestDependency,
+    ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackLifecycle$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPreparedStackLifecycle> = z
-    .enum(PersistImportedDeploymentRequestPreparedStackLifecycle);
+export const PersistImportedDeploymentRequestLifecycle$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestLifecycle> = z.enum(
+    PersistImportedDeploymentRequestLifecycle,
+  );
 
 /** @internal */
-export type PersistImportedDeploymentRequestPreparedStackResources$Outbound = {
-  config: PersistImportedDeploymentRequestPreparedStackConfig$Outbound;
-  dependencies: Array<
-    PersistImportedDeploymentRequestPreparedStackDependency$Outbound
-  >;
-  enabledWhen?: string | null | undefined;
+export type PersistImportedDeploymentRequestResources$Outbound = {
+  config: PersistImportedDeploymentRequestConfig$Outbound;
+  dependencies: Array<PersistImportedDeploymentRequestDependency$Outbound>;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackResources$outboundSchema:
+export const PersistImportedDeploymentRequestResources$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPreparedStackResources$Outbound,
-    PersistImportedDeploymentRequestPreparedStackResources
+    PersistImportedDeploymentRequestResources$Outbound,
+    PersistImportedDeploymentRequestResources
   > = z.object({
-    config: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackConfig$outboundSchema
-    ),
+    config: z.lazy(() => PersistImportedDeploymentRequestConfig$outboundSchema),
     dependencies: z.array(
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackDependency$outboundSchema
-      ),
+      z.lazy(() => PersistImportedDeploymentRequestDependency$outboundSchema),
     ),
-    enabledWhen: z.nullable(z.string()).optional(),
-    lifecycle:
-      PersistImportedDeploymentRequestPreparedStackLifecycle$outboundSchema,
+    lifecycle: PersistImportedDeploymentRequestLifecycle$outboundSchema,
     remoteAccess: z.boolean().optional(),
   });
 
-export function persistImportedDeploymentRequestPreparedStackResourcesToJSON(
-  persistImportedDeploymentRequestPreparedStackResources:
-    PersistImportedDeploymentRequestPreparedStackResources,
+export function persistImportedDeploymentRequestResourcesToJSON(
+  persistImportedDeploymentRequestResources:
+    PersistImportedDeploymentRequestResources,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPreparedStackResources$outboundSchema.parse(
-      persistImportedDeploymentRequestPreparedStackResources,
+    PersistImportedDeploymentRequestResources$outboundSchema.parse(
+      persistImportedDeploymentRequestResources,
     ),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPreparedStackSupportedPlatform$outboundSchema:
-  z.ZodEnum<
-    typeof PersistImportedDeploymentRequestPreparedStackSupportedPlatform
-  > = z.enum(PersistImportedDeploymentRequestPreparedStackSupportedPlatform);
+export const PersistImportedDeploymentRequestSupportedPlatform$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestSupportedPlatform> = z.enum(
+    PersistImportedDeploymentRequestSupportedPlatform,
+  );
 
 /** @internal */
 export type PersistImportedDeploymentRequestPreparedStack$Outbound = {
   id: string;
-  inputs?:
-    | Array<PersistImportedDeploymentRequestPreparedStackInput$Outbound>
-    | undefined;
+  inputs?: Array<PersistImportedDeploymentRequestInput$Outbound> | undefined;
   permissions?:
-    | PersistImportedDeploymentRequestPreparedStackPermissions$Outbound
+    | PersistImportedDeploymentRequestPermissions$Outbound
     | undefined;
   resources: {
-    [k: string]:
-      PersistImportedDeploymentRequestPreparedStackResources$Outbound;
+    [k: string]: PersistImportedDeploymentRequestResources$Outbound;
   };
   supportedPlatforms?: Array<string> | null | undefined;
 };
@@ -14036,23 +8814,17 @@ export const PersistImportedDeploymentRequestPreparedStack$outboundSchema:
   > = z.object({
     id: z.string(),
     inputs: z.array(
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackInput$outboundSchema
-      ),
+      z.lazy(() => PersistImportedDeploymentRequestInput$outboundSchema),
     ).optional(),
     permissions: z.lazy(() =>
-      PersistImportedDeploymentRequestPreparedStackPermissions$outboundSchema
+      PersistImportedDeploymentRequestPermissions$outboundSchema
     ).optional(),
     resources: z.record(
       z.string(),
-      z.lazy(() =>
-        PersistImportedDeploymentRequestPreparedStackResources$outboundSchema
-      ),
+      z.lazy(() => PersistImportedDeploymentRequestResources$outboundSchema),
     ),
     supportedPlatforms: z.nullable(
-      z.array(
-        PersistImportedDeploymentRequestPreparedStackSupportedPlatform$outboundSchema,
-      ),
+      z.array(PersistImportedDeploymentRequestSupportedPlatform$outboundSchema),
     ).optional(),
   });
 
@@ -14094,90 +8866,15 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound =
-  {
-    baselineFrozenDigest: string;
-    nonce: string;
-    releaseId: string;
-    setupFingerprint: string;
-    setupFingerprintVersion: number;
-    setupTarget: string;
-    targetFrozenDigest: string;
-  };
-
-/** @internal */
-export const PersistImportedDeploymentRequestSetupUpdateAuthorization$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound,
-    PersistImportedDeploymentRequestSetupUpdateAuthorization
-  > = z.object({
-    baselineFrozenDigest: z.string(),
-    nonce: z.string(),
-    releaseId: z.string(),
-    setupFingerprint: z.string(),
-    setupFingerprintVersion: z.int(),
-    setupTarget: z.string(),
-    targetFrozenDigest: z.string(),
-  });
-
-export function persistImportedDeploymentRequestSetupUpdateAuthorizationToJSON(
-  persistImportedDeploymentRequestSetupUpdateAuthorization:
-    PersistImportedDeploymentRequestSetupUpdateAuthorization,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestSetupUpdateAuthorization$outboundSchema
-      .parse(persistImportedDeploymentRequestSetupUpdateAuthorization),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$Outbound =
-  | PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$Outbound,
-    PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion
-  > = z.union([
-    z.lazy(() =>
-      PersistImportedDeploymentRequestSetupUpdateAuthorization$outboundSchema
-    ),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestSetupUpdateAuthorizationUnionToJSON(
-  persistImportedDeploymentRequestSetupUpdateAuthorizationUnion:
-    PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestSetupUpdateAuthorizationUnion),
-  );
-}
-
-/** @internal */
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
   lastSyncedEnvVarsHash?: string | null | undefined;
   lastSyncedSecretNames?: Array<string> | undefined;
-  pendingPreparedStack?:
-    | PersistImportedDeploymentRequestPendingPreparedStack$Outbound
-    | any
-    | null
-    | undefined;
-  persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
     | any
     | null
     | undefined;
   registryAccessGranted?: boolean | undefined;
-  setupUpdateAuthorization?:
-    | PersistImportedDeploymentRequestSetupUpdateAuthorization$Outbound
-    | any
-    | null
-    | undefined;
 };
 
 /** @internal */
@@ -14188,15 +8885,6 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
   > = z.object({
     lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
     lastSyncedSecretNames: z.array(z.string()).optional(),
-    pendingPreparedStack: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestPendingPreparedStack$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    persistedGateAnswers: z.record(z.string(), z.boolean()).optional(),
     preparedStack: z.nullable(
       z.union([
         z.lazy(() =>
@@ -14206,14 +8894,6 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
       ]),
     ).optional(),
     registryAccessGranted: z.boolean().optional(),
-    setupUpdateAuthorization: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PersistImportedDeploymentRequestSetupUpdateAuthorization$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
   });
 
 export function persistImportedDeploymentRequestRuntimeMetadataToJSON(
@@ -14401,7 +9081,6 @@ export type PersistImportedDeploymentRequest$Outbound = {
     | null
     | undefined;
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata$Outbound;
-  scheduleReconciliation: boolean;
   deploymentProtocolVersion: number;
   status: string;
   currentReleaseId?: string | undefined;
@@ -14460,7 +9139,6 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   runtimeMetadata: z.lazy(() =>
     PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema
   ),
-  scheduleReconciliation: z.boolean().default(false),
   deploymentProtocolVersion: z.int(),
   status: PersistImportedDeploymentRequestStatus$outboundSchema.default(
     "provisioning",

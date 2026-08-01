@@ -5,11 +5,11 @@
 ```typescript
 import { GetReleaseInclude } from "@alienplatform/platform-api/models/operations";
 
-let value: GetReleaseInclude = "createdBy";
+let value: GetReleaseInclude = "project";
 ```
 
 ## Values
 
 ```typescript
-"project" | "rollout" | "createdBy"
+"project"
 ```

@@ -21,7 +21,7 @@ export type CreateReleaseRequest = {
   project: string;
   version?: string | undefined;
   gitMetadata?: GitMetadata | null | undefined;
-  stack?: StackByPlatform | undefined;
+  stack?: StackByPlatform | null | undefined;
   rootDirectory?: string | null | undefined;
 };
 
@@ -30,7 +30,7 @@ export type CreateReleaseRequest$Outbound = {
   project: string;
   version?: string | undefined;
   gitMetadata?: GitMetadata$Outbound | null | undefined;
-  stack?: StackByPlatform$Outbound | undefined;
+  stack?: StackByPlatform$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
 };
 
@@ -42,7 +42,7 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   project: z.string(),
   version: z.string().optional(),
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
-  stack: StackByPlatform$outboundSchema.optional(),
+  stack: z.nullable(StackByPlatform$outboundSchema).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
 });
 

@@ -15,14 +15,16 @@ export type GenerateManagerTokenRequest = {
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
-  generateManagerTokenRequest: models.GenerateManagerTokenRequest;
+  generateManagerTokenRequest?: models.GenerateManagerTokenRequest | undefined;
 };
 
 /** @internal */
 export type GenerateManagerTokenRequest$Outbound = {
   id: string;
   workspace?: string | undefined;
-  GenerateManagerTokenRequest: models.GenerateManagerTokenRequest$Outbound;
+  GenerateManagerTokenRequest?:
+    | models.GenerateManagerTokenRequest$Outbound
+    | undefined;
 };
 
 /** @internal */
@@ -32,8 +34,8 @@ export const GenerateManagerTokenRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
-  generateManagerTokenRequest:
-    models.GenerateManagerTokenRequest$outboundSchema,
+  generateManagerTokenRequest: models.GenerateManagerTokenRequest$outboundSchema
+    .optional(),
 }).transform((v) => {
   return remap$(v, {
     generateManagerTokenRequest: "GenerateManagerTokenRequest",

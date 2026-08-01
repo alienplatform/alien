@@ -8,7 +8,6 @@
 * [context](#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 * [acquire](#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 * [reconcile](#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
-* [renew](#renew)
 * [release](#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ## list
@@ -203,7 +202,6 @@ async function run() {
     syncAcquireRequest: {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       session: "<value>",
-      requestId: "<id>",
       deploymentIds: [
         "dep_0c29fq4a2yjb7kx3smwdgxlc",
       ],
@@ -237,7 +235,6 @@ async function run() {
     syncAcquireRequest: {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       session: "<value>",
-      requestId: "<id>",
       deploymentIds: [
         "dep_0c29fq4a2yjb7kx3smwdgxlc",
       ],
@@ -358,93 +355,6 @@ run();
 ### Response
 
 **Promise\<[models.SyncReconcileResponse](../../models/syncreconcileresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## renew
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="syncRenew" method="post" path="/v1/sync/renew" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.sync.renew({
-    workspace: "my-workspace",
-    syncRenewRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      session: "<value>",
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { syncRenew } from "@alienplatform/platform-api/funcs/syncRenew.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await syncRenew(alien, {
-    workspace: "my-workspace",
-    syncRenewRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      session: "<value>",
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("syncRenew failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncRenewRequest](../../models/operations/syncrenewrequest.md)                                                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[operations.SyncRenewResponse](../../models/operations/syncrenewresponse.md)\>**
 
 ### Errors
 
