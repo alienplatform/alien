@@ -460,6 +460,15 @@ fn storage_permission_owners(
         }
     }
 
+    if let Some(profile) = ctx.stack.management().profile() {
+        let refs = storage_permission_refs(profile, ctx.resource_id);
+        if !refs.is_empty() {
+            if let Some(role_id) = remote_stack_management_role_id(ctx) {
+                owners.push((role_id, refs));
+            }
+        }
+    }
+
     if ctx.resource.is_remote_frozen_storage() {
         if let Some(role_id) = remote_bindings_role_id(ctx) {
             owners.push((
@@ -521,5 +530,19 @@ fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {
         }
         let logical_id = ctx.name_for(id)?;
         Some(super::remote_stack_management::remote_bindings_role_logical_id(logical_id))
+    })
+}
+
+fn remote_stack_management_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() != RemoteStackManagement::RESOURCE_TYPE {
+            return None;
+        }
+        let logical_id = ctx.name_for(id)?;
+        if logical_id == "Management" {
+            Some("ManagementRole".to_string())
+        } else {
+            Some(format!("{logical_id}Role"))
+        }
     })
 }

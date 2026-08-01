@@ -61,6 +61,9 @@ fn gcp_storage_public_read_allows_object_viewer() {
 #[test]
 fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
     let stack = Stack::new("acme-remote-storage".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["storage/heartbeat"]),
+        ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
@@ -83,7 +86,7 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
         "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_management_remote_bindings_storage_0\""
     ));
     assert!(rendered.contains("google_service_account.management_remote_bindings.email"));
-    assert!(!rendered
+    assert!(rendered
         .contains("member = \"serviceAccount:${google_service_account.management.email}\""));
     assert!(rendered.contains("\"storage.objects.get\""));
     assert!(rendered.contains("\"storage.objects.list\""));

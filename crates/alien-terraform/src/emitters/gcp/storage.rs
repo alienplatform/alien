@@ -225,6 +225,15 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         }
     }
 
+    if let Some(profile) = ctx.stack.management().profile() {
+        let refs = storage_permission_refs(profile, ctx.resource_id);
+        if !refs.is_empty() {
+            if let Some(label) = remote_stack_management_label(ctx) {
+                owners.push((label.to_string(), refs));
+            }
+        }
+    }
+
     if ctx.resource.is_remote_frozen_storage() {
         if let Some(label) = remote_stack_management_label(ctx) {
             owners.push((

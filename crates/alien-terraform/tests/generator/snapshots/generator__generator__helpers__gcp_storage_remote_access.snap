@@ -219,6 +219,32 @@ resource "google_service_account_iam_member" "management_remote_bindings_manager
   member             = "serviceAccount:${each.value}"
 }
 
+resource "google_project_iam_custom_role" "gcp_role_check_cloud_storage_health" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_check_cloud_storage_health", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Check Cloud Storage Health"
+  description = "Used by ${local.deployment_name}. Read Cloud Storage bucket configuration needed for application health checks. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "storage.bucketOperations.get",
+    "storage.bucketOperations.list",
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy",
+    "storage.hmacKeys.get",
+    "storage.hmacKeys.list",
+    "storage.managedFolders.get",
+    "storage.managedFolders.getIamPolicy",
+    "storage.managedFolders.list"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_check_cloud_storage_health_management_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_check_cloud_storage_health[0].name : format("projects/%s/roles/role_%s_check_cloud_storage_health", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.management.email}"
+}
+
 resource "google_service_account_iam_member" "management_manager_token_creator" {
   for_each           = toset(compact([var.managing_service_account_email]))
   service_account_id = google_service_account.management.id
@@ -250,6 +276,12 @@ resource "google_storage_bucket" "uploads" {
   }
 }
 
+resource "google_storage_bucket_iam_member" "gcp_role_check_cloud_storage_health_uploads_management_storage_0" {
+  bucket = google_storage_bucket.uploads.name
+  role   = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_check_cloud_storage_health[0].name : format("projects/%s/roles/role_%s_check_cloud_storage_health", var.gcp_project, local.gcp_custom_role_prefix)
+  member = "serviceAccount:${google_service_account.management.email}"
+}
+
 resource "google_project_iam_custom_role" "gcp_role_storage_remote_data_write" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
@@ -277,6 +309,7 @@ resource "time_sleep" "gcp_iam_propagation" {
   depends_on = [
     google_service_account_iam_member.management_remote_bindings_manager_token_creator,
     google_service_account_iam_member.management_remote_bindings_manager_user,
+    google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user
   ]
@@ -304,9 +337,12 @@ resource "terraform_data" "deployment_registration" {
     google_service_account.management_remote_bindings,
     google_service_account_iam_member.management_remote_bindings_manager_token_creator,
     google_service_account_iam_member.management_remote_bindings_manager_user,
+    google_project_iam_custom_role.gcp_role_check_cloud_storage_health,
+    google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
     google_storage_bucket.uploads,
+    google_storage_bucket_iam_member.gcp_role_check_cloud_storage_health_uploads_management_storage_0,
     google_project_iam_custom_role.gcp_role_storage_remote_data_write,
     google_storage_bucket_iam_member.gcp_role_storage_remote_data_write_uploads_management_remote_bindings_storage_0,
     time_sleep.gcp_iam_propagation
