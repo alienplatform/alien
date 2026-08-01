@@ -89,6 +89,13 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
     let result = generator
         .generate_policy(permission_set, BindingTarget::Stack, &context)
         .expect("compute cluster execute policy should generate");
+
+    let unique_sids = result
+        .statement
+        .iter()
+        .map(|statement| statement.sid.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique_sids.len(), result.statement.len());
     let actions = result
         .statement
         .iter()
@@ -104,6 +111,35 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
         assert!(
             !actions.contains(&action),
             "machine role must not grant {action}"
+        );
+    }
+}
+
+#[test]
+fn compute_cluster_execute_can_observe_runtime_cleanup() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/execute").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("compute cluster execute policy should generate");
+
+    for action in [
+        "ec2:DescribeTags",
+        "elasticloadbalancing:DescribeTargetHealth",
+    ] {
+        let statement = result
+            .statement
+            .iter()
+            .find(|statement| statement.action.iter().any(|candidate| candidate == action))
+            .unwrap_or_else(|| panic!("compute runtime should grant {action}"));
+
+        assert_eq!(statement.resource, ["*".to_string()]);
+        assert!(
+            statement.condition.is_none(),
+            "{action} does not support resource-scoped conditions"
         );
     }
 }
