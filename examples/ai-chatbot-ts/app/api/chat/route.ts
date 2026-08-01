@@ -1,9 +1,9 @@
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
-import { type AiConnection, ai, getAiConnection, postgres } from "@alienplatform/sdk"
+import { type AiConnection, ai, getAiConnection } from "@alienplatform/sdk"
 import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
-import { Pool } from "pg"
 import { z } from "zod"
+import { queryPool } from "../../db"
 import { ensureSeeded } from "../../seed"
 
 // The gateway forwards each model to its own upstream wire format rather than
@@ -23,36 +23,6 @@ function modelFor(modelId: string, connection: AiConnection) {
   return createOpenAICompatible({ name: "alien", ...connection })(modelId)
 }
 
-// The binding reads the password from the cloud secret store at runtime with the
-// workload's own identity — it is never in the environment.
-let dbPool: Promise<Pool> | undefined
-function db(): Promise<Pool> {
-  if (!dbPool) {
-    dbPool = (async () => {
-      const conn = await postgres("db").connection()
-      // Field style + conn.ssl, NOT conn.connectionString: node-postgres parses the
-      // URL's sslmode and overrides ssl, which breaks the managed-cloud cert path.
-      return new Pool({
-        host: conn.host,
-        port: conn.port,
-        database: conn.database,
-        user: conn.username,
-        password: conn.password,
-        ssl: conn.ssl,
-        // The model writes the SQL, so the session bounds it rather than the parser:
-        // read-only stops writes, and the timeout stops a `pg_sleep` or runaway scan
-        // from pinning a pool connection.
-        options: "-c default_transaction_read_only=on -c statement_timeout=10000",
-      })
-    })().catch(err => {
-      // Don't cache a failed resolution; let the next request retry.
-      dbPool = undefined
-      throw err
-    })
-  }
-  return dbPool
-}
-
 const MAX_ROWS = 50
 
 const queryDatabase = tool({
@@ -70,7 +40,7 @@ const queryDatabase = tool({
       return { error: "only a single read-only SELECT or WITH statement is allowed" }
     }
     await ensureSeeded()
-    const pool = await db()
+    const pool = await queryPool()
     // A LIMIT keeps the database from returning rows the client would only buffer
     // and drop; the extra row is what tells the model its answer was truncated.
     const result = await pool.query(`select * from (${statement}) as q limit ${MAX_ROWS + 1}`)

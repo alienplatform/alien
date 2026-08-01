@@ -2,6 +2,7 @@
 
 import { useChat } from "@ai-sdk/react"
 import { useEffect, useRef, useState } from "react"
+import { DataDrawer } from "./components/data-drawer"
 import { GrainBackground } from "./components/grain-background"
 import { Message } from "./components/message"
 import { Spinner } from "./components/spinner"
@@ -59,6 +60,7 @@ export default function Chat() {
         <span className="size-2 rounded-full bg-brand" aria-hidden="true" />
         <h1 className="text-sm font-medium tracking-tight">AI chatbot on Alien</h1>
         <div className="ml-auto flex items-center gap-2">
+          <DataDrawer />
           <select
             value={model}
             onChange={e => setModel(e.target.value)}
