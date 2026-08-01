@@ -158,12 +158,7 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
     // is the IAM policy carrying its id, which also proves the grant follows the gate.
     assert_cloud_gate_pair(
         &env,
-        &[
-            "iam",
-            "get-account-authorization-details",
-            "--output",
-            "json",
-        ],
+        &["iam", "get-account-authorization-details", "--output", "json"],
         "optional-vault-on",
         "optional-vault-off",
     )

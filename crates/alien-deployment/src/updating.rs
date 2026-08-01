@@ -619,14 +619,12 @@ mod tests {
         stack_state.resources.insert(
             "declined".to_string(),
             state_entry(
-                Resource::new(
-                    Worker::new("declined".to_string())
-                        .permissions("execution".to_string())
-                        .code(WorkerCode::Image {
-                            image: "example.com/declined:latest".to_string(),
-                        })
-                        .build(),
-                ),
+                Resource::new(Worker::new("declined".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "example.com/declined:latest".to_string(),
+                    })
+                    .build()),
                 ResourceStatus::Running,
             ),
         );

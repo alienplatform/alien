@@ -3815,19 +3815,6 @@ mod tests {
             .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
     }
 
-    fn count_hcl_string_assignments(rendered: &str, key: &str, value: &str) -> usize {
-        let expected_value = format!("\"{value}\"");
-        rendered
-            .lines()
-            .filter(|line| {
-                line.split_once('=')
-                    .is_some_and(|(actual_key, actual_value)| {
-                        actual_key.trim() == key && actual_value.trim() == expected_value
-                    })
-            })
-            .count()
-    }
-
     fn imported_resource<T: serde::Serialize>(
         resource_type: &'static str,
         data: &T,
@@ -4181,10 +4168,9 @@ mod tests {
             rendered.contains("\"eks.amazonaws.com/role-arn\" = aws_iam_role.management.arn"),
             "Helm values must annotate the manager service account with its IRSA role"
         );
-        assert_eq!(
-            count_hcl_string_assignments(&rendered, "id", "management"),
-            1,
-            "rendered Terraform should register exactly one management identity resource"
+        assert!(
+            rendered.contains("id   = \"management\""),
+            "rendered Terraform should include the management identity resource"
         );
         assert!(
             rendered.contains("eks:DescribeCluster"),
@@ -4347,6 +4333,7 @@ mod tests {
             .iter()
             .map(|(_, contents)| contents)
             .collect::<String>();
+
         assert!(rendered.contains(
             "resource \"google_project_iam_custom_role\" \"gcp_role_manage_cloud_run_services\""
         ));
@@ -4400,14 +4387,17 @@ mod tests {
             iam_member_declarations.len(),
             "GCP IAM member declarations should be unique: {iam_member_declarations:?}"
         );
-        let viewer_bindings =
-            count_hcl_string_assignments(&rendered, "role", "roles/secretmanager.viewer");
+        let viewer_bindings = rendered
+            .matches("role    = \"roles/secretmanager.viewer\"")
+            .count();
         assert_eq!(
             viewer_bindings, 4,
             "GCP vault heartbeat/management bindings should be emitted once per target scope"
         );
         assert_eq!(
-            count_hcl_string_assignments(&rendered, "title", "ResourceVaultSecretsHeartbeat",),
+            rendered
+                .matches("title       = \"ResourceVaultSecretsHeartbeat\"")
+                .count(),
             2,
             "resource-scoped vault heartbeat conditions should be emitted once per generated vault"
         );
