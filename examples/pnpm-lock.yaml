@@ -19,6 +19,9 @@ importers:
 
   ai-chatbot-ts:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: ^2.0.0
+        version: 2.0.92(zod@4.3.2)
       '@ai-sdk/openai-compatible':
         specifier: ^1.0.0
         version: 1.0.47(zod@4.3.2)
@@ -536,6 +539,12 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.12.0)(jiti@2.7.0)(lightningcss@1.32.0)
 
 packages:
+
+  '@ai-sdk/anthropic@2.0.92':
+    resolution: {integrity: sha512-MlIQpuOnchlroR93Dq2GNw12jh/SAVjuFARXWRF/2SfowMv3J2fvPBUzA60waoQivZlf3XkzQ2nxSwer7dnh2g==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
 
   '@ai-sdk/gateway@2.0.122':
     resolution: {integrity: sha512-cA6VJaaBRkb9/s5P7jpA2NgxB/Kq5V+c1jrwQ95KJOyJTkHlmquuMV8zV9w5Tb2mEQ8tdwn9rymvB1UjvA/mxw==}
@@ -3456,6 +3465,12 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@ai-sdk/anthropic@2.0.92(zod@4.3.2)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.3
+      '@ai-sdk/provider-utils': 3.0.31(zod@4.3.2)
+      zod: 4.3.2
 
   '@ai-sdk/gateway@2.0.122(zod@4.3.2)':
     dependencies:
