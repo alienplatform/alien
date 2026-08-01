@@ -348,18 +348,9 @@ mod tests {
         let mut subject = deployment_token("d1");
         subject.role = Role::RemoteBindingResolver;
 
-        assert!(OssAuthz.can_resolve_remote_bindings(
-            &subject,
-            &deployment("d1", "dg-a")
-        ));
-        assert!(!OssAuthz.can_resolve_remote_bindings(
-            &subject,
-            &deployment("d2", "dg-a")
-        ));
-        assert!(!OssAuthz.can_read_deployment(
-            &subject,
-            &deployment("d1", "dg-a")
-        ));
+        assert!(OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d1", "dg-a")));
+        assert!(!OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d2", "dg-a")));
+        assert!(!OssAuthz.can_read_deployment(&subject, &deployment("d1", "dg-a")));
     }
 
     #[test]

@@ -506,6 +506,38 @@ fn emit_setup_management_role_definitions(
     Ok(())
 }
 
+/// Emits custom roles used by the stack's dedicated Remote Bindings identity.
+/// These roles are deliberately separate from setup management permissions.
+pub fn emit_remote_bindings_role_definitions(
+    fragment: &mut TfFragment,
+    permission_set: &PermissionSet,
+) -> Result<()> {
+    for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
+        .into_iter()
+        .enumerate()
+    {
+        let role_definition = &mut custom_role.role_definition;
+        let role_label = remote_bindings_role_label(&role_definition.name, index);
+        let role_segment = azure_resource_role_key_segment(&custom_role.key);
+        role_definition.name = format!(
+            "${{local.resource_prefix}}-{} [remote-bindings]",
+            role_definition.name
+        );
+
+        fragment.push_shared_resource(role_definition_block(
+            &role_label,
+            expr::template(role_definition.name.clone()),
+            expr::raw(&format!(
+                "uuidv5(\"oid\", \"deployment:azure:remote-bindings-role-def:${{local.resource_prefix}}:{}:{role_segment}\")",
+                permission_set.id
+            )),
+            custom_role.role_definition,
+        ));
+    }
+
+    Ok(())
+}
+
 fn setup_resource_custom_roles(
     permission_set: &PermissionSet,
 ) -> Result<Vec<alien_permissions::generators::AzureCustomRole>> {
@@ -594,6 +626,14 @@ pub fn setup_execution_role_label(profile_name: &str, role_name: &str, index: us
 pub fn setup_management_role_label(role_name: &str, index: usize) -> String {
     format!(
         "setup_management_{}_{}",
+        sanitize_role_label(role_name),
+        index
+    )
+}
+
+pub fn remote_bindings_role_label(role_name: &str, index: usize) -> String {
+    format!(
+        "remote_bindings_{}_{}",
         sanitize_role_label(role_name),
         index
     )

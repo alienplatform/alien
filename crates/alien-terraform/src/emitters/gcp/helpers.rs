@@ -246,11 +246,7 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
 /// any other gated block — they no longer depend on nothing ever referencing
 /// them. It does so before coalescing duplicate cloud memberships, which needs
 /// every contributor's gate already in place.
-pub fn gate_bindings(
-    fragment: &mut TfFragment,
-    appended_from: usize,
-    enabled_when: Option<&str>,
-) {
+pub fn gate_bindings(fragment: &mut TfFragment, appended_from: usize, enabled_when: Option<&str>) {
     fragment.mark_gated_from(appended_from, enabled_when);
 }
 

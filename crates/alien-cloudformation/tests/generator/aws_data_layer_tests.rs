@@ -73,9 +73,6 @@ fn aws_storage_minimal_uses_safe_defaults() {
 fn remote_storage_management_dependencies_are_acyclic() {
     let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "files");
     let stack = Stack::new("remote-storage".to_string())
-        .management(ManagementPermissions::override_(
-            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
-        ))
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,

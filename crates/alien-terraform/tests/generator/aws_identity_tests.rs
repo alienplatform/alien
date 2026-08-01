@@ -192,11 +192,18 @@ fn management_grants_sharing_a_gate_get_unique_statement_ids() {
         .find(|block| block.starts_with("aws_iam_role_policy\" \"management_input_jobs_enabled\""))
         .unwrap_or_else(|| panic!("the gated management policy should render:\n{rendered}"));
 
-    let sids: Vec<&str> = gated_policy.match_indices("Sid = \"").map(|(i, _)| {
-        let rest = &gated_policy[i + 7..];
-        &rest[..rest.find('"').unwrap_or(0)]
-    }).collect();
-    assert_eq!(sids.len(), 2, "both workers contribute a statement: {sids:?}");
+    let sids: Vec<&str> = gated_policy
+        .match_indices("Sid = \"")
+        .map(|(i, _)| {
+            let rest = &gated_policy[i + 7..];
+            &rest[..rest.find('"').unwrap_or(0)]
+        })
+        .collect();
+    assert_eq!(
+        sids.len(),
+        2,
+        "both workers contribute a statement: {sids:?}"
+    );
     assert_ne!(
         sids[0], sids[1],
         "IAM rejects a policy document with duplicate statement ids: {sids:?}"

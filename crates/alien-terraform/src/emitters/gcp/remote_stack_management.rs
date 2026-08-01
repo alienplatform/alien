@@ -96,9 +96,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                     [
                         attr(
                             "for_each",
-                            expr::raw(
-                                "toset(compact([var.managing_service_account_email]))",
-                            ),
+                            expr::raw("toset(compact([var.managing_service_account_email]))"),
                         ),
                         attr(
                             "service_account_id",
@@ -220,11 +218,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
             let bindings_label = format!("{label}_remote_bindings");
             fields.push((
                 "remoteBindingsServiceAccountEmail",
-                expr::traversal([
-                    "google_service_account",
-                    bindings_label.as_str(),
-                    "email",
-                ]),
+                expr::traversal(["google_service_account", bindings_label.as_str(), "email"]),
             ));
         }
         Ok(expr::object(fields))

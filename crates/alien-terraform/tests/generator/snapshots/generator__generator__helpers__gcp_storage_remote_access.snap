@@ -165,11 +165,12 @@ locals {
       id   = "management"
       type = "remote-stack-management"
       importData = {
-        projectId                    = var.gcp_project
-        projectNumber                = data.google_project.current.number
-        serviceAccountEmail          = google_service_account.management.email
-        serviceAccountUniqueId       = google_service_account.management.unique_id
-        managementPermissionsApplied = true
+        projectId                         = var.gcp_project
+        projectNumber                     = data.google_project.current.number
+        serviceAccountEmail               = google_service_account.management.email
+        serviceAccountUniqueId            = google_service_account.management.unique_id
+        managementPermissionsApplied      = true
+        remoteBindingsServiceAccountEmail = google_service_account.management_remote_bindings.email
       }
     },
     {
@@ -195,6 +196,27 @@ resource "google_service_account" "management" {
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", local.resource_prefix)), "_", "-")), 0, 8))
   display_name = "${local.deployment_name}: Management service account"
   description  = "Management cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}."
+}
+
+resource "google_service_account" "management_remote_bindings" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management_remote_bindings", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management_remote_bindings", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "${local.deployment_name}: Remote Bindings service account"
+  description  = "Data-plane identity for opted-in remote bindings in ${local.deployment_name}. Resource prefix: ${local.resource_prefix}."
+}
+
+resource "google_service_account_iam_member" "management_remote_bindings_manager_token_creator" {
+  for_each           = toset(compact([var.managing_service_account_email]))
+  service_account_id = google_service_account.management_remote_bindings.id
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${each.value}"
+}
+
+resource "google_service_account_iam_member" "management_remote_bindings_manager_user" {
+  for_each           = toset(compact([var.managing_service_account_email]))
+  service_account_id = google_service_account.management_remote_bindings.id
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${each.value}"
 }
 
 resource "google_service_account_iam_member" "management_manager_token_creator" {
@@ -243,16 +265,18 @@ resource "google_project_iam_custom_role" "gcp_role_storage_remote_data_write" {
   ]
 }
 
-resource "google_storage_bucket_iam_member" "gcp_role_storage_remote_data_write_uploads_management_storage_0" {
+resource "google_storage_bucket_iam_member" "gcp_role_storage_remote_data_write_uploads_management_remote_bindings_storage_0" {
   bucket = google_storage_bucket.uploads.name
   role   = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_remote_data_write[0].name : format("projects/%s/roles/role_%s_storage_remote_data_write", var.gcp_project, local.gcp_custom_role_prefix)
-  member = "serviceAccount:${google_service_account.management.email}"
+  member = "serviceAccount:${google_service_account.management_remote_bindings.email}"
 }
 
 === iam_propagation.tf ===
 resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
+    google_service_account_iam_member.management_remote_bindings_manager_token_creator,
+    google_service_account_iam_member.management_remote_bindings_manager_user,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user
   ]
@@ -277,11 +301,14 @@ resource "terraform_data" "deployment_registration" {
   }
   depends_on = [
     google_service_account.management,
+    google_service_account.management_remote_bindings,
+    google_service_account_iam_member.management_remote_bindings_manager_token_creator,
+    google_service_account_iam_member.management_remote_bindings_manager_user,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
     google_storage_bucket.uploads,
     google_project_iam_custom_role.gcp_role_storage_remote_data_write,
-    google_storage_bucket_iam_member.gcp_role_storage_remote_data_write_uploads_management_storage_0,
+    google_storage_bucket_iam_member.gcp_role_storage_remote_data_write_uploads_management_remote_bindings_storage_0,
     time_sleep.gcp_iam_propagation
   ]
 }

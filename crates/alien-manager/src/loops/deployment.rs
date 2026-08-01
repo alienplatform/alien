@@ -312,7 +312,12 @@ impl DeploymentLoop {
 
             match self
                 .deployment_store
-                .acquire(&caller, &session, &filter, MAX_CONCURRENT_DEPLOYMENTS as u32)
+                .acquire(
+                    &caller,
+                    &session,
+                    &filter,
+                    MAX_CONCURRENT_DEPLOYMENTS as u32,
+                )
                 .await
             {
                 Ok(acquired) => {

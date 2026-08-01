@@ -295,9 +295,7 @@ impl TryFrom<GcpClientConfig> for RemoteGcpClientConfig {
 impl TryFrom<AzureClientConfig> for RemoteAzureClientConfig {
     type Error = alien_error::AlienError<ErrorData>;
 
-    fn try_from(
-        config: AzureClientConfig,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(config: AzureClientConfig) -> Result<Self, Self::Error> {
         if config.service_overrides.is_some() {
             return Err(ErrorData::internal(
                 "Remote Azure Storage response contains service endpoint overrides",

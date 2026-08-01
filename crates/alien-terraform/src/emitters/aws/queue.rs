@@ -41,7 +41,10 @@ impl TfEmitter for AwsQueueEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
         Ok(expr::object([
-            ("queueName", expr::traversal(["aws_sqs_queue", label, "name"])),
+            (
+                "queueName",
+                expr::traversal(["aws_sqs_queue", label, "name"]),
+            ),
             ("queueUrl", expr::traversal(["aws_sqs_queue", label, "url"])),
             ("queueArn", expr::traversal(["aws_sqs_queue", label, "arn"])),
         ]))

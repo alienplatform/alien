@@ -13,9 +13,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    permissions::ManagementPermissions, Ai, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Kv, LifecycleRule, PermissionProfile, Queue, RemoteStackManagement,
-    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
+    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef,
+    ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -105,9 +105,6 @@ fn azure_storage_profile_permissions_emit_container_role_assignment() {
 #[test]
 fn azure_remote_storage_management_dependencies_are_acyclic() {
     let stack = Stack::new("acme-remote-storage".to_string())
-        .management(ManagementPermissions::override_(
-            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
-        ))
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(storage_account(), ResourceLifecycle::Frozen)
         .add_with_remote_access(

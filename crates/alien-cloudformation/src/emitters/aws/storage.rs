@@ -464,7 +464,9 @@ fn storage_permission_owners(
         if let Some(role_id) = remote_bindings_role_id(ctx) {
             owners.push((
                 role_id,
-                vec![PermissionSetReference::from_name("storage/remote-data-write")],
+                vec![PermissionSetReference::from_name(
+                    "storage/remote-data-write",
+                )],
             ));
         }
     }
@@ -518,8 +520,6 @@ fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {
             return None;
         }
         let logical_id = ctx.name_for(id)?;
-        Some(super::remote_stack_management::remote_bindings_role_logical_id(
-            logical_id,
-        ))
+        Some(super::remote_stack_management::remote_bindings_role_logical_id(logical_id))
     })
 }

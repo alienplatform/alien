@@ -22,8 +22,9 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, permission_context, required_label, service_account_principal_id,
-        setup_execution_role_label, setup_management_role_label,
+        downcast, emit_remote_bindings_role_definitions, permission_context,
+        remote_bindings_role_label, required_label, service_account_principal_id,
+        setup_execution_role_label,
     },
     expr,
 };
@@ -276,6 +277,8 @@ fn emit_storage_permissions(
                 ),
             })?;
 
+        emit_remote_bindings_role_definitions(fragment, &permission_set)?;
+
         for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {
                 AzureRoleDefinitionRef::Predefined { role_definition_id } => {
@@ -284,7 +287,7 @@ fn emit_storage_permissions(
                 AzureRoleDefinitionRef::Custom { key } => {
                     let index =
                         custom_role_index(&grant_plan.custom_roles, key, &permission_set.id)?;
-                    let role_label = setup_management_role_label(&binding.role_name, index);
+                    let role_label = remote_bindings_role_label(&binding.role_name, index);
                     expr::traversal([
                         "azurerm_role_definition",
                         role_label.as_str(),
@@ -617,9 +620,7 @@ mod tests {
         assert!(assignments.iter().any(|block| block.contains(
             "/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}",
         ) && !block.contains("blobServices/default/containers")));
-        assert!(!storage_module.contains(
-            "azurerm_user_assigned_identity.management.principal_id"
-        ));
+        assert!(!storage_module.contains("azurerm_user_assigned_identity.management.principal_id"));
     }
 
     fn assert_principal_assignment_scopes(rendered: &str, principal_id: &str) {

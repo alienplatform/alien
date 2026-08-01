@@ -490,7 +490,7 @@ fn response_contract_constructs_only_materialized_provider_credentials() {
         }))),
         "2030-01-01T00:00:00Z".to_string(),
     )
-    .expect("exact Azure storage-scope token should be accepted");
+    .expect("short-lived Azure access token should be accepted");
     let azure = serde_json::to_value(azure).unwrap();
     assert_eq!(
         azure.pointer("/clientConfig/credentials/type"),
@@ -500,10 +500,7 @@ fn response_contract_constructs_only_materialized_provider_credentials() {
         azure.pointer("/clientConfig/credentials/token"),
         Some(&serde_json::json!("storage-token"))
     );
-    assert_eq!(
-        azure.pointer("/clientConfig/credentials/sas/signedResource"),
-        Some(&serde_json::json!("c"))
-    );
+    assert!(azure.pointer("/clientConfig/credentials/sas").is_none());
 }
 
 #[test]
@@ -533,27 +530,20 @@ fn response_contract_rejects_refreshable_static_and_overbroad_credentials() {
     .expect("refreshable GCP metadata credentials must not enter a remote response");
     assert_eq!(gcp_error.code, "INTERNAL_ERROR");
 
-    let binding = RemoteBlobStorageBinding {
-        account_name: "account".to_string(),
-        container_name: "container".to_string(),
-    };
-    let azure_error = RemoteAzureClientConfig::try_from((
-        AzureClientConfig {
-            subscription_id: "subscription".to_string(),
-            tenant_id: "tenant".to_string(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ScopedAccessTokens {
-                tokens: HashMap::from([(
-                    "https://management.azure.com/.default".to_string(),
-                    "management".to_string(),
-                )]),
-            },
-            service_overrides: None,
+    let azure_error = RemoteAzureClientConfig::try_from(AzureClientConfig {
+        subscription_id: "subscription".to_string(),
+        tenant_id: "tenant".to_string(),
+        region: Some("eastus".to_string()),
+        credentials: AzureCredentials::ScopedAccessTokens {
+            tokens: HashMap::from([(
+                "https://management.azure.com/.default".to_string(),
+                "management".to_string(),
+            )]),
         },
-        &binding,
-    ))
+        service_overrides: None,
+    })
     .err()
-    .expect("non-storage Azure scopes must not enter a remote response");
+    .expect("refreshable Azure scoped credentials must not enter a remote response");
     assert_eq!(azure_error.code, "INTERNAL_ERROR");
 }
 

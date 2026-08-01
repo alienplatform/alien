@@ -59,16 +59,13 @@ fn gcp_storage_public_read_allows_object_viewer() {
 }
 
 #[test]
-fn gcp_storage_remote_access_grants_exact_role_to_management_identity() {
+fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
     let stack = Stack::new("acme-remote-storage".to_string())
-        .management(ManagementPermissions::extend(
-            PermissionProfile::new().resource("uploads", ["storage/remote-data-write"]),
-        ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(
+        .add_with_remote_access(
             Storage::new("uploads".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
@@ -83,9 +80,11 @@ fn gcp_storage_remote_access_grants_exact_role_to_management_identity() {
     assert!(rendered
         .contains("google_project_iam_custom_role\" \"gcp_role_storage_remote_data_write\""));
     assert!(rendered.contains(
-        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_management_storage_0\""
+        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_management_remote_bindings_storage_0\""
     ));
-    assert!(rendered.contains("google_service_account.management.email"));
+    assert!(rendered.contains("google_service_account.management_remote_bindings.email"));
+    assert!(!rendered
+        .contains("member = \"serviceAccount:${google_service_account.management.email}\""));
     assert!(rendered.contains("\"storage.objects.get\""));
     assert!(rendered.contains("\"storage.objects.list\""));
     assert!(rendered.contains("\"storage.objects.create\""));
@@ -97,9 +96,6 @@ fn gcp_storage_remote_access_grants_exact_role_to_management_identity() {
 #[test]
 fn gcp_remote_storage_management_dependencies_are_acyclic() {
     let stack = Stack::new("acme-remote-storage".to_string())
-        .management(ManagementPermissions::override_(
-            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
-        ))
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,

@@ -1458,10 +1458,8 @@ async fn an_import_whose_input_values_contradict_the_delivered_resources_is_refu
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
 
     let mut body = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
-    body.input_values = HashMap::from([(
-        "extrasEnabled".to_string(),
-        serde_json::Value::Bool(false),
-    )]);
+    body.input_values =
+        HashMap::from([("extrasEnabled".to_string(), serde_json::Value::Bool(false))]);
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(

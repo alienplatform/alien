@@ -213,9 +213,11 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             .outputs
             .as_ref()
             .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
-            .ok_or_else(|| AlienError::new(GenericError {
-                message: "Remote stack management outputs are missing; rerun setup".to_string(),
-            }))?;
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: "Remote stack management outputs are missing; rerun setup".to_string(),
+                })
+            })?;
         let bindings = outputs.remote_bindings_access.clone().ok_or_else(|| {
             AlienError::new(GenericError {
                 message: "Remote Bindings identity is missing; rerun setup".to_string(),
@@ -467,9 +469,6 @@ fn uses_control_plane_credentials(platform: Platform) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::credential_materialization::{
-        materialize_remote_storage_lease, RemoteStorageCredentialScope,
-    };
     use alien_bindings::BindingsProvider;
     use alien_core::{
         bindings::ServiceAccountBinding, AwsClientConfig, AwsCredentials, AwsEnvironmentInfo,
@@ -479,8 +478,6 @@ mod tests {
         StackResourceState, StackState,
     };
     use chrono::Utc;
-    use httpmock::{Method::POST, MockServer};
-    use serde_json::json;
 
     #[test]
     fn azure_target_environment_overrides_subscription_and_region_but_keeps_managing_tenant() {

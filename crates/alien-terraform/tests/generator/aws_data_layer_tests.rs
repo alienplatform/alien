@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, Queue, RemoteStackManagement,
-    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Ai, Kv, LifecycleRule, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
+    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -60,9 +60,6 @@ fn aws_storage_public_read_allows_get_object() {
 #[test]
 fn aws_remote_storage_management_dependencies_are_acyclic() {
     let stack = Stack::new("acme-remote-storage".to_string())
-        .management(ManagementPermissions::override_(
-            PermissionProfile::new().resource("files", ["storage/remote-data-write"]),
-        ))
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,

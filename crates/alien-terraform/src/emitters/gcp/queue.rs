@@ -51,7 +51,10 @@ impl TfEmitter for GcpQueueEmitter {
                     expr::template(format!("${{local.resource_prefix}}-{}-default", queue.id())),
                 ),
                 attr("project", expr::raw("var.gcp_project")),
-                attr("topic", expr::traversal(["google_pubsub_topic", label, "id"])),
+                attr(
+                    "topic",
+                    expr::traversal(["google_pubsub_topic", label, "id"]),
+                ),
                 attr(
                     "ack_deadline_seconds",
                     Expression::Number(hcl::Number::from(i64::from(ack_deadline))),
@@ -103,7 +106,10 @@ impl TfEmitter for GcpQueueEmitter {
         let label = required_label(ctx)?;
         Ok(Some(expr::object([
             ("service", Expression::String("pubsub".to_string())),
-            ("topic", expr::traversal(["google_pubsub_topic", label, "id"])),
+            (
+                "topic",
+                expr::traversal(["google_pubsub_topic", label, "id"]),
+            ),
             (
                 "subscription",
                 expr::traversal(["google_pubsub_subscription", label, "id"]),
