@@ -1,8 +1,26 @@
+import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
-import { ai, getAiConnection, postgres } from "@alienplatform/sdk"
+import { type AiConnection, ai, getAiConnection, postgres } from "@alienplatform/sdk"
 import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
 import { Pool } from "pg"
 import { z } from "zod"
+
+// The gateway forwards each model to its own upstream wire format rather than
+// translating, so Claude needs the Anthropic client and everything else OpenAI.
+// The catalog (alien-core's ai_catalog.rs) owns which is which.
+function modelFor(modelId: string, connection: AiConnection) {
+  if (modelId.startsWith("claude")) {
+    const anthropic = createAnthropic({
+      baseURL: connection.baseURL,
+      // An ambient binding has no client key — the gateway signs with the workload's
+      // own credential — and the empty string also keeps a stray ANTHROPIC_API_KEY in
+      // the environment from being picked up and sent to it.
+      apiKey: connection.apiKey ?? "",
+    })
+    return anthropic(modelId)
+  }
+  return createOpenAICompatible({ name: "alien", ...connection })(modelId)
+}
 
 // The binding reads the password from the cloud secret store at runtime with the
 // workload's own identity — it is never in the environment.
@@ -56,17 +74,17 @@ const queryDatabase = tool({
 export async function POST(req: Request) {
   const { messages, model }: { messages: UIMessage[]; model?: string } = await req.json()
 
-  // Resolved per request: the binding env exists only in the running workload, not at build.
-  const provider = createOpenAICompatible({ name: "alien", ...(await getAiConnection("llm")) })
-
   // Model ids differ per cloud, so the fallback is the binding's first model, not a hardcoded id.
   const modelId = model || (await ai("llm").getAvailableModels())[0]?.id
   if (!modelId) {
     return Response.json({ error: "the AI binding exposes no models" }, { status: 503 })
   }
 
+  // Resolved per request: the binding env exists only in the running workload, not at build.
+  const connection = await getAiConnection("llm")
+
   const result = streamText({
-    model: provider(modelId),
+    model: modelFor(modelId, connection),
     system:
       "You answer questions about the company's data. When a question needs data, write a " +
       "single read-only Postgres SELECT and call the queryDatabase tool, then summarize the " +

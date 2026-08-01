@@ -12,10 +12,13 @@ keys and no database credentials in the app.
   `ALIEN_LLM_BINDING` and `ALIEN_DB_BINDING`.
 - `app/api/chat/route.ts` resolves the model endpoint with
   `getAiConnection("llm")` and streams with the Vercel AI SDK's `streamText`.
-  On a cloud, the binding routes through Alien's embedded OpenAI-compatible
-  gateway, which injects the workload's ambient cloud credential. On `alien dev`
-  the binding carries the developer's own provider key, and the app calls the
-  provider directly.
+  On a cloud, the binding routes through Alien's embedded gateway, which injects
+  the workload's ambient cloud credential. On `alien dev` the binding carries the
+  developer's own provider key, and the app calls the provider directly.
+  The gateway forwards each model to its own upstream wire format instead of
+  translating, so the route picks the client to match: Claude models get the
+  Anthropic client, everything else the OpenAI-compatible one. Both take the same
+  `baseURL` and the same binding.
 - The chat route gives the model a `queryDatabase` tool: a single SQL statement
   per call, run on read-only sessions so the model cannot write. It reads the
   connection with `postgres("db").connection()`, which resolves the password at
