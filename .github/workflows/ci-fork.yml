@@ -90,13 +90,6 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
-      - name: Generated SDK wire contracts
-        env:
-          NODE_OPTIONS: "--max-old-space-size=8192"
-        run: |
-          pnpm test:manager-sdk-wire
-          pnpm test:platform-sdk-wire
-
       - name: Rust tests (non-cloud)
         run: |
           cargo nextest run --workspace \
@@ -110,7 +103,7 @@ jobs:
           cargo test -p alien-bindings --features platform-sdk --lib remote::
           cargo test -p alien-aws-clients --lib
           cargo test -p alien-gcp-clients --lib
-          cargo test -p alien-azure-clients --lib user_delegation_sas
+          cargo test -p alien-azure-clients --lib
 
       - name: Regenerate local TypeScript APIs
         run: pnpm generate

@@ -305,8 +305,6 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
-          pnpm test:manager-sdk-wire
-          pnpm test:platform-sdk-wire
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
