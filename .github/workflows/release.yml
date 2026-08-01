@@ -411,16 +411,31 @@ jobs:
             exit 1
           fi
 
-          RUN_ID=$(gh run list \
+          mkdir -p qualification-candidates
+          RUN_ID=""
+          while read -r CANDIDATE_RUN_ID; do
+            CANDIDATE_DIR="qualification-candidates/${CANDIDATE_RUN_ID}"
+            mkdir -p "$CANDIDATE_DIR"
+            if ! gh run download "$CANDIDATE_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name release-qualification-manifest \
+              --dir "$CANDIDATE_DIR" 2>/dev/null; then
+              continue
+            fi
+            CANDIDATE_HEAD=$(jq -r '.headSha // empty' "$CANDIDATE_DIR/manifest.json")
+            if [ "$CANDIDATE_HEAD" = "$RELEASE_COMMIT" ]; then
+              RUN_ID="$CANDIDATE_RUN_ID"
+              break
+            fi
+          done < <(gh run list \
             --repo "$GITHUB_REPOSITORY" \
             --workflow release-qualification.yml \
-            --commit "$HEAD_SHA" \
             --status success \
-            --limit 1 \
+            --limit 100 \
             --json databaseId \
-            --jq '.[0].databaseId // empty')
+            --jq '.[].databaseId')
           if [ -z "$RUN_ID" ]; then
-            echo "::error::No successful release qualification exists for ${HEAD_SHA}"
+            echo "::error::No successful release qualification exists for exact release commit ${RELEASE_COMMIT}"
             exit 1
           fi
 
@@ -438,7 +453,7 @@ jobs:
           QUALIFIED_TREE=$(jq -r '.sourceTree' qualification/manifest.json)
           RELEASE_TREE=$(git rev-parse "${RELEASE_COMMIT}^{tree}")
           if [ "$QUALIFIED_VERSION" != "$VERSION" ] || \
-             [ "$QUALIFIED_HEAD" != "$HEAD_SHA" ] || \
+             [ "$QUALIFIED_HEAD" != "$RELEASE_COMMIT" ] || \
              [ "$QUALIFIED_TREE" != "$RELEASE_TREE" ]; then
             echo "::error::Qualified artifact set does not match the merged release tree"
             exit 1
@@ -463,7 +478,7 @@ jobs:
           jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
             qualification/manifest.json |
             while IFS=$'\t' read -r image expected_digest; do
-              ref="ghcr.io/alienplatform/${image}:qualification-${HEAD_SHA}"
+              ref="ghcr.io/alienplatform/${image}:qualification-${RELEASE_COMMIT}"
               actual_digest=$(docker buildx imagetools inspect "$ref" |
                 sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
               if [ "$actual_digest" != "$expected_digest" ]; then
@@ -473,7 +488,7 @@ jobs:
             done
 
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Select release source
         id: release_source
