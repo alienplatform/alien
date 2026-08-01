@@ -56,7 +56,7 @@ pub enum ResolveBindingResponse {
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
-    /// Azure Blob Storage and an exact container-scoped SAS.
+    /// Azure Blob Storage and a storage-audience access token.
     Blob {
         binding: RemoteBlobStorageBinding,
         #[serde(rename = "clientConfig")]
@@ -64,7 +64,7 @@ pub enum ResolveBindingResponse {
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
-    /// Google Cloud Storage and a bucket-downscoped access token.
+    /// Google Cloud Storage and a Remote Bindings identity access token.
     Gcs {
         binding: RemoteGcsStorageBinding,
         #[serde(rename = "clientConfig")]

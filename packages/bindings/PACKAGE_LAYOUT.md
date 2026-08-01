@@ -59,7 +59,7 @@ Its Storage handle deliberately excludes copy and signed URLs.
 Remote access is a trusted-backend API. Its Alien API token and short-lived
 provider credentials must never be shipped to a browser or other untrusted
 client. v0 accepts only Running, Frozen, remote-enabled S3, GCS, and Azure Blob
-resources. The customer setup grants the deployment management identity the
+resources. The customer setup grants the deployment's dedicated Remote Bindings identity the
 five public object operations on each opted-in bucket or container.
 
 These live only on the Rust `BindingsProvider` (manager, controllers, tooling,

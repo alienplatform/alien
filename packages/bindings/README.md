@@ -42,9 +42,9 @@ loopback address for local development.
 The named resource must be a Running, Frozen S3, GCS, or Azure Blob Storage
 resource with remote access enabled. Enabling remote access adds concrete
 object read/write/list/delete access for that bucket or container to the
-deployment management identity. Generate and apply updated customer setup when
+deployment's dedicated Remote Bindings identity. Generate and apply updated customer setup when
 enabling it on an existing deployment. The endpoint returns a short-lived lease
-for that deployment identity only after it validates the named resource, so the
+for that Remote Bindings identity only after it validates the named resource, so the
 Alien token and all returned provider credentials must be treated as backend
 secrets.
 
