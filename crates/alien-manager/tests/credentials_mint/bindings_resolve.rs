@@ -144,13 +144,10 @@ async fn validates_server_state_before_resolving_credentials() {
         }),
     )
     .await;
-    // The fixture intentionally returns already-materialized AWS session
-    // credentials, which cannot be attenuated to the exact bucket. Reaching
-    // this fail-closed error proves all server-owned resource gates ran before
-    // the resolver without weakening the production handoff rules.
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body = {json:#}");
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(json["code"], "CREDENTIAL_MATERIALIZATION_FAILED");
+    assert_eq!(json["service"], "s3");
+    assert_eq!(json["binding"]["bucketName"], "remote-files");
 }
 
 #[tokio::test]

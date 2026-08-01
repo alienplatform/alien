@@ -316,6 +316,7 @@ export type { RawHeartbeatSnippetFormat } from "./raw-heartbeat-snippet-format-s
 export type { RawHeartbeatSnippet } from "./raw-heartbeat-snippet-schema.js";
 export type { ReadinessProbe } from "./readiness-probe-schema.js";
 export type { ReleaseRequest } from "./release-request-schema.js";
+export type { RemoteBindingsAccessOutputs } from "./remote-bindings-access-outputs-schema.js";
 export type { RemoteStackManagementHeartbeatData } from "./remote-stack-management-heartbeat-data-schema.js";
 export type { RemoteStackManagementHeartbeatStatus } from "./remote-stack-management-heartbeat-status-schema.js";
 export type { RemoteStackManagementOutputs } from "./remote-stack-management-outputs-schema.js";
@@ -698,6 +699,7 @@ export { RawHeartbeatSnippetFormatSchema } from "./raw-heartbeat-snippet-format-
 export { RawHeartbeatSnippetSchema } from "./raw-heartbeat-snippet-schema.js";
 export { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 export { ReleaseRequestSchema } from "./release-request-schema.js";
+export { RemoteBindingsAccessOutputsSchema } from "./remote-bindings-access-outputs-schema.js";
 export { RemoteStackManagementHeartbeatDataSchema } from "./remote-stack-management-heartbeat-data-schema.js";
 export { RemoteStackManagementHeartbeatStatusSchema } from "./remote-stack-management-heartbeat-status-schema.js";
 export { RemoteStackManagementOutputsSchema } from "./remote-stack-management-outputs-schema.js";

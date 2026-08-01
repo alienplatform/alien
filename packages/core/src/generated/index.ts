@@ -316,6 +316,7 @@ export type { RawHeartbeatSnippetFormat } from "./zod/raw-heartbeat-snippet-form
 export type { RawHeartbeatSnippet } from "./zod/raw-heartbeat-snippet-schema.js";
 export type { ReadinessProbe } from "./zod/readiness-probe-schema.js";
 export type { ReleaseRequest } from "./zod/release-request-schema.js";
+export type { RemoteBindingsAccessOutputs } from "./zod/remote-bindings-access-outputs-schema.js";
 export type { RemoteStackManagementHeartbeatData } from "./zod/remote-stack-management-heartbeat-data-schema.js";
 export type { RemoteStackManagementHeartbeatStatus } from "./zod/remote-stack-management-heartbeat-status-schema.js";
 export type { RemoteStackManagementOutputs } from "./zod/remote-stack-management-outputs-schema.js";
@@ -698,6 +699,7 @@ export { RawHeartbeatSnippetFormatSchema } from "./zod/raw-heartbeat-snippet-for
 export { RawHeartbeatSnippetSchema } from "./zod/raw-heartbeat-snippet-schema.js";
 export { ReadinessProbeSchema } from "./zod/readiness-probe-schema.js";
 export { ReleaseRequestSchema } from "./zod/release-request-schema.js";
+export { RemoteBindingsAccessOutputsSchema } from "./zod/remote-bindings-access-outputs-schema.js";
 export { RemoteStackManagementHeartbeatDataSchema } from "./zod/remote-stack-management-heartbeat-data-schema.js";
 export { RemoteStackManagementHeartbeatStatusSchema } from "./zod/remote-stack-management-heartbeat-status-schema.js";
 export { RemoteStackManagementOutputsSchema } from "./zod/remote-stack-management-outputs-schema.js";
