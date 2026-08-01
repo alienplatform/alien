@@ -795,9 +795,9 @@ mod tests {
 
     #[tokio::test]
     async fn responses_only_models_are_refused_on_chat_completions() {
-        // These models list once AWS grants access, and a chat-completions client
-        // will then ask for one. It has to be told where to send it, not handed the
-        // catch-all's 500 claiming AWS does not serve the protocol.
+        // A chat-completions client will ask for one of these as soon as they list,
+        // so it has to be told where to send it rather than handed the catch-all's
+        // 500 claiming the cloud does not serve the protocol.
         let server = MockServer::start_async().await;
         let upstream = server
             .mock_async(|when, then| {
@@ -1140,6 +1140,48 @@ mod tests {
                 "output_config": {"effort": "xhigh"},
                 "context_management": {"edits": []},
                 "thinking": {"type": "adaptive"},
+                "messages": [{"role": "user", "content": "hi"}]
+            }))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 200);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn bedrock_path_drops_thinking_display_but_keeps_the_thinking() {
+        // Opus 4.1 answers `thinking.enabled.display: Extra inputs are not permitted`,
+        // so Claude Code cannot reach it at all while the field is forwarded. Dropping
+        // the whole thinking block instead would silently turn extended thinking off.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream")
+                    .matches(|req: &HttpMockRequest| {
+                        let body = req
+                            .body
+                            .as_deref()
+                            .map(String::from_utf8_lossy)
+                            .unwrap_or_default();
+                        !body.contains("display") && body.contains("budget_tokens")
+                    });
+                then.status(200)
+                    .header("content-type", "application/vnd.amazon.eventstream")
+                    .body(eventstream_frame(r#"{"type":"message_stop"}"#));
+            })
+            .await;
+
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/messages"))
+            .json(&json!({
+                "model": "claude-haiku-4.5",
+                "stream": true,
+                "max_tokens": 2048,
+                "thinking": {"type": "enabled", "budget_tokens": 1024, "display": "omitted"},
                 "messages": [{"role": "user", "content": "hi"}]
             }))
             .send()

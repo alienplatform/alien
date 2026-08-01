@@ -540,6 +540,10 @@ mod tests {
     fn protocol_serializes_lowercase() {
         assert_eq!(serde_json::to_string(&Protocol::OpenAi).unwrap(), "\"openai\"");
         assert_eq!(serde_json::to_string(&Protocol::Anthropic).unwrap(), "\"anthropic\"");
+        assert_eq!(
+            serde_json::to_string(&Protocol::OpenAiResponses).unwrap(),
+            "\"openairesponses\""
+        );
     }
 
     #[test]

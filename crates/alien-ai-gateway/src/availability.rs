@@ -161,10 +161,10 @@ fn openai_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
 /// 400, which classifies as unavailable and would hide a live model.
 fn responses_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
     if route.cloud != Platform::Aws {
-        return Err(missing_field(route, "aws cloud for the Responses API"));
+        return Err(missing_field(route, "AWS cloud"));
     }
     let target = ai_catalog::responses_target(cm.public_id)
-        .ok_or_else(|| missing_field(route, "a Responses endpoint for this model"))?;
+        .ok_or_else(|| missing_field(route, "Responses endpoint"))?;
     let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
     let base = route
         .upstream_base_override
