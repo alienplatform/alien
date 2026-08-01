@@ -12,3 +12,16 @@
   --color-card: color-mix(in oklab, #27272a 55%, #000);
   --color-edge: rgb(255 255 255 / 7.5%);
 }
+
+/* The data drawer's entrance; Tailwind ships no slide-from-edge keyframe. */
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}

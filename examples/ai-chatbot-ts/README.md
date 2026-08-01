@@ -19,6 +19,7 @@ The app builds with the included Dockerfile (Next.js [standalone output](https:/
 - The gateway forwards each model to its own upstream wire format instead of translating, so the route picks the client to match: Claude models get the Anthropic client, everything else the OpenAI-compatible one. Both take the same `baseURL` and the same binding.
 - The `queryDatabase` tool runs one SQL statement per call, bounded by the database rather than by parsing the model's output: read-only sessions, a statement timeout, and a row limit applied in SQL. It reads the connection with `postgres("db").connection()`, which resolves the password at runtime under the workload's own identity.
 - `app/api/models/route.ts` calls `ai("llm").getAvailableModels()`, so the picker lists only the models this cloud has enabled.
+- **See the data** in the header opens a drawer over the chat with the demo tables, read through the same read-only pool, so an answer can be checked against the rows it came from.
 
 ## Local development
 
