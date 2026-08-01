@@ -29,7 +29,7 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
         "serialize_controller must inject a `type` discriminator"
     );
     assert_eq!(internal["state"], "ready");
-    assert_eq!(internal["setupManaged"], true);
+    assert_eq!(internal["managementPermissionsApplied"], true);
     let outputs = state
         .outputs
         .as_ref()
