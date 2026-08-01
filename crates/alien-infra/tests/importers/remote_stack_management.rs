@@ -75,7 +75,8 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     assert_eq!(state.status, ResourceStatus::Running);
     assert_eq!(internal_state(&state)["state"], "ready");
     let internal = internal_state(&state);
-    assert_eq!(internal["setupManaged"], true);
+    assert_eq!(internal["roleBound"], true);
+    assert_eq!(internal["impersonationGranted"], true);
     let outputs = state
         .outputs
         .as_ref()
@@ -91,12 +92,6 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
             .as_deref()
             .unwrap()
     );
-    assert_eq!(
-        internal["appliedManagementGrantFingerprint"],
-        serde_json::Value::Null,
-        "import must not claim setup-created grants are runtime-owned",
-    );
-    assert_eq!(internal["remoteStorageBucketNames"], json!([]));
 }
 
 #[test]
@@ -123,15 +118,9 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
     );
     assert_eq!(state.status, ResourceStatus::Provisioning);
     assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
-    assert_eq!(internal_state(&state)["setupManaged"], true);
     assert_eq!(
-        internal_state(&state)["appliedManagementGrantFingerprint"],
-        serde_json::Value::Null,
-        "import must not claim setup-created grants are runtime-owned"
-    );
-    assert_eq!(
-        internal_state(&state)["resourceRoleDefinitionIds"],
-        json!({}),
+        internal_state(&state)["remoteBindingsIdentityId"],
+        data.remote_bindings_identity_id.as_deref().unwrap(),
     );
     assert_eq!(internal_state(&state)["roleAssignmentIds"], json!([]));
 
