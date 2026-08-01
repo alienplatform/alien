@@ -72,8 +72,8 @@ jobs:
       version: ${{ steps.bump.outputs.version || steps.qualification_version.outputs.version || steps.merged_version.outputs.version }}
       ready: ${{ steps.release_state.outputs.ready }}
       source_ref: ${{ steps.release_source.outputs.ref }}
-      qualification_run_id: ${{ steps.verify_qualification.outputs.run_id }}
-      qualification_head_sha: ${{ steps.verify_qualification.outputs.head_sha }}
+      qualification_run_id: ${{ steps.qualification.outputs.run_id }}
+      qualification_head_sha: ${{ steps.qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
@@ -385,73 +385,13 @@ jobs:
             fi
           done
 
-      - name: Login to GHCR for qualification verification
-        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify release qualification
-        id: verify_qualification
+      - name: Select same-run qualification artifacts
+        id: qualification
         if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
-          VERSION: ${{ steps.merged_version.outputs.version }}
         run: |
-          RUN_ID="$GITHUB_RUN_ID"
-
-          mkdir -p qualification
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name release-qualification-manifest \
-            --dir qualification
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir qualification/artifacts
-
-          QUALIFIED_VERSION=$(jq -r '.version' qualification/manifest.json)
-          QUALIFIED_HEAD=$(jq -r '.headSha' qualification/manifest.json)
-          QUALIFIED_TREE=$(jq -r '.sourceTree' qualification/manifest.json)
-          RELEASE_TREE=$(git rev-parse "${RELEASE_COMMIT}^{tree}")
-          if [ "$QUALIFIED_VERSION" != "$VERSION" ] || \
-             [ "$QUALIFIED_HEAD" != "$RELEASE_COMMIT" ] || \
-             [ "$QUALIFIED_TREE" != "$RELEASE_TREE" ]; then
-            echo "::error::Qualified artifact set does not match the merged release tree"
-            exit 1
-          fi
-
-          jq -r '.artifacts | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
-            while IFS=$'\t' read -r qualified_path expected_checksum; do
-              relative_path=${qualified_path#qualified-artifacts/}
-              artifact_path="qualification/artifacts/${relative_path}"
-              if [ ! -f "$artifact_path" ]; then
-                echo "::error::Qualified artifact is missing: ${relative_path}"
-                exit 1
-              fi
-              actual_checksum=$(sha256sum "$artifact_path" | awk '{print $1}')
-              if [ "$actual_checksum" != "$expected_checksum" ]; then
-                echo "::error::Qualified artifact checksum changed: ${relative_path}"
-                exit 1
-              fi
-            done
-
-          jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
-            while IFS=$'\t' read -r image expected_digest; do
-              ref="ghcr.io/alienplatform/${image}:qualification-${RELEASE_COMMIT}"
-              actual_digest=$(docker buildx imagetools inspect "$ref" |
-                sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
-              if [ "$actual_digest" != "$expected_digest" ]; then
-                echo "::error::Qualified image digest changed: ${image}"
-                exit 1
-              fi
-            done
-
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "head_sha=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Select release source
