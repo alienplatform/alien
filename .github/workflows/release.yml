@@ -1960,6 +1960,36 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Record qualified image digests
+        env:
+          RELEASE_COMMIT: ${{ inputs.source_ref }}
+        run: |
+          DIGESTS='{}'
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager; do
+            qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
+            digest=$(docker buildx imagetools inspect "$qualified" |
+              sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+            if [ -z "$digest" ]; then
+              echo "::error::Qualified image ${qualified} has no manifest digest"
+              exit 1
+            fi
+            DIGESTS=$(jq --arg name "$name" --arg digest "$digest" \
+              '. + {($name): $digest}' <<< "$DIGESTS")
+          done
+          jq -n \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --argjson images "$DIGESTS" \
+            '{releaseCommit: $releaseCommit, images: $images}' \
+            > qualified-image-digests.json
+
+      - name: Upload qualified image digests
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-image-digests
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified-image-digests.json
+
   publish-images:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
@@ -1973,34 +2003,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download qualified image digests
+        uses: actions/download-artifact@v7
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          name: qualified-image-digests
+          path: qualification
+
       - name: Promote qualified image manifests
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_COMMIT: ${{ needs.prepare.outputs.qualification_head_sha }}
         run: |
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager; do
-            image="ghcr.io/alienplatform/${name}"
-            qualified="${image}:qualification-${RELEASE_COMMIT}"
-            source_digest=$(docker buildx imagetools inspect "$qualified" |
-              sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
-            if [ -z "$source_digest" ]; then
-              echo "::error::Qualified image ${qualified} is unavailable"
-              exit 1
-            fi
+          recorded_commit=$(jq -r '.releaseCommit' qualification/qualified-image-digests.json)
+          if [ "$recorded_commit" != "$RELEASE_COMMIT" ]; then
+            echo "::error::Qualified images belong to ${recorded_commit}, expected ${RELEASE_COMMIT}"
+            exit 1
+          fi
 
-            versioned="${image}:v${VERSION}"
-            published_digest=$(docker buildx imagetools inspect "$versioned" 2>/dev/null |
-              sed -n 's/^Digest:[[:space:]]*//p' | head -n1 || true)
-            if [ -n "$published_digest" ] && [ "$published_digest" != "$source_digest" ]; then
-              echo "::error::${versioned} exists with a different manifest"
-              exit 1
-            fi
+          jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
+            qualification/qualified-image-digests.json |
+            while IFS=$'\t' read -r name source_digest; do
+              image="ghcr.io/alienplatform/${name}"
+              if ! docker buildx imagetools inspect "${image}@${source_digest}" >/dev/null; then
+                echo "::error::Qualified image ${image}@${source_digest} is unavailable"
+                exit 1
+              fi
 
-            docker buildx imagetools create \
-              --tag "$versioned" \
-              --tag "${image}:latest" \
-              "${image}@${source_digest}"
-          done
+              versioned="${image}:v${VERSION}"
+              published_digest=$(docker buildx imagetools inspect "$versioned" 2>/dev/null |
+                sed -n 's/^Digest:[[:space:]]*//p' | head -n1 || true)
+              if [ -n "$published_digest" ] && [ "$published_digest" != "$source_digest" ]; then
+                echo "::error::${versioned} exists with a different manifest"
+                exit 1
+              fi
+
+              docker buildx imagetools create \
+                --tag "$versioned" \
+                --tag "${image}:latest" \
+                "${image}@${source_digest}"
+            done
 
   # Publish the GitHub release only after the registries and binary store have
   # accepted their qualified artifacts. Homebrew follows because its formula
