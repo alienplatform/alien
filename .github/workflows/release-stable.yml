@@ -1,0 +1,71 @@
+name: Publish stable release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-stable-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  resolve:
+    runs-on: depot-ubuntu-24.04-arm
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve unreleased version commit
+        id: release
+        run: |
+          VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if git rev-parse --verify --quiet "refs/tags/v${VERSION}" >/dev/null; then
+            echo "::error::v${VERSION} is already published"
+            exit 1
+          fi
+
+          LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
+          RELEASE_COMMIT=""
+          while read -r COMMIT; do
+            COMMIT_VERSION=$(git show "${COMMIT}:Cargo.toml" |
+              sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+            if [ "$COMMIT_VERSION" = "$VERSION" ]; then
+              RELEASE_COMMIT="$COMMIT"
+              break
+            fi
+          done < <(git rev-list --reverse "${LATEST_TAG}..HEAD")
+
+          if [ -z "$RELEASE_COMMIT" ]; then
+            echo "::error::Could not find the commit that introduced v${VERSION}"
+            exit 1
+          fi
+
+          echo "Publishing v${VERSION} from ${RELEASE_COMMIT}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+
+  qualify:
+    needs: resolve
+    uses: ./.github/workflows/release.yml
+    with:
+      mode: stable
+      stable_action: qualification
+      source_ref: ${{ needs.resolve.outputs.commit }}
+    secrets: inherit
+
+  publish:
+    needs: [resolve, qualify]
+    uses: ./.github/workflows/release.yml
+    with:
+      mode: stable
+      stable_action: publish
+      source_ref: ${{ needs.resolve.outputs.commit }}
+    secrets: inherit

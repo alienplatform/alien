@@ -28,10 +28,10 @@ on:
         default: stable
         options: [stable, dev]
       stable_action:
-        description: Prepare a version PR or publish the qualified merged version
+        description: Prepare a version PR
         type: choice
         default: prepare
-        options: [prepare, publish]
+        options: [prepare]
       release_branch:
         description: Linear-derived branch name for the version PR (prepare only)
         type: string
@@ -401,43 +401,7 @@ jobs:
           RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
           VERSION: ${{ steps.merged_version.outputs.version }}
         run: |
-          PR_JSON=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${GITHUB_REPOSITORY}/commits/${RELEASE_COMMIT}/pulls" \
-            --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last')
-          HEAD_SHA=$(jq -r '.head.sha // empty' <<< "$PR_JSON")
-          if [ -z "$HEAD_SHA" ]; then
-            echo "::error::The release commit is not associated with a merged pull request"
-            exit 1
-          fi
-
-          mkdir -p qualification-candidates
-          RUN_ID=""
-          while read -r CANDIDATE_RUN_ID; do
-            CANDIDATE_DIR="qualification-candidates/${CANDIDATE_RUN_ID}"
-            mkdir -p "$CANDIDATE_DIR"
-            if ! gh run download "$CANDIDATE_RUN_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name release-qualification-manifest \
-              --dir "$CANDIDATE_DIR" 2>/dev/null; then
-              continue
-            fi
-            CANDIDATE_HEAD=$(jq -r '.headSha // empty' "$CANDIDATE_DIR/manifest.json")
-            if [ "$CANDIDATE_HEAD" = "$RELEASE_COMMIT" ]; then
-              RUN_ID="$CANDIDATE_RUN_ID"
-              break
-            fi
-          done < <(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow release-qualification.yml \
-            --status success \
-            --limit 100 \
-            --json databaseId \
-            --jq '.[].databaseId')
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No successful release qualification exists for exact release commit ${RELEASE_COMMIT}"
-            exit 1
-          fi
+          RUN_ID="$GITHUB_RUN_ID"
 
           mkdir -p qualification
           gh run download "$RUN_ID" \
