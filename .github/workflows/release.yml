@@ -13,6 +13,10 @@ on:
         type: string
         required: false
         default: main
+      qualification_run_id:
+        type: string
+        required: false
+        default: ""
       dry_run:
         type: boolean
         required: false
@@ -390,8 +394,13 @@ jobs:
         if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
         env:
           RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
-          echo "run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          if ! grep -qE '^[0-9]+$' <<< "$QUALIFICATION_RUN_ID"; then
+            echo "::error::Stable publication requires its orchestrator run ID"
+            exit 1
+          fi
+          echo "run_id=$QUALIFICATION_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "head_sha=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Select release source

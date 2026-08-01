@@ -68,4 +68,5 @@ jobs:
       mode: stable
       stable_action: publish
       source_ref: ${{ needs.resolve.outputs.commit }}
+      qualification_run_id: ${{ github.run_id }}
     secrets: inherit
