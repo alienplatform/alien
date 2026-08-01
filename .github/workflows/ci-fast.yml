@@ -68,6 +68,20 @@ jobs:
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
             typescript:
+              # `pnpm format-and-lint` runs Biome from the repository root.
+              # Match its source formats repository-wide instead of trying to
+              # enumerate every directory that may contain linted files.
+              - '**/*.js'
+              - '**/*.cjs'
+              - '**/*.mjs'
+              - '**/*.jsx'
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/*.json'
+              - '**/*.jsonc'
+              - '**/*.css'
+              - '**/*.graphql'
+              - '**/*.gql'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
