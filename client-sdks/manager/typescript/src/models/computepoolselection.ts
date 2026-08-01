@@ -3,22 +3,14 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import {
-  FailureDomainSelection,
-  FailureDomainSelection$inboundSchema,
-  FailureDomainSelection$Outbound,
-  FailureDomainSelection$outboundSchema,
-} from "./failuredomainselection.js";
 
 /**
  * Autoscaling machine pool.
  */
 export type ComputePoolSelectionAutoscale = {
-  failureDomains?: FailureDomainSelection | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -38,7 +30,6 @@ export type ComputePoolSelectionAutoscale = {
  * Fixed number of machines.
  */
 export type ComputePoolSelectionFixed = {
-  failureDomains?: FailureDomainSelection | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -62,19 +53,13 @@ export const ComputePoolSelectionAutoscale$inboundSchema: z.ZodType<
   ComputePoolSelectionAutoscale,
   unknown
 > = z.object({
-  failure_domains: z.nullable(FailureDomainSelection$inboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
-}).transform((v) => {
-  return remap$(v, {
-    "failure_domains": "failureDomains",
-  });
 });
 /** @internal */
 export type ComputePoolSelectionAutoscale$Outbound = {
-  failure_domains?: FailureDomainSelection$Outbound | null | undefined;
   machine?: string | null | undefined;
   max: number;
   min: number;
@@ -86,15 +71,10 @@ export const ComputePoolSelectionAutoscale$outboundSchema: z.ZodType<
   ComputePoolSelectionAutoscale$Outbound,
   ComputePoolSelectionAutoscale
 > = z.object({
-  failureDomains: z.nullable(FailureDomainSelection$outboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
-}).transform((v) => {
-  return remap$(v, {
-    failureDomains: "failure_domains",
-  });
 });
 
 export function computePoolSelectionAutoscaleToJSON(
@@ -121,18 +101,12 @@ export const ComputePoolSelectionFixed$inboundSchema: z.ZodType<
   ComputePoolSelectionFixed,
   unknown
 > = z.object({
-  failure_domains: z.nullable(FailureDomainSelection$inboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
-}).transform((v) => {
-  return remap$(v, {
-    "failure_domains": "failureDomains",
-  });
 });
 /** @internal */
 export type ComputePoolSelectionFixed$Outbound = {
-  failure_domains?: FailureDomainSelection$Outbound | null | undefined;
   machine?: string | null | undefined;
   machines: number;
   mode: "fixed";
@@ -143,14 +117,9 @@ export const ComputePoolSelectionFixed$outboundSchema: z.ZodType<
   ComputePoolSelectionFixed$Outbound,
   ComputePoolSelectionFixed
 > = z.object({
-  failureDomains: z.nullable(FailureDomainSelection$outboundSchema).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
-}).transform((v) => {
-  return remap$(v, {
-    failureDomains: "failure_domains",
-  });
 });
 
 export function computePoolSelectionFixedToJSON(

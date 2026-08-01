@@ -38,8 +38,8 @@ let value: ResourceHeartbeat = {
   raw: [
     {
       body: "<value>",
-      collectedAt: new Date("2024-09-19T21:19:47.290Z"),
-      format: "json",
+      collectedAt: new Date("2026-05-11T10:48:38.268Z"),
+      format: "text",
       source: "<value>",
       truncated: false,
     },

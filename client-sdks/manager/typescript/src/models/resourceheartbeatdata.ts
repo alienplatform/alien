@@ -4,11 +4,6 @@
 
 import * as z from "zod/v4";
 import {
-  AiHeartbeatData,
-  AiHeartbeatData$Outbound,
-  AiHeartbeatData$outboundSchema,
-} from "./aiheartbeatdata.js";
-import {
   ArtifactRegistryHeartbeatData,
   ArtifactRegistryHeartbeatData$Outbound,
   ArtifactRegistryHeartbeatData$outboundSchema,
@@ -108,11 +103,6 @@ import {
   WorkerHeartbeatData$Outbound,
   WorkerHeartbeatData$outboundSchema,
 } from "./workerheartbeatdata.js";
-
-export type ResourceHeartbeatDataAi = {
-  data: AiHeartbeatData;
-  resourceType: "ai";
-};
 
 export type ResourceHeartbeatDataAzureServiceBusNamespace = {
   data: AzureServiceBusNamespaceHeartbeatData;
@@ -234,31 +224,7 @@ export type ResourceHeartbeatData =
   | ResourceHeartbeatDataAzureResourceGroup
   | ResourceHeartbeatDataAzureStorageAccount
   | ResourceHeartbeatDataAzureContainerAppsEnvironment
-  | ResourceHeartbeatDataAzureServiceBusNamespace
-  | ResourceHeartbeatDataAi;
-
-/** @internal */
-export type ResourceHeartbeatDataAi$Outbound = {
-  data: AiHeartbeatData$Outbound;
-  resourceType: "ai";
-};
-
-/** @internal */
-export const ResourceHeartbeatDataAi$outboundSchema: z.ZodType<
-  ResourceHeartbeatDataAi$Outbound,
-  ResourceHeartbeatDataAi
-> = z.object({
-  data: AiHeartbeatData$outboundSchema,
-  resourceType: z.literal("ai"),
-});
-
-export function resourceHeartbeatDataAiToJSON(
-  resourceHeartbeatDataAi: ResourceHeartbeatDataAi,
-): string {
-  return JSON.stringify(
-    ResourceHeartbeatDataAi$outboundSchema.parse(resourceHeartbeatDataAi),
-  );
-}
+  | ResourceHeartbeatDataAzureServiceBusNamespace;
 
 /** @internal */
 export type ResourceHeartbeatDataAzureServiceBusNamespace$Outbound = {
@@ -783,8 +749,7 @@ export type ResourceHeartbeatData$Outbound =
   | ResourceHeartbeatDataAzureResourceGroup$Outbound
   | ResourceHeartbeatDataAzureStorageAccount$Outbound
   | ResourceHeartbeatDataAzureContainerAppsEnvironment$Outbound
-  | ResourceHeartbeatDataAzureServiceBusNamespace$Outbound
-  | ResourceHeartbeatDataAi$Outbound;
+  | ResourceHeartbeatDataAzureServiceBusNamespace$Outbound;
 
 /** @internal */
 export const ResourceHeartbeatData$outboundSchema: z.ZodType<
@@ -813,7 +778,6 @@ export const ResourceHeartbeatData$outboundSchema: z.ZodType<
     ResourceHeartbeatDataAzureContainerAppsEnvironment$outboundSchema
   ),
   z.lazy(() => ResourceHeartbeatDataAzureServiceBusNamespace$outboundSchema),
-  z.lazy(() => ResourceHeartbeatDataAi$outboundSchema),
 ]);
 
 export function resourceHeartbeatDataToJSON(

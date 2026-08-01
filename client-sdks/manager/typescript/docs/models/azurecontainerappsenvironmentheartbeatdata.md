@@ -8,18 +8,11 @@ import { AzureContainerAppsEnvironmentHeartbeatData } from "@alienplatform/manag
 let value: AzureContainerAppsEnvironmentHeartbeatData = {
   name: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "running",
-    partial: false,
-    stale: true,
+    collectionIssues: [],
+    health: "healthy",
+    lifecycle: "scaling",
+    partial: true,
+    stale: false,
   },
   workloadProfileCount: 265852,
   workloadProfiles: [

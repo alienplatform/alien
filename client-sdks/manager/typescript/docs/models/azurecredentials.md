@@ -68,3 +68,4 @@ const value: models.AzureCredentialsManagedIdentity = {
   type: "managedIdentity",
 };
 ```
+

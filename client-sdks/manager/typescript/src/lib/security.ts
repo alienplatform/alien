@@ -251,7 +251,7 @@ export function resolveGlobalSecurity(
     [
       {
         fieldName: "Authorization",
-        type: "http:bearer",
+        type: "apiKey:header",
         value: security?.bearer ?? env().ALIEN_MANAGER_BEARER,
       },
     ],
