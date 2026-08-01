@@ -174,7 +174,6 @@ dependencies = [
  "pem",
  "prettyplease",
  "progenitor",
- "quick-xml 0.37.5",
  "quote",
  "rand 0.9.4",
  "rcgen",
