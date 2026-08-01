@@ -13,6 +13,10 @@ on:
         type: string
         required: false
         default: main
+      qualification_run_id:
+        type: string
+        required: false
+        default: ""
       dry_run:
         type: boolean
         required: false
@@ -72,8 +76,8 @@ jobs:
       version: ${{ steps.bump.outputs.version || steps.qualification_version.outputs.version || steps.merged_version.outputs.version }}
       ready: ${{ steps.release_state.outputs.ready }}
       source_ref: ${{ steps.release_source.outputs.ref }}
-      qualification_run_id: ${{ steps.verify_qualification.outputs.run_id }}
-      qualification_head_sha: ${{ steps.verify_qualification.outputs.head_sha }}
+      qualification_run_id: ${{ steps.qualification.outputs.run_id }}
+      qualification_head_sha: ${{ steps.qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
@@ -385,73 +389,18 @@ jobs:
             fi
           done
 
-      - name: Login to GHCR for qualification verification
-        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify release qualification
-        id: verify_qualification
+      - name: Select same-run qualification artifacts
+        id: qualification
         if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
-          VERSION: ${{ steps.merged_version.outputs.version }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
-          RUN_ID="$GITHUB_RUN_ID"
-
-          mkdir -p qualification
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name release-qualification-manifest \
-            --dir qualification
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir qualification/artifacts
-
-          QUALIFIED_VERSION=$(jq -r '.version' qualification/manifest.json)
-          QUALIFIED_HEAD=$(jq -r '.headSha' qualification/manifest.json)
-          QUALIFIED_TREE=$(jq -r '.sourceTree' qualification/manifest.json)
-          RELEASE_TREE=$(git rev-parse "${RELEASE_COMMIT}^{tree}")
-          if [ "$QUALIFIED_VERSION" != "$VERSION" ] || \
-             [ "$QUALIFIED_HEAD" != "$RELEASE_COMMIT" ] || \
-             [ "$QUALIFIED_TREE" != "$RELEASE_TREE" ]; then
-            echo "::error::Qualified artifact set does not match the merged release tree"
+          if ! grep -qE '^[0-9]+$' <<< "$QUALIFICATION_RUN_ID"; then
+            echo "::error::Stable publication requires its orchestrator run ID"
             exit 1
           fi
-
-          jq -r '.artifacts | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
-            while IFS=$'\t' read -r qualified_path expected_checksum; do
-              relative_path=${qualified_path#qualified-artifacts/}
-              artifact_path="qualification/artifacts/${relative_path}"
-              if [ ! -f "$artifact_path" ]; then
-                echo "::error::Qualified artifact is missing: ${relative_path}"
-                exit 1
-              fi
-              actual_checksum=$(sha256sum "$artifact_path" | awk '{print $1}')
-              if [ "$actual_checksum" != "$expected_checksum" ]; then
-                echo "::error::Qualified artifact checksum changed: ${relative_path}"
-                exit 1
-              fi
-            done
-
-          jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
-            while IFS=$'\t' read -r image expected_digest; do
-              ref="ghcr.io/alienplatform/${image}:qualification-${RELEASE_COMMIT}"
-              actual_digest=$(docker buildx imagetools inspect "$ref" |
-                sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
-              if [ "$actual_digest" != "$expected_digest" ]; then
-                echo "::error::Qualified image digest changed: ${image}"
-                exit 1
-              fi
-            done
-
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "run_id=$QUALIFICATION_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "head_sha=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Select release source
@@ -2011,6 +1960,36 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Record qualified image digests
+        env:
+          RELEASE_COMMIT: ${{ inputs.source_ref }}
+        run: |
+          DIGESTS='{}'
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager; do
+            qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
+            digest=$(docker buildx imagetools inspect "$qualified" |
+              sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+            if [ -z "$digest" ]; then
+              echo "::error::Qualified image ${qualified} has no manifest digest"
+              exit 1
+            fi
+            DIGESTS=$(jq --arg name "$name" --arg digest "$digest" \
+              '. + {($name): $digest}' <<< "$DIGESTS")
+          done
+          jq -n \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --argjson images "$DIGESTS" \
+            '{releaseCommit: $releaseCommit, images: $images}' \
+            > qualified-image-digests.json
+
+      - name: Upload qualified image digests
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-image-digests
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified-image-digests.json
+
   publish-images:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
@@ -2024,20 +2003,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download qualification manifest
+      - name: Download qualified image digests
         uses: actions/download-artifact@v7
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          name: release-qualification-manifest
+          name: qualified-image-digests
           path: qualification
 
       - name: Promote qualified image manifests
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.qualification_head_sha }}
         run: |
+          recorded_commit=$(jq -r '.releaseCommit' qualification/qualified-image-digests.json)
+          if [ "$recorded_commit" != "$RELEASE_COMMIT" ]; then
+            echo "::error::Qualified images belong to ${recorded_commit}, expected ${RELEASE_COMMIT}"
+            exit 1
+          fi
+
           jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
+            qualification/qualified-image-digests.json |
             while IFS=$'\t' read -r name source_digest; do
               image="ghcr.io/alienplatform/${name}"
               if ! docker buildx imagetools inspect "${image}@${source_digest}" >/dev/null; then
