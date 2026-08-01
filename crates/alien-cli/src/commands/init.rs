@@ -82,6 +82,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "github-agent",
         "A GitHub integration agent with a Next.js dashboard.",
     ),
+    (
+        "ai-chatbot-ts",
+        "A streaming AI chatbot that answers questions about a private Postgres.",
+    ),
 ];
 
 fn fallback_templates() -> Vec<TemplateInfo> {
