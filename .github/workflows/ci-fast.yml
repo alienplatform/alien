@@ -297,6 +297,9 @@ jobs:
         working-directory: crates/alien-bindings-node
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
 
+      - name: Build package-layout dependencies
+        run: pnpm --filter @alienplatform/sdk... build
+
       - name: Validate package layout
         run: pnpm validate:package-layout
 

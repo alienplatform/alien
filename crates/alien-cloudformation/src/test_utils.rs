@@ -145,11 +145,30 @@ where
 fn suppress_known_cfn_lint_false_positives(mut result: LinterRun) -> LinterRun {
     if matches!(result.status, LinterStatus::Failed(_))
         && (is_apigateway_tagresource_false_positive_only(&result.stdout)
+            || is_bedrock_mantle_service_prefix_false_positive_only(&result.stdout)
             || is_nextgen_opensearch_schema_lag_only(&result.stdout))
     {
         result.status = LinterStatus::Passed;
     }
     result
+}
+
+fn is_bedrock_mantle_service_prefix_false_positive_only(stdout: &str) -> bool {
+    let blocks = stdout
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>();
+
+    !blocks.is_empty()
+        && blocks.iter().all(|block| {
+            let mut lines = block.lines();
+            matches!(
+                lines.next(),
+                Some(line) if line.starts_with("W3037 'bedrock-mantle' is not one of ")
+            ) && matches!(lines.next(), Some(line) if line.contains("template.yaml:"))
+                && lines.next().is_none()
+        })
 }
 
 fn is_apigateway_tagresource_false_positive_only(stdout: &str) -> bool {
@@ -228,6 +247,22 @@ mod tests {
         });
 
         assert_eq!(result.status, LinterStatus::Failed(Some(4)));
+    }
+
+    #[test]
+    fn suppresses_only_bedrock_mantle_service_prefix_schema_lag() {
+        let output =
+            "W3037 'bedrock-mantle' is not one of ['bedrock']\n/tmp/.tmp123/template.yaml:12:9\n\n";
+
+        let result = suppress_known_cfn_lint_false_positives(LinterRun {
+            tool: "cfn-lint".to_string(),
+            command: "cfn-lint template.yaml".to_string(),
+            status: LinterStatus::Failed(Some(4)),
+            stdout: output.to_string(),
+            stderr: String::new(),
+        });
+
+        assert_eq!(result.status, LinterStatus::Passed);
     }
 
     #[test]
