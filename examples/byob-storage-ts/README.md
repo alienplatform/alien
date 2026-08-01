@@ -18,9 +18,9 @@ export default new alien.Stack("byob-storage")
 ```
 
 Publish the release through the normal Alien release flow. `remoteAccess` is an
-explicit security choice: it causes customer setup to grant Alien's deployment
-management identity object read, write, list, delete, and multipart access to
-this dedicated bucket or container.
+explicit security choice: it causes customer setup to grant the stack's separate
+Remote Bindings identity object read, write, list, delete, and multipart access
+to this dedicated bucket or container.
 
 ## Customer: run the normal setup
 
@@ -62,10 +62,12 @@ await uploads.list()
 await uploads.delete("hello.txt")
 ```
 
-Provider credentials are short-lived and resource-scoped. The same `Bindings`
-and Storage objects refresh them below the application API. Read-only or
-mismatched Alien credentials, non-Running resources, and resources without
-`remoteAccess` are denied before usable cloud credentials are returned.
+Provider credentials are short-lived and use the stack's Remote Bindings
+identity, whose permissions are the union of resources explicitly opted into
+remote access. The same `Bindings` and Storage objects refresh them below the
+application API. Read-only or mismatched Alien credentials, non-Running
+resources, and resources without `remoteAccess` are denied before usable cloud
+credentials are returned.
 
 Never expose the Alien API credential or returned provider credentials to a
 browser, mobile app, logs, or other untrusted client.
