@@ -13,6 +13,10 @@ on:
         type: string
         required: false
         default: main
+      qualification_run_id:
+        type: string
+        required: false
+        default: ""
       dry_run:
         type: boolean
         required: false
@@ -40,6 +44,10 @@ on:
         description: Exact 40-character source commit for dev npm packages
         type: string
         default: main
+      qualification_run_id:
+        description: Successful qualification run to publish (optional)
+        type: string
+        default: ""
       dry_run:
         description: Validate without publishing
         type: boolean
@@ -331,28 +339,46 @@ jobs:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
           VERSION: ${{ steps.merged_version.outputs.version }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
-          PR_JSON=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${GITHUB_REPOSITORY}/commits/${RELEASE_COMMIT}/pulls" \
-            --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last')
-          HEAD_SHA=$(jq -r '.head.sha // empty' <<< "$PR_JSON")
-          if [ -z "$HEAD_SHA" ]; then
-            echo "::error::The release commit is not associated with a merged pull request"
-            exit 1
-          fi
+          if [ -n "$QUALIFICATION_RUN_ID" ]; then
+            if ! grep -qE '^[0-9]+$' <<< "$QUALIFICATION_RUN_ID"; then
+              echo "::error::qualification_run_id must be a GitHub Actions run ID"
+              exit 1
+            fi
+            RUN_JSON=$(gh run view "$QUALIFICATION_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json conclusion,workflowName)
+            if [ "$(jq -r '.conclusion' <<< "$RUN_JSON")" != "success" ] || \
+               [ "$(jq -r '.workflowName' <<< "$RUN_JSON")" != "Release qualification" ]; then
+              echo "::error::qualification_run_id must name a successful Release qualification run"
+              exit 1
+            fi
+            RUN_ID="$QUALIFICATION_RUN_ID"
+            HEAD_SHA="$RELEASE_COMMIT"
+          else
+            PR_JSON=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/commits/${RELEASE_COMMIT}/pulls" \
+              --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last')
+            HEAD_SHA=$(jq -r '.head.sha // empty' <<< "$PR_JSON")
+            if [ -z "$HEAD_SHA" ]; then
+              echo "::error::The release commit is not associated with a merged pull request"
+              exit 1
+            fi
 
-          RUN_ID=$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow release-qualification.yml \
-            --commit "$HEAD_SHA" \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No successful release qualification exists for ${HEAD_SHA}"
-            exit 1
+            RUN_ID=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow release-qualification.yml \
+              --commit "$HEAD_SHA" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::No successful release qualification exists for ${HEAD_SHA}"
+              exit 1
+            fi
           fi
 
           mkdir -p qualification
