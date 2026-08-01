@@ -857,6 +857,7 @@ impl GcpRemoteStackManagementController {
                 service_account_name
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
+            remote_bindings_service_account_email: None,
             role_bound: true,
             impersonation_granted: true,
             _internal_stay_count: None,

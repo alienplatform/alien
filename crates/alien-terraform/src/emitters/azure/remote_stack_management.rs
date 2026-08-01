@@ -16,7 +16,6 @@ use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, permission_context, required_label, tags},
-    emitters::enabled,
     expr,
 };
 use alien_core::{

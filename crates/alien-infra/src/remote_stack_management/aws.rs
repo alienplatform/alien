@@ -1095,6 +1095,7 @@ impl AwsRemoteStackManagementController {
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
+            remote_bindings_role_arn: None,
             management_permissions_applied: true,
             _internal_stay_count: None,
         }
