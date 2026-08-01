@@ -3,9 +3,9 @@
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Kv, LifecycleRule, ManagementPermissions, PermissionProfile, Queue, RemoteStackManagement,
-    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
-    WorkerCode, WorkerTrigger,
+    Kv, LifecycleRule, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
+    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
+    WorkerTrigger,
 };
 
 #[test]
@@ -101,8 +101,19 @@ fn remote_storage_management_dependencies_are_acyclic() {
     let management_role = template
         .resources
         .values()
-        .find(|resource| resource.resource_type == "AWS::IAM::Role")
+        .find(|resource| {
+            resource.resource_type == "AWS::IAM::Role"
+                && !resource.logical_id.ends_with("RemoteBindings")
+        })
         .expect("management role");
+    let remote_bindings_role = template
+        .resources
+        .values()
+        .find(|resource| {
+            resource.resource_type == "AWS::IAM::Role"
+                && resource.logical_id.ends_with("RemoteBindings")
+        })
+        .expect("remote bindings role");
     let storage_bucket = template
         .resources
         .values()
@@ -127,15 +138,15 @@ fn remote_storage_management_dependencies_are_acyclic() {
         .contains(&storage_grant.logical_id));
     assert!(storage_grant
         .depends_on
-        .contains(&management_role.logical_id));
+        .contains(&remote_bindings_role.logical_id));
     assert!(queue.depends_on.contains(&storage_grant.logical_id));
 
     let grant_properties =
         serde_json::to_value(&storage_grant.properties).expect("serialize storage grant");
     assert_eq!(
         grant_properties["Roles"],
-        serde_json::json!([{ "Ref": management_role.logical_id }]),
-        "setup must attach the exact storage grant to the management role"
+        serde_json::json!([{ "Ref": remote_bindings_role.logical_id }]),
+        "setup must attach the exact storage grant to the Remote Bindings role"
     );
     let grant_actions = grant_properties["PolicyDocument"]["Statement"][0]["Action"]
         .as_array()
