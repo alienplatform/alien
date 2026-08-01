@@ -42,7 +42,7 @@ fn test_azure_predefined_grant_plan(
 }
 
 #[test]
-fn remote_storage_data_write_keeps_data_on_container_and_delegation_on_account() {
+fn remote_storage_data_write_is_scoped_to_the_container() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set =
         get_permission_set("storage/remote-data-write").expect("permission set exists");
@@ -52,8 +52,8 @@ fn remote_storage_data_write_keeps_data_on_container_and_delegation_on_account()
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
         .expect("remote Storage grant plan should generate");
 
-    assert_eq!(grant_plan.custom_roles.len(), 2);
-    assert_eq!(grant_plan.bindings.len(), 2);
+    assert_eq!(grant_plan.custom_roles.len(), 1);
+    assert_eq!(grant_plan.bindings.len(), 1);
     assert!(grant_plan.bindings.iter().all(|binding| matches!(
         binding.role_definition,
         AzureRoleDefinitionRef::Custom { .. }
@@ -62,14 +62,7 @@ fn remote_storage_data_write_keeps_data_on_container_and_delegation_on_account()
     let account_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.Storage/storageAccounts/stcxpaymentsprod";
     let container_scope =
         format!("{account_scope}/blobServices/default/containers/my-stack-payments-data");
-    assert!(grant_plan
-        .bindings
-        .iter()
-        .any(|binding| binding.scope == account_scope));
-    assert!(grant_plan
-        .bindings
-        .iter()
-        .any(|binding| binding.scope == container_scope));
+    assert_eq!(grant_plan.bindings[0].scope, container_scope);
 
     let data_role = grant_plan
         .custom_roles
@@ -85,17 +78,6 @@ fn remote_storage_data_write_keeps_data_on_container_and_delegation_on_account()
             "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
         ]
     );
-
-    let delegation_role = grant_plan
-        .custom_roles
-        .iter()
-        .find(|role| role.role_definition.assignable_scopes == [account_scope])
-        .expect("storage-account delegation-key role");
-    assert_eq!(
-        delegation_role.role_definition.actions,
-        ["Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action"]
-    );
-    assert!(delegation_role.role_definition.data_actions.is_empty());
 }
 
 #[test]
