@@ -24,9 +24,8 @@ use alien_error::AlienError;
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    deployment_status_from_record, CreateDeploymentParams, CreateTokenParams,
-    DeploymentAcquireMode, DeploymentFilter, DeploymentRecord, ReconcileData, ReleaseRecord,
-    TokenType,
+    CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
+    DeploymentRecord, ReconcileData, ReleaseRecord, TokenType,
 };
 
 use super::{auth, AppState};
@@ -1706,6 +1705,10 @@ fn deployment_state_from_record(
     })
 }
 
+fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
+    serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
+}
+
 fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {
     error
         .clone()
@@ -1936,10 +1939,6 @@ async fn initialize(
                 .into_response(),
                 Err(e) => e.into_response(),
             }
-        }
-        crate::auth::Scope::Command { .. } => {
-            ErrorData::forbidden("Command payload tokens cannot initialize deployments")
-                .into_response()
         }
     }
 }

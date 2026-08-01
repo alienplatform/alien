@@ -14,18 +14,6 @@ use crate::traits::release_store::ReleaseRecord;
 pub struct OssAuthz;
 
 impl OssAuthz {
-    /// Roles minted only for narrow platform-to-manager capabilities. They
-    /// must never inherit OSS's broad "any authenticated token can read"
-    /// behavior merely because their scope is workspace-wide.
-    fn is_internal_capability(s: &Subject) -> bool {
-        matches!(
-            s.role,
-            Role::WorkspaceTelemetryReader
-                | Role::CommandPayloadReader
-                | Role::RemoteBindingResolver
-        )
-    }
-
     /// True if the subject has workspace-level write authority. In OSS this
     /// covers the legacy "admin" token (mapped to `WorkspaceAdmin`) and any
     /// workspace-scoped service account with a write role.
@@ -56,11 +44,10 @@ impl Authz for OssAuthz {
         }
     }
 
-    fn can_read_release(&self, s: &Subject, _release: &ReleaseRecord) -> bool {
+    fn can_read_release(&self, _s: &Subject, _release: &ReleaseRecord) -> bool {
         // OSS single-tenant: any valid token reads any release. Deployment
-        // tokens included — agents need their target release to deploy. Exact
-        // internal capabilities are intentionally limited to their purpose.
-        !Self::is_internal_capability(s) && !matches!(s.scope, Scope::Command { .. })
+        // tokens included — agents need their target release to deploy.
+        true
     }
 
     fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
@@ -80,10 +67,6 @@ impl Authz for OssAuthz {
     }
 
     fn can_read_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if Self::is_internal_capability(s) {
-            return false;
-        }
-
         match &s.scope {
             Scope::Workspace => true,
             Scope::Project { project_id } => project_id == &deployment.project_id,
@@ -95,7 +78,6 @@ impl Authz for OssAuthz {
                 deployment_id == &deployment.id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
-            Scope::Command { .. } => false,
         }
     }
 
@@ -114,18 +96,17 @@ impl Authz for OssAuthz {
     }
 
     fn can_resolve_remote_bindings(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        if let (
-            Scope::Deployment {
-                project_id,
-                deployment_id,
-            },
-            Role::RemoteBindingResolver,
-        ) = (&s.scope, s.role)
-        {
-            return project_id == &deployment.project_id && deployment_id == &deployment.id;
-        }
-
         self.can_update_deployment(s, deployment)
+            || matches!(
+                (&s.scope, s.role),
+                (
+                    Scope::Deployment {
+                        project_id,
+                        deployment_id,
+                    },
+                    Role::RemoteBindingResolver,
+                ) if project_id == &deployment.project_id && deployment_id == &deployment.id
+            )
     }
 
     fn can_delete_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
@@ -148,10 +129,6 @@ impl Authz for OssAuthz {
     }
 
     fn can_read_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
-        if Self::is_internal_capability(s) {
-            return false;
-        }
-
         match &s.scope {
             Scope::Workspace | Scope::Project { .. } => true,
             Scope::DeploymentGroup {
@@ -159,7 +136,6 @@ impl Authz for OssAuthz {
                 ..
             } => deployment_group_id == &dg.id,
             Scope::Deployment { .. } => false,
-            Scope::Command { .. } => false,
         }
     }
 
@@ -190,28 +166,11 @@ impl Authz for OssAuthz {
         self.can_read_deployment(s, deployment)
     }
 
-    fn can_read_command_payload(&self, s: &Subject, command_id: &str) -> bool {
-        matches!(
-            (&s.scope, s.role),
-            (
-                Scope::Command {
-                    command_id: scope_id,
-                    ..
-                },
-                Role::CommandPayloadReader
-            ) if scope_id == command_id
-        )
-    }
-
     fn can_read_command_context(
         &self,
         s: &Subject,
         command: &alien_commands::server::CommandAccessContext,
     ) -> bool {
-        if Self::is_internal_capability(s) {
-            return false;
-        }
-
         match &s.scope {
             Scope::Workspace => true,
             Scope::Project { project_id } => project_id == &command.project_id,
@@ -220,7 +179,6 @@ impl Authz for OssAuthz {
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
             Scope::DeploymentGroup { .. } => false,
-            Scope::Command { .. } => false,
         }
     }
 
@@ -237,7 +195,6 @@ impl Authz for OssAuthz {
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
             Scope::Project { .. } => true,
-            Scope::Command { .. } => false,
         }
     }
 
@@ -329,43 +286,6 @@ mod tests {
         }
     }
 
-    fn deployment_viewer_token(deployment_id: &str) -> Subject {
-        let mut subject = deployment_token(deployment_id);
-        subject.role = Role::DeploymentViewer;
-        subject
-    }
-
-    fn remote_binding_resolver(project_id: &str, deployment_id: &str) -> Subject {
-        Subject {
-            kind: SubjectKind::ServiceAccount {
-                id: "platform-remote-binding-resolver".to_string(),
-            },
-            workspace_id: "default".to_string(),
-            scope: Scope::Deployment {
-                project_id: project_id.to_string(),
-                deployment_id: deployment_id.to_string(),
-            },
-            role: Role::RemoteBindingResolver,
-            bearer_token: "bearer".to_string(),
-        }
-    }
-
-    fn command_payload_reader(command_id: &str) -> Subject {
-        Subject {
-            kind: SubjectKind::ServiceAccount {
-                id: "platform-command-reader".to_string(),
-            },
-            workspace_id: "default".to_string(),
-            scope: Scope::Command {
-                project_id: "default".to_string(),
-                deployment_id: "d1".to_string(),
-                command_id: command_id.to_string(),
-            },
-            role: Role::CommandPayloadReader,
-            bearer_token: "bearer".to_string(),
-        }
-    }
-
     fn deployment(id: &str, dg: &str) -> DeploymentRecord {
         DeploymentRecord {
             deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
@@ -424,30 +344,22 @@ mod tests {
     }
 
     #[test]
-    fn remote_binding_resolution_uses_deployment_writer_roles_not_viewers() {
-        let dep = deployment("d1", "dg-a");
-        assert!(OssAuthz.can_resolve_remote_bindings(&deployment_token("d1"), &dep));
-        assert!(!OssAuthz.can_resolve_remote_bindings(&deployment_viewer_token("d1"), &dep));
-    }
+    fn remote_binding_capability_is_exactly_deployment_scoped() {
+        let mut subject = deployment_token("d1");
+        subject.role = Role::RemoteBindingResolver;
 
-    #[test]
-    fn remote_binding_capability_is_exact_and_has_no_other_deployment_access() {
-        let dep = deployment("d1", "dg-a");
-        let subject = remote_binding_resolver("default", "d1");
-
-        assert!(OssAuthz.can_resolve_remote_bindings(&subject, &dep));
-        assert!(!OssAuthz
-            .can_resolve_remote_bindings(&remote_binding_resolver("other-project", "d1"), &dep));
-        assert!(
-            !OssAuthz.can_resolve_remote_bindings(&remote_binding_resolver("default", "d2"), &dep)
-        );
-        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
-        assert!(!OssAuthz.can_read_command(&subject, &dep));
-        assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_ingest_telemetry_for(&subject, "d1"));
+        assert!(OssAuthz.can_resolve_remote_bindings(
+            &subject,
+            &deployment("d1", "dg-a")
+        ));
+        assert!(!OssAuthz.can_resolve_remote_bindings(
+            &subject,
+            &deployment("d2", "dg-a")
+        ));
+        assert!(!OssAuthz.can_read_deployment(
+            &subject,
+            &deployment("d1", "dg-a")
+        ));
     }
 
     #[test]
@@ -509,37 +421,5 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(!OssAuthz.can_sync_deployment(&s, &dep));
         assert!(!OssAuthz.can_read_deployment(&s, &dep));
-    }
-
-    #[test]
-    fn command_payload_reader_is_exact_and_has_no_deployment_access() {
-        let subject = command_payload_reader("cmd-1");
-        let dep = deployment("d1", "dg-a");
-
-        assert!(OssAuthz.can_read_command_payload(&subject, "cmd-1"));
-        assert!(!OssAuthz.can_read_command_payload(&subject, "cmd-2"));
-        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_resolve_remote_bindings(&subject, &dep));
-        assert!(!OssAuthz.can_ingest_telemetry_for(&subject, "d1"));
-    }
-
-    #[test]
-    fn workspace_telemetry_reader_has_no_control_plane_access() {
-        let subject = Subject {
-            kind: SubjectKind::ServiceAccount {
-                id: "platform-query-reader".to_string(),
-            },
-            workspace_id: "default".to_string(),
-            scope: Scope::Workspace,
-            role: Role::WorkspaceTelemetryReader,
-            bearer_token: "bearer".to_string(),
-        };
-        let dep = deployment("d1", "dg-a");
-
-        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
-        assert!(!OssAuthz.can_resolve_remote_bindings(&subject, &dep));
-        assert!(!OssAuthz.can_ingest_telemetry_for(&subject, "d1"));
     }
 }
