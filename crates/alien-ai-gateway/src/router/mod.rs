@@ -248,6 +248,18 @@ async fn proxy(
             .await;
     }
 
+    // Bedrock's model cards mark Chat Completions unsupported for these, so there is
+    // no chat endpoint to forward to. Without this, `upstream_target` falls to its
+    // catch-all and answers an opaque 500 saying the cloud does not serve the protocol.
+    if cm.protocol == Protocol::OpenAiResponses {
+        return Err(AlienError::new(ErrorData::InvalidRequest {
+            message: format!(
+                "model `{model}` is served over the Responses API; \
+                 send it to /{binding}/v1/responses instead of /v1/chat/completions"
+            ),
+        }));
+    }
+
     payload["model"] = Value::String(cm.upstream_id.to_string());
     let upstream_body = serde_json::to_vec(&payload)
         .into_alien_error()
@@ -284,7 +296,7 @@ async fn proxy_responses(
 
     // The Responses table implies AWS; the binding's cloud must still match so a
     // GCP/Azure binding doesn't forward to an AWS endpoint it has no credential for.
-    let upstream_id = ai_catalog::responses_upstream_id(&model)
+    let target = ai_catalog::responses_target(&model)
         .filter(|_| route.cloud == Platform::Aws)
         .ok_or_else(|| {
             AlienError::new(ErrorData::ModelNotAvailable {
@@ -293,7 +305,7 @@ async fn proxy_responses(
             })
         })?;
 
-    payload["model"] = Value::String(upstream_id.to_string());
+    payload["model"] = Value::String(target.upstream_id.to_string());
     let upstream_body = serde_json::to_vec(&payload)
         .into_alien_error()
         .context(ErrorData::Other {
@@ -305,7 +317,7 @@ async fn proxy_responses(
         .upstream_base_override
         .clone()
         .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
-    let url = format!("{}/v1/responses", base.trim_end_matches('/'));
+    let url = format!("{}{}", base.trim_end_matches('/'), target.path);
 
     let upstream =
         sign_and_execute(&state.client, &route.cred, &url, "bedrock-mantle", upstream_body, &[])
@@ -779,6 +791,35 @@ mod tests {
         // The mock only matches when the body carries the rewritten upstream id and an
         // Authorization header, so a hit proves the model rewrite and cred injection.
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn responses_only_models_are_refused_on_chat_completions() {
+        // These models list once AWS grants access, and a chat-completions client
+        // will then ask for one. It has to be told where to send it, not handed the
+        // catch-all's 500 claiming AWS does not serve the protocol.
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(200).body("{}");
+            })
+            .await;
+
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 400);
+        let body = resp.text().await.unwrap();
+        assert!(body.contains("GATEWAY_INVALID_REQUEST"), "wrong error variant: {body}");
+        assert!(body.contains("/v1/responses"), "must name the endpoint to use: {body}");
+        // Nothing may reach the cloud: a forwarded request would be signed and billed.
+        upstream.assert_hits_async(0).await;
     }
 
     #[tokio::test]
@@ -1470,6 +1511,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gpt5_responses_use_the_openai_prefixed_path() {
+        // The GPT-5 family serves on `/openai/v1/responses`, not the `/v1/responses`
+        // the open-weight models use. Sending it to the shared path 404s upstream.
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/responses")
+                    .body_contains("\"openai.gpt-5.6-sol\"");
+                then.status(200).header("content-type", "application/json").body("{}");
+            })
+            .await;
+
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model":"gpt-5.6-sol","input":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 200);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn claude_over_responses_is_404() {
         // Claude on mantle is Messages-only; a Claude id over /v1/responses must be
         // rejected by the gateway, not forwarded.
@@ -1508,6 +1575,50 @@ mod tests {
             body.contains("GATEWAY_MODEL_NOT_AVAILABLE"),
             "the 404 must be the gateway's own rejection, not a forwarded upstream 404: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn responses_only_models_are_listed_when_their_endpoint_answers() {
+        // The GPT-5 family serves no chat endpoint, so the chat probe would reject it.
+        // It must be probed on its own mantle Responses path instead, or it would
+        // never appear in /v1/models despite being usable.
+        let server = MockServer::start_async().await;
+        let responses = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/openai/v1/responses");
+                then.status(200).header("content-type", "application/json").body("{}");
+            })
+            .await;
+        // Everything else on this account is denied, so a pass can only come from
+        // the Responses probe above.
+        server
+            .mock_async(|when, then| {
+                when.method(POST).matches(|req: &HttpMockRequest| {
+                    !req.path.contains("/openai/v1/responses")
+                });
+                then.status(403).body("access denied");
+            })
+            .await;
+
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let body: Value = reqwest::get(format!("{url}/llm/v1/models"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let ids: Vec<&str> =
+            body["data"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+
+        assert!(ids.contains(&"gpt-5.6-sol"), "gpt-5.6-sol must be listed: {ids:?}");
+        assert!(responses.hits_async().await > 0, "the Responses path must be probed");
+        let sol = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == "gpt-5.6-sol")
+            .expect("gpt-5.6-sol entry");
+        assert_eq!(sol["displayName"], "GPT-5.6 Sol");
     }
 
     #[tokio::test]

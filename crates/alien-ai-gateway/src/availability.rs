@@ -107,6 +107,7 @@ async fn probe_model(
     let built = match cm.protocol {
         Protocol::OpenAi => openai_probe(route, cm),
         Protocol::Anthropic => anthropic_probe(route, cm),
+        Protocol::OpenAiResponses => responses_probe(route, cm),
     };
     let (url, service, body, extra_headers) = match built {
         Ok(probe) => probe,
@@ -153,6 +154,30 @@ type Probe = (String, &'static str, Vec<u8>, Vec<(&'static str, String)>);
 fn openai_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
     let (url, service) = upstream_target(route, Protocol::OpenAi)?;
     Ok((url, service, openai_body(cm.upstream_id), Vec::new()))
+}
+
+/// The same mantle endpoint `proxy_responses` forwards to, with a minimal body.
+/// `max_output_tokens` is the API floor rather than 1: below it the request is a
+/// 400, which classifies as unavailable and would hide a live model.
+fn responses_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
+    if route.cloud != Platform::Aws {
+        return Err(missing_field(route, "aws cloud for the Responses API"));
+    }
+    let target = ai_catalog::responses_target(cm.public_id)
+        .ok_or_else(|| missing_field(route, "a Responses endpoint for this model"))?;
+    let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
+    let base = route
+        .upstream_base_override
+        .clone()
+        .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
+    let body = json!({
+        "model": target.upstream_id,
+        "input": "ping",
+        "max_output_tokens": 16,
+    })
+    .to_string()
+    .into_bytes();
+    Ok((format!("{}{}", base.trim_end_matches('/'), target.path), "bedrock-mantle", body, Vec::new()))
 }
 
 /// Build the same per-cloud Claude endpoint the proxy uses (Bedrock InvokeModel /

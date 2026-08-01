@@ -22,6 +22,9 @@ pub enum Protocol {
     OpenAi,
     /// Anthropic Messages (`/v1/messages`).
     Anthropic,
+    /// OpenAI Responses on bedrock-mantle. The only API the GPT-5 family serves;
+    /// the exact path is per-model, see `RESPONSES_UPSTREAM`.
+    OpenAiResponses,
 }
 
 /// The one-time action, if any, a customer must take in the cloud provider before
@@ -87,6 +90,11 @@ impl CatalogModel {
     /// acronyms (GPT, OSS, GLM, VL) and versions read correctly.
     pub fn display_name(&self) -> &'static str {
         match self.public_id {
+            "gpt-5.6-sol" => "GPT-5.6 Sol",
+            "gpt-5.6-terra" => "GPT-5.6 Terra",
+            "gpt-5.6-luna" => "GPT-5.6 Luna",
+            "gpt-5.5" => "GPT-5.5",
+            "gpt-5.4" => "GPT-5.4",
             "gpt-oss-20b" => "GPT-OSS 20B",
             "gpt-oss-120b" => "GPT-OSS 120B",
             "gpt-oss-safeguard-20b" => "GPT-OSS Safeguard 20B",
@@ -118,6 +126,7 @@ impl CatalogModel {
             "glm-4.7-flash" => "GLM 4.7 Flash",
             "glm-5" => "GLM 5",
             "palmyra-vision-7b" => "Palmyra Vision 7B",
+            "claude-opus-5" => "Claude Opus 5",
             "claude-sonnet-5" => "Claude Sonnet 5",
             "claude-opus-4.8" => "Claude Opus 4.8",
             "claude-opus-4.7" => "Claude Opus 4.7",
@@ -129,6 +138,8 @@ impl CatalogModel {
             "claude-haiku-4.5" => "Claude Haiku 4.5",
             "claude-fable-5" => "Claude Fable 5",
             "claude-mythos-5" => "Claude Mythos 5",
+            "claude-sonnet-4" => "Claude Sonnet 4",
+            "claude-3-haiku" => "Claude 3 Haiku",
             "gemini-2.5-pro" => "Gemini 2.5 Pro",
             "gemini-2.5-flash" => "Gemini 2.5 Flash",
             "gemini-2.5-flash-lite" => "Gemini 2.5 Flash Lite",
@@ -166,6 +177,14 @@ static CATALOG: &[CatalogModel] = &[
     // AWS Bedrock over `/openai/v1` chat completions. The plain Bedrock model id,
     // not the `us.*` cross-region inference profile — that endpoint rejects it.
     // Invoke/Converse-only models (older Llama/Mistral-v0/Nova) can't be served here.
+    // The GPT-5 family is Responses-only: chat completions, converse and invoke are
+    // all unavailable, so `upstream_id` here is the mantle id and the chat probe
+    // would reject them.
+    CatalogModel { public_id: "gpt-5.6-sol", cloud: Platform::Aws, upstream_id: "openai.gpt-5.6-sol", protocol: Protocol::OpenAiResponses },
+    CatalogModel { public_id: "gpt-5.6-terra", cloud: Platform::Aws, upstream_id: "openai.gpt-5.6-terra", protocol: Protocol::OpenAiResponses },
+    CatalogModel { public_id: "gpt-5.6-luna", cloud: Platform::Aws, upstream_id: "openai.gpt-5.6-luna", protocol: Protocol::OpenAiResponses },
+    CatalogModel { public_id: "gpt-5.5", cloud: Platform::Aws, upstream_id: "openai.gpt-5.5", protocol: Protocol::OpenAiResponses },
+    CatalogModel { public_id: "gpt-5.4", cloud: Platform::Aws, upstream_id: "openai.gpt-5.4", protocol: Protocol::OpenAiResponses },
     CatalogModel { public_id: "gpt-oss-20b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-20b-1:0", protocol: Protocol::OpenAi },
     CatalogModel { public_id: "gpt-oss-120b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-120b-1:0", protocol: Protocol::OpenAi },
     CatalogModel { public_id: "gpt-oss-safeguard-20b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-safeguard-20b", protocol: Protocol::OpenAi },
@@ -203,6 +222,7 @@ static CATALOG: &[CatalogModel] = &[
     // geo prefix (`us.`/`eu.`/`apac.`) at request time, since Claude is invocable only
     // through a profile. Dated ids (`…-<date>-v1:0`) are required where AWS has no short
     // alias. These need Claude model access granted on the deployment's account.
+    CatalogModel { public_id: "claude-opus-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-5", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-sonnet-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-sonnet-5", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-opus-4.8", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-8", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-opus-4.7", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-7", protocol: Protocol::Anthropic },
@@ -214,6 +234,8 @@ static CATALOG: &[CatalogModel] = &[
     CatalogModel { public_id: "claude-haiku-4.5", cloud: Platform::Aws, upstream_id: "anthropic.claude-haiku-4-5-20251001-v1:0", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-fable-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-fable-5", protocol: Protocol::Anthropic },
     CatalogModel { public_id: "claude-mythos-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-mythos-5", protocol: Protocol::Anthropic },
+    CatalogModel { public_id: "claude-sonnet-4", cloud: Platform::Aws, upstream_id: "anthropic.claude-sonnet-4-20250514-v1:0", protocol: Protocol::Anthropic },
+    CatalogModel { public_id: "claude-3-haiku", cloud: Platform::Aws, upstream_id: "anthropic.claude-3-haiku-20240307-v1:0", protocol: Protocol::Anthropic },
     // GCP Vertex, Gemini. The OpenAI-compatible Vertex endpoint expects the `google/` prefix.
     // The 2.5 family serves in-region; the 3.x models serve on the `global` location.
     CatalogModel { public_id: "gemini-2.5-pro", cloud: Platform::Gcp, upstream_id: "google/gemini-2.5-pro", protocol: Protocol::OpenAi },
@@ -268,23 +290,37 @@ static AZURE_DEPLOYMENTS: &[(&str, &str, &str)] = &[
     ("model-router", "model-router", "2025-11-18"),
 ];
 
-/// AWS models servable over the bedrock-mantle OpenAI Responses API, mapped to the
-/// id that endpoint expects (mantle drops the InvokeModel version suffix, and only
-/// a subset of the chat catalog supports Responses at all — Claude is Messages-only
-/// and e.g. Qwen rejects it). Kept explicit rather than derived: the two id schemes
-/// differ per model family, not by a rule.
-static RESPONSES_UPSTREAM: &[(&str, &str)] = &[
-    ("gpt-oss-20b", "openai.gpt-oss-20b"),
-    ("gpt-oss-120b", "openai.gpt-oss-120b"),
+/// Where a model sits on the bedrock-mantle Responses API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResponsesTarget {
+    /// The id mantle expects, which drops the InvokeModel version suffix.
+    pub upstream_id: &'static str,
+    /// Path under the mantle host. The GPT-5 family serves on `/openai/v1/responses`,
+    /// the open-weight models on `/v1/responses`.
+    pub path: &'static str,
+}
+
+/// AWS models servable over the bedrock-mantle OpenAI Responses API. Only a subset
+/// of the chat catalog supports Responses at all — Claude is Messages-only and e.g.
+/// Qwen rejects it. Kept explicit rather than derived: both the id scheme and the
+/// path differ per model family, not by a rule.
+static RESPONSES_UPSTREAM: &[(&str, ResponsesTarget)] = &[
+    ("gpt-oss-20b", ResponsesTarget { upstream_id: "openai.gpt-oss-20b", path: "/v1/responses" }),
+    ("gpt-oss-120b", ResponsesTarget { upstream_id: "openai.gpt-oss-120b", path: "/v1/responses" }),
+    ("gpt-5.6-sol", ResponsesTarget { upstream_id: "openai.gpt-5.6-sol", path: "/openai/v1/responses" }),
+    ("gpt-5.6-terra", ResponsesTarget { upstream_id: "openai.gpt-5.6-terra", path: "/openai/v1/responses" }),
+    ("gpt-5.6-luna", ResponsesTarget { upstream_id: "openai.gpt-5.6-luna", path: "/openai/v1/responses" }),
+    ("gpt-5.5", ResponsesTarget { upstream_id: "openai.gpt-5.5", path: "/openai/v1/responses" }),
+    ("gpt-5.4", ResponsesTarget { upstream_id: "openai.gpt-5.4", path: "/openai/v1/responses" }),
 ];
 
-/// The bedrock-mantle Responses-API id for a public model id, or `None` when the
+/// The bedrock-mantle Responses target for a public model id, or `None` when the
 /// model is not servable over the Responses API.
-pub fn responses_upstream_id(public_id: &str) -> Option<&'static str> {
+pub fn responses_target(public_id: &str) -> Option<ResponsesTarget> {
     RESPONSES_UPSTREAM
         .iter()
         .find(|(public, _)| *public == public_id)
-        .map(|(_, upstream)| *upstream)
+        .map(|(_, target)| *target)
 }
 
 pub fn models_for(cloud: Platform) -> Vec<&'static CatalogModel> {
@@ -527,6 +563,22 @@ mod tests {
                     assert!(!summary.is_empty(), "'{}' step summary is empty", m.public_id);
                 }
             }
+        }
+    }
+
+    /// The gateway forwards, it does not translate, so a client picks its wire format
+    /// from the model id alone. Break this and an OpenAI body reaches the Anthropic
+    /// upstream, or the reverse, for a bare 400 no caller can act on.
+    #[test]
+    fn only_claude_ids_speak_the_anthropic_protocol() {
+        for m in CATALOG {
+            assert_eq!(
+                m.protocol == Protocol::Anthropic,
+                m.public_id.starts_with("claude"),
+                "'{}' is {:?} but its id says otherwise",
+                m.public_id,
+                m.protocol
+            );
         }
     }
 }
