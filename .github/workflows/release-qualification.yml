@@ -62,6 +62,60 @@ jobs:
               echo "$unexpected"
               exit 1
             fi
+            BASE_SHA="$BASE_SHA" SOURCE_REF="$SOURCE_REF" node <<'NODE'
+            const { execFileSync } = require('child_process');
+
+            const changed = execFileSync(
+              'git',
+              ['diff', '--name-only', process.env.BASE_SHA, process.env.SOURCE_REF],
+              { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+            ).trim().split('\n').filter(Boolean);
+            const fromRef = (ref, path) => execFileSync(
+              'git',
+              ['show', ref + ':' + path],
+              { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+            );
+            const stable = (value) => {
+              if (Array.isArray(value)) return value.map(stable);
+              if (value && typeof value === 'object') {
+                return Object.fromEntries(
+                  Object.keys(value).sort().map((key) => [key, stable(value[key])]),
+                );
+              }
+              return value;
+            };
+            const normalizeJson = (path, content) => {
+              const value = JSON.parse(content);
+              value.version = '__RELEASE_VERSION__';
+              if (path.endsWith('/package-lock.json') && value.packages?.['']) {
+                value.packages[''].version = '__RELEASE_VERSION__';
+              }
+              return JSON.stringify(stable(value));
+            };
+            const normalizeSpeakeasy = (path, content) => path.endsWith('/gen.yaml')
+              ? content.replace(/(typescript:\n  version: )[^\n]+/, '$1__RELEASE_VERSION__')
+              : content.replace(/(  releaseVersion: )[^\n]+/, '$1__RELEASE_VERSION__');
+
+            for (const path of changed) {
+              let base;
+              let head;
+              if (path.endsWith('/package.json') || path.endsWith('/jsr.json') ||
+                  path.endsWith('/package-lock.json')) {
+                base = normalizeJson(path, fromRef(process.env.BASE_SHA, path));
+                head = normalizeJson(path, fromRef(process.env.SOURCE_REF, path));
+              } else if (path.endsWith('/.speakeasy/gen.yaml') ||
+                         path.endsWith('/.speakeasy/gen.lock')) {
+                base = normalizeSpeakeasy(path, fromRef(process.env.BASE_SHA, path));
+                head = normalizeSpeakeasy(path, fromRef(process.env.SOURCE_REF, path));
+              } else {
+                continue;
+              }
+              if (base !== head) {
+                console.error('::error::Release PR changes non-version metadata in ' + path);
+                process.exit(1);
+              }
+            }
+          NODE
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
