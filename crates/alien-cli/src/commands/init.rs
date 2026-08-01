@@ -66,6 +66,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "ai-quickstart-ts",
         "The smallest AI setup: one worker calling cloud LLMs, no API keys, no database.",
     ),
+    (
+        "ai-chatbot-ts",
+        "A streaming AI chatbot that answers questions about a private Postgres.",
+    ),
 ];
 
 fn fallback_templates() -> Vec<TemplateInfo> {

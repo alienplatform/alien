@@ -4,6 +4,7 @@ import { type AiConnection, ai, getAiConnection, postgres } from "@alienplatform
 import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
 import { Pool } from "pg"
 import { z } from "zod"
+import { ensureSeeded } from "../../seed"
 
 // The gateway forwards each model to its own upstream wire format rather than
 // translating, so Claude needs the Anthropic client and everything else OpenAI.
@@ -38,8 +39,10 @@ function db(): Promise<Pool> {
         user: conn.username,
         password: conn.password,
         ssl: conn.ssl,
-        // The model's tool only reads; enforce it in the session, not by parsing SQL.
-        options: "-c default_transaction_read_only=on",
+        // The model writes the SQL, so the session bounds it rather than the parser:
+        // read-only stops writes, and the timeout stops a `pg_sleep` or runaway scan
+        // from pinning a pool connection.
+        options: "-c default_transaction_read_only=on -c statement_timeout=10000",
       })
     })().catch(err => {
       // Don't cache a failed resolution; let the next request retry.
@@ -49,6 +52,8 @@ function db(): Promise<Pool> {
   }
   return dbPool
 }
+
+const MAX_ROWS = 50
 
 const queryDatabase = tool({
   description:
@@ -64,10 +69,13 @@ const queryDatabase = tool({
     if (!/^(select|with)\b/i.test(statement) || statement.includes(";")) {
       return { error: "only a single read-only SELECT or WITH statement is allowed" }
     }
+    await ensureSeeded()
     const pool = await db()
-    const result = await pool.query(statement)
-    // Cap what the model sees; rowCount still reports the real total.
-    return { rowCount: result.rowCount, rows: result.rows.slice(0, 50) }
+    // A LIMIT keeps the database from returning rows the client would only buffer
+    // and drop; the extra row is what tells the model its answer was truncated.
+    const result = await pool.query(`select * from (${statement}) as q limit ${MAX_ROWS + 1}`)
+    const rows = result.rows.slice(0, MAX_ROWS)
+    return { rows, rowCount: rows.length, truncated: result.rows.length > MAX_ROWS }
   },
 })
 

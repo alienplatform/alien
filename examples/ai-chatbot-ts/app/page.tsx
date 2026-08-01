@@ -6,7 +6,7 @@ import { GrainBackground } from "./components/grain-background"
 import { Message } from "./components/message"
 import { Spinner } from "./components/spinner"
 
-// Matched to the /api/seed dataset so first-run questions land.
+// Matched to the seeded dataset so first-run questions land.
 const SUGGESTIONS = [
   "How many enterprise customers do we have and what's their total MRR?",
   "Who are our top 5 customers by MRR?",
@@ -18,7 +18,6 @@ export default function Chat() {
   const [input, setInput] = useState("")
   const [models, setModels] = useState<string[]>([])
   const [model, setModel] = useState("")
-  const [seedNote, setSeedNote] = useState("")
   const { messages, sendMessage, status, stop, error, regenerate } = useChat()
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
@@ -53,17 +52,6 @@ export default function Chat() {
     setInput("")
   }
 
-  async function seed() {
-    try {
-      const r = await fetch("/api/seed", { method: "POST" })
-      const d: { customers?: number } = await r.json()
-      setSeedNote(r.ok ? `✓ Seeded ${d.customers} customers` : "Seeding failed")
-    } catch {
-      setSeedNote("Seeding failed")
-    }
-    setTimeout(() => setSeedNote(""), 4000)
-  }
-
   return (
     <div className="relative flex h-dvh flex-col">
       <GrainBackground />
@@ -71,20 +59,6 @@ export default function Chat() {
         <span className="size-2 rounded-full bg-brand" aria-hidden="true" />
         <h1 className="text-sm font-medium tracking-tight">AI chatbot on Alien</h1>
         <div className="ml-auto flex items-center gap-2">
-          {seedNote && (
-            <span
-              className={`font-mono text-xs ${seedNote.startsWith("✓") ? "text-brand" : "text-red-400"}`}
-            >
-              {seedNote}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={seed}
-            className="cursor-pointer rounded-full border border-edge px-3 py-1.5 text-xs font-medium text-zinc-100 transition-colors hover:bg-white/5 hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
-          >
-            Seed demo data
-          </button>
           <select
             value={model}
             onChange={e => setModel(e.target.value)}

@@ -1,51 +1,49 @@
-# AI chatbot
+# AI Chatbot
 
-A streaming chatbot that runs as a single container in the customer's cloud and
-answers questions about a private **Postgres** it queries with a tool. No API
-keys and no database credentials in the app.
+A streaming chatbot that answers questions about a private Postgres by writing SQL and running it through a tool. The model is served by the deployment's own cloud and the database is reachable only from inside the stack, so there are no API keys and no database credentials in the app.
+
+The app builds with the included Dockerfile (Next.js [standalone output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output)) and runs as a single container behind an HTTPS load balancer.
+
+## What's included
+
+| Resource | Type | Description |
+|----------|------|-------------|
+| `app` | Container | The Next.js chat app, built from the Dockerfile and exposed over HTTP |
+| `llm` | AI (live) | Model-less AI resource; the gateway serves it from the deployment's cloud |
+| `db` | Postgres (live) | Private database, reachable only from same-stack workloads |
 
 ## How it works
 
-- `alien.ts` declares a model-less `alien.AI("llm")` and a private
-  `alien.Postgres("db")`, and links both to the container. At deploy time Alien
-  grants the workload `ai/invoke` + `postgres/data-access` and injects
-  `ALIEN_LLM_BINDING` and `ALIEN_DB_BINDING`.
-- `app/api/chat/route.ts` resolves the model endpoint with
-  `getAiConnection("llm")` and streams with the Vercel AI SDK's `streamText`.
-  On a cloud, the binding routes through Alien's embedded gateway, which injects
-  the workload's ambient cloud credential. On `alien dev` the binding carries the
-  developer's own provider key, and the app calls the provider directly.
-  The gateway forwards each model to its own upstream wire format instead of
-  translating, so the route picks the client to match: Claude models get the
-  Anthropic client, everything else the OpenAI-compatible one. Both take the same
-  `baseURL` and the same binding.
-- The chat route gives the model a `queryDatabase` tool: a single SQL statement
-  per call, run on read-only sessions so the model cannot write. It reads the
-  connection with `postgres("db").connection()`, which resolves the password at
-  runtime using the workload's own identity, so the password never sits in
-  checked-in config.
-- `app/api/models/route.ts` calls `ai("llm").getAvailableModels()` so the UI's
-  model picker reflects the binding's model set.
-- The UI (`app/page.tsx`) is a full chat surface built on `useChat`: streamed
-  markdown answers, a card for every `queryDatabase` call showing the SQL and
-  the rows it returned, suggested questions, a model picker, and stop/retry.
+- `alien.ts` links both resources to the container, so Alien grants the workload `ai/invoke` and `postgres/data-access` and injects `ALIEN_LLM_BINDING` and `ALIEN_DB_BINDING`.
+- `app/api/chat/route.ts` resolves the model endpoint with `getAiConnection("llm")` and streams with the Vercel AI SDK. On a cloud the binding routes through Alien's embedded gateway, which injects the workload's ambient credential; on `alien dev` it carries your own provider key and the app calls the provider directly.
+- The gateway forwards each model to its own upstream wire format instead of translating, so the route picks the client to match: Claude models get the Anthropic client, everything else the OpenAI-compatible one. Both take the same `baseURL` and the same binding.
+- The `queryDatabase` tool runs one SQL statement per call, bounded by the database rather than by parsing the model's output: read-only sessions, a statement timeout, and a row limit applied in SQL. It reads the connection with `postgres("db").connection()`, which resolves the password at runtime under the workload's own identity.
+- `app/api/models/route.ts` calls `ai("llm").getAvailableModels()`, so the picker lists only the models this cloud has enabled.
 
-## Run it
+## Local development
 
-In the customer's cloud:
-
-```bash
-alien deploy
-```
-
-Locally, bring your own provider key:
+Bring your own provider key -- locally there is no cloud identity, so the SDK uses the key directly (a BYO-key binding) instead of the gateway:
 
 ```bash
 OPENAI_API_KEY=sk-... alien dev
 ```
 
-Open the app URL, click **Seed demo data** (or `curl -X POST <app-url>/api/seed`
-— it drops and recreates the demo tables, so anyone with the URL can reset them),
-and ask a data question, e.g. *"How many enterprise customers do we have and
-what's the total MRR?"* The model writes the SQL, calls `queryDatabase`, and
-summarizes the result.
+Open the printed URL and ask a data question, e.g. *"How many enterprise customers do we have and what's the total MRR?"* The model writes the SQL, calls `queryDatabase`, and summarizes the result. The demo tables are created and filled on the first question, so there is nothing to seed by hand.
+
+## Deploying
+
+```bash
+alien deploy production --platform aws   # or gcp / azure
+```
+
+Alien builds the container image from the Dockerfile, pushes it, and provisions the compute, the database, and the load balancer. The deploy output prints the public URL.
+
+## Model availability
+
+`getAvailableModels()` returns what is enabled on your deployment's cloud right now. Open-weight models work out of the box; Claude needs a one-time activation first -- the Anthropic use-case form on AWS Bedrock, Model Garden on GCP Vertex, or Marketplace terms on Azure AI Foundry. Until then it simply does not appear in the picker, and every other model keeps working.
+
+## Learn more
+
+- [Postgres reference](https://alien.dev/docs/infrastructure/postgres)
+- [Container reference](https://alien.dev/docs/infrastructure/container)
+- [Stacks](https://alien.dev/docs/stacks)
