@@ -6,6 +6,9 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
     let data = AwsRemoteStackManagementImportData {
         role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
         role_name: "alien-stack-mgmt".to_string(),
+        remote_bindings_role_arn: Some(
+            "arn:aws:iam::123456789012:role/alien-stack-remote-bindings".to_string(),
+        ),
         management_permissions_applied: true,
     };
     let state = run_through_registry(
@@ -27,6 +30,19 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
     );
     assert_eq!(internal["state"], "ready");
     assert_eq!(internal["setupManaged"], true);
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+        .expect("AWS remote-stack-management import must produce outputs");
+    assert_eq!(
+        outputs
+            .remote_bindings_access
+            .as_ref()
+            .expect("Remote Bindings handoff")
+            .resource_id,
+        data.remote_bindings_role_arn.as_deref().unwrap()
+    );
     assert_eq!(
         internal["appliedManagementGrantFingerprint"],
         serde_json::Value::Null,
@@ -42,6 +58,9 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
         project_number: Some("123456789012".to_string()),
         service_account_email: "management@my-project.iam.gserviceaccount.com".to_string(),
         service_account_unique_id: "123456789012345678901".to_string(),
+        remote_bindings_service_account_email: Some(
+            "remote-bindings@my-project.iam.gserviceaccount.com".to_string(),
+        ),
         management_permissions_applied: true,
     };
     let state = run_through_registry(
@@ -57,6 +76,21 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     assert_eq!(internal_state(&state)["state"], "ready");
     let internal = internal_state(&state);
     assert_eq!(internal["setupManaged"], true);
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+        .expect("GCP remote-stack-management import must produce outputs");
+    assert_eq!(
+        outputs
+            .remote_bindings_access
+            .as_ref()
+            .expect("Remote Bindings handoff")
+            .resource_id,
+        data.remote_bindings_service_account_email
+            .as_deref()
+            .unwrap()
+    );
     assert_eq!(
         internal["appliedManagementGrantFingerprint"],
         serde_json::Value::Null,
@@ -73,6 +107,8 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         resource_group: "rg-alien".to_string(),
         identity_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-management".to_string(),
         client_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        remote_bindings_identity_id: Some("/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-remote-bindings".to_string()),
+        remote_bindings_client_id: Some("44444444-4444-4444-4444-444444444444".to_string()),
         principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
         tenant_id: "33333333-3333-3333-3333-333333333333".to_string(),
         management_permissions_applied: true,
@@ -105,6 +141,14 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
         .expect("Azure remote-stack-management import must produce outputs");
     assert_eq!(outputs.management_resource_id, data.identity_id);
+    assert_eq!(
+        outputs
+            .remote_bindings_access
+            .as_ref()
+            .expect("Remote Bindings handoff")
+            .resource_id,
+        data.remote_bindings_identity_id.as_deref().unwrap()
+    );
 
     let access_config: serde_json::Value =
         serde_json::from_str(&outputs.access_configuration).unwrap();
