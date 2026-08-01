@@ -146,8 +146,7 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
     assert_eq!(client_config.tenant_id, "tenant-id");
     assert_eq!(client_config.region.as_deref(), Some("eastus"));
     assert!(client_config.service_overrides.is_none());
-    let alien_core::AzureCredentials::AccessToken { token } = client_config.credentials
-    else {
+    let alien_core::AzureCredentials::AccessToken { token } = client_config.credentials else {
         panic!("generated client returned the wrong Azure credential type");
     };
     assert_eq!(token, "azure-storage-token");

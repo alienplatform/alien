@@ -10,7 +10,6 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::TfFragment,
-    emitters::enabled,
     expr,
 };
 use alien_core::{

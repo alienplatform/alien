@@ -7,7 +7,7 @@ use alien_error::{Context, IntoAlienError};
 use alien_manager_api::types as manager_types;
 use chrono::{DateTime, Utc};
 
-use super::{invalid_remote_lease, ResolvedRemoteBinding};
+use super::ResolvedRemoteBinding;
 use crate::error::{ErrorData, Result};
 
 impl ResolvedRemoteBinding {
