@@ -312,7 +312,12 @@ impl DeploymentLoop {
 
             match self
                 .deployment_store
-                .acquire(&caller, &session, &filter, MAX_CONCURRENT_DEPLOYMENTS as u32)
+                .acquire(
+                    &caller,
+                    &session,
+                    &filter,
+                    MAX_CONCURRENT_DEPLOYMENTS as u32,
+                )
                 .await
             {
                 Ok(acquired) => {
@@ -1186,6 +1191,7 @@ mod tests {
                         .to_string(),
                     access_configuration: "arn:aws:iam::123456789012:role/test-management"
                         .to_string(),
+                    remote_bindings_access: None,
                 }))
                 .build()
         } else {

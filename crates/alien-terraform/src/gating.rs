@@ -158,18 +158,21 @@ pub(crate) fn apply_gated_contributions(
 /// A residual block renders ungated inside a gated fragment, so it must not
 /// be able to create anything or run anything.
 fn verify_residual_is_footprintless(block: &Block, resource_id: &str) -> Result<()> {
-    let offending = block.body.blocks().find(|nested| {
-        SIDE_EFFECT_NESTED_BLOCKS.contains(&nested.identifier.as_str())
-    });
+    let offending = block
+        .body
+        .blocks()
+        .find(|nested| SIDE_EFFECT_NESTED_BLOCKS.contains(&nested.identifier.as_str()));
     if let Some(nested) = offending {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!(
-                "enabled() on resource '{resource_id}'",
-            ),
+            operation: format!("enabled() on resource '{resource_id}'",),
             reason: format!(
                 "its `{}` block would stay ungated as a footprintless residual, but it \
                  contains a `{}` block, which executes even when the resource is declined",
-                block.labels.first().map(|label| label.as_str()).unwrap_or("residual"),
+                block
+                    .labels
+                    .first()
+                    .map(|label| label.as_str())
+                    .unwrap_or("residual"),
                 nested.identifier.as_str()
             ),
         }));
@@ -206,8 +209,7 @@ pub(crate) fn rewrite_expression(expression: &mut Expression, gated: &GatedAddre
             let Expression::Variable(root) = &traversal.expr else {
                 return;
             };
-            let [TraversalOperator::GetAttr(label), following, ..] =
-                traversal.operators.as_slice()
+            let [TraversalOperator::GetAttr(label), following, ..] = traversal.operators.as_slice()
             else {
                 // A bare `type.label` whole-resource reference: valid on a
                 // counted resource (`depends_on`), never indexed.
@@ -343,22 +345,22 @@ fn rewrite_template_elements(template: &mut Template, gated: &GatedAddresses, ch
             }
             Element::Directive(directive) => match directive.as_mut() {
                 hcl::template::Directive::If(directive) => {
-                let before = directive.cond_expr.clone();
-                rewrite_expression(&mut directive.cond_expr, gated);
-                if directive.cond_expr != before {
-                    *changed = true;
-                }
+                    let before = directive.cond_expr.clone();
+                    rewrite_expression(&mut directive.cond_expr, gated);
+                    if directive.cond_expr != before {
+                        *changed = true;
+                    }
                     rewrite_template_elements(&mut directive.true_template, gated, changed);
                     if let Some(false_template) = directive.false_template.as_mut() {
                         rewrite_template_elements(false_template, gated, changed);
                     }
                 }
                 hcl::template::Directive::For(directive) => {
-                let before = directive.collection_expr.clone();
-                rewrite_expression(&mut directive.collection_expr, gated);
-                if directive.collection_expr != before {
-                    *changed = true;
-                }
+                    let before = directive.collection_expr.clone();
+                    rewrite_expression(&mut directive.collection_expr, gated);
+                    if directive.collection_expr != before {
+                        *changed = true;
+                    }
                     rewrite_template_elements(&mut directive.template, gated, changed);
                 }
             },
@@ -391,13 +393,11 @@ pub(crate) fn scan_rendered_for_unindexed(
                 search_from = end;
 
                 let preceded = contents[..start].chars().next_back();
-                if preceded.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
-                {
+                if preceded.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.') {
                     continue;
                 }
                 let follower = contents[end..].chars().next();
-                if follower.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-                {
+                if follower.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
                     continue;
                 }
                 if follower == Some('[') && is_instance_index(&contents[end..]) {
@@ -456,7 +456,10 @@ fn depends_on_spans(contents: &str) -> Vec<std::ops::Range<usize>> {
         // word appearing in prose (a README paragraph, a comment) must not
         // exempt whatever bracket happens to follow it.
         let after = &contents[start + "depends_on".len()..];
-        let assignment: String = after.chars().take_while(|ch| ch.is_whitespace() || *ch == '=').collect();
+        let assignment: String = after
+            .chars()
+            .take_while(|ch| ch.is_whitespace() || *ch == '=')
+            .collect();
         if !assignment.contains('=') || !after[assignment.len()..].starts_with('[') {
             continue;
         }
@@ -506,7 +509,11 @@ mod tests {
     fn a_declared_contribution_is_gated_and_registered() {
         let mut fragment = TfFragment::default();
         fragment.push_gated_resource(
-            resource_block("aws_iam_role_policy", "mgmt_jobs", [attr("role", expr::raw("x"))]),
+            resource_block(
+                "aws_iam_role_policy",
+                "mgmt_jobs",
+                [attr("role", expr::raw("x"))],
+            ),
             std::slice::from_ref(&"jobsEnabled".to_string()),
         );
         let mut gated = GatedAddresses::default();
@@ -536,7 +543,11 @@ mod tests {
     fn a_contribution_merged_from_several_gates_carries_all_of_them() {
         let mut fragment = TfFragment::default();
         fragment.push_gated_resource(
-            resource_block("azurerm_role_assignment", "mgmt", [attr("scope", expr::raw("x"))]),
+            resource_block(
+                "azurerm_role_assignment",
+                "mgmt",
+                [attr("scope", expr::raw("x"))],
+            ),
             &["auditEnabled".to_string(), "jobsEnabled".to_string()],
         );
         let mut gated = GatedAddresses::default();
@@ -620,9 +631,8 @@ mod tests {
             "main.tf".to_string(),
             "locals { a = aws_dynamodb_table.analytics.*.name }".to_string(),
         );
-        scan_rendered_for_unindexed(&ok_files, &gated_analytics()).expect(
-            "the dot-form splat renders verbatim and is list-aware, exactly like `[*]`",
-        );
+        scan_rendered_for_unindexed(&ok_files, &gated_analytics())
+            .expect("the dot-form splat renders verbatim and is list-aware, exactly like `[*]`");
 
         let mut bad_files = indexmap::IndexMap::new();
         bad_files.insert(
@@ -695,7 +705,10 @@ mod tests {
             .with_resource(resource_block(
                 "random_id",
                 "suffix",
-                [attr("byte_length", Expression::Number(hcl::Number::from(4)))],
+                [attr(
+                    "byte_length",
+                    Expression::Number(hcl::Number::from(4)),
+                )],
             ))
             .with_resource(resource_block(
                 "aws_dynamodb_table",
@@ -731,9 +744,13 @@ mod tests {
         let mut residual = resource_block(
             "random_id",
             "suffix",
-            [attr("byte_length", Expression::Number(hcl::Number::from(4)))],
+            [attr(
+                "byte_length",
+                Expression::Number(hcl::Number::from(4)),
+            )],
         );
-        let provisioner = crate::block::block("provisioner", [attr("command", expr::template("rm -rf /"))]);
+        let provisioner =
+            crate::block::block("provisioner", [attr("command", expr::template("rm -rf /"))]);
         let body: Vec<Structure> = std::mem::take(&mut residual.body)
             .into_iter()
             .chain([Structure::Block(provisioner)])
@@ -774,7 +791,10 @@ mod tests {
         fragment.push_shared_resource(resource_block(
             "google_project_iam_custom_role",
             "gcp_role_reader",
-            [attr("count", expr::raw("var.gcp_manage_custom_roles ? 1 : 0"))],
+            [attr(
+                "count",
+                expr::raw("var.gcp_manage_custom_roles ? 1 : 0"),
+            )],
         ));
         gate_fragment(
             &mut fragment,

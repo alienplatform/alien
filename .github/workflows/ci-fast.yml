@@ -184,6 +184,19 @@ jobs:
           )
           cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
 
+      # The steps below cover code behind non-default cargo features, which the
+      # workspace run above compiles with default features only.
+      - name: Manager OpenAPI security contract
+        run: |
+          cargo test -p alien-manager --features openapi --lib api::tests::openapi_declares_http_bearer_security_without_dropping_schemas
+
+      - name: Remote bindings tests (non-cloud)
+        # `platform-sdk` is not a default feature, so `remote::` is cfg'd out of
+        # the workspace run. The cloud client crates' unit tests already run
+        # there via the `kind(test)`-only filters.
+        run: |
+          cargo test -p alien-bindings --features platform-sdk --lib remote::
+
   typescript:
     name: TypeScript packages and CLIs
     needs: pr-conventions
@@ -284,13 +297,17 @@ jobs:
         working-directory: crates/alien-bindings-node
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
 
+      - name: Build package-layout dependencies
+        run: pnpm --filter @alienplatform/sdk... build
+
       - name: Validate package layout
         run: pnpm validate:package-layout
 
       - name: TypeScript unit tests
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
+        run: |
+          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'

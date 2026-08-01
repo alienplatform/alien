@@ -6,11 +6,15 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind, sync::OperatorCapabilityReport, DeploymentConfig, DeploymentModel,
-    DeploymentState, EnvironmentInfo, EnvironmentVariable, ManagementConfig,
+    DeploymentState, DeploymentStatus, EnvironmentInfo, EnvironmentVariable, ManagementConfig,
     ObservedInventoryBatch, Platform, ResourceHeartbeat, RuntimeMetadata, StackSettings,
     StackState,
 };
 use alien_error::AlienError;
+
+pub(crate) fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
+    serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
+}
 
 /// A deployment record as stored in the database.
 #[derive(Clone, Serialize, Deserialize)]

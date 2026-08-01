@@ -115,6 +115,17 @@ pub enum ErrorData {
         platform: Platform,
     },
 
+    /// A provider failed while turning a refreshable identity into a bearer token.
+    #[error(
+        code = "CREDENTIAL_MATERIALIZATION_FAILED",
+        message = "Failed to materialize {platform} credentials for {purpose}",
+        retryable = "inherit",
+        internal = "inherit",
+        http_status_code = "inherit",
+        human = "transparent"
+    )]
+    CredentialMaterializationFailed { platform: Platform, purpose: String },
+
     /// Registry permissions could not be removed during deployment cleanup.
     #[error(
         code = "REGISTRY_ACCESS_CLEANUP_FAILED",

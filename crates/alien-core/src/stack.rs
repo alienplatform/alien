@@ -31,6 +31,24 @@ pub struct ResourceEntry {
     pub enabled_when: Option<String>,
 }
 
+impl ResourceEntry {
+    /// Returns whether this resource is published through Remote Bindings.
+    ///
+    /// Provider emitters use this generic signal to create the stack-level
+    /// Remote Bindings identity. Each resource emitter remains responsible for
+    /// granting that identity only the resource's declared data-plane access.
+    pub fn has_remote_bindings(&self) -> bool {
+        self.remote_access
+    }
+
+    /// Returns whether this entry is Frozen Storage published for remote access.
+    pub fn is_remote_frozen_storage(&self) -> bool {
+        self.lifecycle == ResourceLifecycle::Frozen
+            && self.remote_access
+            && self.config.downcast_ref::<crate::Storage>().is_some()
+    }
+}
+
 /// A bag of resources, unaware of any cloud.
 #[derive(Builder, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -326,6 +344,70 @@ mod tests {
         Storage, Worker, WorkerCode,
     };
     use insta::assert_json_snapshot;
+
+    fn resource_entry<T: crate::ResourceDefinition>(
+        resource: T,
+        lifecycle: ResourceLifecycle,
+        remote_access: bool,
+    ) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(resource),
+            lifecycle,
+            dependencies: Vec::new(),
+            remote_access,
+            enabled_when: None,
+        }
+    }
+
+    #[test]
+    fn remote_frozen_storage_requires_storage_lifecycle_and_opt_in() {
+        assert!(resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            true,
+        )
+        .is_remote_frozen_storage());
+        assert!(!resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            false,
+        )
+        .is_remote_frozen_storage());
+        assert!(!resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Live,
+            true,
+        )
+        .is_remote_frozen_storage());
+        assert!(!resource_entry(
+            Worker::new("worker".to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/worker:latest".to_string(),
+                })
+                .permissions("worker-execution".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+            true,
+        )
+        .is_remote_frozen_storage());
+    }
+
+    #[test]
+    fn remote_bindings_opt_in_is_resource_agnostic() {
+        let worker = resource_entry(
+            Worker::new("worker".to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/worker:latest".to_string(),
+                })
+                .permissions("worker-execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+            true,
+        );
+
+        assert!(worker.has_remote_bindings());
+        assert!(!worker.is_remote_frozen_storage());
+    }
 
     #[test]
     fn test_stack_serialization() {

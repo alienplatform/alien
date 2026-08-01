@@ -1,10 +1,11 @@
 use super::helpers::{
-    assert_terraform_valid, assert_ungated_registration_list_is_a_plain_array, gate_input,
-    normalized, render, snapshot_module, try_render,
+    assert_terraform_valid, assert_ungated_registration_list_is_a_plain_array,
+    declared_block_types, gate_input, gated_block_types, normalized, render, snapshot_module,
+    try_render,
 };
 use alien_core::{
-    AzureResourceGroup, AzureStorageAccount, Kv, PermissionProfile, ResourceLifecycle,
-    ServiceAccount, Stack, StackBuilder, StackSettings,
+    AzureResourceGroup, AzureStorageAccount, Kv, PermissionProfile, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackBuilder, StackSettings, Storage,
 };
 use alien_terraform::TerraformTarget;
 
@@ -424,6 +425,76 @@ fn gcp_shared_project_grant_combines_independent_gates() {
     );
     snapshot_module("gcp_gated_kv_shared_project_grant", &module);
     assert_terraform_valid(&module, "gated GCP kv stores with a shared project grant");
+}
+
+/// A remote-access (externally bound) bucket is the one resource whose
+/// Remote Bindings grant the storage emitter renders into the bucket's own
+/// fragment. Gating is a post-pass over that fragment, so the grant inherits
+/// the gate along with the bucket, with no remote-storage-specific gating
+/// code. Worth pinning: a grant that outlived a declined bucket would leave
+/// the Remote Bindings identity holding data-write on a resource the deployer said
+/// no to, and the bucket's own reference would go unindexed.
+fn gated_remote_access_storage_stack() -> Stack {
+    let mut stack = Stack::new("gated-stack".to_string())
+        .inputs(vec![gate_input(
+            "filesEnabled",
+            "Enable remote files",
+            "Whether to create the externally bound bucket.",
+        )])
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
+        )
+        .build();
+    // `add_with_remote_access` and `add_enabled_when` each vary one field of
+    // the entry, while the SDK's
+    // `stack.add(resource.enabled(input), lifecycle, { remoteAccess: true })`
+    // sets both. No single builder call spells that combination, so set the
+    // gate on the built entry.
+    stack
+        .resources
+        .get_mut("files")
+        .expect("the files entry should exist")
+        .enabled_when = Some("filesEnabled".to_string());
+    stack
+}
+
+#[test]
+fn a_gated_remote_access_bucket_gates_its_remote_bindings_grant() {
+    let module = render(
+        &gated_remote_access_storage_stack(),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    let main = normalized(&module);
+    let gated = gated_block_types(&main, "count = var.input_files_enabled ? 1 : 0");
+
+    assert!(
+        declared_block_types(&main).contains(&"google_project_iam_custom_role".to_string()),
+        "the shared custom role must render for the exclusion below to mean anything:\n{main}"
+    );
+    assert!(
+        gated.contains(&"google_storage_bucket".to_string()),
+        "the bucket itself must be conditional:\n{main}"
+    );
+    assert!(
+        gated.contains(&"google_storage_bucket_iam_member".to_string()),
+        "the Remote Bindings identity's data grant must go with the bucket:\n{main}"
+    );
+    assert!(
+        !gated.contains(&"google_project_iam_custom_role".to_string()),
+        "the shared custom role outlives any one resource and stays ungated:\n{main}"
+    );
+    assert!(
+        main.contains("google_storage_bucket.files[0]"),
+        "references to the counted bucket must be indexed:\n{main}"
+    );
+    assert_terraform_valid(&module, "gated remote-access storage");
 }
 
 #[test]

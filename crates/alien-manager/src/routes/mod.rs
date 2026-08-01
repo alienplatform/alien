@@ -1,5 +1,6 @@
 //! REST API route handlers for alien-manager.
 
+pub mod bindings;
 pub mod build_config;
 pub mod commands;
 pub mod credentials;
@@ -28,7 +29,8 @@ use std::sync::Arc;
 use alien_bindings::traits::Kv;
 use alien_bindings::BindingsProviderApi;
 use alien_commands::server::{CommandServer, HasCommandServer};
-use alien_core::Platform;
+use alien_core::{Platform, ResourceEntry, Stack};
+use alien_error::{AlienError, Context};
 use axum::{
     routing::{get, post},
     Router,
@@ -36,7 +38,8 @@ use axum::{
 use http::{header, Method};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-use crate::auth::Authz;
+use crate::auth::{Authz, Subject};
+use crate::error::ErrorData;
 use crate::traits::*;
 
 /// Shared state for all route handlers.
@@ -80,6 +83,53 @@ impl HasCommandServer for AppState {
     fn command_server(&self) -> &Arc<CommandServer> {
         &self.command_server
     }
+}
+
+/// Load the deployment's authoritative current release.
+///
+/// Callers validate the release id with endpoint-specific wording. This
+/// helper owns store failures and dangling current-release ids; `operation`
+/// keeps the load error specific to the endpoint.
+pub(super) async fn load_current_release(
+    release_store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+    release_id: &str,
+    operation: &str,
+) -> Result<ReleaseRecord, AlienError<ErrorData>> {
+    release_store
+        .get_release(&Subject::system(), release_id)
+        .await
+        .context(ErrorData::InternalError {
+            message: format!("Failed to load current release '{release_id}' for {operation}"),
+        })?
+        .ok_or_else(|| {
+            ErrorData::internal(format!(
+                "Current release '{release_id}' for deployment '{}' does not exist",
+                deployment.id
+            ))
+        })
+}
+
+/// Select a resource from the deployment platform's current-release stack.
+pub(super) fn current_release_resource<'a>(
+    release: &'a ReleaseRecord,
+    deployment: &DeploymentRecord,
+    release_id: &str,
+    resource_id: &str,
+) -> Result<(&'a Stack, &'a ResourceEntry), AlienError<ErrorData>> {
+    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        ErrorData::internal(format!(
+            "Current release '{release_id}' has no {} stack",
+            deployment.platform
+        ))
+    })?;
+
+    let resource = stack.resources.get(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not part of the deployment's current release"
+        ))
+    })?;
+    Ok((stack, resource))
 }
 
 /// Create the complete router with all routes (standalone mode).
@@ -129,6 +179,8 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(sync::router())
         // Credentials
         .merge(credentials::router())
+        // Remote resource bindings
+        .merge(bindings::router())
         // Vault secrets
         .merge(vault::router())
         // Token management (list, revoke)

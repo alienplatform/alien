@@ -140,6 +140,7 @@ async function checkSdkWorkerRuntime(): Promise<void> {
 // Public surface table + the shared error primitives re-export (AlienError,
 // defineError from @alienplatform/core) pinned by the bindings contract.
 const BINDINGS_EXPORTS = [
+  "Bindings",
   "storage",
   "kv",
   "queue",
@@ -184,6 +185,9 @@ async function checkBindings(): Promise<void> {
   }
 
   const missing = missingExports(mod, BINDINGS_EXPORTS)
+  const remoteFactory = (mod.Bindings as { forRemoteDeployment?: unknown } | undefined)
+    ?.forRemoteDeployment
+  if (typeof remoteFactory !== "function") missing.push("Bindings.forRemoteDeployment")
   report({
     check: "import",
     package: "bindings",
@@ -191,7 +195,7 @@ async function checkBindings(): Promise<void> {
     reason: missing.length === 0 ? "ok" : "missing pinned exports",
     evidence:
       missing.length === 0
-        ? "resolved storage/kv/queue/vault/container/postgres + error"
+        ? "resolved Bindings.forRemoteDeployment + storage/kv/queue/vault/container/postgres + error"
         : missing.join(", "),
   })
 

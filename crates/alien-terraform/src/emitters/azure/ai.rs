@@ -142,9 +142,8 @@ fn emit_ai_permissions(
             }
 
             let generator = AzureRuntimePermissionsGenerator::new();
-            let perm_context = permission_context(ai_label).with_resource_name(
-                format!("${{local.resource_prefix}}-{}", ctx.resource_id),
-            );
+            let perm_context = permission_context(ai_label)
+                .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
             let grant_plan = generator
                 .generate_grant_plan(&permission_set, BindingTarget::Resource, &perm_context)
                 .context(ErrorData::GenericError {
@@ -172,11 +171,12 @@ fn emit_ai_permissions(
                                     ctx.resource_id
                                 ),
                             }))?;
-                        let role_label = crate::emitters::azure::helpers::setup_execution_role_label(
-                            profile_name,
-                            &binding.role_name,
-                            index,
-                        );
+                        let role_label =
+                            crate::emitters::azure::helpers::setup_execution_role_label(
+                                profile_name,
+                                &binding.role_name,
+                                index,
+                            );
                         expr::traversal([
                             "azurerm_role_definition",
                             role_label.as_str(),
@@ -215,7 +215,13 @@ fn emit_ai_permissions(
 /// digits, underscores, dashes): `gpt-4.1` becomes `gpt-4_1`.
 fn sanitize_deployment_label(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

@@ -23,4 +23,10 @@ pub struct AzureRemoteStackManagementImportData {
     /// generated stack.
     #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub management_permissions_applied: bool,
+    /// Setup-owned UAMI resource id used only for opted-in remote bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_bindings_identity_id: Option<String>,
+    /// Remote Bindings UAMI client id used for workload identity exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_bindings_client_id: Option<String>,
 }

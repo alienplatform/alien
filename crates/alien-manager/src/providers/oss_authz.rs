@@ -95,6 +95,20 @@ impl Authz for OssAuthz {
         )
     }
 
+    fn can_resolve_remote_bindings(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        self.can_update_deployment(s, deployment)
+            || matches!(
+                (&s.scope, s.role),
+                (
+                    Scope::Deployment {
+                        project_id,
+                        deployment_id,
+                    },
+                    Role::RemoteBindingResolver,
+                ) if project_id == &deployment.project_id && deployment_id == &deployment.id
+            )
+    }
+
     fn can_delete_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         // Deletion is workspace-write only — a deployment-group token can
         // create/update its own deployments, but tearing them down is an
@@ -327,6 +341,16 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_read_deployment(&deployment_token("d1"), &dep));
         assert!(!OssAuthz.can_read_deployment(&deployment_token("d2"), &dep));
+    }
+
+    #[test]
+    fn remote_binding_capability_is_exactly_deployment_scoped() {
+        let mut subject = deployment_token("d1");
+        subject.role = Role::RemoteBindingResolver;
+
+        assert!(OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d1", "dg-a")));
+        assert!(!OssAuthz.can_resolve_remote_bindings(&subject, &deployment("d2", "dg-a")));
+        assert!(!OssAuthz.can_read_deployment(&subject, &deployment("d1", "dg-a")));
     }
 
     #[test]

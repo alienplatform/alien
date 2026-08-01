@@ -105,7 +105,7 @@ pub enum ServiceAccountInfo {
 pub struct ImpersonationRequest {
     /// Optional session name (AWS only)
     pub session_name: Option<String>,
-    /// Optional session duration in seconds  
+    /// Optional session duration in seconds
     pub duration_seconds: Option<i32>,
     /// Optional scopes (GCP only)
     pub scopes: Option<Vec<String>>,
@@ -773,7 +773,7 @@ fn first_attempt() -> u32 {
 ///
 /// This limit ensures compatibility across all queue backends:
 /// - **AWS SQS**: 256KB message limit (much higher, not constraining)
-/// - **Azure Service Bus**: 1MB message limit (much higher, not constraining)  
+/// - **Azure Service Bus**: 1MB message limit (much higher, not constraining)
 /// - **GCP Pub/Sub**: 10MB message limit (much higher, not constraining)
 ///
 /// The 64KB limit provides:
@@ -868,7 +868,7 @@ pub trait Worker: Binding {
     ///
     /// Platform implementations:
     /// - AWS: Uses InvokeWorker API directly
-    /// - GCP: Calls private service URL directly  
+    /// - GCP: Calls private service URL directly
     /// - Azure: Calls private container app URL directly
     /// - Kubernetes: HTTP call to internal service
     async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse>;

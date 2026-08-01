@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, GenericError, IntoAlienError};
+use alien_error::{AlienError, Context, GenericError};
 use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -554,6 +554,25 @@ impl StackExecutor {
         self.deployment_config.external_bindings.has(resource_id)
     }
 
+    fn external_binding_requests_remote_access(&self, resource_id: &str) -> bool {
+        self.desired_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| entry.remote_access)
+    }
+
+    fn validate_external_binding_remote_access(&self, resource_id: &str) -> Result<()> {
+        if self.external_binding_requests_remote_access(resource_id) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' cannot use an external binding; remote access is limited to resources created by setup"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        Ok(())
+    }
+
     /// Whether this resource is one Alien adopted from a binding rather than provisioned.
     ///
     /// Being named in the bindings is not enough: a resource that already carries controller
@@ -615,8 +634,11 @@ impl StackExecutor {
         Ok(true)
     }
 
-    /// The state an external binding dictates: what its target resolves to, and the params
-    /// synced only while the entry opts into remote access.
+    /// The state an external binding dictates: what its target resolves to.
+    ///
+    /// External bindings never publish `remote_binding_params` — their binding may carry
+    /// inline credentials, and remote access is limited to resources created by setup —
+    /// so requesting remote access on one is a configuration error.
     fn external_binding_state(
         &self,
         resource_id: &str,
@@ -627,22 +649,8 @@ impl StackExecutor {
         let Some(binding) = self.deployment_config.external_bindings.get(resource_id) else {
             return Ok((None, None));
         };
-        let remote_access = self
-            .desired_stack
-            .resources
-            .get(resource_id)
-            .map(|entry| entry.remote_access)
-            .unwrap_or(false);
-        let params = match remote_access {
-            true => Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: resource_id.to_string(),
-                    message: "Failed to serialize external binding parameters".to_string(),
-                },
-            )?),
-            false => None,
-        };
-        Ok((params, binding.to_resource_outputs()))
+        self.validate_external_binding_remote_access(resource_id)?;
+        Ok((None, binding.to_resource_outputs()))
     }
 
     /// Whether a bound resource's recorded state no longer matches its binding.
@@ -1243,7 +1251,9 @@ impl StackExecutor {
                 resource_state.status = ResourceStatus::Running;
 
                 // Seeded through the same helper the planner diffs against, so a create
-                // cannot land in a state the next plan immediately calls drifted.
+                // cannot land in a state the next plan immediately calls drifted. External
+                // resources never publish `remote_binding_params`; their binding may
+                // contain inline credentials.
                 let (remote_binding_params, binding_outputs) =
                     self.external_binding_state(resource_id)?;
                 resource_state.remote_binding_params = remote_binding_params;
@@ -1733,16 +1743,20 @@ impl StackExecutor {
             // in the internal_state and handles its own stepping
             if !current_resource_state.has_internal_state() {
                 if self.is_external_binding_resource(&resource_id) {
-                    debug!(
-                        resource_id = %resource_id,
-                        "External binding resource has no controller state; skipping step"
-                    );
-                } else {
-                    warn!(
-                        "Resource '{}' has no controller state. Skipping step.",
-                        resource_id
-                    );
+                    // External bindings intentionally have no controller to
+                    // step. Reconcile the explicit publication gate directly.
+                    self.validate_external_binding_remote_access(&resource_id)?;
+                    current_resource_state.remote_binding_params = None;
+                    return Ok(Some((
+                        resource_id,
+                        current_resource_state,
+                        resource_min_delay,
+                    )));
                 }
+                warn!(
+                    "Resource '{}' has no controller state. Skipping step.",
+                    resource_id
+                );
                 return Ok(None);
             }
 
@@ -2255,7 +2269,11 @@ impl StackExecutor {
                         let is_running = current_view.status == ResourceStatus::Running;
 
                         let config_matches = if self.is_external_binding_resource(id) {
+                            let remote_binding_matches = !self
+                                .external_binding_requests_remote_access(id)
+                                && current_view.remote_binding_params.is_none();
                             current_view.config == desired_resource_config.resource
+                                && remote_binding_matches
                         } else {
                             current_view
                                 .internal_state

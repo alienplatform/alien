@@ -31,8 +31,6 @@ macro_rules! impl_resource_links {
 
 impl_resource_links!(Worker, Container, Daemon, Build);
 
-
-
 /// The link-owning view of a resource, or `None` when it owns no links.
 ///
 /// `None` is ordinary and callers walking every resource skip it; a caller that has already
@@ -291,7 +289,10 @@ mod tests {
             .map(|(tag, _)| *tag)
             .collect();
         for (tag, make) in FIXTURES {
-            assert!(declared.contains(tag), "fixture '{tag}' is not declared a link owner");
+            assert!(
+                declared.contains(tag),
+                "fixture '{tag}' is not declared a link owner"
+            );
             assert!(
                 resource_links(&make()).is_some(),
                 "'{tag}' is declared a link owner but does not resolve as one"

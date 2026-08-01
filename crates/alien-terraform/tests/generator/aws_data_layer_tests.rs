@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Vault,
+    Ai, Kv, LifecycleRule, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
+    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -55,6 +55,24 @@ fn aws_storage_public_read_allows_get_object() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_storage_public_read", &module);
     assert_terraform_valid(&module, "aws_storage_public_read");
+}
+
+#[test]
+fn aws_remote_storage_management_dependencies_are_acyclic() {
+    let stack = Stack::new("acme-remote-storage".to_string())
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    assert_terraform_valid(&module, "aws_remote_storage_management_dependencies");
 }
 
 #[test]
@@ -154,7 +172,10 @@ fn aws_ai_emits_only_import_data() {
     // AWS Bedrock has no per-stack cloud resource to provision. The emitter
     // returns an empty fragment so only the import metadata JSON is produced.
     let stack = Stack::new("acme-ai".to_string())
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_ai_minimal", &module);
@@ -162,9 +183,7 @@ fn aws_ai_emits_only_import_data() {
 
     // Import metadata must carry the region so the controller can reconstruct
     // the Bedrock endpoint. The import ref appears in locals.tf.
-    let locals = module
-        .get("locals.tf")
-        .expect("locals.tf should render");
+    let locals = module.get("locals.tf").expect("locals.tf should render");
     assert!(locals.contains("region"), "import ref must carry region");
 }
 
@@ -181,7 +200,10 @@ fn aws_ai_invoke_permissions_attach_to_service_account_role() {
             ServiceAccount::new("execution-sa".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     let rendered = module

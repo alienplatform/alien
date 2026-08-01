@@ -15,6 +15,24 @@ pub struct ResolvedCredentials {
     pub has_provision_capability: bool,
 }
 
+/// Credentials for the setup-owned, stack-scoped Remote Bindings identity.
+pub enum RemoteStorageCredentialSource {
+    /// Provider config resolved from the Remote Bindings identity handoff.
+    Direct(ClientConfig),
+}
+
+impl std::fmt::Debug for RemoteStorageCredentialSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direct(config) => f
+                .debug_struct("RemoteStorageCredentialSource::Direct")
+                .field("platform", &config.platform())
+                .field("credentials", &"[REDACTED]")
+                .finish(),
+        }
+    }
+}
+
 /// Resolves cloud credentials for push-model deployments.
 ///
 /// In push mode, alien-manager needs credentials to call cloud APIs in the remote
@@ -44,6 +62,19 @@ pub trait CredentialResolver: Send + Sync {
             client_config,
             has_provision_capability: true,
         })
+    }
+
+    /// Resolve authority for a purpose-specific remote Storage lease.
+    ///
+    /// Custom resolvers default to their direct config. Provider materializers
+    /// still fail closed when that form cannot be attenuated cryptographically.
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        Ok(RemoteStorageCredentialSource::Direct(
+            self.resolve(deployment).await?,
+        ))
     }
 
     /// Resolve the management identity for a target platform.

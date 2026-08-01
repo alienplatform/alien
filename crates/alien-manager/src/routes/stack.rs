@@ -188,15 +188,14 @@ pub async fn stack_import(
         .iter()
         .map(|resource| resource.id.clone())
         .collect();
-    let imported_gate_answers =
-        match alien_deployment::resolve_frozen_gate_answers_from_presence(
-            source_stack,
-            &delivered_resource_ids,
-            &req.input_values,
-        ) {
-            Ok(answers) => answers,
-            Err(e) => return e.into_response(),
-        };
+    let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers_from_presence(
+        source_stack,
+        &delivered_resource_ids,
+        &req.input_values,
+    ) {
+        Ok(answers) => answers,
+        Err(e) => return e.into_response(),
+    };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
@@ -354,9 +353,9 @@ pub async fn stack_import(
                 &req,
                 imported_gate_answers,
             ) {
-                    Ok(metadata) => metadata,
-                    Err(error) => return error.into_response(),
-                };
+                Ok(metadata) => metadata,
+                Err(error) => return error.into_response(),
+            };
             let should_reconcile = import_changes_deployment(
                 &existing,
                 &stack_state,
@@ -1401,15 +1400,14 @@ mod setup_update_authorization_tests {
     fn frozen_reimport_mints_exact_authority_without_losing_runtime_metadata() {
         let baseline = stack("live", "frozen-a");
         let target = stack("live", "frozen-b");
-        let metadata =
-            reimport_runtime_metadata(
-                &record(baseline.clone()),
-                &target,
-                "release",
-                &request(),
-                Default::default(),
-            )
-                .expect("setup-owned update should succeed");
+        let metadata = reimport_runtime_metadata(
+            &record(baseline.clone()),
+            &target,
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("setup-owned update should succeed");
         let authorization = metadata
             .setup_update_authorization
             .expect("frozen change should mint setup authority");

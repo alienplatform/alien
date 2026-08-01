@@ -27,6 +27,7 @@ impl ResourceImporter for AwsRemoteStackManagementImporter {
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some(data.role_arn),
             role_name: Some(data.role_name),
+            remote_bindings_role_arn: data.remote_bindings_role_arn,
             management_permissions_applied: data.management_permissions_applied,
             _internal_stay_count: None,
         };

@@ -38,9 +38,7 @@ impl TfEmitter for AwsStorageEmitter {
         fragment
             .resource_blocks
             .push(public_access_block(label, !storage.public_read));
-        fragment
-            .resource_blocks
-            .push(bucket_policy(label, storage));
+        fragment.resource_blocks.push(bucket_policy(label, storage));
 
         if storage.versioning {
             fragment.resource_blocks.push(versioning(label));
@@ -62,7 +60,10 @@ impl TfEmitter for AwsStorageEmitter {
                 "bucketName",
                 expr::traversal(["aws_s3_bucket", label, "bucket"]),
             ),
-            ("bucketArn", expr::traversal(["aws_s3_bucket", label, "arn"])),
+            (
+                "bucketArn",
+                expr::traversal(["aws_s3_bucket", label, "arn"]),
+            ),
         ]))
     }
 
@@ -298,6 +299,17 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
             if let Some(label) = remote_stack_management_label(ctx) {
                 owners.push((label.to_string(), refs));
             }
+        }
+    }
+
+    if ctx.resource.is_remote_frozen_storage() {
+        if let Some(label) = remote_stack_management_label(ctx) {
+            owners.push((
+                format!("{label}_remote_bindings"),
+                vec![PermissionSetReference::from_name(
+                    "storage/remote-data-write",
+                )],
+            ));
         }
     }
 

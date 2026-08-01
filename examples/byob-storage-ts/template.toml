@@ -1,0 +1,3 @@
+name = "byob-storage-ts"
+description = "Provision customer-owned storage and access it from an external SaaS backend."
+language = "TypeScript"

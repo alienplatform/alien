@@ -355,6 +355,7 @@ mod tests {
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: service_account_email.to_string(),
                     access_configuration: service_account_email.to_string(),
+                    remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)
                 .dependencies(vec![])

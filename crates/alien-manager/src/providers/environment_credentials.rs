@@ -129,6 +129,7 @@ pub(super) mod tests {
                     "tenantId": "target-tenant"
                 })
                 .to_string(),
+                remote_bindings_access: None,
             }));
         });
         let mut stack_state =

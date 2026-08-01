@@ -37,6 +37,9 @@ pub struct AwsRemoteStackManagementController {
     pub(crate) role_arn: Option<String>,
     /// The name of the created IAM role.
     pub(crate) role_name: Option<String>,
+    /// Setup-owned role used only for Remote Bindings data-plane access.
+    #[serde(default)]
+    pub(crate) remote_bindings_role_arn: Option<String>,
     /// Whether management permissions have been applied
     pub(crate) management_permissions_applied: bool,
 }
@@ -486,6 +489,12 @@ impl AwsRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
+                remote_bindings_access: self.remote_bindings_role_arn.as_ref().map(|arn| {
+                    alien_core::RemoteBindingsAccessOutputs {
+                        resource_id: arn.clone(),
+                        access_configuration: arn.clone(),
+                    }
+                }),
             }))
         } else {
             None
@@ -1086,6 +1095,7 @@ impl AwsRemoteStackManagementController {
             state: AwsRemoteStackManagementState::Ready,
             role_arn: Some(format!("arn:aws:iam::123456789012:role/{}", role_name)),
             role_name: Some(role_name.to_string()),
+            remote_bindings_role_arn: None,
             management_permissions_applied: true,
             _internal_stay_count: None,
         }

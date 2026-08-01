@@ -56,6 +56,9 @@ export interface Storage {
   signedUrl(options: SignedUrlOptions): Promise<PresignedRequest>
 }
 
+/** Storage operations available from an external deployment binding. */
+export type RemoteStorage = Pick<Storage, "get" | "put" | "delete" | "list" | "head">
+
 /** Options for {@link Kv.set}. */
 export interface KvSetOptions {
   /** Time-to-live, in seconds. */

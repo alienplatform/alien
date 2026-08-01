@@ -3,6 +3,7 @@ pub mod commands;
 pub mod container;
 pub mod events;
 pub mod lifecycle;
+pub mod remote_bindings;
 pub mod routing;
 pub mod runner;
 pub mod runtime_less;

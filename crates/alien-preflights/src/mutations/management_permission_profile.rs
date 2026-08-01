@@ -421,6 +421,60 @@ mod tests {
         }
     }
 
+    fn management_permissions_for_test(mode: &str) -> ManagementPermissions {
+        match mode {
+            "auto" => ManagementPermissions::Auto,
+            "extend" => ManagementPermissions::Extend(
+                PermissionProfile::new().global(["worker/management"]),
+            ),
+            "override" => ManagementPermissions::Override(
+                PermissionProfile::new().global(["worker/management"]),
+            ),
+            _ => panic!("unknown management permission mode: {mode}"),
+        }
+    }
+
+    fn deployment_config_for_management_permission_test() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    #[tokio::test]
+    async fn remote_storage_never_adds_data_access_to_management() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            for mode in ["auto", "extend"] {
+                let storage = Storage::new("uploads".to_string()).build();
+                let stack = Stack::new("test-stack".to_string())
+                    .add_with_remote_access(storage, ResourceLifecycle::Frozen)
+                    .management(management_permissions_for_test(mode))
+                    .build();
+                let stack_state = StackState::new(platform);
+
+                let result_stack = ManagementPermissionProfileMutation
+                    .mutate(
+                        stack,
+                        &stack_state,
+                        &deployment_config_for_management_permission_test(),
+                    )
+                    .await
+                    .expect("management permission mutation should succeed");
+
+                assert!(
+                    !result_stack.management().profile().is_some_and(|profile| profile
+                        .0
+                        .values()
+                        .flatten()
+                        .any(|permission| permission.id() == "storage/remote-data-write")),
+                    "{platform:?} {mode} must keep remote binding data access off the management identity"
+                );
+            }
+        }
+    }
+
     fn kubernetes_generated_aws_alb_acm_settings() -> StackSettings {
         StackSettings {
             kubernetes: Some(KubernetesSettings {

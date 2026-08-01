@@ -234,6 +234,17 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         }
     }
 
+    if ctx.resource.is_remote_frozen_storage() {
+        if let Some(label) = remote_stack_management_label(ctx) {
+            owners.push((
+                format!("{label}_remote_bindings"),
+                vec![PermissionSetReference::from_name(
+                    "storage/remote-data-write",
+                )],
+            ));
+        }
+    }
+
     owners
 }
 

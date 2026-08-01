@@ -29,6 +29,81 @@
         }
       }
     },
+    "/v1/bindings/resolve": {
+      "post": {
+        "tags": [
+          "bindings"
+        ],
+        "operationId": "resolve_binding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Remote binding resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBindingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The deployment, release, or binding is not eligible for remote access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller cannot resolve bindings for this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The deployment, release, or binding was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/commands": {
       "post": {
         "tags": [
@@ -1096,41 +1171,6 @@
         ]
       }
     },
-    "/v1/resolve-credentials": {
-      "post": {
-        "tags": [
-          "credentials"
-        ],
-        "operationId": "resolve_credentials",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResolveCredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Credentials resolved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResolveCredentialsResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
     "/v1/stack/import": {
       "post": {
         "tags": [
@@ -1183,7 +1223,7 @@
             "description": "Deployment group or release not found"
           },
           "409": {
-            "description": "Deployment name conflict"
+            "description": "Deployment name conflict, or the current release cannot be read to resolve a gate answer"
           }
         }
       }
@@ -1505,6 +1545,128 @@
           "target": {}
         }
       },
+      "AiHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsBedrockAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "awsBedrock"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpVertexAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "gcpVertex"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureFoundryAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "azureFoundry"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAiHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "external"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "AiHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
       "AlienError": {
         "type": "object",
         "description": "Canonical error container that provides a structured way to represent errors\nwith rich metadata including error codes, human-readable messages, context,\nand chaining capabilities for error propagation.\n\nThis struct is designed to be both machine-readable and user-friendly,\nsupporting serialization for API responses and detailed error reporting\nin distributed systems.",
@@ -1710,6 +1872,21 @@
           },
           "status": {
             "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          }
+        }
+      },
+      "AwsBedrockAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
           }
         }
       },
@@ -3780,6 +3957,33 @@
           "version": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "AzureFoundryAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "accountName"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceGroup": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
           }
         }
       },
@@ -6319,6 +6523,22 @@
           "tcp"
         ]
       },
+      "ExternalAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "The BYO-key provider serving this binding (e.g. \"openai\"). Used on the Local\nplatform, where the app brings its own provider key instead of an ambient cloud."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
+          }
+        }
+      },
       "FailureDomainSelection": {
         "type": "object",
         "description": "Failure-domain policy selected for a compute pool.",
@@ -7490,6 +7710,25 @@
           "title": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "GcpVertexAiHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "project",
+          "location"
+        ],
+        "properties": {
+          "location": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AiHeartbeatStatus"
           }
         }
       },
@@ -11687,6 +11926,224 @@
           }
         }
       },
+      "RemoteAwsClientConfig": {
+        "type": "object",
+        "description": "Response-safe AWS client configuration. The public contract deliberately\nhas no static, profile, metadata, or web-identity credential variants.",
+        "required": [
+          "accountId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "AWS account containing the bucket."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteAwsCredentials",
+            "description": "Expiring AWS session credentials."
+          },
+          "region": {
+            "type": "string",
+            "description": "AWS region containing the bucket."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAwsCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Temporary AWS session credentials with an authoritative expiry.",
+            "required": [
+              "accessKeyId",
+              "secretAccessKey",
+              "sessionToken",
+              "expiresAt",
+              "type"
+            ],
+            "properties": {
+              "accessKeyId": {
+                "type": "string",
+                "description": "AWS access key id."
+              },
+              "expiresAt": {
+                "type": "string",
+                "description": "Provider-reported credential expiry."
+              },
+              "secretAccessKey": {
+                "type": "string",
+                "description": "AWS secret access key."
+              },
+              "sessionToken": {
+                "type": "string",
+                "description": "AWS session token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sessionCredentials"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only AWS credential form remote binding resolution can return."
+      },
+      "RemoteAzureClientConfig": {
+        "type": "object",
+        "description": "Response-safe Azure client configuration containing one storage-audience\naccess token for the stack's Remote Bindings identity.",
+        "required": [
+          "subscriptionId",
+          "tenantId",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteAzureCredentials",
+            "description": "A short-lived Azure Storage access token."
+          },
+          "region": {
+            "type": "string",
+            "description": "Azure region configured for the deployment.",
+            "nullable": true
+          },
+          "subscriptionId": {
+            "type": "string",
+            "description": "Azure subscription containing the storage account."
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Azure tenant owning the identity."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAzureCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "OAuth bearer token for `https://storage.azure.com/.default`.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only Azure credential form remote binding resolution can return."
+      },
+      "RemoteBlobStorageBinding": {
+        "type": "object",
+        "description": "Concrete Azure Blob Storage topology returned to remote clients.",
+        "required": [
+          "accountName",
+          "containerName"
+        ],
+        "properties": {
+          "accountName": {
+            "type": "string",
+            "description": "Storage account containing the authorized container."
+          },
+          "containerName": {
+            "type": "string",
+            "description": "Blob container authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpClientConfig": {
+        "type": "object",
+        "description": "Response-safe GCP client configuration. Refreshable source credentials and\nservice endpoint overrides cannot be represented by this type.",
+        "required": [
+          "projectId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteGcpCredentials",
+            "description": "Already-minted OAuth access token."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "GCP project containing the bucket."
+          },
+          "projectNumber": {
+            "type": "string",
+            "description": "Numeric GCP project id, when known.",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "description": "GCP region configured for the deployment."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Short-lived OAuth access token. Its expiry is the response `expiresAt`.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "OAuth bearer token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only GCP credential form remote binding resolution can return."
+      },
+      "RemoteGcsStorageBinding": {
+        "type": "object",
+        "description": "Concrete Google Cloud Storage topology returned to remote clients.",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "type": "string",
+            "description": "GCS bucket name authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteS3StorageBinding": {
+        "type": "object",
+        "description": "Concrete S3 topology returned to remote clients.",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "type": "string",
+            "description": "S3 bucket name authorized by the credential lease."
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteStackManagementHeartbeatData": {
         "oneOf": [
           {
@@ -11803,27 +12260,110 @@
           }
         }
       },
-      "ResolveCredentialsRequest": {
+      "ResolveBindingRequest": {
         "type": "object",
+        "description": "Request body for `POST /v1/bindings/resolve`.",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "resourceId"
         ],
         "properties": {
           "deploymentId": {
-            "type": "string"
+            "type": "string",
+            "description": "Deployment containing the remote-enabled resource."
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "Logical Storage resource id in the deployment's stack state."
           }
-        }
+        },
+        "additionalProperties": false
       },
-      "ResolveCredentialsResponse": {
-        "type": "object",
-        "required": [
-          "clientConfig"
-        ],
-        "properties": {
-          "clientConfig": {
-            "$ref": "#/components/schemas/ClientConfig"
+      "ResolveBindingResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "AWS S3 and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteS3StorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "s3"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Blob Storage and an exact container-scoped SAS.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteBlobStorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "blob"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Google Cloud Storage and a bucket-downscoped access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteGcsStorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "gcs"
+                ]
+              }
+            }
           }
-        }
+        ],
+        "description": "One approved remote Storage binding paired with credentials for the same\nprovider. The discriminant makes cross-provider combinations impossible."
       },
       "ResourceEntry": {
         "type": "object",
@@ -12248,6 +12788,24 @@
                 "type": "string",
                 "enum": [
                   "azure_service_bus_namespace"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/AiHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "ai"
                 ]
               }
             }
@@ -13424,6 +13982,12 @@
           }
         }
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     }
   },
   "tags": [
@@ -13458,6 +14022,10 @@
     {
       "name": "credentials",
       "description": "Credential resolution for deployments"
+    },
+    {
+      "name": "bindings",
+      "description": "Remote resource binding resolution"
     },
     {
       "name": "telemetry",

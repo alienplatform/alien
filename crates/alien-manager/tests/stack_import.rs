@@ -339,6 +339,7 @@ fn aws_remote_management_import_request(
             import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
                 role_name: format!("{deployment_name}-management"),
                 role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
+                remote_bindings_role_arn: None,
                 management_permissions_applied: true,
             })
             .unwrap(),
@@ -419,6 +420,7 @@ fn gcp_remote_management_import_request(
                     "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
                 ),
                 service_account_unique_id: "1234567890".to_string(),
+                remote_bindings_service_account_email: None,
                 management_permissions_applied: true,
             })
             .unwrap(),
@@ -466,6 +468,8 @@ fn azure_remote_management_import_request(
                 ),
                 principal_id: "00000000-0000-0000-0000-000000000001".to_string(),
                 client_id: "00000000-0000-0000-0000-000000000002".to_string(),
+                remote_bindings_identity_id: None,
+                remote_bindings_client_id: None,
                 management_permissions_applied: true,
             })
             .unwrap(),
@@ -1458,10 +1462,8 @@ async fn an_import_whose_input_values_contradict_the_delivered_resources_is_refu
     let fixture = make_fixture(Some(stack_with_gated_storage("assets", "extras"))).await;
 
     let mut body = aws_two_store_import_request("acme-prod", "us-east-1", "assets", "extras");
-    body.input_values = HashMap::from([(
-        "extrasEnabled".to_string(),
-        serde_json::Value::Bool(false),
-    )]);
+    body.input_values =
+        HashMap::from([("extrasEnabled".to_string(), serde_json::Value::Bool(false))]);
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(

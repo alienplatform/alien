@@ -4,6 +4,7 @@ pub mod compile_time;
 pub mod deployment_prerequisites;
 pub mod error;
 pub mod mutations;
+mod remote_storage;
 pub mod runner;
 pub mod runtime;
 
@@ -371,6 +372,7 @@ impl PreflightRegistry {
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ExternalBindingsTypeCheck,
         ));
+        registry.add_deployment_prerequisite_check(Box::new(remote_storage::ExternalBindingCheck));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ExternalBindingStillBoundCheck,
         ));
