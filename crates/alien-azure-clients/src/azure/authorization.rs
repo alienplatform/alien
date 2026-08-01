@@ -234,11 +234,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
         let role_definition: RoleDefinition = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure CreateOrUpdateRoleDefinition: JSON parse error".to_string(),
+                message: format!(
+                    "Azure CreateOrUpdateRoleDefinition: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url: url.to_string(),
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
             })?;
 
         Ok(role_definition)
@@ -294,11 +297,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
                     serde_json::from_str(&response_body)
                         .into_alien_error()
                         .context(ErrorData::HttpResponseError {
-                            message: "Azure DeleteRoleDefinition: JSON parse error".to_string(),
+                            message: format!(
+                                "Azure DeleteRoleDefinition: JSON parse error. Body: {}",
+                                response_body
+                            ),
                             url: url.to_string(),
                             http_status: status.as_u16(),
                             http_request_text: None,
-                            http_response_text: None,
+                            http_response_text: Some(response_body),
                         })?,
                 )
             }
@@ -347,11 +353,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
         let role_definition: RoleDefinition = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure GetRoleDefinition: JSON parse error".to_string(),
+                message: format!(
+                    "Azure GetRoleDefinition: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_body),
             })?;
 
         Ok(role_definition)
@@ -407,11 +416,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
         let role_assignment: RoleAssignment = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure CreateOrUpdateRoleAssignment: JSON parse error".to_string(),
+                message: format!(
+                    "Azure CreateOrUpdateRoleAssignment: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url: url.to_string(),
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
             })?;
 
         Ok(role_assignment)
@@ -462,11 +474,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
                     serde_json::from_str(&response_body)
                         .into_alien_error()
                         .context(ErrorData::HttpResponseError {
-                            message: "Azure DeleteRoleAssignment: JSON parse error".to_string(),
+                            message: format!(
+                                "Azure DeleteRoleAssignment: JSON parse error. Body: {}",
+                                response_body
+                            ),
                             url: url.to_string(),
                             http_status: status.as_u16(),
                             http_request_text: None,
-                            http_response_text: None,
+                            http_response_text: Some(response_body),
                         })?,
                 )
             }
@@ -510,11 +525,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
         let role_assignment: RoleAssignment = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure GetRoleAssignment: JSON parse error".to_string(),
+                message: format!(
+                    "Azure GetRoleAssignment: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_body),
             })?;
 
         Ok(role_assignment)
@@ -579,11 +597,14 @@ impl AuthorizationApi for AzureAuthorizationClient {
         let response: RoleAssignmentListResponse = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure ListRoleAssignments: JSON parse error".to_string(),
+                message: format!(
+                    "Azure ListRoleAssignments: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url: url.to_string(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_body),
             })?;
 
         // Filter by role definition ID if provided

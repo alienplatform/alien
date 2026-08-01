@@ -173,6 +173,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
             },
         )?;
 
+        let request_body = body.clone();
         let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
             .content_type_json()
             .content_length(&body)
@@ -196,7 +197,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
                 url: url.clone(),
                 http_status: 200,
-                http_request_text: None,
+                http_request_text: Some(request_body.clone()),
                 http_response_text: None,
             })?;
 
@@ -208,8 +209,8 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
                 url: url,
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(request_body),
+                http_response_text: Some(body),
             },
         )?;
 
@@ -287,7 +288,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 url: url,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(body),
             },
         )?;
 
@@ -317,6 +318,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
             })?;
 
+        let request_body = body.clone();
         let builder = AzureRequestBuilder::new(Method::PATCH, url.clone())
             .content_type_json()
             .content_length(&body)
@@ -340,7 +342,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
                 url: url.clone(),
                 http_status: 200,
-                http_request_text: None,
+                http_request_text: Some(request_body.clone()),
                 http_response_text: None,
             })?;
 
@@ -352,8 +354,8 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
                 url: url,
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(request_body),
+                http_response_text: Some(body),
             },
         )?;
 
@@ -387,6 +389,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
             })?;
 
+        let request_body = body.clone();
         let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
             .content_type_json()
             .content_length(&body)
@@ -410,7 +413,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
                     url: url.clone(),
                     http_status: 200,
-                    http_request_text: None,
+                    http_request_text: Some(request_body.clone()),
                     http_response_text: None,
                 })?;
 
@@ -423,8 +426,8 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 ),
                 url,
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(request_body),
+                http_response_text: Some(response_body),
             })?;
 
         Ok(credential)
@@ -481,7 +484,7 @@ impl ManagedIdentityApi for AzureManagedIdentityClient {
                 url,
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_body),
             })?;
 
         Ok(credential)

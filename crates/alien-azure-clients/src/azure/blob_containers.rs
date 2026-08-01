@@ -108,6 +108,8 @@ impl BlobContainerApi for AzureBlobContainerClient {
             .context(ErrorData::SerializationError {
                 message: format!("Failed to serialize blob container '{}'.", container_name),
             })?;
+        let request_body = body.clone(); // Store request body for error context
+
         let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
             .content_type_json()
             .content_length(&body)
@@ -131,11 +133,14 @@ impl BlobContainerApi for AzureBlobContainerClient {
         let blob_container: BlobContainer = serde_json::from_str(&body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure CreateBlobContainer: JSON parse error".to_string(),
+                message: format!(
+                    "Azure CreateBlobContainer: JSON parse error. Body: {}",
+                    body
+                ),
                 url: url.clone(),
                 http_status: 200,
-                http_response_text: None,
-                http_request_text: None,
+                http_response_text: Some(body.clone()),
+                http_request_text: Some(request_body),
             })?;
 
         Ok(blob_container)
@@ -181,10 +186,10 @@ impl BlobContainerApi for AzureBlobContainerClient {
         let blob_container: BlobContainer = serde_json::from_str(&body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure GetBlobContainer: JSON parse error".to_string(),
+                message: format!("Azure GetBlobContainer: JSON parse error. Body: {}", body),
                 url: url.clone(),
                 http_status: 200,
-                http_response_text: None,
+                http_response_text: Some(body.clone()),
                 http_request_text: None, // GET request has no body
             })?;
 
@@ -230,10 +235,13 @@ impl BlobContainerApi for AzureBlobContainerClient {
         let blob_service_properties: BlobServiceProperties = serde_json::from_str(&body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure GetBlobServiceProperties: JSON parse error".to_string(),
+                message: format!(
+                    "Azure GetBlobServiceProperties: JSON parse error. Body: {}",
+                    body
+                ),
                 url: url.clone(),
                 http_status: 200,
-                http_response_text: None,
+                http_response_text: Some(body.clone()),
                 http_request_text: None,
             })?;
 
@@ -298,6 +306,8 @@ impl BlobContainerApi for AzureBlobContainerClient {
             .context(ErrorData::SerializationError {
                 message: format!("Failed to serialize blob container '{}'.", container_name),
             })?;
+        let request_body = body.clone(); // Store request body for error context
+
         let builder = AzureRequestBuilder::new(Method::PATCH, url.clone())
             .content_type_json()
             .content_length(&body)
@@ -321,11 +331,14 @@ impl BlobContainerApi for AzureBlobContainerClient {
         let blob_container: BlobContainer = serde_json::from_str(&body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Azure UpdateBlobContainer: JSON parse error".to_string(),
+                message: format!(
+                    "Azure UpdateBlobContainer: JSON parse error. Body: {}",
+                    body
+                ),
                 url: url.clone(),
                 http_status: 200,
-                http_response_text: None,
-                http_request_text: None,
+                http_response_text: Some(body.clone()),
+                http_request_text: Some(request_body),
             })?;
 
         Ok(blob_container)

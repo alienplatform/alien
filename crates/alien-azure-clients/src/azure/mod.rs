@@ -20,7 +20,6 @@ pub mod compute;
 pub mod container_apps;
 pub mod containerregistry;
 pub mod disks;
-pub(crate) mod error;
 pub mod event_grid;
 pub mod flexible_server;
 pub mod keyvault;
@@ -105,11 +104,15 @@ async fn get_workload_identity_token(
             message: "Failed to request Azure access token using workload identity".to_string(),
         })?;
 
-    let status = response.status();
-    if !status.is_success() {
+    if !response.status().is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(AlienError::new(ErrorData::AuthenticationError {
             message: format!(
-                "Failed to get workload identity access token: Azure returned HTTP {status}"
+                "Failed to get workload identity access token: {}",
+                error_text
             ),
         }));
     }
@@ -202,11 +205,15 @@ async fn get_impersonated_token(
                     message: "Failed to exchange OIDC token for impersonation".to_string(),
                 })?;
 
-            let status = response.status();
-            if !status.is_success() {
+            if !response.status().is_success() {
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
                 return Err(AlienError::new(ErrorData::AuthenticationError {
                     message: format!(
-                        "OIDC token exchange for impersonation failed: Azure returned HTTP {status}"
+                        "OIDC token exchange for impersonation failed: {}",
+                        error_text
                     ),
                 }));
             }
@@ -273,12 +280,13 @@ async fn get_impersonated_token(
                     message: "Failed to request Azure access token for impersonation".to_string(),
                 })?;
 
-            let status = response.status();
-            if !status.is_success() {
+            if !response.status().is_success() {
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
                 return Err(AlienError::new(ErrorData::AuthenticationError {
-                    message: format!(
-                        "Failed to get impersonated access token: Azure returned HTTP {status}"
-                    ),
+                    message: format!("Failed to get impersonated access token: {}", error_text),
                 }));
             }
 
@@ -672,8 +680,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                 if !status.is_success() {
                     return Err(AlienError::new(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to get Azure service principal token for scope '{scope}': \
-                             HTTP {status}"
+                            "Failed to get Azure service principal token for scope '{}': HTTP {}: {}",
+                            scope, status, response_text
                         ),
                     }));
                 }
@@ -682,8 +690,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .into_alien_error()
                     .context(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to parse Azure service principal token response for scope \
-                             '{scope}'"
+                            "Failed to parse Azure service principal token response for scope '{}': {}",
+                            scope, response_text
                         ),
                     })?;
 
@@ -776,8 +784,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                 if !status.is_success() {
                     return Err(AlienError::new(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to get Azure VM managed identity token for resource \
-                             '{resource}': HTTP {status}"
+                            "Failed to get Azure VM managed identity token for resource '{}': HTTP {}: {}",
+                            resource, status, response_text
                         ),
                     }));
                 }
@@ -786,8 +794,8 @@ impl AzureClientConfigExt for AzureClientConfig {
                     .into_alien_error()
                     .context(ErrorData::AuthenticationError {
                         message: format!(
-                            "Failed to parse Azure VM managed identity token response for resource \
-                             '{resource}'"
+                            "Failed to parse Azure VM managed identity token response for resource '{}': {}",
+                            resource, response_text
                         ),
                     })?;
 

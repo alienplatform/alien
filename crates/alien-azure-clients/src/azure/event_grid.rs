@@ -121,11 +121,14 @@ impl EventGridApi for AzureEventGridClient {
         serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Event Grid CreateOrUpdateEventSubscription: JSON parse error".to_string(),
+                message: format!(
+                    "Event Grid CreateOrUpdateEventSubscription: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url,
                 http_status: response_status,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
             })
     }
 
@@ -163,11 +166,14 @@ impl EventGridApi for AzureEventGridClient {
         serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
-                message: "Event Grid GetEventSubscription: JSON parse error".to_string(),
+                message: format!(
+                    "Event Grid GetEventSubscription: JSON parse error. Body: {}",
+                    response_body
+                ),
                 url,
                 http_status: response_status,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_body),
             })
     }
 

@@ -7,7 +7,7 @@ use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
 use reqwest::{Client, Method};
-use tracing::debug;
+use tracing::{debug, trace};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -139,9 +139,11 @@ impl ResourcesApi for AzureResourcesClient {
                     ),
                     url: url.clone(),
                     http_status: status,
-                    http_request_text: None,
+                    http_request_text: Some(body.clone()),
                     http_response_text: None,
                 })?;
+
+        trace!("Resource group response: {}", response_text);
 
         let resource_group: ResourceGroup = serde_json::from_str(&response_text)
             .into_alien_error()
@@ -152,8 +154,8 @@ impl ResourcesApi for AzureResourcesClient {
                 ),
                 url: url.clone(),
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(body),
+                http_response_text: Some(response_text),
             })?;
 
         Ok(resource_group)
@@ -263,9 +265,11 @@ impl ResourcesApi for AzureResourcesClient {
                     ),
                     url: url.clone(),
                     http_status: status,
-                    http_request_text: None,
+                    http_request_text: Some(body.clone()),
                     http_response_text: None,
                 })?;
+
+        trace!("Resource group update response: {}", response_text);
 
         let resource_group: ResourceGroup = serde_json::from_str(&response_text)
             .into_alien_error()
@@ -276,8 +280,8 @@ impl ResourcesApi for AzureResourcesClient {
                 ),
                 url: url.clone(),
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(body),
+                http_response_text: Some(response_text),
             })?;
 
         Ok(resource_group)
@@ -332,6 +336,8 @@ impl ResourcesApi for AzureResourcesClient {
                     http_response_text: None,
                 })?;
 
+        trace!("Resource group get response: {}", response_text);
+
         let resource_group: ResourceGroup = serde_json::from_str(&response_text)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
@@ -342,7 +348,7 @@ impl ResourcesApi for AzureResourcesClient {
                 url: url.clone(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_text),
             })?;
 
         Ok(resource_group)
@@ -397,6 +403,8 @@ impl ResourcesApi for AzureResourcesClient {
                     http_response_text: None,
                 })?;
 
+        trace!("Provider get response: {}", response_text);
+
         let provider: Provider = serde_json::from_str(&response_text)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
@@ -407,7 +415,7 @@ impl ResourcesApi for AzureResourcesClient {
                 url: url.clone(),
                 http_status: status,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_text),
             })?;
 
         Ok(provider)
@@ -480,9 +488,11 @@ impl ResourcesApi for AzureResourcesClient {
                     ),
                     url: url.clone(),
                     http_status: status,
-                    http_request_text: None,
+                    http_request_text: Some(body.clone()),
                     http_response_text: None,
                 })?;
+
+        trace!("Provider registration response: {}", response_text);
 
         let provider: Provider = serde_json::from_str(&response_text)
             .into_alien_error()
@@ -493,8 +503,8 @@ impl ResourcesApi for AzureResourcesClient {
                 ),
                 url: url.clone(),
                 http_status: status,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(body),
+                http_response_text: Some(response_text),
             })?;
 
         Ok(provider)
@@ -553,6 +563,8 @@ impl ResourcesApi for AzureResourcesClient {
                     http_response_text: None,
                 })?;
 
+        trace!("Provider unregistration response: {}", response_text);
+
         let provider: Provider = serde_json::from_str(&response_text)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
@@ -563,7 +575,7 @@ impl ResourcesApi for AzureResourcesClient {
                 url: url.clone(),
                 http_status: status,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(response_text),
             })?;
 
         Ok(provider)

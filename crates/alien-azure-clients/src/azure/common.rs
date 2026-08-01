@@ -4,12 +4,10 @@
 // -----------------------------------------------------------------------------
 
 use crate::azure::{AzureClientConfig, AzureClientConfigExt};
-use alien_client_core::{ErrorData, Result};
+use alien_client_core::{Error, ErrorData, Result};
 
-pub use crate::azure::error::create_azure_http_error_with_context;
-use crate::azure::error::safe_http_response_context;
 use crate::azure::long_running_operation::{LongRunningOperation, OperationResult};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use backon::{ExponentialBuilder, Retryable};
 use chrono::Utc;
 use http::{header::HeaderName, HeaderValue};
@@ -209,18 +207,18 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Keep the request URL for diagnostics, but never retain the body: Azure request
-                // payloads can contain credentials and other sensitive configuration.
+                // Capture request details before execution consumes the request
                 let request_url = req_clone.url().to_string();
+                let request_body = req_clone
+                    .body()
+                    .and_then(|b| b.as_bytes())
+                    .map(|b| String::from_utf8_lossy(b).to_string());
 
-                let resp = client
-                    .execute(req_clone)
-                    .await
-                    .map_err(reqwest::Error::without_url)
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
+                let resp = client.execute(req_clone).await.into_alien_error().context(
+                    ErrorData::HttpRequestFailed {
                         message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    })?;
+                    },
+                )?;
                 let status = resp.status();
                 if status.is_success()
                     || status == StatusCode::CREATED
@@ -236,6 +234,7 @@ impl AzureClientBase {
                         &res_name,
                         &body,
                         &request_url,
+                        request_body,
                     ))
                 }
             }
@@ -266,18 +265,18 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Keep the request URL for diagnostics, but never retain the body: Azure request
-                // payloads can contain credentials and other sensitive configuration.
+                // Capture request details before execution consumes the request
                 let request_url = req_clone.url().to_string();
+                let request_body = req_clone
+                    .body()
+                    .and_then(|b| b.as_bytes())
+                    .map(|b| String::from_utf8_lossy(b).to_string());
 
-                let resp = client
-                    .execute(req_clone)
-                    .await
-                    .map_err(reqwest::Error::without_url)
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
+                let resp = client.execute(req_clone).await.into_alien_error().context(
+                    ErrorData::HttpRequestFailed {
                         message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    })?;
+                    },
+                )?;
                 let status = resp.status();
                 if status.is_success()
                     || status == StatusCode::CREATED
@@ -293,6 +292,7 @@ impl AzureClientBase {
                         &res_name,
                         &body,
                         &request_url,
+                        request_body,
                     ))
                 }
             }
@@ -333,38 +333,37 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Keep the request URL for diagnostics, but never retain the body: Azure request
-                // payloads can contain credentials and other sensitive configuration.
+                // Capture request details before execution consumes the request
                 let request_url = req_clone.url().to_string();
+                let request_body = req_clone
+                    .body()
+                    .and_then(|b| b.as_bytes())
+                    .map(|b| String::from_utf8_lossy(b).to_string());
 
-                let resp = client
-                    .execute(req_clone)
-                    .await
-                    .map_err(reqwest::Error::without_url)
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
+                let resp = client.execute(req_clone).await.into_alien_error().context(
+                    ErrorData::HttpRequestFailed {
                         message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    })?;
+                    },
+                )?;
                 let status = resp.status();
 
                 match status {
                     StatusCode::OK => {
                         // 200 OK - Operation completed synchronously with response body
-                        let body = resp
-                            .text()
-                            .await
-                            .map_err(reqwest::Error::without_url)
-                            .into_alien_error()
-                            .context(ErrorData::HttpRequestFailed {
+                        let body = resp.text().await.into_alien_error().context(
+                            ErrorData::HttpRequestFailed {
                                 message: format!("Azure {}: failed to read response body", op),
-                            })?;
+                            },
+                        )?;
 
                         let result: T = serde_json::from_str(&body).into_alien_error().context(
-                            safe_http_response_context(
-                                format!("Azure {op}: JSON parse error"),
-                                &request_url,
-                                StatusCode::OK,
-                            ),
+                            ErrorData::HttpResponseError {
+                                message: format!("Azure {}: JSON parse error. Body: {}", op, body),
+                                url: request_url.clone(),
+                                http_status: 200,
+                                http_response_text: Some(body.clone()),
+                                http_request_text: request_body.clone(),
+                            },
                         )?;
 
                         Ok(OperationResult::Completed(result))
@@ -380,22 +379,24 @@ impl AzureClientBase {
                             Ok(OperationResult::LongRunning(long_running_op))
                         } else {
                             // No async headers - operation completed synchronously
-                            let body = resp
-                                .text()
-                                .await
-                                .map_err(reqwest::Error::without_url)
-                                .into_alien_error()
-                                .context(ErrorData::HttpRequestFailed {
+                            let body = resp.text().await.into_alien_error().context(
+                                ErrorData::HttpRequestFailed {
                                     message: format!("Azure {}: failed to read response body", op),
-                                })?;
+                                },
+                            )?;
 
                             let result: T = serde_json::from_str(&body)
                                 .into_alien_error()
-                                .context(safe_http_response_context(
-                                    format!("Azure {op}: JSON parse error"),
-                                    &request_url,
-                                    StatusCode::CREATED,
-                                ))?;
+                                .context(ErrorData::HttpResponseError {
+                                    message: format!(
+                                        "Azure {}: JSON parse error. Body: {}",
+                                        op, body
+                                    ),
+                                    url: request_url.clone(),
+                                    http_status: 201,
+                                    http_response_text: Some(body.clone()),
+                                    http_request_text: request_body.clone(),
+                                })?;
 
                             Ok(OperationResult::Completed(result))
                         }
@@ -404,14 +405,16 @@ impl AzureClientBase {
                         // Operation completed synchronously with no response body (typically DELETE)
                         // For unit type (), we can deserialize from empty string
                         let result: T = serde_json::from_str("null").into_alien_error().context(
-                            safe_http_response_context(
-                                format!(
-                                    "Azure {op}: failed to deserialize unit type for \
-                                     NO_CONTENT response"
-                                ),
-                                &request_url,
-                                StatusCode::NO_CONTENT,
+                            ErrorData::HttpResponseError {
+                                message: format!(
+                                "Azure {}: failed to deserialize unit type for NO_CONTENT response",
+                                op
                             ),
+                                url: request_url.clone(),
+                                http_status: 204,
+                                http_response_text: Some("null".to_string()),
+                                http_request_text: request_body.clone(),
+                            },
                         )?;
 
                         Ok(OperationResult::Completed(result))
@@ -438,6 +441,7 @@ impl AzureClientBase {
                             &res_name,
                             &body,
                             &request_url,
+                            request_body,
                         ))
                     }
                 }
@@ -480,38 +484,37 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Keep the request URL for diagnostics, but never retain the body: Azure request
-                // payloads can contain credentials and other sensitive configuration.
+                // Capture request details before execution consumes the request
                 let request_url = req_clone.url().to_string();
+                let request_body = req_clone
+                    .body()
+                    .and_then(|b| b.as_bytes())
+                    .map(|b| String::from_utf8_lossy(b).to_string());
 
-                let resp = client
-                    .execute(req_clone)
-                    .await
-                    .map_err(reqwest::Error::without_url)
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
+                let resp = client.execute(req_clone).await.into_alien_error().context(
+                    ErrorData::HttpRequestFailed {
                         message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    })?;
+                    },
+                )?;
                 let status = resp.status();
 
                 match status {
                     StatusCode::OK => {
                         // 200 OK - Operation completed synchronously with response body
-                        let body = resp
-                            .text()
-                            .await
-                            .map_err(reqwest::Error::without_url)
-                            .into_alien_error()
-                            .context(ErrorData::HttpRequestFailed {
+                        let body = resp.text().await.into_alien_error().context(
+                            ErrorData::HttpRequestFailed {
                                 message: format!("Azure {}: failed to read response body", op),
-                            })?;
+                            },
+                        )?;
 
                         let result: T = serde_json::from_str(&body).into_alien_error().context(
-                            safe_http_response_context(
-                                format!("Azure {op}: JSON parse error"),
-                                &request_url,
-                                StatusCode::OK,
-                            ),
+                            ErrorData::HttpResponseError {
+                                message: format!("Azure {}: JSON parse error. Body: {}", op, body),
+                                url: request_url.clone(),
+                                http_status: 200,
+                                http_response_text: Some(body.clone()),
+                                http_request_text: request_body.clone(),
+                            },
                         )?;
 
                         Ok(OperationResult::Completed(result))
@@ -526,22 +529,24 @@ impl AzureClientBase {
                             Ok(OperationResult::LongRunning(long_running_op))
                         } else {
                             // No async headers - operation completed synchronously
-                            let body = resp
-                                .text()
-                                .await
-                                .map_err(reqwest::Error::without_url)
-                                .into_alien_error()
-                                .context(ErrorData::HttpRequestFailed {
+                            let body = resp.text().await.into_alien_error().context(
+                                ErrorData::HttpRequestFailed {
                                     message: format!("Azure {}: failed to read response body", op),
-                                })?;
+                                },
+                            )?;
 
                             let result: T = serde_json::from_str(&body)
                                 .into_alien_error()
-                                .context(safe_http_response_context(
-                                    format!("Azure {op}: JSON parse error"),
-                                    &request_url,
-                                    StatusCode::CREATED,
-                                ))?;
+                                .context(ErrorData::HttpResponseError {
+                                    message: format!(
+                                        "Azure {}: JSON parse error. Body: {}",
+                                        op, body
+                                    ),
+                                    url: request_url.clone(),
+                                    http_status: 201,
+                                    http_response_text: Some(body.clone()),
+                                    http_request_text: request_body.clone(),
+                                })?;
 
                             Ok(OperationResult::Completed(result))
                         }
@@ -550,14 +555,16 @@ impl AzureClientBase {
                         // Operation completed synchronously with no response body (typically DELETE)
                         // For unit type (), we can deserialize from empty string
                         let result: T = serde_json::from_str("null").into_alien_error().context(
-                            safe_http_response_context(
-                                format!(
-                                    "Azure {op}: failed to deserialize unit type for \
-                                     NO_CONTENT response"
-                                ),
-                                &request_url,
-                                StatusCode::NO_CONTENT,
+                            ErrorData::HttpResponseError {
+                                message: format!(
+                                "Azure {}: failed to deserialize unit type for NO_CONTENT response",
+                                op
                             ),
+                                url: request_url.clone(),
+                                http_status: 204,
+                                http_response_text: Some("null".to_string()),
+                                http_request_text: request_body.clone(),
+                            },
                         )?;
 
                         Ok(OperationResult::Completed(result))
@@ -584,6 +591,7 @@ impl AzureClientBase {
                             &res_name,
                             &body,
                             &request_url,
+                            request_body,
                         ))
                     }
                 }
@@ -648,6 +656,143 @@ impl AzureRequestBuilder {
 }
 
 // -----------------------------------------------------------------------------
+// Azure HTTP error handling helpers
+// -----------------------------------------------------------------------------
+
+/// Standard Azure REST API error response envelope.
+#[derive(serde::Deserialize, Debug)]
+struct AzureErrorResponse {
+    error: AzureErrorDetails,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct AzureErrorDetails {
+    code: Option<String>,
+    message: Option<String>,
+}
+
+/// Attempt to extract the Azure-specific error details from a JSON response body.
+fn parse_azure_error_details(body: &str) -> Option<AzureErrorDetails> {
+    serde_json::from_str::<AzureErrorResponse>(body)
+        .ok()
+        .map(|r| r.error)
+}
+
+/// Azure error codes that represent transient propagation delays, not actual
+/// invalid input. These are returned as HTTP 400 but should be retryable.
+const AZURE_TRANSIENT_BAD_REQUEST_CODES: &[&str] = &[
+    // Role definition assignableScopes update hasn't propagated yet.
+    "RoleAssignmentScopeNotAssignableToRoleDefinition",
+    // A PUT raced with an earlier create or update that is still in progress.
+    "ResourceCannotBeUpdatedDuringProvisioning",
+];
+
+fn is_transient_azure_bad_request(code: Option<&str>, message: &str) -> bool {
+    code.is_some_and(|code| {
+        AZURE_TRANSIENT_BAD_REQUEST_CODES
+            .iter()
+            .any(|transient_code| code.eq_ignore_ascii_case(transient_code))
+    }) || message
+        .to_ascii_lowercase()
+        .contains("cannot be updated during provisioning")
+}
+
+/// Creates an HttpResponseError with full HTTP details and adds appropriate service-specific context.
+///
+/// Parses the Azure error code from the JSON response body (when available)
+/// to refine classification beyond HTTP status codes alone — following the
+/// same approach as AWS clients (e.g., `map_iam_error` in `aws/iam.rs`).
+pub fn create_azure_http_error_with_context(
+    status: StatusCode,
+    op: &str,
+    res_type: &str,
+    res_name: &str,
+    body: &str,
+    url: &str,
+    request_body: Option<String>,
+) -> Error {
+    // First create the HttpResponseError with all HTTP details
+    let http_error = AlienError::new(ErrorData::HttpResponseError {
+        message: format!("Azure {op} failed for {res_type} '{res_name}': HTTP {status}"),
+        url: url.to_string(),
+        http_status: status.as_u16(),
+        http_response_text: Some(body.to_string()),
+        http_request_text: request_body,
+    });
+
+    let azure_error = parse_azure_error_details(body);
+    let azure_error_code = azure_error.as_ref().and_then(|error| error.code.as_deref());
+    let azure_error_body = azure_error
+        .as_ref()
+        .and_then(|error| error.message.as_deref())
+        .unwrap_or(body);
+
+    // Add service-specific context based on Azure error code and HTTP status
+    let service_context = match (status, azure_error_code) {
+        // Azure propagation delays — transient, not truly invalid input
+        (StatusCode::BAD_REQUEST, code)
+            if is_transient_azure_bad_request(code, azure_error_body) =>
+        {
+            ErrorData::RemoteResourceConflict {
+                message: format!(
+                    "Transient Azure error for {res_type} '{res_name}' ({}): {azure_error_body}",
+                    code.unwrap_or("unclassified")
+                ),
+                resource_type: res_type.into(),
+                resource_name: res_name.into(),
+            }
+        }
+        (StatusCode::BAD_REQUEST, _) => ErrorData::InvalidInput {
+            message: format!("Bad request for {res_type} '{res_name}': {azure_error_body}"),
+            field_name: None,
+        },
+        (StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED, _) => {
+            ErrorData::RemoteResourceConflict {
+                message: format!(
+                    "Resource conflict for {res_type} '{res_name}': {azure_error_body}"
+                ),
+                resource_type: res_type.into(),
+                resource_name: res_name.into(),
+            }
+        }
+        (StatusCode::NOT_FOUND, _) => ErrorData::RemoteResourceNotFound {
+            resource_type: res_type.into(),
+            resource_name: res_name.into(),
+        },
+        (StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED, _) => ErrorData::RemoteAccessDenied {
+            resource_type: res_type.into(),
+            resource_name: res_name.into(),
+        },
+        (StatusCode::TOO_MANY_REQUESTS, _) => ErrorData::RateLimitExceeded {
+            message: format!("Rate limit exceeded for {res_type} '{res_name}': {azure_error_body}"),
+        },
+        (
+            StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::INTERNAL_SERVER_ERROR,
+            _,
+        ) => ErrorData::RemoteServiceUnavailable {
+            message: format!("Service unavailable for {res_type} '{res_name}': {azure_error_body}"),
+        },
+        (StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT, _) => ErrorData::Timeout {
+            message: format!("Timeout for {res_type} '{res_name}': {azure_error_body}"),
+        },
+        // 499 is a non-standard status code that indicates "Client Closed Request" - typically due to timeout
+        (status, _) if status.as_u16() == 499 => ErrorData::Timeout {
+            message: format!(
+                "Client closed request for {res_type} '{res_name}': {azure_error_body}"
+            ),
+        },
+        _ => ErrorData::GenericError {
+            message: format!("Unknown error for {res_type} '{res_name}': {azure_error_body}"),
+        },
+    };
+
+    // Add the service-specific context to the HTTP error
+    http_error.context(service_context)
+}
+
+// -----------------------------------------------------------------------------
 // Azure metadata validation utilities
 // -----------------------------------------------------------------------------
 
@@ -695,79 +840,68 @@ pub fn validate_azure_metadata_value(key: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use httpmock::{Method::PATCH, MockServer};
-    use serde_json::json;
-
     use super::*;
 
-    #[tokio::test]
-    async fn long_running_request_errors_never_retain_http_bodies() {
-        const REQUEST_SECRET: &str = "synthetic-container-app-credential-do-not-log";
-        const REFLECTED_RESPONSE_SECRET: &str =
-            "synthetic-reflected-container-app-credential-do-not-log";
+    #[test]
+    fn bad_gateway_is_retryable_service_unavailable() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_GATEWAY,
+            "CreateOrUpdateQueue",
+            "Resource",
+            "commands",
+            "Bad Gateway",
+            "https://management.azure.com/test",
+            None,
+        );
 
-        let server = MockServer::start_async().await;
-        let failed_request = server
-            .mock_async(|when, then| {
-                when.method(PATCH)
-                    .path("/container-app")
-                    .body_contains(REQUEST_SECRET);
-                then.status(400).json_body(json!({
-                    "error": {
-                        "code": "ContainerAppInvalidName",
-                        "message": REFLECTED_RESPONSE_SECRET
-                    }
-                }));
-            })
-            .await;
-        let client = Client::new();
-        let request_url = format!("{}/container-app", server.base_url());
-        let request = client
-            .patch(&request_url)
-            .json(&json!({
-                "properties": {
-                    "configuration": {
-                        "secrets": [{
-                            "name": "remote-storage",
-                            "value": REQUEST_SECRET
-                        }]
-                    }
+        assert_eq!(err.code, "REMOTE_SERVICE_UNAVAILABLE");
+        assert!(err.retryable);
+        assert!(err.message.contains("Bad Gateway"));
+    }
+
+    #[test]
+    fn resource_update_during_provisioning_is_retryable_conflict() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_REQUEST,
+            "CreateOrUpdateEventSubscription",
+            "Event Grid subscription",
+            "storage-events",
+            r#"{
+                "error": {
+                    "code": "BadRequest",
+                    "message": "Resource cannot be updated during provisioning"
                 }
-            }))
-            .build()
-            .expect("synthetic Azure request should build");
-        let base = AzureClientBase::new(client, server.base_url());
+            }"#,
+            "https://management.azure.com/test",
+            None,
+        );
 
-        let error = base
-            .execute_request_with_long_running_support::<serde_json::Value>(
-                request,
-                "UpdateContainerApp",
-                "invalid_app_name",
-            )
-            .await
-            .expect_err("synthetic Azure rejection should be returned");
+        assert_eq!(err.code, "REMOTE_RESOURCE_CONFLICT");
+        assert!(err.retryable);
+        assert!(err
+            .message
+            .contains("cannot be updated during provisioning"));
+    }
 
-        failed_request.assert_async().await;
-        let serialized = serde_json::to_string(&error).expect("Azure error should serialize");
-        assert!(
-            !serialized.contains(REQUEST_SECRET),
-            "request body leaked into serialized Azure error: {serialized}"
+    #[test]
+    fn resource_update_during_provisioning_code_is_retryable_conflict() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_REQUEST,
+            "CreateOrUpdateEventSubscription",
+            "Event Grid subscription",
+            "storage-events",
+            r#"{
+                "error": {
+                    "code": "ResourceCannotBeUpdatedDuringProvisioning",
+                    "message": "The resource is busy"
+                }
+            }"#,
+            "https://management.azure.com/test",
+            None,
         );
-        assert!(
-            !serialized.contains(REFLECTED_RESPONSE_SECRET),
-            "response body leaked into serialized Azure error: {serialized}"
-        );
-        assert!(
-            serialized.contains("ContainerAppInvalidName"),
-            "Azure response code was dropped: {serialized}"
-        );
-        assert!(
-            serialized.contains("\"http_status\":400"),
-            "HTTP status was dropped: {serialized}"
-        );
-        assert!(
-            serialized.contains(&request_url),
-            "request URL was dropped: {serialized}"
-        );
+
+        assert_eq!(err.code, "REMOTE_RESOURCE_CONFLICT");
+        assert!(err.retryable);
+        assert!(err.message.contains("The resource is busy"));
     }
 }

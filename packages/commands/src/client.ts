@@ -49,7 +49,7 @@ export interface CommandsClientConfig {
   deploymentId: string
   /** Bearer token (deployment token or workspace token). */
   token: string
-  /** Default polling budget measured from invoke start (default: 60000). */
+  /** Default invoke timeout in milliseconds (default: 60000). */
   timeoutMs?: number
   /** Allow reading local files for storage responses (default: false, local dev only). */
   allowLocalStorage?: boolean
@@ -61,10 +61,7 @@ export interface CommandsClientConfig {
  * Per-invoke options.
  */
 export interface InvokeOptions {
-  /**
-   * Polling budget measured from invoke start (default: the client's
-   * `timeoutMs`). It does not abort in-flight network requests.
-   */
+  /** Wall-clock timeout in milliseconds (default: the client's `timeoutMs`). */
   timeoutMs?: number
   /** Optional server-side deadline for command completion. */
   deadline?: Date

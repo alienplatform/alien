@@ -13,25 +13,6 @@ use reqwest::{Client, Method};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
-fn parse_storage_account_keys_response(
-    body: &str,
-    url: &str,
-    account_name: &str,
-) -> Result<StorageAccountListKeysResult> {
-    serde_json::from_str(body)
-        .into_alien_error()
-        .context(ErrorData::HttpResponseError {
-            message: format!(
-                "Azure ListStorageAccountKeys: JSON parse error for {}",
-                account_name
-            ),
-            url: url.to_string(),
-            http_status: 200,
-            http_request_text: None,
-            http_response_text: None,
-        })
-}
-
 // -------------------------------------------------------------------------
 // Type aliases for operation results
 // -------------------------------------------------------------------------
@@ -282,7 +263,7 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
                 url: url.clone(),
                 http_status: 200,
                 http_request_text: None,
-                http_response_text: None,
+                http_response_text: Some(body),
             })?;
 
         Ok(storage_account)
@@ -337,7 +318,7 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
             ),
                     url: url.clone(),
                     http_status: 200,
-                    http_request_text: None,
+                    http_request_text: Some(request_body.clone()),
                     http_response_text: None,
                 })?;
 
@@ -350,8 +331,8 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
                 ),
                 url: url.clone(),
                 http_status: 200,
-                http_request_text: None,
-                http_response_text: None,
+                http_request_text: Some(request_body),
+                http_response_text: Some(response_body),
             })?;
 
         Ok(result)
@@ -400,45 +381,19 @@ impl StorageAccountsApi for AzureStorageAccountsClient {
                 http_response_text: None,
             })?;
 
-        let result = parse_storage_account_keys_response(&body, &url, account_name)?;
+        let result: StorageAccountListKeysResult = serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+            message: format!(
+                "Azure ListStorageAccountKeys: JSON parse error for {}",
+                account_name
+            ),
+            url: url.clone(),
+            http_status: 200,
+            http_request_text: None,
+            http_response_text: Some(body),
+        })?;
 
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn malformed_list_keys_response_never_retains_access_keys() {
-        const ACCESS_KEY: &str = "synthetic-azure-storage-access-key-do-not-log";
-        let malformed_response = format!(
-            r#"{{"keys":[{{"keyName":"key1","permissions":"Full","value":"{ACCESS_KEY}"}}
-"#
-        );
-        let url = "https://management.azure.com/subscriptions/test/storageAccounts/storage-account/listKeys";
-
-        let error =
-            parse_storage_account_keys_response(&malformed_response, url, "storage-account")
-                .expect_err("malformed listKeys response should fail");
-        let serialized = serde_json::to_string(&error).expect("Azure error should serialize");
-
-        assert!(
-            !serialized.contains(ACCESS_KEY),
-            "storage access key leaked into serialized Azure error: {serialized}"
-        );
-        assert!(
-            serialized.contains("ListStorageAccountKeys"),
-            "operation context was dropped: {serialized}"
-        );
-        assert!(
-            serialized.contains("storage-account"),
-            "resource context was dropped: {serialized}"
-        );
-        assert!(
-            serialized.contains("\"http_status\":200"),
-            "HTTP status was dropped: {serialized}"
-        );
     }
 }

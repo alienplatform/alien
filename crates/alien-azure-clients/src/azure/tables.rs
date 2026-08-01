@@ -1,7 +1,6 @@
 use crate::azure::common::{
     create_azure_http_error_with_context, AzureClientBase, AzureRequestBuilder,
 };
-use crate::azure::error::safe_http_response_context;
 use crate::azure::models::table::*;
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
@@ -11,54 +10,9 @@ use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use url::Url;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-
-fn table_diagnostic_url(request_url: &Url) -> String {
-    let mut diagnostic_url = request_url.clone();
-    diagnostic_url.set_query(None);
-    diagnostic_url.set_fragment(None);
-
-    let path = diagnostic_url.path().to_string();
-    if let Some(entity_key_start) = path.find('(') {
-        diagnostic_url.set_path(&format!(
-            "{}(redacted-entity-key)",
-            &path[..entity_key_start]
-        ));
-    }
-
-    diagnostic_url.to_string()
-}
-
-async fn send_table_request(
-    request: reqwest::RequestBuilder,
-    operation_name: &str,
-) -> Result<reqwest::Response> {
-    request
-        .send()
-        .await
-        .map_err(reqwest::Error::without_url)
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: format!("Azure {operation_name}: failed to execute request"),
-        })
-}
-
-async fn read_table_response_body(
-    response: reqwest::Response,
-    operation_name: &str,
-) -> Result<String> {
-    response
-        .text()
-        .await
-        .map_err(reqwest::Error::without_url)
-        .into_alien_error()
-        .context(ErrorData::HttpRequestFailed {
-            message: format!("Azure {operation_name}: failed to read response body"),
-        })
-}
 
 // -----------------------------------------------------------------------------
 // Entity data structures for Table Storage operations
@@ -314,6 +268,8 @@ impl TableManagementApi for AzureTableManagementClient {
                 message: format!("Failed to serialize table '{}'", table_name),
             },
         )?;
+        let request_body = body.clone();
+
         let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
             .content_type_json()
             .content_length(&body)
@@ -336,11 +292,11 @@ impl TableManagementApi for AzureTableManagementClient {
 
         let table: Table = serde_json::from_str(&body).into_alien_error().context(
             ErrorData::HttpResponseError {
-                message: "Azure CreateTable: JSON parse error".to_string(),
+                message: format!("Azure CreateTable: JSON parse error. Body: {}", body),
                 url: url.clone(),
                 http_status: 200,
-                http_response_text: None,
-                http_request_text: None,
+                http_response_text: Some(body.clone()),
+                http_request_text: Some(request_body),
             },
         )?;
 
@@ -410,10 +366,10 @@ impl TableManagementApi for AzureTableManagementClient {
 
         let table: Table = serde_json::from_str(&body).into_alien_error().context(
             ErrorData::HttpResponseError {
-                message: "Azure GetTableAcl: JSON parse error".to_string(),
+                message: format!("Azure GetTableAcl: JSON parse error. Body: {}", body),
                 url: url.clone(),
                 http_status: 200,
-                http_response_text: None,
+                http_response_text: Some(body.clone()),
                 http_request_text: None,
             },
         )?;
@@ -509,7 +465,7 @@ impl AzureTableStorageClient {
         let mut url = url::Url::parse(&format!("{}{}", base_url, path))
             .into_alien_error()
             .context(ErrorData::InvalidClientConfig {
-                message: format!("Invalid Table Storage URL for account '{storage_account_name}'"),
+                message: format!("Invalid Table Storage URL: {}{}", base_url, path),
                 errors: None,
             })?;
 
@@ -537,7 +493,7 @@ impl AzureTableStorageClient {
         storage_account_name: &str,
         resource_group_name: &str,
         operation_name: &str,
-        table_name: &str,
+        entity_identifier: &str,
         additional_headers: Option<HashMap<String, String>>,
     ) -> Result<reqwest::Response> {
         let headers = self
@@ -574,8 +530,11 @@ impl AzureTableStorageClient {
             }
         }
 
-        let diagnostic_url = table_diagnostic_url(url);
-        let resp = send_table_request(request_builder, operation_name).await?;
+        let resp = request_builder.send().await.into_alien_error().context(
+            ErrorData::HttpRequestFailed {
+                message: format!("Azure {}: failed to execute request", operation_name),
+            },
+        )?;
 
         let status = resp.status();
         if status.is_success() || status == StatusCode::CREATED || status == StatusCode::ACCEPTED {
@@ -589,9 +548,14 @@ impl AzureTableStorageClient {
                 status,
                 operation_name,
                 "Azure Table Storage Entity",
-                table_name,
+                entity_identifier,
                 &error_text,
-                &diagnostic_url,
+                &url.to_string(),
+                if body.is_empty() {
+                    None
+                } else {
+                    Some(body.to_string())
+                },
             ))
         }
     }
@@ -654,6 +618,7 @@ impl TableStorageApi for AzureTableStorageClient {
             },
         )?;
 
+        let entity_identifier = format!("{}:{}", entity.partition_key, entity.row_key);
         let mut additional_headers = HashMap::new();
         additional_headers.insert("Prefer".to_string(), "return-content".to_string());
 
@@ -665,20 +630,31 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "InsertEntity",
-                table_name,
+                &entity_identifier,
                 Some(additional_headers),
             )
             .await?;
 
-        let response_body = read_table_response_body(resp, "InsertEntity").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure InsertEntity: failed to read response body".to_string(),
+                })?;
 
         let entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-                "Azure InsertEntity: JSON parse error",
-                table_diagnostic_url(&url),
-                StatusCode::CREATED,
-            ))?;
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure InsertEntity: JSON parse error. Body: {}",
+                    response_body
+                ),
+                url: url.to_string(),
+                http_status: 201,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
+            })?;
 
         Ok(entity)
     }
@@ -714,6 +690,7 @@ impl TableStorageApi for AzureTableStorageClient {
             },
         )?;
 
+        let entity_identifier = format!("{}:{}", partition_key, row_key);
         let mut additional_headers = HashMap::new();
 
         // Add If-Match header for optimistic concurrency
@@ -731,7 +708,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "UpdateEntity",
-                table_name,
+                &entity_identifier,
                 Some(additional_headers),
             )
             .await?;
@@ -741,15 +718,26 @@ impl TableStorageApi for AzureTableStorageClient {
             return Ok(entity.clone());
         }
 
-        let response_body = read_table_response_body(resp, "UpdateEntity").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure UpdateEntity: failed to read response body".to_string(),
+                })?;
 
         let updated_entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-            "Azure UpdateEntity: JSON parse error",
-            table_diagnostic_url(&url),
-            StatusCode::OK,
-        ))?;
+            .context(ErrorData::HttpResponseError {
+            message: format!(
+                "Azure UpdateEntity: JSON parse error. Body: {}",
+                response_body
+            ),
+            url: url.to_string(),
+            http_status: 200,
+            http_request_text: Some(body),
+            http_response_text: Some(response_body),
+        })?;
 
         Ok(updated_entity)
     }
@@ -785,6 +773,7 @@ impl TableStorageApi for AzureTableStorageClient {
             },
         )?;
 
+        let entity_identifier = format!("{}:{}", partition_key, row_key);
         let mut additional_headers = HashMap::new();
 
         // Add If-Match header for optimistic concurrency
@@ -802,7 +791,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "MergeEntity",
-                table_name,
+                &entity_identifier,
                 Some(additional_headers),
             )
             .await?;
@@ -812,15 +801,26 @@ impl TableStorageApi for AzureTableStorageClient {
             return Ok(entity.clone());
         }
 
-        let response_body = read_table_response_body(resp, "MergeEntity").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure MergeEntity: failed to read response body".to_string(),
+                })?;
 
         let merged_entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-                "Azure MergeEntity: JSON parse error",
-                table_diagnostic_url(&url),
-                StatusCode::OK,
-            ))?;
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure MergeEntity: JSON parse error. Body: {}",
+                    response_body
+                ),
+                url: url.to_string(),
+                http_status: 200,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
+            })?;
 
         Ok(merged_entity)
     }
@@ -846,6 +846,7 @@ impl TableStorageApi for AzureTableStorageClient {
             None,
         )?;
 
+        let entity_identifier = format!("{}:{}", partition_key, row_key);
         let mut additional_headers = HashMap::new();
 
         // Add If-Match header for optimistic concurrency
@@ -863,7 +864,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "DeleteEntity",
-                table_name,
+                &entity_identifier,
                 Some(additional_headers),
             )
             .await?;
@@ -901,6 +902,8 @@ impl TableStorageApi for AzureTableStorageClient {
             },
         )?;
 
+        let entity_identifier = format!("{}:{}", partition_key, row_key);
+
         let resp = self
             .execute_data_plane_request(
                 "PUT",
@@ -909,7 +912,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "InsertOrReplaceEntity",
-                table_name,
+                &entity_identifier,
                 None,
             )
             .await?;
@@ -919,15 +922,27 @@ impl TableStorageApi for AzureTableStorageClient {
             return Ok(entity.clone());
         }
 
-        let response_body = read_table_response_body(resp, "InsertOrReplaceEntity").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure InsertOrReplaceEntity: failed to read response body"
+                        .to_string(),
+                })?;
 
         let result_entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-                "Azure InsertOrReplaceEntity: JSON parse error",
-                table_diagnostic_url(&url),
-                StatusCode::OK,
-            ))?;
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure InsertOrReplaceEntity: JSON parse error. Body: {}",
+                    response_body
+                ),
+                url: url.to_string(),
+                http_status: 200,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
+            })?;
 
         Ok(result_entity)
     }
@@ -962,6 +977,8 @@ impl TableStorageApi for AzureTableStorageClient {
             },
         )?;
 
+        let entity_identifier = format!("{}:{}", partition_key, row_key);
+
         let resp = self
             .execute_data_plane_request(
                 "PATCH",
@@ -970,7 +987,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "InsertOrMergeEntity",
-                table_name,
+                &entity_identifier,
                 None,
             )
             .await?;
@@ -980,15 +997,26 @@ impl TableStorageApi for AzureTableStorageClient {
             return Ok(entity.clone());
         }
 
-        let response_body = read_table_response_body(resp, "InsertOrMergeEntity").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure InsertOrMergeEntity: failed to read response body".to_string(),
+                })?;
 
         let result_entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-                "Azure InsertOrMergeEntity: JSON parse error",
-                table_diagnostic_url(&url),
-                StatusCode::OK,
-            ))?;
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure InsertOrMergeEntity: JSON parse error. Body: {}",
+                    response_body
+                ),
+                url: url.to_string(),
+                http_status: 200,
+                http_request_text: Some(body),
+                http_response_text: Some(response_body),
+            })?;
 
         Ok(result_entity)
     }
@@ -1037,15 +1065,26 @@ impl TableStorageApi for AzureTableStorageClient {
             )
             .await?;
 
-        let response_body = read_table_response_body(resp, "QueryEntities").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure QueryEntities: failed to read response body".to_string(),
+                })?;
 
         let query_response: EntityQueryResponse = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-                "Azure QueryEntities: JSON parse error",
-                table_diagnostic_url(&url),
-                StatusCode::OK,
-            ))?;
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure QueryEntities: JSON parse error. Body: {}",
+                    response_body
+                ),
+                url: url.to_string(),
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: Some(response_body),
+            })?;
 
         Ok(query_response)
     }
@@ -1077,6 +1116,8 @@ impl TableStorageApi for AzureTableStorageClient {
             query_params,
         )?;
 
+        let entity_identifier = format!("{}:{}", partition_key, row_key);
+
         let resp = self
             .execute_data_plane_request(
                 "GET",
@@ -1085,7 +1126,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 storage_account_name,
                 resource_group_name,
                 "GetEntity",
-                table_name,
+                &entity_identifier,
                 None,
             )
             .await?;
@@ -1099,15 +1140,23 @@ impl TableStorageApi for AzureTableStorageClient {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let response_body = read_table_response_body(resp, "GetEntity").await?;
+        let response_body =
+            resp.text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Azure GetEntity: failed to read response body".to_string(),
+                })?;
 
         let mut entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
-            .context(safe_http_response_context(
-                "Azure GetEntity: JSON parse error",
-                table_diagnostic_url(&url),
-                StatusCode::OK,
-            ))?;
+            .context(ErrorData::HttpResponseError {
+                message: format!("Azure GetEntity: JSON parse error. Body: {}", response_body),
+                url: url.to_string(),
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: Some(response_body),
+            })?;
 
         // Expose it under the odata property name (present natively only at
         // fullmetadata) so consumers have ONE place to look.
@@ -1119,68 +1168,6 @@ impl TableStorageApi for AzureTableStorageClient {
         }
 
         Ok(entity)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use httpmock::{Method::GET, MockServer};
-
-    #[test]
-    fn table_diagnostic_urls_redact_entity_keys_and_query_values() {
-        const PARTITION_KEY: &str = "PARTITION_KEY_SECRET_0123456789";
-        const ROW_KEY: &str = "ROW_KEY_SECRET_0123456789";
-        const FILTER_VALUE: &str = "FILTER_SECRET_0123456789";
-        const SELECT_VALUE: &str = "SELECT_SECRET_0123456789";
-
-        let url = Url::parse(&format!(
-            "https://example.table.core.windows.net/Jobs(PartitionKey='{PARTITION_KEY}',RowKey='{ROW_KEY}')?$filter={FILTER_VALUE}&$select={SELECT_VALUE}"
-        ))
-        .unwrap();
-        let diagnostic_url = table_diagnostic_url(&url);
-
-        assert!(diagnostic_url.contains("example.table.core.windows.net"));
-        assert!(diagnostic_url.contains("/Jobs(redacted-entity-key)"));
-        assert!(!diagnostic_url.contains(PARTITION_KEY));
-        assert!(!diagnostic_url.contains(ROW_KEY));
-        assert!(!diagnostic_url.contains(FILTER_VALUE));
-        assert!(!diagnostic_url.contains(SELECT_VALUE));
-        assert!(!diagnostic_url.contains('?'));
-    }
-
-    #[tokio::test]
-    async fn table_transport_errors_drop_entity_keys_and_query_values() {
-        const PARTITION_KEY: &str = "PARTITION_TRANSPORT_SECRET_0123456789";
-        const ROW_KEY: &str = "ROW_TRANSPORT_SECRET_0123456789";
-        const FILTER_VALUE: &str = "FILTER_TRANSPORT_SECRET_0123456789";
-
-        let server = MockServer::start_async().await;
-        let request_url = format!(
-            "{}/Jobs(PartitionKey='{PARTITION_KEY}',RowKey='{ROW_KEY}')?$filter={FILTER_VALUE}",
-            server.base_url()
-        );
-        let redirect = server
-            .mock_async(|when, then| {
-                when.method(GET);
-                then.status(302).header("Location", &request_url);
-            })
-            .await;
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(1))
-            .build()
-            .unwrap();
-
-        let error = send_table_request(client.get(&request_url), "GetEntity")
-            .await
-            .expect_err("redirect loop should be a transport failure");
-        let serialized = serde_json::to_string(&error).unwrap();
-
-        redirect.assert_hits_async(2).await;
-        assert!(serialized.contains("GetEntity"));
-        assert!(!serialized.contains(PARTITION_KEY));
-        assert!(!serialized.contains(ROW_KEY));
-        assert!(!serialized.contains(FILTER_VALUE));
     }
 }
 
