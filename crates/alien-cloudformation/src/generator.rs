@@ -1,5 +1,6 @@
 use crate::{
     emitters::enabled,
+    inline_policy::consolidate_role_inline_policies,
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -388,6 +389,7 @@ pub fn generate_cloudformation_template(
         supports_custom_domain,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
+    consolidate_role_inline_policies(&mut template);
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
