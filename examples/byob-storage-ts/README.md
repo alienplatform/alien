@@ -56,8 +56,9 @@ const bindings = await Bindings.forRemoteDeployment({
 
 const uploads = bindings.storage("uploads")
 await uploads.put("hello.txt", new TextEncoder().encode("hello"))
-await uploads.get("hello.txt")
-await uploads.head("hello.txt")
+const object = await uploads.get("hello.txt")
+const head = await uploads.head("hello.txt")
+console.log(new TextDecoder().decode(object.data), head.meta, head.attributes)
 await uploads.list()
 await uploads.delete("hello.txt")
 ```

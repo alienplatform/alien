@@ -68,11 +68,18 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   const constructions: unknown[] = []
 
   const storageHandle: RawStorageHandle = {
-    get: async () => Buffer.from("x"),
-    put: async () => {},
+    get: async () => ({
+      data: Buffer.from("x"),
+      meta: { location: "p", size: 1, lastModified: "" },
+      attributes: { metadata: {} },
+    }),
+    put: async () => ({}),
     delete: async () => {},
     list: async () => [],
-    head: async () => ({ location: "p", size: 0, lastModified: "" }),
+    head: async () => ({
+      meta: { location: "p", size: 0, lastModified: "" },
+      attributes: { metadata: {} },
+    }),
     copy: async () => {},
     signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
   }
@@ -297,28 +304,74 @@ describe("createFactories kv surface", () => {
 })
 
 describe("createFactories method mapping", () => {
-  it("forwards storage object attributes and converts Uint8Array data", async () => {
-    const put = vi.fn<RawStorageHandle["put"]>(async () => {})
+  it("returns structured storage reads without discarding metadata or attributes", async () => {
+    const result = {
+      data: Buffer.from("hello"),
+      meta: {
+        location: "notes/note.txt",
+        size: 5,
+        lastModified: "2026-08-02T00:00:00Z",
+        eTag: "etag-123",
+        version: "version-456",
+      },
+      attributes: {
+        contentType: "text/plain",
+        storageClass: "STANDARD",
+        metadata: { source: "upload" },
+      },
+    }
     const storageHandle: RawStorageHandle = {
-      get: async () => Buffer.from("x"),
+      get: async () => result,
+      put: async () => ({}),
+      delete: async () => {},
+      list: async () => [],
+      head: async () => ({ meta: result.meta, attributes: result.attributes }),
+      copy: async () => {},
+      signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
+    }
+    const { storage } = createFactories(() => addonForStorage(storageHandle))
+
+    await expect(storage("files").get("notes/note.txt")).resolves.toEqual(result)
+    await expect(storage("files").head("notes/note.txt")).resolves.toEqual({
+      meta: result.meta,
+      attributes: result.attributes,
+    })
+  })
+
+  it("forwards storage object attributes and converts Uint8Array data", async () => {
+    const put = vi.fn<RawStorageHandle["put"]>(async () => ({
+      eTag: "etag-123",
+      version: "version-456",
+    }))
+    const storageHandle: RawStorageHandle = {
+      get: async () => ({
+        data: Buffer.from("x"),
+        meta: { location: "p", size: 1, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
       put,
       delete: async () => {},
       list: async () => [],
-      head: async () => ({ location: "p", size: 0, lastModified: "" }),
+      head: async () => ({
+        meta: { location: "p", size: 0, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
       copy: async () => {},
       signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
     }
     const { storage } = createFactories(() => addonForStorage(storageHandle))
     const options = {
-      contentType: "text/plain",
-      contentDisposition: 'attachment; filename="note.txt"',
-      contentEncoding: "gzip",
-      contentLanguage: "en-US",
-      cacheControl: "private, max-age=60",
-      metadata: { source: "upload", checksum: "abc123" },
+      attributes: {
+        contentType: "text/plain",
+        contentDisposition: 'attachment; filename="note.txt"',
+        contentEncoding: "gzip",
+        contentLanguage: "en-US",
+        cacheControl: "private, max-age=60",
+        metadata: { source: "upload", checksum: "abc123" },
+      },
     }
 
-    await storage("files").put("notes/note.txt", new Uint8Array([1, 2, 3]), options)
+    const result = await storage("files").put("notes/note.txt", new Uint8Array([1, 2, 3]), options)
 
     expect(put).toHaveBeenCalledOnce()
     const firstCall = put.mock.calls[0]
@@ -326,16 +379,24 @@ describe("createFactories method mapping", () => {
     expect(firstCall[0]).toBe("notes/note.txt")
     expect(firstCall[1]).toEqual(Buffer.from([1, 2, 3]))
     expect(firstCall[2]).toEqual(options)
+    expect(result).toEqual({ eTag: "etag-123", version: "version-456" })
   })
 
   it("preserves two-argument storage puts", async () => {
-    const put = vi.fn<RawStorageHandle["put"]>(async () => {})
+    const put = vi.fn<RawStorageHandle["put"]>(async () => ({}))
     const storageHandle: RawStorageHandle = {
-      get: async () => Buffer.from("x"),
+      get: async () => ({
+        data: Buffer.from("x"),
+        meta: { location: "p", size: 1, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
       put,
       delete: async () => {},
       list: async () => [],
-      head: async () => ({ location: "p", size: 0, lastModified: "" }),
+      head: async () => ({
+        meta: { location: "p", size: 0, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
       copy: async () => {},
       signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
     }

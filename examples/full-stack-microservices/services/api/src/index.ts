@@ -136,7 +136,7 @@ app.get("/files/:fileId", async c => {
     return c.json({ error: "file not found" }, 404)
   }
 
-  const object = new TextDecoder().decode(await files.get(result.rows[0].object_key))
+  const object = new TextDecoder().decode((await files.get(result.rows[0].object_key)).data)
   return c.json({ filename: result.rows[0].filename, content: object })
 })
 

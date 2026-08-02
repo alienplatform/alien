@@ -28,11 +28,16 @@ describe("storage (local file-tree provider)", () => {
     const s = freshStorage()
     const data = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x80, 0x7f, 0x00])
 
-    await s.put("bin/data.bin", data)
+    const putResult = await s.put("bin/data.bin", data)
     const fetched = await s.get("bin/data.bin")
 
-    expect(fetched.length).toBe(data.length)
-    expect(fetched.equals(data)).toBe(true)
+    expect(putResult.eTag).toEqual(expect.any(String))
+    expect(putResult.version).toBeUndefined()
+    expect(fetched.data.length).toBe(data.length)
+    expect(fetched.data.equals(data)).toBe(true)
+    expect(fetched.meta).toMatchObject({ location: "bin/data.bin", size: data.length })
+    expect(Number.isNaN(Date.parse(fetched.meta.lastModified))).toBe(false)
+    expect(fetched.attributes).toEqual({ metadata: {} })
   })
 
   it("rejects object attributes when the backend cannot persist them", async () => {
@@ -41,12 +46,14 @@ describe("storage (local file-tree provider)", () => {
 
     await expect(
       s.put("attributes.txt", data, {
-        contentType: "text/plain; charset=utf-8",
-        contentDisposition: 'attachment; filename="attributes.txt"',
-        contentEncoding: "identity",
-        contentLanguage: "en-US",
-        cacheControl: "private, max-age=60",
-        metadata: { source: "integration-test", checksum: "abc123" },
+        attributes: {
+          contentType: "text/plain; charset=utf-8",
+          contentDisposition: 'attachment; filename="attributes.txt"',
+          contentEncoding: "identity",
+          contentLanguage: "en-US",
+          cacheControl: "private, max-age=60",
+          metadata: { source: "integration-test", checksum: "abc123" },
+        },
       }),
     ).rejects.toMatchObject({
       code: "OPERATION_NOT_SUPPORTED",
@@ -63,15 +70,16 @@ describe("storage (local file-tree provider)", () => {
     const listed = await s.list()
     expect(listed.map(o => o.location).sort()).toEqual(["a.txt", "b.txt"])
 
-    const meta = await s.head("a.txt")
-    expect(meta.location).toBe("a.txt")
-    expect(meta.size).toBe(Buffer.from("a-content").length)
-    expect(Number.isNaN(Date.parse(meta.lastModified))).toBe(false)
+    const head = await s.head("a.txt")
+    expect(head.meta.location).toBe("a.txt")
+    expect(head.meta.size).toBe(Buffer.from("a-content").length)
+    expect(Number.isNaN(Date.parse(head.meta.lastModified))).toBe(false)
+    expect(head.attributes).toEqual({ metadata: {} })
 
     await s.copy("a.txt", "a-copy.txt")
-    expect((await s.get("a-copy.txt")).toString("utf8")).toBe("a-content")
+    expect((await s.get("a-copy.txt")).data.toString("utf8")).toBe("a-content")
     // copy must not remove the source
-    expect((await s.get("a.txt")).toString("utf8")).toBe("a-content")
+    expect((await s.get("a.txt")).data.toString("utf8")).toBe("a-content")
 
     await s.delete("a.txt")
     const afterDelete = await s.list()

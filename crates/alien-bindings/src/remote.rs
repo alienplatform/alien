@@ -183,6 +183,11 @@ pub trait RemoteStorage: Send + Sync + fmt::Debug {
         &self,
         path: &object_store::path::Path,
     ) -> object_store::Result<object_store::GetResult>;
+    async fn get_opts(
+        &self,
+        path: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult>;
     async fn put(
         &self,
         path: &object_store::path::Path,
