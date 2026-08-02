@@ -484,6 +484,10 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::RefreshFailed
     );
 
+    fn updates_when_dependencies_change(&self) -> bool {
+        !self.management_permissions_applied
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         if let (Some(role_arn), Some(_role_name)) = (&self.role_arn, &self.role_name) {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
@@ -1127,4 +1131,26 @@ fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorD
         error.error,
         Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
     )
+}
+
+#[cfg(test)]
+mod dependency_update_tests {
+    use super::*;
+    use crate::core::ResourceController;
+
+    #[test]
+    fn imported_management_role_does_not_reapply_setup_owned_policies() {
+        let controller = AwsRemoteStackManagementController {
+            state: AwsRemoteStackManagementState::Ready,
+            role_arn: Some("arn:aws:iam::123456789012:role/management".to_string()),
+            role_name: Some("management".to_string()),
+            remote_bindings_role_arn: Some(
+                "arn:aws:iam::123456789012:role/remote-bindings".to_string(),
+            ),
+            management_permissions_applied: true,
+            _internal_stay_count: None,
+        };
+
+        assert!(!controller.updates_when_dependencies_change());
+    }
 }

@@ -736,6 +736,11 @@ pub trait ResourceController: Send + Sync + Debug {
         Ok(false)
     }
 
+    /// Whether a change to a dependency should schedule this resource for update.
+    fn updates_when_dependencies_change(&self) -> bool {
+        true
+    }
+
     /// Whether a Running resource must continue its controller state machine
     /// during convergence phases. Most Ready resources are periodic health
     /// checks and should only run in the dedicated Running pass.

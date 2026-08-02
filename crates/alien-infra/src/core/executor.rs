@@ -1062,6 +1062,19 @@ impl StackExecutor {
                                     });
 
                                 if dependencies_ready {
+                                    if current_resource_state
+                                        .get_internal_controller()?
+                                        .is_some_and(|controller| {
+                                            !controller.updates_when_dependencies_change()
+                                        })
+                                    {
+                                        debug!(
+                                            "Skipping dependency-driven UPDATE for resource '{}'",
+                                            resource_id
+                                        );
+                                        continue;
+                                    }
+
                                     debug!(
                                         "Planning UPDATE for resource '{}' due to dependency changes (create/update)",
                                         resource_id
