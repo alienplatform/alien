@@ -571,6 +571,7 @@ async fn test_entity_query(ctx: &TableStorageTestContext) -> Result<()> {
         filter: Some(format!("PartitionKey eq '{}'", partition_key)),
         select: None,
         top: None,
+        continuation: None,
     };
 
     let query_result = ctx
@@ -594,6 +595,7 @@ async fn test_entity_query(ctx: &TableStorageTestContext) -> Result<()> {
         )),
         select: None,
         top: None,
+        continuation: None,
     };
 
     let filtered_result = ctx
@@ -614,6 +616,7 @@ async fn test_entity_query(ctx: &TableStorageTestContext) -> Result<()> {
         filter: Some(format!("PartitionKey eq '{}'", partition_key)),
         select: Some("PartitionKey,RowKey,Name".to_string()),
         top: Some(2),
+        continuation: None,
     };
 
     let select_result = ctx
