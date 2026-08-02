@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/ai-gateway",
-  "version": "3.3.3",
+  "version": "3.3.4",
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
