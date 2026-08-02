@@ -7,7 +7,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
+    Ai, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, ResourceLifecycle,
     ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
@@ -58,20 +58,24 @@ fn aws_storage_public_read_allows_get_object() {
 }
 
 #[test]
-fn aws_remote_storage_management_dependencies_are_acyclic() {
-    let stack = Stack::new("acme-remote-storage".to_string())
+fn aws_byo_bucket_is_acyclic_and_valid() {
+    let mut stack = Stack::new("acme-remote-storage".to_string())
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_with_dependencies(
-            RemoteStackManagement::new("management".to_string()).build(),
+        .add(
+            RemoteBindings::new("remote-bindings".to_string()).build(),
             ResourceLifecycle::Frozen,
-            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
         )
         .build();
+    stack.resources.get_mut("files").unwrap().dependencies = vec![ResourceRef::new(
+        RemoteBindings::RESOURCE_TYPE,
+        "remote-bindings",
+    )];
 
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    snapshot_module("aws_byo_bucket", &module);
     assert_terraform_valid(&module, "aws_remote_storage_management_dependencies");
 }
 

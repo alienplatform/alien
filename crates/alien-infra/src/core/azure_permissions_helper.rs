@@ -241,7 +241,143 @@ impl AzurePermissionsHelper {
         )
         .await?;
 
+        Self::apply_remote_bindings_permissions(
+            ctx,
+            &authorization_client,
+            resource_id,
+            &resource_scope,
+            permission_context,
+            role_assignment_ids,
+            apply,
+        )
+        .await?;
+
         Ok(())
+    }
+
+    async fn apply_remote_bindings_permissions(
+        ctx: &ResourceControllerContext<'_>,
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        resource_id: &str,
+        resource_scope: &Scope,
+        permission_context: &PermissionContext,
+        role_assignment_ids: &mut Vec<String>,
+        apply: bool,
+    ) -> Result<()> {
+        let Some(entry) = ctx.desired_stack.resources.get(resource_id) else {
+            return Ok(());
+        };
+        let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(entry) else {
+            return Ok(());
+        };
+        let Some((_, identity_entry)) = ctx.desired_stack.resources.iter().find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
+        }) else {
+            return Err(AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: resource_id.to_string(),
+                dependency_id: "remote-bindings".to_string(),
+            }));
+        };
+        let controller = ctx
+            .require_dependency::<crate::remote_bindings::AzureRemoteBindingsController>(
+                &(&identity_entry.config).into(),
+            )?;
+        let principal_id = controller.principal_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: resource_id.to_string(),
+                dependency_id: "remote-bindings".to_string(),
+            })
+        })?;
+        let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Remote Bindings permission set '{}' is not registered",
+                        definition.permission_set
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
+        let generator = AzureRuntimePermissionsGenerator::new();
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to generate Remote Bindings grant '{}'",
+                    definition.permission_set
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        let profile_name = "remote-bindings";
+        let azure_config = ctx.get_azure_config()?;
+        let role_definition_scope =
+            Self::role_definition_scope_for_assignment_scope(resource_scope);
+        if apply {
+            Self::ensure_profile_custom_role_definitions(
+                ctx,
+                authorization_client,
+                profile_name,
+                grant_plan
+                    .custom_roles
+                    .into_iter()
+                    .map(|role| (permission_set.id.clone(), role))
+                    .collect(),
+                &role_definition_scope,
+                azure_config,
+            )
+            .await?;
+        }
+        let assignments = dedupe_azure_role_bindings(grant_plan.bindings)
+            .into_iter()
+            .enumerate()
+            .map(|(binding_index, binding)| {
+                let scope = Self::role_assignment_scope(
+                    &binding.permission_set_id,
+                    &binding.scope,
+                    resource_scope,
+                    azure_config,
+                );
+                let role_definition_id = Self::resource_role_definition_id(
+                    ctx.resource_prefix,
+                    profile_name,
+                    &binding,
+                    &role_definition_scope,
+                    azure_config,
+                );
+                PlannedRoleAssignment {
+                    scope,
+                    role_assignment_id: Uuid::new_v5(
+                        &Uuid::NAMESPACE_OID,
+                        format!(
+                            "deployment:azure:res-role-assign:{}:{}:{}:{}",
+                            ctx.resource_prefix, resource_id, profile_name, binding_index,
+                        )
+                        .as_bytes(),
+                    )
+                    .to_string(),
+                    principal_id: principal_id.clone(),
+                    role_definition_id,
+                    failure_message: format!(
+                        "Failed to create Remote Bindings assignment for '{}'",
+                        binding.permission_set_id
+                    ),
+                    permission_set_id: binding.permission_set_id,
+                }
+            })
+            .collect();
+        if apply {
+            Self::apply_planned_role_assignments(
+                authorization_client,
+                resource_id,
+                assignments,
+                role_assignment_ids,
+            )
+            .await
+        } else {
+            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
+            Ok(())
+        }
     }
 
     /// Process permissions for a specific profile

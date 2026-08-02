@@ -1,0 +1,1 @@
+{"type":"object","required":["roleName","roleArn","externalId"],"properties":{"externalId":{"type":"string"},"roleArn":{"type":"string"},"roleName":{"type":"string"}},"additionalProperties":false,"x-readme-ref-name":"AwsRemoteBindingsImportData"}

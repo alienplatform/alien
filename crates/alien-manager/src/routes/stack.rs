@@ -36,13 +36,14 @@ use sha2::{Digest, Sha256};
 
 use alien_core::{
     import::{
-        ImportContext, StackImportRequest, StackImportResponse,
+        ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
         CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
     GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
-    RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState, StackState,
+    RemoteStackManagement, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
+    StackState,
     RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
@@ -88,7 +89,7 @@ pub async fn stack_import(
     headers: HeaderMap,
     Json(raw_req): Json<serde_json::Value>,
 ) -> Response {
-    let req = match parse_stack_import_request(raw_req) {
+    let mut req = match parse_stack_import_request(raw_req) {
         Ok(req) => req,
         Err(e) => return e.into_response(),
     };
@@ -220,6 +221,10 @@ pub async fn stack_import(
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(error) = migrate_legacy_remote_bindings_handoff(&mut req, &prepared_stack) {
+        return error.into_response();
+    }
 
     if let Err(error) = validate_import_handoff(&req, &prepared_stack) {
         return error.into_response();
@@ -499,6 +504,99 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+/// PR #156 carried the Remote Bindings identity inside the management import
+/// payload. Keep already-generated setup artifacts usable while new packages
+/// register the identity as its own setup-owned resource.
+fn migrate_legacy_remote_bindings_handoff(
+    req: &mut StackImportRequest,
+    stack: &Stack,
+) -> crate::error::Result<()> {
+    const BINDINGS_ID: &str = "remote-bindings";
+    if !stack.resources.contains_key(BINDINGS_ID)
+        || req
+            .resources
+            .iter()
+            .any(|resource| resource.id == BINDINGS_ID)
+    {
+        return Ok(());
+    }
+    let Some(management) = req
+        .resources
+        .iter()
+        .find(|resource| resource.resource_type == RemoteStackManagement::RESOURCE_TYPE)
+    else {
+        return Ok(());
+    };
+
+    let import_data = match req.base_platform.unwrap_or(req.platform) {
+        Platform::Aws => {
+            let legacy: alien_core::AwsRemoteStackManagementImportData =
+                serde_json::from_value(management.import_data.clone()).map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "Invalid legacy AWS management handoff: {error}"
+                    ))
+                })?;
+            let Some(role_arn) = legacy.remote_bindings_role_arn else {
+                return Ok(());
+            };
+            serde_json::to_value(alien_core::AwsRemoteBindingsImportData {
+                role_name: role_arn.rsplit('/').next().unwrap_or(&role_arn).to_string(),
+                role_arn,
+                external_id: req.resource_prefix.clone(),
+            })
+        }
+        Platform::Gcp => {
+            let legacy: alien_core::GcpRemoteStackManagementImportData =
+                serde_json::from_value(management.import_data.clone()).map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "Invalid legacy GCP management handoff: {error}"
+                    ))
+                })?;
+            let Some(service_account_email) = legacy.remote_bindings_service_account_email else {
+                return Ok(());
+            };
+            serde_json::to_value(alien_core::GcpRemoteBindingsImportData {
+                project_id: legacy.project_id,
+                service_account_email,
+                service_account_unique_id: String::new(),
+            })
+        }
+        Platform::Azure => {
+            let legacy: alien_core::AzureRemoteStackManagementImportData =
+                serde_json::from_value(management.import_data.clone()).map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "Invalid legacy Azure management handoff: {error}"
+                    ))
+                })?;
+            let (Some(identity_id), Some(client_id)) = (
+                legacy.remote_bindings_identity_id,
+                legacy.remote_bindings_client_id,
+            ) else {
+                return Ok(());
+            };
+            serde_json::to_value(alien_core::AzureRemoteBindingsImportData {
+                identity_id,
+                client_id,
+                principal_id: String::new(),
+                tenant_id: legacy.tenant_id,
+            })
+        }
+        _ => return Ok(()),
+    }
+    .map_err(|error| {
+        ErrorData::bad_request(format!(
+            "Failed to migrate legacy Remote Bindings handoff: {error}"
+        ))
+    })?;
+
+    req.resources.push(ImportedResource {
+        id: BINDINGS_ID.to_string(),
+        resource_type: alien_core::RemoteBindings::RESOURCE_TYPE,
+        import_data,
+    });
+    Ok(())
 }
 
 fn merge_reimported_stack_state(

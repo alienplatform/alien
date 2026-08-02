@@ -45,14 +45,18 @@ impl ResourceEntry {
     /// Remote Bindings identity. Each resource emitter remains responsible for
     /// granting that identity only the resource's declared data-plane access.
     pub fn has_remote_bindings(&self) -> bool {
-        self.remote_access
+        crate::remote_bindings::remote_binding_for_entry(self).is_some()
     }
 
-    /// Returns whether this entry is Frozen Storage published for remote access.
-    pub fn is_remote_frozen_storage(&self) -> bool {
-        self.lifecycle == ResourceLifecycle::Frozen
-            && self.remote_access
-            && self.config.downcast_ref::<crate::Storage>().is_some()
+    /// Whether the controller's non-secret binding locator must be synchronized
+    /// into stack state. The built-in secrets vault is consumed by the manager,
+    /// but is not exposed through the external Remote Bindings API.
+    pub fn publishes_binding_params(&self) -> bool {
+        self.remote_access
+            || self
+                .config
+                .downcast_ref::<crate::Vault>()
+                .is_some_and(|vault| vault.id == "secrets")
     }
 }
 
@@ -367,25 +371,25 @@ mod tests {
     }
 
     #[test]
-    fn remote_frozen_storage_requires_storage_lifecycle_and_opt_in() {
+    fn remote_bindings_require_a_registered_frozen_resource_and_opt_in() {
         assert!(resource_entry(
             Storage::new("archive".to_string()).build(),
             ResourceLifecycle::Frozen,
             true,
         )
-        .is_remote_frozen_storage());
+        .has_remote_bindings());
         assert!(!resource_entry(
             Storage::new("archive".to_string()).build(),
             ResourceLifecycle::Frozen,
             false,
         )
-        .is_remote_frozen_storage());
+        .has_remote_bindings());
         assert!(!resource_entry(
             Storage::new("archive".to_string()).build(),
             ResourceLifecycle::Live,
             true,
         )
-        .is_remote_frozen_storage());
+        .has_remote_bindings());
         assert!(!resource_entry(
             Worker::new("worker".to_string())
                 .code(WorkerCode::Image {
@@ -396,24 +400,7 @@ mod tests {
             ResourceLifecycle::Frozen,
             true,
         )
-        .is_remote_frozen_storage());
-    }
-
-    #[test]
-    fn remote_bindings_opt_in_is_resource_agnostic() {
-        let worker = resource_entry(
-            Worker::new("worker".to_string())
-                .code(WorkerCode::Image {
-                    image: "example.com/worker:latest".to_string(),
-                })
-                .permissions("worker-execution".to_string())
-                .build(),
-            ResourceLifecycle::Live,
-            true,
-        );
-
-        assert!(worker.has_remote_bindings());
-        assert!(!worker.is_remote_frozen_storage());
+        .has_remote_bindings());
     }
 
     #[test]

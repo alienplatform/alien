@@ -82,17 +82,6 @@ pub enum ErrorData {
     )]
     PreflightChecksFailed,
 
-    /// Remote Bindings identity and exact grants are not implemented by the
-    /// direct setup engine.
-    #[error(
-        code = "REMOTE_BINDINGS_SETUP_REQUIRED",
-        message = "Remote Bindings require a generated Terraform or CloudFormation setup artifact; direct setup cannot create the dedicated identity and grants yet",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 400
-    )]
-    RemoteBindingsSetupRequired,
-
     /// Stack mutation failed.
     #[error(
         code = "STACK_MUTATION_FAILED",

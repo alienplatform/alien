@@ -238,6 +238,7 @@ mod tests {
         ("artifact-registry", false),
         ("service_activation", false),
         ("remote-stack-management", false),
+        ("remote-bindings", false),
         ("azure_resource_group", false),
         ("azure_storage_account", false),
         ("azure_container_apps_environment", false),

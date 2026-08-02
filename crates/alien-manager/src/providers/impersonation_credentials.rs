@@ -9,10 +9,7 @@ use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
-use alien_core::{
-    ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform,
-    RemoteStackManagement, RemoteStackManagementOutputs,
-};
+use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
@@ -175,11 +172,11 @@ impl CredentialResolver for ImpersonationCredentialResolver {
     async fn resolve_remote_storage_source(
         &self,
         deployment: &DeploymentRecord,
+        resource_id: &str,
     ) -> Result<RemoteStorageCredentialSource, AlienError> {
         if !self
             .management_binding_platforms
             .contains(&deployment.platform)
-            || uses_direct_impersonation_credentials(deployment)
         {
             return Err(AlienError::new(GenericError {
                 message: "Remote Bindings require setup-owned identity outputs; rerun setup"
@@ -187,7 +184,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             }));
         }
 
-        let mut stack_state = deployment.stack_state.clone().ok_or_else(|| {
+        let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(GenericError {
                 message: format!(
                     "Remote stack state is required to resolve Remote Bindings credentials for deployment {}",
@@ -195,46 +192,43 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                 ),
             })
         })?;
-        let management_state = stack_state
+        let first_class_outputs = stack_state
             .resources
-            .values_mut()
+            .values()
             .find(|resource| {
-                resource.resource_type == RemoteStackManagement::RESOURCE_TYPE.as_ref()
+                resource.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
             })
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>());
+        let legacy_outputs = stack_state
+            .resources
+            .values()
+            .find(|resource| {
+                resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+            })
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
+            .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
+        let outputs = first_class_outputs
+            .or(legacy_outputs)
             .ok_or_else(|| {
                 AlienError::new(GenericError {
                     message: format!(
-                        "Remote stack management state is required to resolve Remote Bindings credentials for deployment {}",
+                        "Remote Bindings identity state is required for deployment {}; rerun setup",
                         deployment.id
                     ),
                 })
             })?;
-        let outputs = management_state
-            .outputs
-            .as_ref()
-            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: "Remote stack management outputs are missing; rerun setup".to_string(),
-                })
-            })?;
-        let bindings = outputs.remote_bindings_access.clone().ok_or_else(|| {
-            AlienError::new(GenericError {
-                message: "Remote Bindings identity is missing; rerun setup".to_string(),
-            })
-        })?;
-        management_state.outputs = Some(alien_core::ResourceOutputs::new(
-            RemoteStackManagementOutputs {
-                management_resource_id: bindings.resource_id,
-                access_configuration: bindings.access_configuration,
-                remote_bindings_access: None,
-            },
-        ));
 
         let provider = self.provider_for_target(deployment.platform);
         let base = impersonate_management_sa(&**provider, deployment.platform).await?;
         let resolved = alien_infra::RemoteAccessResolver::default()
-            .resolve(base, &stack_state, deployment.environment_info.as_ref())
+            .resolve_remote_bindings(
+                base,
+                outputs,
+                deployment.environment_info.as_ref(),
+                Some(remote_bindings_session_name(&deployment.id, resource_id)),
+            )
             .await
             .context(ErrorData::RemoteCredentialHandoffFailed {
                 deployment_id: deployment.id.clone(),
@@ -462,6 +456,22 @@ fn uses_direct_impersonation_credentials(deployment: &DeploymentRecord) -> bool 
     }
 }
 
+fn remote_bindings_session_name(deployment_id: &str, resource_id: &str) -> String {
+    format!("alien-{deployment_id}-{resource_id}")
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric()
+                || matches!(character, '+' | '=' | ',' | '.' | '@' | '-')
+            {
+                character
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect()
+}
+
 fn uses_control_plane_credentials(platform: Platform) -> bool {
     matches!(platform, Platform::Machines)
 }
@@ -569,7 +579,7 @@ mod tests {
                         .to_string(),
                     access_configuration: "deployment@target-project.iam.gserviceaccount.com"
                         .to_string(),
-                    remote_bindings_access: None,
+                    legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)
                 .dependencies(vec![])

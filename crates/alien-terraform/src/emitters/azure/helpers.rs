@@ -584,10 +584,7 @@ fn role_definition_block(
                     "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
                 ),
             ),
-            attr(
-                "description",
-                Expression::String(role_definition.description),
-            ),
+            attr("description", expr::template(role_definition.description)),
             nested(block(
                 "permissions",
                 [

@@ -24,11 +24,13 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
-    KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
-    NetworkSettings, RemoteStackManagement, Result, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
-    TelemetryMode, UpdatesMode,
+    ownership_policy_for_resource_type,
+    remote_bindings::stack_is_bindings_only,
+    DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
+    KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
+    RemoteStackManagement, Result, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackInputValidation, StackSettings, TelemetryMode,
+    UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -336,10 +338,13 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action");
+    let bindings_only = stack_is_bindings_only(stack);
     let has_remote_management =
         stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE);
+    let has_remote_bindings = stack_has_resource_type(stack, RemoteBindings::RESOURCE_TYPE);
     let needs_azure_management_inputs =
-        matches!(target.cloud_platform(), alien_core::Platform::Azure) && has_remote_management;
+        matches!(target.cloud_platform(), alien_core::Platform::Azure)
+            && (has_remote_management || has_remote_bindings);
     let deployment_name_default = options
         .display_name
         .as_deref()
@@ -369,6 +374,7 @@ pub fn generate_terraform_module(
             options.helm_install.as_ref(),
             &deployment_name_default,
             needs_azure_management_inputs,
+            bindings_only,
             &options.supported_aws_regions,
             &stack_inputs,
         )?)?,
@@ -394,6 +400,7 @@ pub fn generate_terraform_module(
             registration_resources,
             &shared_locals,
             has_remote_management,
+            bindings_only,
         )?)?,
     );
 
@@ -440,6 +447,9 @@ pub fn generate_terraform_module(
             &stack_inputs,
         ))?,
     );
+    if let Some(contents) = remote_bindings_permissions_md(stack, target) {
+        files.insert("PERMISSIONS.md".to_string(), contents);
+    }
     files.insert(
         "README.md".to_string(),
         readme_md(
@@ -466,6 +476,123 @@ pub fn generate_terraform_module(
     let _ = format_with_terraform(&mut module);
 
     Ok(module)
+}
+
+fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Option<String> {
+    let resources = stack
+        .resources()
+        .filter_map(|(resource_id, entry)| {
+            alien_core::remote_bindings::remote_binding_for_entry(entry)
+                .map(|definition| (resource_id, definition))
+        })
+        .collect::<Vec<_>>();
+    if resources.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "# Remote Bindings permissions".to_string(),
+        String::new(),
+        "The setup creates one narrow Remote Bindings identity. It can access only the resources listed below; it does not receive Alien's management permissions.".to_string(),
+    ];
+    for (resource_id, definition) in resources {
+        lines.extend([
+            String::new(),
+            format!("## `{resource_id}` ({})", definition.resource_type),
+            String::new(),
+            format!("{}.", definition.description.trim_end_matches('.')),
+            String::new(),
+            format!(
+                "Permission set: `{}` (revision {}).",
+                definition.permission_set, definition.revision
+            ),
+        ]);
+        let Some(permission_set) = alien_permissions::get_permission_set(definition.permission_set)
+        else {
+            continue;
+        };
+        match target.cloud_platform() {
+            alien_core::Platform::Aws => {
+                for entry in permission_set.platforms.aws.as_deref().unwrap_or_default() {
+                    append_permission_entry(
+                        &mut lines,
+                        entry.description.as_deref(),
+                        entry.grant.actions.as_deref(),
+                        entry.binding.resource.as_ref().map(|binding| {
+                            permission_doc_scope(&binding.resources.join(", "), target, resource_id)
+                        }),
+                    );
+                }
+            }
+            alien_core::Platform::Gcp => {
+                for entry in permission_set.platforms.gcp.as_deref().unwrap_or_default() {
+                    append_permission_entry(
+                        &mut lines,
+                        entry.description.as_deref(),
+                        entry.grant.permissions.as_deref(),
+                        entry.binding.resource.as_ref().map(|binding| {
+                            permission_doc_scope(&binding.scope, target, resource_id)
+                        }),
+                    );
+                }
+            }
+            alien_core::Platform::Azure => {
+                for entry in permission_set
+                    .platforms
+                    .azure
+                    .as_deref()
+                    .unwrap_or_default()
+                {
+                    append_permission_entry(
+                        &mut lines,
+                        entry.description.as_deref(),
+                        entry.grant.data_actions.as_deref(),
+                        entry.binding.resource.as_ref().map(|binding| {
+                            permission_doc_scope(&binding.scope, target, resource_id)
+                        }),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    lines.push(String::new());
+    Some(lines.join("\n"))
+}
+
+fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str) -> String {
+    let resource_name = match target.cloud_platform() {
+        alien_core::Platform::Azure => format!(
+            "${{replace(lower(\"${{local.resource_prefix}}-{resource_id}\"), \"_\", \"-\")}}"
+        ),
+        _ => format!("${{local.resource_prefix}}-{resource_id}"),
+    };
+    scope
+        .replace("${resourceName}", &resource_name)
+        .replace("${projectName}", "${var.gcp_project}")
+        .replace("${subscriptionId}", "${var.azure_subscription_id}")
+        .replace("${resourceGroup}", "${var.azure_resource_group_name}")
+        .replace(
+            "${storageAccountName}",
+            "${azurerm_storage_account.default_storage_account.name}",
+        )
+}
+
+fn append_permission_entry(
+    lines: &mut Vec<String>,
+    description: Option<&str>,
+    permissions: Option<&[String]>,
+    scope: Option<String>,
+) {
+    if let Some(description) = description {
+        lines.extend([String::new(), format!("- {description}")]);
+    }
+    if let Some(scope) = scope {
+        lines.push(format!("  Scope: `{scope}`"));
+    }
+    for permission in permissions.unwrap_or_default() {
+        lines.push(format!("  - `{permission}`"));
+    }
 }
 
 fn emit_azure_setup_resource_role_definitions(
@@ -667,28 +794,6 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             (resource_id.clone(), addresses)
         })
         .collect();
-    // Remote Storage grants refer back to the management identity. For the
-    // management -> storage bootstrap edge, wait for the physical storage
-    // resources but not the grants that cannot exist until management does.
-    let remote_storage_prerequisite_addresses: IndexMap<String, Vec<Expression>> = per_resource
-        .iter()
-        .filter(|(resource_id, _)| {
-            stack
-                .resources
-                .get(*resource_id)
-                .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage)
-        })
-        .map(|(resource_id, fragment)| {
-            let addresses = fragment
-                .resource_blocks
-                .iter()
-                .filter(|resource| !is_remote_storage_permission_support_resource(resource))
-                .filter_map(resource_address)
-                .collect();
-            (resource_id.clone(), addresses)
-        })
-        .collect();
-
     for (resource_id, entry) in stack.resources() {
         let Some(fragment) = per_resource.get_mut(resource_id) else {
             continue;
@@ -699,14 +804,19 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             if dependency.id() == resource_id {
                 continue;
             }
-            let addresses = if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+            // Remote Bindings is an executor-ordering dependency: direct setup must create the
+            // identity before a resource controller can attach its exact grant. Generated setup
+            // expresses that relationship on the grant resource itself, which depends on both
+            // the identity and the physical resource. Making the physical resource depend on the
+            // identity adds noise and needlessly serializes otherwise-independent creation.
+            if stack
+                .resources
+                .get(dependency.id())
+                .is_some_and(|entry| entry.config.downcast_ref::<RemoteBindings>().is_some())
             {
-                remote_storage_prerequisite_addresses
-                    .get(dependency.id())
-                    .or_else(|| dependency_addresses.get(dependency.id()))
-            } else {
-                dependency_addresses.get(dependency.id())
-            };
+                continue;
+            }
+            let addresses = dependency_addresses.get(dependency.id());
             if let Some(addresses) = addresses {
                 for address in addresses {
                     if !depends_on.contains(address) {
@@ -792,16 +902,6 @@ fn stack_has_resource_type(stack: &Stack, resource_type: alien_core::ResourceTyp
 
 fn resource_inherits_stack_resource_dependencies(resource: &Block) -> bool {
     !is_gcp_iam_support_resource(resource)
-}
-
-fn is_remote_storage_permission_support_resource(resource: &Block) -> bool {
-    let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
-        return false;
-    };
-
-    provider_type == "aws_iam_role_policy"
-        || provider_type == "google_storage_bucket_iam_member"
-        || provider_type == "azurerm_role_assignment"
 }
 
 fn is_gcp_iam_support_resource(resource: &Block) -> bool {
@@ -1138,6 +1238,7 @@ fn variables_body(
     helm_install: Option<&TerraformHelmInstall>,
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
+    bindings_only: bool,
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
 ) -> Result<Body> {
@@ -1166,57 +1267,61 @@ fn variables_body(
         Some(Expression::String("".to_string())),
         false,
     )));
-    blocks.push(nested(string_enum_variable_block(
-        "deployment_model",
-        "How runtime updates are delivered after setup.",
-        deployment_model(stack_settings.deployment_model),
-        &["push", "pull"],
-    )));
-    blocks.push(nested(variable_block(
-        "advanced_settings_json",
-        "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead.",
-        Some(Expression::String(advanced_settings_default)),
-        true,
-    )));
-    blocks.push(nested(variable_block(
-        "advanced_settings_overlay_json",
-        "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections.",
-        Some(Expression::String("{}".to_string())),
-        true,
-    )));
-    blocks.push(nested(string_enum_variable_block(
-        "updates_mode",
-        "How application updates are delivered after setup.",
-        updates_mode(stack_settings.updates),
-        &["auto", "approval-required"],
-    )));
-    blocks.push(nested(string_enum_variable_block(
-        "telemetry_mode",
-        "How logs, metrics, and traces are collected.",
-        telemetry_mode(stack_settings.telemetry),
-        &["off", "auto", "approval-required"],
-    )));
-    blocks.push(nested(string_enum_variable_block(
-        "heartbeats_mode",
-        "Whether runtime health checks are enabled.",
-        heartbeats_mode(stack_settings.heartbeats),
-        &["off", "on"],
-    )));
+    if !bindings_only {
+        blocks.push(nested(string_enum_variable_block(
+            "deployment_model",
+            "How runtime updates are delivered after setup.",
+            deployment_model(stack_settings.deployment_model),
+            &["push", "pull"],
+        )));
+        blocks.push(nested(variable_block(
+            "advanced_settings_json",
+            "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead.",
+            Some(Expression::String(advanced_settings_default)),
+            true,
+        )));
+        blocks.push(nested(variable_block(
+            "advanced_settings_overlay_json",
+            "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections.",
+            Some(Expression::String("{}".to_string())),
+            true,
+        )));
+        blocks.push(nested(string_enum_variable_block(
+            "updates_mode",
+            "How application updates are delivered after setup.",
+            updates_mode(stack_settings.updates),
+            &["auto", "approval-required"],
+        )));
+        blocks.push(nested(string_enum_variable_block(
+            "telemetry_mode",
+            "How logs, metrics, and traces are collected.",
+            telemetry_mode(stack_settings.telemetry),
+            &["off", "auto", "approval-required"],
+        )));
+        blocks.push(nested(string_enum_variable_block(
+            "heartbeats_mode",
+            "Whether runtime health checks are enabled.",
+            heartbeats_mode(stack_settings.heartbeats),
+            &["off", "on"],
+        )));
+    }
 
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
         blocks.push(nested(variable_block(
             "managing_role_arn",
             "ARN of the management identity allowed to assume setup-created roles.",
-            Some(Expression::String(String::new())),
+            (!bindings_only).then(|| Expression::String(String::new())),
             false,
         )));
-        blocks.push(nested(variable_block(
-            "managing_account_id",
-            "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants.",
-            Some(Expression::String(String::new())),
-            false,
-        )));
+        if !bindings_only {
+            blocks.push(nested(variable_block(
+                "managing_account_id",
+                "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+        }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Aws)
         && has_dynamic_aws_network_settings(stack_settings.network.as_ref())
@@ -1293,8 +1398,8 @@ fn variables_body(
         )));
         blocks.push(nested(variable_block(
             "managing_service_account_email",
-            "Email of the management service account allowed to impersonate setup-created identities. Empty disables the binding.",
-            Some(Expression::String(String::new())),
+            "Email of the management service account allowed to impersonate setup-created identities.",
+            (!bindings_only).then(|| Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(bool_variable_block(
@@ -1377,19 +1482,19 @@ fn variables_body(
             blocks.push(nested(variable_block(
                 "azure_managing_tenant_id",
                 "Azure tenant ID that hosts the management identity for cross-tenant access.",
-                Some(Expression::String(String::new())),
+                (!bindings_only).then(|| Expression::String(String::new())),
                 false,
             )));
             blocks.push(nested(variable_block(
                 "azure_oidc_issuer",
                 "OIDC issuer URL for Azure Federated Identity Credential.",
-                Some(Expression::String(String::new())),
+                (!bindings_only).then(|| Expression::String(String::new())),
                 false,
             )));
             blocks.push(nested(variable_block(
                 "azure_oidc_subject",
                 "OIDC subject claim for Azure Federated Identity Credential.",
-                Some(Expression::String(String::new())),
+                (!bindings_only).then(|| Expression::String(String::new())),
                 false,
             )));
         }
@@ -2197,6 +2302,7 @@ fn locals_body(
     registration_resources: Vec<(Option<String>, Expression)>,
     extra: &IndexMap<String, Expression>,
     has_remote_management: bool,
+    bindings_only: bool,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -2238,12 +2344,14 @@ fn locals_body(
             expr::raw("null")
         },
     ));
-    body.push(attr(
-        "advanced_settings",
-        expr::raw(
-            "merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))",
-        ),
-    ));
+    if !bindings_only {
+        body.push(attr(
+            "advanced_settings",
+            expr::raw(
+                "merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))",
+            ),
+        ));
+    }
     if target.is_kubernetes() {
         let generated_kubernetes_exposure = extra
             .get("kubernetes_exposure")
@@ -2283,7 +2391,19 @@ fn locals_body(
     }
     body.push(attr(
         "deployment_settings",
-        stack_settings_expression(target, stack_settings),
+        if bindings_only {
+            expr::object([
+                ("deploymentModel", Expression::String("push".to_string())),
+                (
+                    "updates",
+                    Expression::String("approval-required".to_string()),
+                ),
+                ("telemetry", Expression::String("off".to_string())),
+                ("heartbeats", Expression::String("off".to_string())),
+            ])
+        } else {
+            stack_settings_expression(target, stack_settings)
+        },
     ));
     body.push(attr(
         "deployment_resources",
@@ -3048,7 +3168,7 @@ fn readme_kubernetes_destroy_order() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef, Storage};
+    use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
 
     fn block_has_depends_on(block: &Block) -> bool {
         block.body.0.iter().any(|structure| {
@@ -3176,85 +3296,5 @@ mod tests {
 
         assert!(!block_has_depends_on(custom_role));
         assert!(block_has_depends_on(topic));
-    }
-
-    #[test]
-    fn remote_management_waits_for_storage_but_not_its_back_referencing_grant() {
-        let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "files");
-        let stack = Stack::new("test".to_string())
-            .add_with_remote_access(
-                Storage::new("files".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add_with_dependencies(
-                RemoteStackManagement::new("management".to_string()).build(),
-                ResourceLifecycle::Frozen,
-                vec![storage_ref.clone()],
-            )
-            .add_with_dependencies(
-                Queue::new("queue".to_string()).build(),
-                ResourceLifecycle::Frozen,
-                vec![storage_ref],
-            )
-            .build();
-
-        let mut per_resource = IndexMap::new();
-        per_resource.insert(
-            "files".to_string(),
-            TfFragment::default()
-                .with_resource(resource_block(
-                    "aws_s3_bucket",
-                    "files",
-                    [attr("bucket", Expression::String("files".to_string()))],
-                ))
-                .with_resource(resource_block(
-                    "aws_iam_role_policy",
-                    "files_management_storage",
-                    [attr(
-                        "role",
-                        expr::traversal(["aws_iam_role", "management", "id"]),
-                    )],
-                )),
-        );
-        per_resource.insert(
-            "management".to_string(),
-            TfFragment::default().with_resource(resource_block(
-                "aws_iam_role",
-                "management",
-                [attr("name", Expression::String("management".to_string()))],
-            )),
-        );
-        per_resource.insert(
-            "queue".to_string(),
-            TfFragment::default().with_resource(resource_block(
-                "aws_sqs_queue",
-                "queue",
-                [attr("name", Expression::String("queue".to_string()))],
-            )),
-        );
-
-        apply_resource_dependencies(&stack, &mut per_resource);
-
-        let management = render_body(Body::from(vec![Structure::Block(
-            per_resource
-                .get("management")
-                .expect("management fragment")
-                .resource_blocks[0]
-                .clone(),
-        )]))
-        .expect("management renders");
-        assert!(management.contains("aws_s3_bucket.files"));
-        assert!(!management.contains("aws_iam_role_policy.files_management_storage"));
-
-        let queue = render_body(Body::from(vec![Structure::Block(
-            per_resource
-                .get("queue")
-                .expect("queue fragment")
-                .resource_blocks[0]
-                .clone(),
-        )]))
-        .expect("queue renders");
-        assert!(queue.contains("aws_s3_bucket.files"));
-        assert!(queue.contains("aws_iam_role_policy.files_management_storage"));
     }
 }

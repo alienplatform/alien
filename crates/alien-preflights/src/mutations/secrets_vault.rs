@@ -44,6 +44,9 @@ impl StackMutation for SecretsVaultMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
+        if alien_core::remote_bindings::stack_is_bindings_only(stack) {
+            return false;
+        }
         if stack_state.platform == Platform::Machines {
             return stack.resources.contains_key(SECRETS_VAULT_ID)
                 || config.external_bindings.has(SECRETS_VAULT_ID);
@@ -72,11 +75,9 @@ impl StackMutation for SecretsVaultMutation {
                 config: alien_core::Resource::new(vault),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
-                // The deployment loop syncs secrets into this vault from control-plane state
-                // (`sync_secrets_to_vault` resolves it via `from_stack_state`), so its binding must
-                // be synced. Safe to sync: the binding is only a reference (Parameter Store / Secret
-                // Manager / Key Vault locator), never the secret values themselves.
-                remote_access: true,
+                // This locator is synchronized for the manager's internal secret-delivery path.
+                // It does not expose the vault through the Remote Bindings API.
+                remote_access: false,
             };
             stack
                 .resources

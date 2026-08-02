@@ -1,0 +1,335 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the management identity allowed to assume setup-created roles."
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "aws"
+  deployment_target            = "aws"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  deployment_settings = {
+    deploymentModel = "push"
+    updates         = "approval-required"
+    telemetry       = "off"
+    heartbeats      = "off"
+  }
+  deployment_resources = [
+    {
+      id   = "files"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.files.bucket
+        bucketArn  = aws_s3_bucket.files.arn
+      }
+    },
+    {
+      id   = "remote-bindings"
+      type = "remote-bindings"
+      importData = {
+        roleName   = aws_iam_role.remote_bindings.name
+        roleArn    = aws_iam_role.remote_bindings.arn
+        externalId = local.resource_prefix
+      }
+    }
+  ]
+}
+
+=== files.tf ===
+resource "aws_s3_bucket" "files" {
+  bucket        = "${local.resource_prefix}-files"
+  force_destroy = false
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "files"
+    "resource-type" = "storage"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "files" {
+  bucket = aws_s3_bucket.files.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "files" {
+  bucket = aws_s3_bucket.files.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "files" {
+  bucket                  = aws_s3_bucket.files.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "files" {
+  bucket = aws_s3_bucket.files.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.files.arn, "${aws_s3_bucket.files.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
+}
+
+resource "aws_iam_role_policy" "files_remote_bindings_storage-remote-data-write_0" {
+  name   = "files-storage-remote-data-write-0"
+  role   = aws_iam_role.remote_bindings.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ListBucketAndUploads", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}"] }, { Sid = "ReadWriteBucketObjects", Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}/*"] }] })
+}
+
+=== remote_bindings.tf ===
+resource "aws_iam_role" "remote_bindings" {
+  name               = length(format("%s-%s", local.resource_prefix, "remote-bindings")) <= 64 ? format("%s-%s", local.resource_prefix, "remote-bindings") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "remote-bindings"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "remote-bindings")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn, "sts:ExternalId" = local.resource_prefix } } }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "remote-bindings"
+    "resource-type" = "remote-bindings"
+  }
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = {}
+  }
+  depends_on = [
+    aws_s3_bucket.files,
+    aws_s3_bucket_server_side_encryption_configuration.files,
+    aws_s3_bucket_ownership_controls.files,
+    aws_s3_bucket_public_access_block.files,
+    aws_s3_bucket_policy.files,
+    aws_iam_role_policy.files_remote_bindings_storage-remote-data-write_0,
+    aws_iam_role.remote_bindings
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== PERMISSIONS.md ===
+# Remote Bindings permissions
+
+The setup creates one narrow Remote Bindings identity. It can access only the resources listed below; it does not receive Alien's management permissions.
+
+## `files` (storage)
+
+Read and write objects in this storage resource.
+
+Permission set: `storage/remote-data-write` (revision 1).
+
+- List the selected S3 bucket and its in-progress multipart uploads.
+  Scope: `arn:aws:s3:::${local.resource_prefix}-files`
+  - `s3:ListBucket`
+  - `s3:GetBucketLocation`
+  - `s3:ListBucketMultipartUploads`
+
+- Read, write, delete, and complete multipart uploads for objects in the selected S3 bucket.
+  Scope: `arn:aws:s3:::${local.resource_prefix}-files/*`
+  - `s3:GetObject`
+  - `s3:PutObject`
+  - `s3:DeleteObject`
+  - `s3:AbortMultipartUpload`
+  - `s3:ListMultipartUploadParts`
+
+=== README.md ===
+# Deployment setup - acme-remote-storage
+
+Target: `aws`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+AWS settings:
+
+- `aws_region`: AWS region used by the provider.
+- `managing_role_arn`: management identity allowed to assume setup-created roles.
+- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="acme-remote-storage"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.

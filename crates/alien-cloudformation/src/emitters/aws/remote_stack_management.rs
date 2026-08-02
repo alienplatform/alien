@@ -46,24 +46,6 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
 
         let policy_documents = remote_management_policy_documents(ctx)?;
         let mut resources = vec![role];
-        if has_remote_bindings(ctx) {
-            let mut bindings_role = CfResource::new(
-                remote_bindings_role_logical_id(logical_id),
-                "AWS::IAM::Role".to_string(),
-            );
-            bindings_role.properties.insert(
-                "RoleName".to_string(),
-                CfExpression::sub("${AWS::StackName}-remote-bindings"),
-            );
-            bindings_role.properties.insert(
-                "AssumeRolePolicyDocument".to_string(),
-                remote_management_trust_policy(),
-            );
-            bindings_role
-                .properties
-                .insert("Tags".to_string(), tags(ctx));
-            resources.push(bindings_role);
-        }
         resources.extend(management_policy_resources(&role_id, policy_documents));
 
         Ok(resources)
@@ -73,29 +55,13 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         resource_config::<RemoteStackManagement>(ctx, RemoteStackManagement::RESOURCE_TYPE)?;
         let logical_id = required_logical_id(ctx)?;
         let role_id = role_logical_id(logical_id);
-        let mut fields = vec![
+        let fields = vec![
             ("roleName", CfExpression::ref_(&role_id)),
             ("roleArn", CfExpression::get_att(&role_id, "Arn")),
             ("managementPermissionsApplied", CfExpression::from(true)),
         ];
-        if has_remote_bindings(ctx) {
-            fields.push((
-                "remoteBindingsRoleArn",
-                CfExpression::get_att(&remote_bindings_role_logical_id(logical_id), "Arn"),
-            ));
-        }
         Ok(CfExpression::object(fields))
     }
-}
-
-pub(crate) fn remote_bindings_role_logical_id(resource_logical_id: &str) -> String {
-    format!("{}RemoteBindings", role_logical_id(resource_logical_id))
-}
-
-fn has_remote_bindings(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack
-        .resources()
-        .any(|(_, entry)| entry.has_remote_bindings())
 }
 
 fn role_logical_id(resource_logical_id: &str) -> String {

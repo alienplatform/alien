@@ -12,9 +12,9 @@ const value: models.QueueHeartbeatDataAwsSqs = {
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "deleted",
-    partial: true,
-    stale: false,
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   backend: "awsSqs",
 };
@@ -30,9 +30,9 @@ const value: models.QueueHeartbeatDataGcpPubSub = {
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "deleted",
-    partial: true,
-    stale: false,
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   subscriptionLabels: {
     "key": "<value>",
@@ -60,9 +60,9 @@ const value: models.QueueHeartbeatDataAzureServiceBus = {
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "deleted",
-    partial: true,
-    stale: false,
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   backend: "azureServiceBus",
 };
@@ -76,9 +76,9 @@ const value: models.QueueHeartbeatDataLocal = {
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "deleted",
-    partial: true,
-    stale: false,
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   backend: "local",
 };

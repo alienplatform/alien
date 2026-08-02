@@ -14,7 +14,8 @@ use alien_core::KubernetesCluster;
 use alien_core::{
     Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, Build, Kv, Network, Platform, Queue,
-    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
+    RemoteBindings, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault,
+    Worker,
 };
 
 use crate::ai::AzureAiImporter;
@@ -25,6 +26,7 @@ use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::AzureKvImporter;
 use crate::network::AzureNetworkImporter;
 use crate::queue::AzureQueueImporter;
+use crate::remote_bindings::AzureRemoteBindingsImporter;
 use crate::remote_stack_management::AzureRemoteStackManagementImporter;
 use crate::service_account::AzureServiceAccountImporter;
 use crate::service_activation::AzureServiceActivationImporter;
@@ -63,6 +65,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             RemoteStackManagement::RESOURCE_TYPE,
             Platform::Azure,
             AzureRemoteStackManagementImporter,
+        )
+        .register(
+            RemoteBindings::RESOURCE_TYPE,
+            Platform::Azure,
+            AzureRemoteBindingsImporter,
         )
         .register(Build::RESOURCE_TYPE, Platform::Azure, AzureBuildImporter)
         .register(

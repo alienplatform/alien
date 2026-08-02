@@ -14,6 +14,7 @@ pub use platform::*;
 
 mod resource_links;
 pub use resource_links::*;
+pub mod remote_bindings;
 mod secret_delivery;
 pub use secret_delivery::*;
 

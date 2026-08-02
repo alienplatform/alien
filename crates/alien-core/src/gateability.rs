@@ -36,6 +36,7 @@ const STACK_DERIVED_TYPES: &[&str] = &[
     "kubernetes-cluster",
     "network",
     "remote-stack-management",
+    "remote-bindings",
     "service_activation",
     "service-activation",
     "azure_resource_group",

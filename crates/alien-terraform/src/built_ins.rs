@@ -7,7 +7,8 @@ use crate::registry::TfRegistry;
 use alien_core::{
     Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, Build, KubernetesCluster, Kv, Network, Platform,
-    Queue, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
+    Queue, RemoteBindings, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage,
+    Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -34,6 +35,11 @@ fn register_aws(registry: &mut TfRegistry) {
         RemoteStackManagement::RESOURCE_TYPE,
         p,
         aws::AwsRemoteStackManagementEmitter,
+    );
+    registry.register(
+        RemoteBindings::RESOURCE_TYPE,
+        p,
+        aws::AwsRemoteBindingsEmitter,
     );
     registry.register(
         ArtifactRegistry::RESOURCE_TYPE,
@@ -67,6 +73,11 @@ fn register_gcp(registry: &mut TfRegistry) {
         RemoteStackManagement::RESOURCE_TYPE,
         p,
         gcp::GcpRemoteStackManagementEmitter,
+    );
+    registry.register(
+        RemoteBindings::RESOURCE_TYPE,
+        p,
+        gcp::GcpRemoteBindingsEmitter,
     );
     registry.register(
         ArtifactRegistry::RESOURCE_TYPE,
@@ -107,6 +118,11 @@ fn register_azure(registry: &mut TfRegistry) {
         RemoteStackManagement::RESOURCE_TYPE,
         p,
         azure::AzureRemoteStackManagementEmitter,
+    );
+    registry.register(
+        RemoteBindings::RESOURCE_TYPE,
+        p,
+        azure::AzureRemoteBindingsEmitter,
     );
     registry.register(
         ArtifactRegistry::RESOURCE_TYPE,

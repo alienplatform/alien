@@ -1191,7 +1191,7 @@ mod tests {
                         .to_string(),
                     access_configuration: "arn:aws:iam::123456789012:role/test-management"
                         .to_string(),
-                    remote_bindings_access: None,
+                    legacy_remote_bindings_access: None,
                 }))
                 .build()
         } else {

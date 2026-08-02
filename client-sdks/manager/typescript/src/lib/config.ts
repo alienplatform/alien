@@ -5,12 +5,23 @@
 import { HTTPClient } from "./http.js";
 import { Logger } from "./logger.js";
 import { RetryConfig } from "./retries.js";
-import { pathToFunc } from "./url.js";
+import { Params, pathToFunc } from "./url.js";
+
+/**
+ * Contains the list of servers available to the SDK
+ */
+export const ServerList = [
+  "/",
+] as const;
 
 export type SDKOptions = {
   bearer?: string | (() => Promise<string>) | undefined;
 
   httpClient?: HTTPClient;
+  /**
+   * Allows overriding the default server used by the SDK
+   */
+  serverIdx?: number | undefined;
   /**
    * Specifies the server URL to be used by the SDK
    */
@@ -28,13 +39,17 @@ export type SDKOptions = {
 };
 
 export function serverURLFromOptions(options: SDKOptions): URL | null {
-  const serverURL = options.serverURL;
+  let serverURL = options.serverURL;
+
+  const params: Params = {};
 
   if (!serverURL) {
-    return null;
+    const serverIdx = options.serverIdx ?? 0;
+    if (serverIdx < 0 || serverIdx >= ServerList.length) {
+      throw new Error(`Invalid server index ${serverIdx}`);
+    }
+    serverURL = ServerList[serverIdx] || "";
   }
-
-  const params: Record<string, string | undefined> = {};
 
   const u = pathToFunc(serverURL)(params);
   return new URL(u);
@@ -43,8 +58,8 @@ export function serverURLFromOptions(options: SDKOptions): URL | null {
 export const SDK_METADATA = {
   language: "typescript",
   openapiDocVersion: "1.0.0",
-  sdkVersion: "1.15.0",
-  genVersion: "2.918.1",
+  sdkVersion: "3.3.2",
+  genVersion: "2.788.15",
   userAgent:
-    "speakeasy-sdk/typescript 1.15.0 2.918.1 1.0.0 @alienplatform/manager-api",
+    "speakeasy-sdk/typescript 3.3.2 2.788.15 1.0.0 @alienplatform/manager-api",
 } as const;

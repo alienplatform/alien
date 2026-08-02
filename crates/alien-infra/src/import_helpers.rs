@@ -43,7 +43,7 @@ where
     C: ResourceController + 'static,
 {
     let outputs = controller.get_outputs();
-    let remote_binding_params = if ctx.resource.remote_access {
+    let remote_binding_params = if ctx.resource.publishes_binding_params() {
         controller.get_binding_params().map_err(|err| {
             AlienError::new(CoreErrorData::GenericError {
                 message: format!(

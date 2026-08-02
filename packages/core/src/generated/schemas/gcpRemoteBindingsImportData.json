@@ -1,0 +1,1 @@
+{"type":"object","required":["projectId","serviceAccountEmail","serviceAccountUniqueId"],"properties":{"projectId":{"type":"string"},"serviceAccountEmail":{"type":"string"},"serviceAccountUniqueId":{"type":"string"}},"additionalProperties":false,"x-readme-ref-name":"GcpRemoteBindingsImportData"}

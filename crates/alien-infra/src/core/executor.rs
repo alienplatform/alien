@@ -2024,17 +2024,17 @@ impl StackExecutor {
             // inline secret (e.g. a Local Postgres password), and same-stack workers resolve bindings
             // via the controller/manager, not this synced field, so a non-remote binding has no
             // business in `remote_binding_params`.
-            let remote_access = self
+            let publish_binding_params = self
                 .desired_stack
                 .resources
                 .get(&resource_id)
-                .map(|entry| entry.remote_access)
+                .map(|entry| entry.publishes_binding_params())
                 .unwrap_or(false);
 
             let next_state = next_state.with_updates(|state| {
                 state.status = next_status;
                 state.outputs = next_outputs;
-                state.remote_binding_params = if remote_access {
+                state.remote_binding_params = if publish_binding_params {
                     next_binding_params
                 } else {
                     None

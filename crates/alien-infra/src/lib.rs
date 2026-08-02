@@ -105,6 +105,7 @@ mod gcp_importers;
 
 mod remote_access_resolver;
 pub use remote_access_resolver::*;
+pub mod remote_bindings;
 
 // Re-export from alien-client-config for backwards compatibility
 pub use alien_client_config::ClientConfigExt;

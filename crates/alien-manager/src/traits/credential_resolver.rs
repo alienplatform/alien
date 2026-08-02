@@ -71,6 +71,7 @@ pub trait CredentialResolver: Send + Sync {
     async fn resolve_remote_storage_source(
         &self,
         deployment: &DeploymentRecord,
+        _resource_id: &str,
     ) -> Result<RemoteStorageCredentialSource, AlienError> {
         Ok(RemoteStorageCredentialSource::Direct(
             self.resolve(deployment).await?,

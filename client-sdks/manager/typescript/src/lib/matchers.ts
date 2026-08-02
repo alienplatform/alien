@@ -6,7 +6,7 @@ import { AlienManagerDefaultError } from "../models/errors/alienmanagerdefaulter
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { ERR, OK, Result } from "../types/fp.js";
 import { matchResponse, matchStatusCode, StatusCodePredicate } from "./http.js";
-import { isPlainObject } from "./primitives.js";
+import { isPlainObject } from "./is-plain-object.js";
 
 export type Encoding =
   | "jsonl"
@@ -254,9 +254,8 @@ export function match<T, E>(
         raw = body;
         break;
       default:
-        throw new Error(
-          `Unsupported response type: ${encoding satisfies never}`,
-        );
+        encoding satisfies never;
+        throw new Error(`Unsupported response type: ${encoding}`);
     }
 
     if (matcher.enc === "fail") {

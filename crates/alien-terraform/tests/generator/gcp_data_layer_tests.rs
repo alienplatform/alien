@@ -8,8 +8,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
-    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
-    Storage, Vault,
+    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
+    StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -60,7 +60,7 @@ fn gcp_storage_public_read_allows_object_viewer() {
 
 #[test]
 fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
-    let stack = Stack::new("acme-remote-storage".to_string())
+    let mut stack = Stack::new("acme-remote-storage".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global(["storage/heartbeat"]),
         ))
@@ -68,11 +68,19 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
+        .add(
+            RemoteBindings::new("remote-bindings".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .add_with_remote_access(
             Storage::new("uploads".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
+    stack.resources.get_mut("uploads").unwrap().dependencies = vec![
+        ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management"),
+        ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "remote-bindings"),
+    ];
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_storage_remote_access", &module);
     let rendered = module
@@ -83,11 +91,12 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
     assert!(rendered
         .contains("google_project_iam_custom_role\" \"gcp_role_storage_remote_data_write\""));
     assert!(rendered.contains(
-        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_management_remote_bindings_storage_0\""
+        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_remote_bindings_storage_0\""
     ));
-    assert!(rendered.contains("google_service_account.management_remote_bindings.email"));
-    assert!(rendered
-        .contains("member = \"serviceAccount:${google_service_account.management.email}\""));
+    assert!(rendered.contains("google_service_account.remote_bindings.email"));
+    assert!(
+        rendered.contains("member = \"serviceAccount:${google_service_account.management.email}\"")
+    );
     assert!(rendered.contains("\"storage.objects.get\""));
     assert!(rendered.contains("\"storage.objects.list\""));
     assert!(rendered.contains("\"storage.objects.create\""));
@@ -97,20 +106,24 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
 }
 
 #[test]
-fn gcp_remote_storage_management_dependencies_are_acyclic() {
-    let stack = Stack::new("acme-remote-storage".to_string())
+fn gcp_byo_bucket_is_acyclic_and_valid() {
+    let mut stack = Stack::new("acme-remote-storage".to_string())
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_with_dependencies(
-            RemoteStackManagement::new("management".to_string()).build(),
+        .add(
+            RemoteBindings::new("remote-bindings".to_string()).build(),
             ResourceLifecycle::Frozen,
-            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
         )
         .build();
+    stack.resources.get_mut("files").unwrap().dependencies = vec![ResourceRef::new(
+        RemoteBindings::RESOURCE_TYPE,
+        "remote-bindings",
+    )];
 
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_byo_bucket", &module);
     assert_terraform_valid(&module, "gcp_remote_storage_management_dependencies");
 }
 

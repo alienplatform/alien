@@ -51,19 +51,6 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ],
         ));
 
-        if has_remote_bindings(ctx) {
-            let bindings_label = format!("{label}_remote_bindings");
-            fragment.resource_blocks.push(resource_block(
-                "aws_iam_role",
-                &bindings_label,
-                [
-                    attr("name", iam_role_name_template("remote-bindings")),
-                    attr("assume_role_policy", trust_policy()),
-                    attr("tags", tags(ctx, "remote-bindings")),
-                ],
-            ));
-        }
-
         let generator = AwsRuntimePermissionsGenerator::new();
         let context = aws_terraform_permission_context();
         let stack_context = context.clone().with_resource_name("management".to_string());
@@ -185,26 +172,13 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        let mut fields = vec![
+        let fields = vec![
             ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
             ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
             ("managementPermissionsApplied", Expression::Bool(true)),
         ];
-        if has_remote_bindings(ctx) {
-            let bindings_label = format!("{label}_remote_bindings");
-            fields.push((
-                "remoteBindingsRoleArn",
-                expr::traversal(["aws_iam_role", bindings_label.as_str(), "arn"]),
-            ));
-        }
         Ok(expr::object(fields))
     }
-}
-
-fn has_remote_bindings(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack
-        .resources()
-        .any(|(_, entry)| entry.has_remote_bindings())
 }
 
 fn trust_policy() -> Expression {

@@ -6,6 +6,46 @@ use alien_error::AlienError;
 use alien_error::Context;
 use tracing::info;
 
+/// Prepare a re-runnable direct setup without replacing the existing cloud
+/// state. The caller must hold the deployment lock and supply setup credentials.
+pub async fn prepare_direct_setup_update(
+    target_stack: Stack,
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    client_config: &ClientConfig,
+    existing_metadata: &alien_core::RuntimeMetadata,
+) -> Result<alien_core::RuntimeMetadata> {
+    let persisted_gate_answers =
+        resolve_frozen_gate_answers(&target_stack, stack_state, &config.input_values)?;
+    let frozen_gating = frozen_gating_inputs(&target_stack);
+    let target_stack = strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    let (mutated_stack, _, _) = runner
+        .run_deployment_time_preflights(
+            target_stack,
+            stack_state,
+            config,
+            client_config,
+            existing_metadata.prepared_stack.as_ref(),
+            None,
+            Some(alien_core::InitialSetupAuthority::DirectSetup),
+        )
+        .await
+        .context(ErrorData::PreflightChecksFailed)?;
+    let mutated_stack = strip_declined_live_resources(
+        mutated_stack,
+        &config.input_values,
+        &persisted_gate_answers,
+        &frozen_gating,
+    )?;
+    let mut metadata = existing_metadata.clone();
+    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::DirectSetup;
+    metadata.prepared_stack = Some(mutated_stack);
+    metadata.persisted_gate_answers = persisted_gate_answers;
+    metadata.setup_update_authorization = None;
+    Ok(metadata)
+}
+
 /// Handle Pending → InitialSetup transition
 ///
 /// This step:
@@ -51,8 +91,6 @@ pub async fn handle_pending(
     let frozen_gating = frozen_gating_inputs(&target_stack);
     let target_stack = strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
 
-    validate_direct_setup_features(&target_stack)?;
-
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
     let runner = alien_preflights::runner::PreflightRunner::new();
@@ -64,6 +102,7 @@ pub async fn handle_pending(
             &client_config,
             None, // No old stack for initial deployment
             None,
+            Some(alien_core::InitialSetupAuthority::DirectSetup),
         )
         .await
         .context(ErrorData::PreflightChecksFailed)?;
@@ -124,16 +163,6 @@ pub async fn handle_pending(
     })
 }
 
-fn validate_direct_setup_features(stack: &Stack) -> Result<()> {
-    if stack
-        .resources()
-        .any(|(_, entry)| entry.has_remote_bindings())
-    {
-        return Err(AlienError::new(ErrorData::RemoteBindingsSetupRequired));
-    }
-    Ok(())
-}
-
 /// Remove the gated setup-created resources the deployer declined. Runs
 /// BEFORE the mutations on every path: a declined frozen resource never
 /// existed, so nothing may be derived from it — no service-account grants, no
@@ -151,10 +180,7 @@ fn validate_direct_setup_features(stack: &Stack) -> Result<()> {
 /// the frozen-compatibility check say so — "frozen resources are setup-owned
 /// and can only be added by rerunning setup" — instead of this strip silently
 /// deleting the release's new resource and reporting success.
-fn strip_declined_frozen_resources(
-    mut stack: Stack,
-    answers: &alien_core::GateAnswers,
-) -> Stack {
+fn strip_declined_frozen_resources(mut stack: Stack, answers: &alien_core::GateAnswers) -> Stack {
     let declined: Vec<String> = frozen_gated(&stack)
         .filter(|(_, input_id)| answers.get(*input_id) == Some(&false))
         .map(|(resource_id, _)| resource_id.clone())
@@ -347,10 +373,9 @@ fn live_gate_of(entry: &alien_core::ResourceEntry) -> Option<&str> {
 
 fn gate_of(entry: &alien_core::ResourceEntry, setup_created: bool) -> Option<&str> {
     let input_id = entry.enabled_when.as_deref()?;
-    let emitted_in_setup = alien_core::ownership_policy_for_resource_type(
-        entry.config.resource_type().as_ref(),
-    )
-    .should_emit_in_setup(entry.lifecycle);
+    let emitted_in_setup =
+        alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+            .should_emit_in_setup(entry.lifecycle);
     (emitted_in_setup == setup_created).then_some(input_id)
 }
 
@@ -410,14 +435,14 @@ pub fn enforce_frozen_gate_fixity(
             }));
         };
         if requested != *persisted_answer {
-            return Err(AlienError::new(
-                crate::error::ErrorData::FrozenGateAnswerChanged {
+            return Err(
+                AlienError::new(crate::error::ErrorData::FrozenGateAnswerChanged {
                     input_id: input_id.clone(),
                     persisted: *persisted_answer,
                     requested,
-                },
-            )
-            .into());
+                })
+                .into(),
+            );
         }
     }
     Ok(())
@@ -665,7 +690,7 @@ mod tests {
     use super::*;
     use alien_core::{
         KubernetesClientConfig, Kv, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
-        StackInputDefinition, StackResourceState, Storage,
+        StackInputDefinition, StackResourceState,
     };
 
     fn imported_state_with(resource_id: &str, resource: Resource) -> StackState {
@@ -679,21 +704,6 @@ mod tests {
         let mut state = StackState::new(Platform::Aws);
         state.resources.insert(resource_id.to_string(), entry);
         state
-    }
-
-    #[test]
-    fn direct_setup_rejects_remote_bindings() {
-        let stack = Stack::new("remote-bindings".to_string())
-            .add_with_remote_access(
-                Storage::new("assets".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-
-        let error = validate_direct_setup_features(&stack)
-            .expect_err("direct setup does not create the Remote Bindings identity");
-
-        assert_eq!(error.code, "REMOTE_BINDINGS_SETUP_REQUIRED");
     }
 
     fn gated_stack() -> Stack {
@@ -866,12 +876,7 @@ mod tests {
     #[test]
     fn the_scrub_changes_the_config_the_executor_diffs() {
         let before = live_gated_stack_with_linking_worker(Some(true));
-        let before_config = before
-            .resources
-            .get("api")
-            .expect("worker")
-            .config
-            .clone();
+        let before_config = before.resources.get("api").expect("worker").config.clone();
 
         let after = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
         let after_config = &after.resources.get("api").expect("worker").config;
@@ -907,11 +912,15 @@ mod tests {
         let mut profile = alien_core::permissions::PermissionProfile::new();
         profile.0.insert(
             "cache".to_string(),
-            vec![alien_core::permissions::PermissionSetReference::from("kv/data-read")],
+            vec![alien_core::permissions::PermissionSetReference::from(
+                "kv/data-read",
+            )],
         );
         profile.0.insert(
             "store".to_string(),
-            vec![alien_core::permissions::PermissionSetReference::from("kv/data-read")],
+            vec![alien_core::permissions::PermissionSetReference::from(
+                "kv/data-read",
+            )],
         );
         let mut profiles = indexmap::IndexMap::new();
         profiles.insert("execution".to_string(), profile);
@@ -1034,7 +1043,11 @@ mod tests {
             &Default::default(),
         )
         .expect_err("no value and no default cannot resolve");
-        assert!(error.message.contains("analyticsEnabled"), "{}", error.message);
+        assert!(
+            error.message.contains("analyticsEnabled"),
+            "{}",
+            error.message
+        );
     }
 
     /// A gated resource the import delivered was accepted; it stays.
@@ -1096,7 +1109,10 @@ mod tests {
     fn a_live_gate_answered_false_drops_the_resource() {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -1108,7 +1124,10 @@ mod tests {
     fn a_live_gate_answered_true_keeps_the_resource() {
         let stripped = strip_declined_live_resources(
             live_gated_stack(Some(false)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -1160,18 +1179,16 @@ mod tests {
             "analytics",
             Resource::new(Kv::new("analytics".to_string()).build()),
         );
-        let answers =
-            resolve_frozen_gate_answers(&gated_stack(), &imported, &Default::default())
-                .expect("presence resolves");
+        let answers = resolve_frozen_gate_answers(&gated_stack(), &imported, &Default::default())
+            .expect("presence resolves");
         assert_eq!(answers.get("analyticsEnabled"), Some(&true));
 
         let declined = imported_state_with(
             "execution-sa",
             Resource::new(ServiceAccount::new("execution-sa".to_string()).build()),
         );
-        let answers =
-            resolve_frozen_gate_answers(&gated_stack(), &declined, &Default::default())
-                .expect("absence resolves");
+        let answers = resolve_frozen_gate_answers(&gated_stack(), &declined, &Default::default())
+            .expect("absence resolves");
         assert_eq!(answers.get("analyticsEnabled"), Some(&false));
 
         let direct = resolve_frozen_gate_answers(
@@ -1211,9 +1228,9 @@ mod tests {
     /// does not mention keep their recorded answer silently.
     #[test]
     fn fixity_refuses_conflicting_answers_only() {
-        let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
-        let still_frozen =
-            std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+        let persisted =
+            alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+        let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
 
         enforce_frozen_gate_fixity(&persisted, &still_frozen, &Default::default())
             .expect("an unmentioned input keeps its answer");
@@ -1245,8 +1262,7 @@ mod tests {
     /// update does not mention stays with the compatibility check.
     #[test]
     fn fixity_refuses_a_value_for_an_unrecorded_gate() {
-        let still_frozen =
-            std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+        let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
 
         enforce_frozen_gate_fixity(
             &alien_core::GateAnswers::new(),
@@ -1272,7 +1288,8 @@ mod tests {
     /// is a normal update again.
     #[test]
     fn fixity_releases_inputs_no_longer_frozen_gating() {
-        let persisted = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
+        let persisted =
+            alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), false)]);
 
         enforce_frozen_gate_fixity(
             &persisted,
@@ -1309,8 +1326,7 @@ mod tests {
     #[test]
     fn an_omitted_live_gate_follows_the_persisted_answer_over_the_default() {
         let persisted = alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), true)]);
-        let still_gating =
-            std::collections::HashSet::from(["cacheEnabled".to_string()]);
+        let still_gating = std::collections::HashSet::from(["cacheEnabled".to_string()]);
 
         let kept = strip_declined_live_resources(
             live_gated_stack(Some(false)),
@@ -1326,7 +1342,10 @@ mod tests {
 
         let provided_wins = strip_declined_live_resources(
             live_gated_stack(Some(false)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(false))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(false),
+            )]),
             &persisted,
             &still_gating,
         )
@@ -1344,8 +1363,7 @@ mod tests {
     /// anything.
     #[test]
     fn a_freed_gate_stops_following_its_recorded_answer() {
-        let recorded_no =
-            alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
+        let recorded_no = alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
 
         let kept = strip_declined_live_resources(
             live_gated_stack(Some(true)),
@@ -1380,7 +1398,10 @@ mod tests {
     fn a_string_boolean_gate_value_coerces_and_anything_else_fails_fast() {
         let dropped = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("false"))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!("false"),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -1392,7 +1413,10 @@ mod tests {
 
         let error = strip_declined_live_resources(
             live_gated_stack(Some(true)),
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!("yes"))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!("yes"),
+            )]),
             &Default::default(),
             &Default::default(),
         )
@@ -1431,9 +1455,12 @@ mod tests {
         };
 
         let declined = shared_gate_stack(false);
-        let answers =
-            resolve_frozen_gate_answers(&declined, &StackState::new(Platform::Aws), &Default::default())
-                .expect("the declared default resolves");
+        let answers = resolve_frozen_gate_answers(
+            &declined,
+            &StackState::new(Platform::Aws),
+            &Default::default(),
+        )
+        .expect("the declared default resolves");
         assert_eq!(answers.get("extrasEnabled"), Some(&false));
         let frozen_gating = frozen_gating_inputs(&declined);
         let stripped = strip_declined_frozen_resources(declined, &answers);
@@ -1445,9 +1472,12 @@ mod tests {
         );
 
         let accepted = shared_gate_stack(true);
-        let answers =
-            resolve_frozen_gate_answers(&accepted, &StackState::new(Platform::Aws), &Default::default())
-                .expect("the declared default resolves");
+        let answers = resolve_frozen_gate_answers(
+            &accepted,
+            &StackState::new(Platform::Aws),
+            &Default::default(),
+        )
+        .expect("the declared default resolves");
         let frozen_gating = frozen_gating_inputs(&accepted);
         let kept = strip_declined_frozen_resources(accepted, &answers);
         let kept = strip_frozen_dominated_live_resources(kept, &answers, &frozen_gating);
@@ -1466,13 +1496,13 @@ mod tests {
             alien_core::GateAnswers::from_iter([("cacheEnabled".to_string(), false)]);
         let freed_target = live_gated_stack(Some(false));
         let frozen_gating = frozen_gating_inputs(&freed_target);
-        assert!(frozen_gating.is_empty(), "nothing frozen gates this input anymore");
-
-        let kept = strip_frozen_dominated_live_resources(
-            freed_target,
-            &stale_answers,
-            &frozen_gating,
+        assert!(
+            frozen_gating.is_empty(),
+            "nothing frozen gates this input anymore"
         );
+
+        let kept =
+            strip_frozen_dominated_live_resources(freed_target, &stale_answers, &frozen_gating);
         assert!(
             kept.resources.contains_key("cache"),
             "a freed gate follows live resolution, not the stale frozen answer"
@@ -1480,7 +1510,10 @@ mod tests {
 
         let accepted = strip_declined_live_resources(
             kept,
-            &std::collections::HashMap::from([("cacheEnabled".to_string(), serde_json::json!(true))]),
+            &std::collections::HashMap::from([(
+                "cacheEnabled".to_string(),
+                serde_json::json!(true),
+            )]),
             &stale_answers,
             &Default::default(),
         )
