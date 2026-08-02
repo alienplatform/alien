@@ -1,14 +1,26 @@
 use crate::error::{map_cloud_client_error, ErrorData, Result};
 use crate::traits::{Binding, Kv, PutOptions, ScanResult};
 use alien_aws_clients::dynamodb::*;
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
 use super::{validate_key, validate_value};
+
+const HASH_BUCKET_COUNT: u8 = 16;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CursorState {
+    version: u8,
+    prefix: String,
+    bucket: u8,
+    last_key: Option<String>,
+}
 
 /// AWS DynamoDB implementation of the KV trait.
 ///
@@ -39,7 +51,7 @@ impl AwsDynamodbKv {
 
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
-        let bucket_id = hasher.finish() % 16; // 16 buckets for load distribution
+        let bucket_id = hasher.finish() % u64::from(HASH_BUCKET_COUNT);
         format!("bucket_{}", bucket_id)
     }
 
@@ -51,6 +63,55 @@ impl AwsDynamodbKv {
         } else {
             false
         }
+    }
+
+    fn encode_cursor(state: &CursorState) -> Result<String> {
+        let json =
+            serde_json::to_vec(state)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "DynamoDB KV scan cursor encoding".to_string(),
+                    details: "Failed to serialize cursor state".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        Ok(BASE64_URL_SAFE_NO_PAD.encode(json))
+    }
+
+    fn decode_cursor(prefix: &str, cursor: &str) -> Result<CursorState> {
+        let decoded = BASE64_URL_SAFE_NO_PAD
+            .decode(cursor)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor decoding".to_string(),
+                details: "Invalid cursor encoding".to_string(),
+                field_name: Some("cursor".to_string()),
+            })?;
+        let state: CursorState = serde_json::from_slice(&decoded)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor decoding".to_string(),
+                details: "Invalid cursor data".to_string(),
+                field_name: Some("cursor".to_string()),
+            })?;
+        if state.version != 1 || state.prefix != prefix || state.bucket >= HASH_BUCKET_COUNT {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor validation".to_string(),
+                details: "Cursor does not belong to this prefix scan".to_string(),
+                field_name: Some("cursor".to_string()),
+            }));
+        }
+        if state
+            .last_key
+            .as_ref()
+            .is_some_and(|last_key| !last_key.starts_with(prefix))
+        {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor validation".to_string(),
+                details: "Cursor key does not match the scan prefix".to_string(),
+                field_name: Some("cursor".to_string()),
+            }));
+        }
+        Ok(state)
     }
 }
 
@@ -97,7 +158,7 @@ impl Kv for AwsDynamodbKv {
             let value = item
                 .get("value")
                 .and_then(|attr| attr.b.as_ref())
-                .and_then(|base64_value| BASE64_STANDARD.decode(base64_value).ok())
+                .and_then(|base64_value| base64::prelude::BASE64_STANDARD.decode(base64_value).ok())
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::CloudPlatformError {
                         message: format!("Missing or invalid value attribute for key '{}'", key),
@@ -123,7 +184,7 @@ impl Kv for AwsDynamodbKv {
         item.insert("sk".to_string(), AttributeValue::s(key.to_string()));
         item.insert(
             "value".to_string(),
-            AttributeValue::b(BASE64_STANDARD.encode(&value)),
+            AttributeValue::b(base64::prelude::BASE64_STANDARD.encode(&value)),
         );
 
         if let Some(ttl) = options.ttl {
@@ -253,35 +314,51 @@ impl Kv for AwsDynamodbKv {
         &self,
         prefix: &str,
         limit: Option<usize>,
-        _cursor: Option<String>,
+        cursor: Option<String>,
     ) -> Result<ScanResult> {
-        validate_key(prefix)?; // Prefix follows same key validation rules
-
-        // For prefix scans with hash-based bucketing, we must query ALL buckets
-        // since items with the same prefix can be distributed across different buckets
-        let mut all_items = Vec::new();
-        let mut total_fetched = 0;
+        validate_key(prefix)?;
         let limit = limit.unwrap_or(1000);
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
 
-        // For simplicity, we'll query all 16 buckets sequentially
-        // In production, this could be parallelized for better performance
-        for bucket_id in 0..16 {
-            if total_fetched >= limit {
-                break;
-            }
+        let initial = cursor
+            .as_deref()
+            .map(|cursor| Self::decode_cursor(prefix, cursor))
+            .transpose()?
+            .unwrap_or(CursorState {
+                version: 1,
+                prefix: prefix.to_string(),
+                bucket: 0,
+                last_key: None,
+            });
+        let mut items = Vec::with_capacity(limit);
+        let mut bucket_id = initial.bucket;
+        let mut last_key = initial.last_key;
 
+        while bucket_id < HASH_BUCKET_COUNT {
             let bucket = format!("bucket_{}", bucket_id);
             let mut expression_attribute_values = HashMap::new();
-            expression_attribute_values.insert(":bucket".to_string(), AttributeValue::s(bucket));
+            expression_attribute_values
+                .insert(":bucket".to_string(), AttributeValue::s(bucket.clone()));
             expression_attribute_values
                 .insert(":prefix".to_string(), AttributeValue::s(prefix.to_string()));
 
-            // Build request for this bucket
+            let exclusive_start_key = last_key.as_ref().map(|key| {
+                HashMap::from([
+                    ("pk".to_string(), AttributeValue::s(bucket.clone())),
+                    ("sk".to_string(), AttributeValue::s(key.clone())),
+                ])
+            });
             let request = QueryRequest::builder()
                 .table_name(self.table_name.clone())
                 .key_condition_expression("pk = :bucket AND begins_with(sk, :prefix)".to_string())
                 .expression_attribute_values(expression_attribute_values)
-                .limit((limit - total_fetched) as i32)
+                .limit(i32::try_from(limit - items.len()).unwrap_or(i32::MAX))
+                .maybe_exclusive_start_key(exclusive_start_key)
                 .build();
 
             let response = self.client.query(request).await.map_err(|e| {
@@ -292,13 +369,7 @@ impl Kv for AwsDynamodbKv {
                 )
             })?;
 
-            // Process items from this bucket
             for item in response.items {
-                if total_fetched >= limit {
-                    break;
-                }
-
-                // Check TTL expiry
                 if let Some(ttl_attr) = item.get("ttl") {
                     if let Some(ttl_epoch) = ttl_attr.n.as_ref().and_then(|s| s.parse::<i64>().ok())
                     {
@@ -312,19 +383,51 @@ impl Kv for AwsDynamodbKv {
                     if let (Some(key), Some(base64_value)) =
                         (key_attr.s.as_ref(), value_attr.b.as_ref())
                     {
-                        if let Ok(value) = BASE64_STANDARD.decode(base64_value) {
-                            all_items.push((key.clone(), value));
-                            total_fetched += 1;
+                        if let Ok(value) = base64::prelude::BASE64_STANDARD.decode(base64_value) {
+                            items.push((key.clone(), value));
                         }
                     }
                 }
             }
+
+            let provider_last_key = response
+                .last_evaluated_key
+                .as_ref()
+                .and_then(|key| key.get("sk"))
+                .and_then(|value| value.s.clone());
+
+            if items.len() == limit {
+                let (next_bucket, next_key) = match provider_last_key {
+                    Some(key) => (bucket_id, Some(key)),
+                    None if bucket_id + 1 < HASH_BUCKET_COUNT => (bucket_id + 1, None),
+                    None => {
+                        return Ok(ScanResult {
+                            items,
+                            next_cursor: None,
+                        });
+                    }
+                };
+                return Ok(ScanResult {
+                    items,
+                    next_cursor: Some(Self::encode_cursor(&CursorState {
+                        version: 1,
+                        prefix: prefix.to_string(),
+                        bucket: next_bucket,
+                        last_key: next_key,
+                    })?),
+                });
+            }
+
+            if let Some(key) = provider_last_key {
+                last_key = Some(key);
+            } else {
+                bucket_id += 1;
+                last_key = None;
+            }
         }
 
-        // For simplicity, we're not implementing cursor-based pagination across buckets
-        // In production, this would require more complex cursor state management
         Ok(ScanResult {
-            items: all_items,
+            items,
             next_cursor: None,
         })
     }

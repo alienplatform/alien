@@ -27,7 +27,9 @@ use crate::providers::local_store::{
 use crate::traits::{Binding, Kv, PutOptions, ScanResult};
 use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use turso::Connection;
 
@@ -41,6 +43,13 @@ static KV_SPEC: StoreSpec = StoreSpec {
 #[derive(Debug)]
 pub struct LocalKv {
     store: LocalStore,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CursorState {
+    version: u8,
+    prefix: String,
+    last_key: String,
 }
 
 /// Build the standard KV operation error context.
@@ -146,6 +155,46 @@ impl LocalKv {
     /// Validate value constraints using global KV validation.
     fn validate_value(value: &[u8]) -> Result<()> {
         crate::providers::kv::validate_value(value)
+    }
+
+    fn encode_cursor(state: &CursorState) -> Result<String> {
+        let bytes =
+            serde_json::to_vec(state)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Local KV cursor encoding".to_string(),
+                    details: "Failed to serialize cursor state".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        Ok(URL_SAFE_NO_PAD.encode(bytes))
+    }
+
+    fn decode_cursor(prefix: &str, cursor: &str) -> Result<CursorState> {
+        let bytes =
+            URL_SAFE_NO_PAD
+                .decode(cursor)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Local KV cursor decoding".to_string(),
+                    details: "Invalid cursor encoding".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        let state: CursorState =
+            serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Local KV cursor decoding".to_string(),
+                    details: "Invalid cursor data".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        if state.version != 1 || state.prefix != prefix || !state.last_key.starts_with(prefix) {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "Local KV cursor validation".to_string(),
+                details: "Cursor does not belong to this prefix scan".to_string(),
+                field_name: Some("cursor".to_string()),
+            }));
+        }
+        Ok(state)
     }
 }
 
@@ -287,86 +336,97 @@ impl Kv for LocalKv {
     ) -> Result<ScanResult> {
         Self::validate_key(prefix)?;
 
-        // Parse cursor (simple offset-based pagination for local).
-        let start_offset = if let Some(cursor_str) = cursor {
-            cursor_str.parse::<usize>().map_err(|_| {
-                AlienError::new(ErrorData::InvalidInput {
-                    operation_context: "KV scan cursor parsing".to_string(),
-                    details: format!("Invalid cursor format: {}", cursor_str),
-                    field_name: Some("cursor".to_string()),
+        let limit = limit.unwrap_or(1000);
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
+        let last_key = cursor
+            .as_deref()
+            .map(|cursor| Self::decode_cursor(prefix, cursor))
+            .transpose()?
+            .map(|state| state.last_key);
+
+        // Collect matching, non-expired items after the last key in sorted order.
+        let matching: Vec<(String, Vec<u8>)> =
+            self.store
+                .with_conn(|conn| async move {
+                    let now = Utc::now().timestamp_millis();
+                    let rows = match last_key.as_deref() {
+                        Some(last_key) => {
+                            query_all(
+                                &conn,
+                                "SELECT key, value, expires_at FROM kv WHERE key > ?1 ORDER BY key",
+                                (last_key,),
+                            )
+                            .await
+                        }
+                        None => query_all(
+                            &conn,
+                            "SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key",
+                            (prefix,),
+                        )
+                        .await,
+                    }
+                    .into_alien_error()
+                    .context(kv_error(
+                        "scan_prefix",
+                        prefix,
+                        "failed to scan prefix",
+                    ))?;
+
+                    let mut matching = Vec::new();
+                    for row in &rows {
+                        let k = row.first().and_then(as_text).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "failed to read scan row key",
+                            ))
+                        })?;
+                        // Keys are ordered ascending starting at `prefix`; once a key
+                        // stops matching the prefix, no later key can match either.
+                        if !k.starts_with(prefix) {
+                            break;
+                        }
+                        let v = row.get(1).and_then(as_blob).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "stored value is not a blob",
+                            ))
+                        })?;
+                        let exp = row.get(2).and_then(as_opt_i64).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "stored expires_at is not an integer",
+                            ))
+                        })?;
+                        if matches!(exp, Some(e) if e <= now) {
+                            continue; // expired: treat as absent
+                        }
+                        matching.push((k, v));
+                    }
+                    Ok(matching)
                 })
-            })?
-        } else {
-            0
-        };
+                .await?;
 
-        // Collect matching, non-expired items in sorted key order.
-        let matching: Vec<(String, Vec<u8>)> = self
-            .store
-            .with_conn(|conn| async move {
-                let now = Utc::now().timestamp_millis();
-                let rows = query_all(
-                    &conn,
-                    "SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key",
-                    (prefix,),
-                )
-                .await
-                .into_alien_error()
-                .context(kv_error(
-                    "scan_prefix",
-                    prefix,
-                    "failed to scan prefix",
-                ))?;
-
-                let mut matching = Vec::new();
-                for row in &rows {
-                    let k = row.first().and_then(as_text).ok_or_else(|| {
-                        AlienError::new(kv_error(
-                            "scan_prefix",
-                            prefix,
-                            "failed to read scan row key",
-                        ))
-                    })?;
-                    // Keys are ordered ascending starting at `prefix`; once a key
-                    // stops matching the prefix, no later key can match either.
-                    if !k.starts_with(prefix) {
-                        break;
-                    }
-                    let v = row.get(1).and_then(as_blob).ok_or_else(|| {
-                        AlienError::new(kv_error(
-                            "scan_prefix",
-                            prefix,
-                            "stored value is not a blob",
-                        ))
-                    })?;
-                    let exp = row.get(2).and_then(as_opt_i64).ok_or_else(|| {
-                        AlienError::new(kv_error(
-                            "scan_prefix",
-                            prefix,
-                            "stored expires_at is not an integer",
-                        ))
-                    })?;
-                    if matches!(exp, Some(e) if e <= now) {
-                        continue; // expired: treat as absent
-                    }
-                    matching.push((k, v));
-                }
-                Ok(matching)
-            })
-            .await?;
-
-        // Apply offset-based pagination (results are already sorted by key).
-        let total_items = matching.len();
-        let end_offset = start_offset + limit.unwrap_or(total_items);
-
-        let items = matching
-            .into_iter()
-            .skip(start_offset)
-            .take(limit.unwrap_or(usize::MAX))
-            .collect::<Vec<_>>();
-
-        let next_cursor = if end_offset < total_items {
-            Some(end_offset.to_string())
+        let has_more = matching.len() > limit;
+        let items = matching.into_iter().take(limit).collect::<Vec<_>>();
+        let next_cursor = if has_more {
+            items
+                .last()
+                .map(|(last_key, _)| {
+                    Self::encode_cursor(&CursorState {
+                        version: 1,
+                        prefix: prefix.to_string(),
+                        last_key: last_key.clone(),
+                    })
+                })
+                .transpose()?
         } else {
             None
         };
@@ -492,6 +552,51 @@ mod tests {
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].0, "prefix:key3");
         assert!(result.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn prefix_cursor_does_not_skip_after_an_earlier_key_is_deleted() {
+        let (kv, _temp_dir) = create_test_kv().await;
+        for key in ["prefix:key1", "prefix:key2", "prefix:key3"] {
+            kv.put(key, key.as_bytes().to_vec(), None).await.unwrap();
+        }
+
+        let first = kv.scan_prefix("prefix:", Some(2), None).await.unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>(),
+            ["prefix:key1", "prefix:key2"]
+        );
+
+        kv.delete("prefix:key1").await.unwrap();
+        let second = kv
+            .scan_prefix("prefix:", Some(2), first.next_cursor)
+            .await
+            .unwrap();
+        assert_eq!(second.items[0].0, "prefix:key3");
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn prefix_cursor_is_rejected_for_another_prefix() {
+        let (kv, _temp_dir) = create_test_kv().await;
+        for key in ["first:key1", "first:key2"] {
+            kv.put(key, key.as_bytes().to_vec(), None).await.unwrap();
+        }
+
+        let cursor = kv
+            .scan_prefix("first:", Some(1), None)
+            .await
+            .unwrap()
+            .next_cursor
+            .expect("the first page should have a cursor");
+        assert!(kv
+            .scan_prefix("second:", Some(1), Some(cursor))
+            .await
+            .is_err());
     }
 
     #[tokio::test]

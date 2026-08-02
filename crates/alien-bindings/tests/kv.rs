@@ -1324,19 +1324,22 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
     let unique_id = Uuid::new_v4().simple();
     let prefix = format!("test-scan-{}", unique_id);
 
-    // Create test data with the prefix
-    let test_keys = vec![
-        format!("{}:key1", prefix),
-        format!("{}:key2", prefix),
-        format!("{}:dir1:key3", prefix),
-        format!("{}:dir1:key4", prefix),
-        format!("{}:dir2:key5", prefix),
-    ];
+    // Use enough keys and a small page size to force provider pagination and,
+    // for partitioned backends, traversal across several physical partitions.
+    let test_keys = (0..32)
+        .map(|index| format!("{}:key{:02}", prefix, index))
+        .collect::<Vec<_>>();
+    let expired_keys = (0..8)
+        .map(|index| format!("{}:expired{:02}", prefix, index))
+        .collect::<Vec<_>>();
 
     let other_key = format!("other-prefix-{}:key6", unique_id);
 
     // Track all keys for cleanup
     for key in &test_keys {
+        ctx.track_key(key);
+    }
+    for key in &expired_keys {
         ctx.track_key(key);
     }
     ctx.track_key(&other_key);
@@ -1351,72 +1354,112 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
             )
         });
     }
+    for key in &expired_keys {
+        kv.put(
+            key,
+            b"expired".to_vec(),
+            Some(PutOptions {
+                ttl: Some(Duration::from_secs(1)),
+                if_not_exists: false,
+            }),
+        )
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "[{}] Failed to put expiring scan data for key '{}': {:?}",
+                provider_name, key, e
+            )
+        });
+    }
 
     // Put data with different prefix (should not be returned)
     kv.put(&other_key, b"other value".to_vec(), None)
         .await
         .unwrap_or_else(|e| panic!("[{}] Failed to put other key: {:?}", provider_name, e));
 
-    // Small delay for eventual consistency in cloud providers
-    if matches!(provider_name, "aws" | "gcp" | "azure") {
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-    }
+    // Let the short-lived rows expire and cloud writes become visible.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Scan with prefix
-    let scan_result = kv
-        .scan_prefix(&prefix, Some(10), None)
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "[{}] Failed to scan with prefix '{}': {:?}",
-                provider_name, prefix, e
-            )
-        });
-
-    // Verify results
-    assert!(
-        !scan_result.items.is_empty(),
-        "[{}] Scan should return some items",
-        provider_name
-    );
-    assert!(
-        scan_result.items.len() <= test_keys.len(),
-        "[{}] Scan should not return more items than we put",
-        provider_name
-    );
-
-    // Check that all returned keys have the correct prefix
-    for (key, _value) in &scan_result.items {
-        assert!(
-            key.starts_with(&prefix),
-            "[{}] All returned keys should start with prefix '{}', but got '{}'",
-            provider_name,
-            prefix,
-            key
-        );
-    }
-
-    // Check that the other key is not included
-    let other_key_found = scan_result.items.iter().any(|(key, _)| key == &other_key);
-    assert!(
-        !other_key_found,
-        "[{}] Other key should not be included in prefix scan",
-        provider_name
-    );
-
-    // Test pagination if supported
-    if scan_result.items.len() > 2 {
-        let limited_scan = kv
-            .scan_prefix(&prefix, Some(2), None)
+    let mut cursor = None;
+    let mut first_cursor = None;
+    let mut visited_cursors = HashSet::new();
+    let mut found = HashMap::new();
+    for page_number in 0..256 {
+        let scan_result = kv
+            .scan_prefix(&prefix, Some(3), cursor)
             .await
-            .unwrap_or_else(|e| panic!("[{}] Failed to scan with limit: {:?}", provider_name, e));
-
+            .unwrap_or_else(|e| {
+                panic!(
+                    "[{}] Failed to scan page {} with prefix '{}': {:?}",
+                    provider_name, page_number, prefix, e
+                )
+            });
         assert!(
-            limited_scan.items.len() <= 2,
-            "[{}] Limited scan should respect limit",
+            scan_result.items.len() <= 3,
+            "[{}] Page {} exceeded the requested limit",
+            provider_name,
+            page_number
+        );
+        for (key, value) in scan_result.items {
+            assert!(
+                key.starts_with(&prefix),
+                "[{}] Scan returned key '{}' outside prefix '{}'",
+                provider_name,
+                key,
+                prefix
+            );
+            found.insert(key, value);
+        }
+
+        let Some(next_cursor) = scan_result.next_cursor else {
+            break;
+        };
+        if first_cursor.is_none() {
+            first_cursor = Some(next_cursor.clone());
+        }
+        assert!(
+            visited_cursors.insert(next_cursor.clone()),
+            "[{}] Scan repeated a cursor and cannot make progress",
+            provider_name
+        );
+        cursor = Some(next_cursor);
+        assert!(
+            page_number < 255,
+            "[{}] Scan did not terminate",
             provider_name
         );
     }
+
+    let expected = test_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| (key.clone(), format!("value{}", index + 1).into_bytes()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        found, expected,
+        "[{}] Following scan cursors must visit exactly the live prefix keys",
+        provider_name
+    );
+
+    let first_cursor = first_cursor.expect("a three-item page must produce a cursor");
+    assert!(
+        kv.scan_prefix(
+            &format!("different-{}", unique_id),
+            Some(3),
+            Some(first_cursor)
+        )
+        .await
+        .is_err(),
+        "[{}] A cursor must be bound to its original prefix",
+        provider_name
+    );
+    assert!(
+        kv.scan_prefix(&prefix, Some(3), Some("not-a-cursor".to_string()))
+            .await
+            .is_err(),
+        "[{}] A malformed cursor must fail",
+        provider_name
+    );
 }
 
 #[rstest]
