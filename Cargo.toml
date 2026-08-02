@@ -202,6 +202,7 @@ uuid = "1"
 hostname = "0.4"
 walkdir = "2"
 workspace_root = "0.1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 pem = "3.0"
 oci-tar-builder = "0.4"
 sha2 = "0.10"

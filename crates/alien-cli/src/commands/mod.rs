@@ -25,6 +25,11 @@ pub mod platform;
 #[cfg(feature = "platform")]
 pub mod manager;
 
+/// Operations plugin commands (publish, list). Talk to the platform API, so
+/// only available when the `platform` feature is enabled.
+#[cfg(feature = "platform")]
+pub mod operations;
+
 pub use build::{build_command, BuildArgs, BuildSubcommand};
 pub use commands::{commands_task, commands_task_dev, CommandsArgs};
 pub use debug::{debug_task, debug_task_dev, DebugArgs};
