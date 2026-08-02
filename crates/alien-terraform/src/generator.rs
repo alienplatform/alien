@@ -24,13 +24,11 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type,
-    remote_bindings::stack_is_bindings_only,
-    DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
-    KubernetesExposureSettings, KubernetesSettings, Network, NetworkSettings, RemoteBindings,
-    RemoteStackManagement, Result, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackInputValidation, StackSettings, TelemetryMode,
-    UpdatesMode,
+    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
+    KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
+    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -338,7 +336,10 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action");
-    let bindings_only = stack_is_bindings_only(stack);
+    let setup_only = !stack
+        .resources
+        .values()
+        .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
     let has_remote_management =
         stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE);
     let has_remote_bindings = stack_has_resource_type(stack, RemoteBindings::RESOURCE_TYPE);
@@ -374,7 +375,7 @@ pub fn generate_terraform_module(
             options.helm_install.as_ref(),
             &deployment_name_default,
             needs_azure_management_inputs,
-            bindings_only,
+            setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
         )?)?,
@@ -400,7 +401,7 @@ pub fn generate_terraform_module(
             registration_resources,
             &shared_locals,
             has_remote_management,
-            bindings_only,
+            setup_only,
         )?)?,
     );
 
@@ -424,6 +425,7 @@ pub fn generate_terraform_module(
             options.registration.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
+            setup_only,
         ))?,
     );
     if let Some(helm_install) = options
@@ -491,9 +493,9 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
     }
 
     let mut lines = vec![
-        "# Remote Bindings permissions".to_string(),
+        "# Application access permissions".to_string(),
         String::new(),
-        "The setup creates one narrow Remote Bindings identity. It can access only the resources listed below; it does not receive Alien's management permissions.".to_string(),
+        "The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive Alien's management permissions.".to_string(),
     ];
     for (resource_id, definition) in resources {
         lines.extend([
@@ -1238,7 +1240,7 @@ fn variables_body(
     helm_install: Option<&TerraformHelmInstall>,
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
-    bindings_only: bool,
+    setup_only: bool,
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
 ) -> Result<Body> {
@@ -1261,13 +1263,13 @@ fn variables_body(
         None,
         true,
     )));
-    blocks.push(nested(variable_block(
-        "management_url",
-        "Optional management endpoint used by pull-style runtimes.",
-        Some(Expression::String("".to_string())),
-        false,
-    )));
-    if !bindings_only {
+    if !setup_only {
+        blocks.push(nested(variable_block(
+            "management_url",
+            "Optional management endpoint used by pull-style runtimes.",
+            Some(Expression::String("".to_string())),
+            false,
+        )));
         blocks.push(nested(string_enum_variable_block(
             "deployment_model",
             "How runtime updates are delivered after setup.",
@@ -1311,10 +1313,10 @@ fn variables_body(
         blocks.push(nested(variable_block(
             "managing_role_arn",
             "ARN of the management identity allowed to assume setup-created roles.",
-            (!bindings_only).then(|| Expression::String(String::new())),
+            (!setup_only).then(|| Expression::String(String::new())),
             false,
         )));
-        if !bindings_only {
+        if !setup_only {
             blocks.push(nested(variable_block(
                 "managing_account_id",
                 "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants.",
@@ -1399,7 +1401,7 @@ fn variables_body(
         blocks.push(nested(variable_block(
             "managing_service_account_email",
             "Email of the management service account allowed to impersonate setup-created identities.",
-            (!bindings_only).then(|| Expression::String(String::new())),
+            (!setup_only).then(|| Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(bool_variable_block(
@@ -1482,19 +1484,19 @@ fn variables_body(
             blocks.push(nested(variable_block(
                 "azure_managing_tenant_id",
                 "Azure tenant ID that hosts the management identity for cross-tenant access.",
-                (!bindings_only).then(|| Expression::String(String::new())),
+                (!setup_only).then(|| Expression::String(String::new())),
                 false,
             )));
             blocks.push(nested(variable_block(
                 "azure_oidc_issuer",
                 "OIDC issuer URL for Azure Federated Identity Credential.",
-                (!bindings_only).then(|| Expression::String(String::new())),
+                (!setup_only).then(|| Expression::String(String::new())),
                 false,
             )));
             blocks.push(nested(variable_block(
                 "azure_oidc_subject",
                 "OIDC subject claim for Azure Federated Identity Credential.",
-                (!bindings_only).then(|| Expression::String(String::new())),
+                (!setup_only).then(|| Expression::String(String::new())),
                 false,
             )));
         }
@@ -2302,7 +2304,7 @@ fn locals_body(
     registration_resources: Vec<(Option<String>, Expression)>,
     extra: &IndexMap<String, Expression>,
     has_remote_management: bool,
-    bindings_only: bool,
+    setup_only: bool,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -2339,12 +2341,12 @@ fn locals_body(
     body.push(attr(
         "deployment_management_config",
         if has_remote_management {
-            management_config_expression(target)
+            management_config_expression(target, setup_only)
         } else {
             expr::raw("null")
         },
     ));
-    if !bindings_only {
+    if !setup_only {
         body.push(attr(
             "advanced_settings",
             expr::raw(
@@ -2391,7 +2393,7 @@ fn locals_body(
     }
     body.push(attr(
         "deployment_settings",
-        if bindings_only {
+        if setup_only {
             expr::object([
                 ("deploymentModel", Expression::String("push".to_string())),
                 (
@@ -2399,7 +2401,7 @@ fn locals_body(
                     Expression::String("approval-required".to_string()),
                 ),
                 ("telemetry", Expression::String("off".to_string())),
-                ("heartbeats", Expression::String("off".to_string())),
+                ("heartbeats", Expression::String("on".to_string())),
             ])
         } else {
             stack_settings_expression(target, stack_settings)
@@ -2443,22 +2445,43 @@ fn region_expression(target: TerraformTarget) -> Expression {
     }
 }
 
-fn management_config_expression(target: TerraformTarget) -> Expression {
-    match target.cloud_platform() {
-        alien_core::Platform::Aws => expr::raw(
+fn management_config_expression(target: TerraformTarget, setup_only: bool) -> Expression {
+    match (target.cloud_platform(), setup_only) {
+        (alien_core::Platform::Aws, true) => expr::raw(
+            r#"{
+  platform        = "aws"
+  managingRoleArn = var.managing_role_arn
+}"#,
+        ),
+        (alien_core::Platform::Gcp, true) => expr::raw(
+            r#"{
+  platform            = "gcp"
+  projectId           = var.gcp_project
+  serviceAccountEmail = var.managing_service_account_email
+}"#,
+        ),
+        (alien_core::Platform::Azure, true) => expr::raw(
+            r#"{
+  platform          = "azure"
+  managingTenantId  = var.azure_managing_tenant_id
+  oidcIssuer        = var.azure_oidc_issuer
+  oidcSubject       = var.azure_oidc_subject
+}"#,
+        ),
+        (alien_core::Platform::Aws, false) => expr::raw(
             r#"var.deployment_model == "push" ? {
   platform        = "aws"
   managingRoleArn = var.managing_role_arn
 } : null"#,
         ),
-        alien_core::Platform::Gcp => expr::raw(
+        (alien_core::Platform::Gcp, false) => expr::raw(
             r#"var.deployment_model == "push" ? {
   platform            = "gcp"
   projectId           = var.gcp_project
   serviceAccountEmail = var.managing_service_account_email
 } : null"#,
         ),
-        alien_core::Platform::Azure => expr::raw(
+        (alien_core::Platform::Azure, false) => expr::raw(
             r#"var.deployment_model == "push" ? {
   platform          = "azure"
   managingTenantId  = var.azure_managing_tenant_id
@@ -2466,7 +2489,7 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
   oidcSubject       = var.azure_oidc_subject
 } : null"#,
         ),
-        platform => Expression::String(platform.as_str().to_string()),
+        (platform, _) => Expression::String(platform.as_str().to_string()),
     }
 }
 
@@ -2613,6 +2636,7 @@ fn registration_body(
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
     input_values: Expression,
+    setup_only: bool,
 ) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -2647,7 +2671,14 @@ fn registration_body(
             ),
             attr("platform", expr::raw("local.deployment_platform")),
             attr("region", expr::raw("local.deployment_region")),
-            attr("management_url", expr::raw("var.management_url")),
+            attr(
+                "management_url",
+                if setup_only {
+                    Expression::String(String::new())
+                } else {
+                    expr::raw("var.management_url")
+                },
+            ),
             attr(
                 "management_config",
                 expr::raw("jsondecode(jsonencode(local.deployment_management_config))"),
@@ -2718,7 +2749,14 @@ fn registration_body(
                             .unwrap_or_default(),
                     ))),
                 ),
-                ("management_url", expr::raw("var.management_url")),
+                (
+                    "management_url",
+                    if setup_only {
+                        Expression::String(String::new())
+                    } else {
+                        expr::raw("var.management_url")
+                    },
+                ),
                 (
                     "management_config",
                     expr::raw("local.deployment_management_config"),
@@ -3008,7 +3046,11 @@ fn readme_md(
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
     let mut input_sections = vec![readme_required_inputs(registration.is_some())];
-    input_sections.push(readme_common_inputs());
+    let setup_only = !stack
+        .resources
+        .values()
+        .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
+    input_sections.push(readme_common_inputs(setup_only));
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         input_sections.push(readme_aws_inputs());
     }
@@ -3074,7 +3116,11 @@ fn readme_required_inputs(has_registration: bool) -> String {
     format!("Required:\n\n- `token`: install token from the setup page.\n{name}")
 }
 
-fn readme_common_inputs() -> String {
+fn readme_common_inputs(setup_only: bool) -> String {
+    if setup_only {
+        return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one."
+            .to_string();
+    }
     "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.\n- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.".to_string()
 }
 
@@ -3209,6 +3255,7 @@ mod tests {
             Some(&registration),
             &[],
             Expression::Object(Default::default()),
+            false,
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));

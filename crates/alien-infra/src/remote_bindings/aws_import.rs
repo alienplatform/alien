@@ -20,7 +20,6 @@ impl ResourceImporter for AwsRemoteBindingsImporter {
                 state: AwsRemoteBindingsState::Ready,
                 role_arn: Some(data.role_arn),
                 role_name: Some(data.role_name),
-                external_id: Some(data.external_id),
                 _internal_stay_count: None,
             },
             ctx,

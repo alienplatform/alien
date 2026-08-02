@@ -1,4 +1,4 @@
-use crate::{ResourceEntry, ResourceLifecycle, ResourceType, Stack, StackState};
+use crate::{ResourceEntry, ResourceLifecycle, ResourceType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
@@ -49,52 +49,4 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
 
 pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {
     DEFINITIONS
-}
-
-/// True when the stack contains only externally published resources plus
-/// unavoidable setup parents. Such a stack needs no broad runtime identity.
-pub fn stack_is_bindings_only(stack: &Stack) -> bool {
-    let has_binding = stack
-        .resources
-        .values()
-        .any(|entry| remote_binding_for_entry(entry).is_some());
-    has_binding
-        && stack.resources.values().all(|entry| {
-            remote_binding_for_entry(entry).is_some()
-                || entry.config.resource_type() == crate::RemoteBindings::RESOURCE_TYPE
-                || DEFINITIONS.iter().any(|definition| {
-                    definition
-                        .setup_support_resource_types
-                        .contains(&entry.config.resource_type().as_ref())
-                })
-        })
-}
-
-/// State-side equivalent used during credential handoff, where the desired stack is not
-/// available. The standalone identity's compiled grant list is authoritative for which resource
-/// IDs belong to the bindings-only data plane.
-pub fn stack_state_is_bindings_only(state: &StackState) -> bool {
-    let Some(bindings) = state.resources.values().find_map(|resource| {
-        (resource.resource_type == crate::RemoteBindings::RESOURCE_TYPE.as_ref())
-            .then(|| resource.config.downcast_ref::<crate::RemoteBindings>())
-            .flatten()
-    }) else {
-        return false;
-    };
-    if bindings.grants.is_empty() {
-        return false;
-    }
-
-    state.resources.iter().all(|(resource_id, resource)| {
-        resource.resource_type == crate::RemoteBindings::RESOURCE_TYPE.as_ref()
-            || bindings
-                .grants
-                .iter()
-                .any(|grant| grant.resource_id == *resource_id)
-            || DEFINITIONS.iter().any(|definition| {
-                definition
-                    .setup_support_resource_types
-                    .contains(&resource.resource_type.as_str())
-            })
-    })
 }

@@ -127,7 +127,6 @@ fn remote_bindings_imports_are_first_class_on_every_cloud() {
             serde_json::to_value(AwsRemoteBindingsImportData {
                 role_name: "alien-bindings".to_string(),
                 role_arn: "arn:aws:iam::123456789012:role/alien-bindings".to_string(),
-                external_id: "alien-stack".to_string(),
             })
             .unwrap(),
             "arn:aws:iam::123456789012:role/alien-bindings",

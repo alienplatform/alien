@@ -106,18 +106,7 @@ impl AzureRemoteBindingsController {
     }
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
-    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        ctx.service_provider
-            .get_azure_managed_identity_client(ctx.get_azure_config()?)?
-            .get_user_assigned_identity(
-                &azure_utils::get_resource_group_name(ctx.state)?,
-                &identity_name(ctx.resource_prefix),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to read Remote Bindings managed identity".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<RemoteBindings>()?.id.clone()),
-            })?;
+    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -196,7 +185,6 @@ impl AzureRemoteBindingsController {
                 "uamiClientId": self.client_id.as_ref()?, "tenantId": self.tenant_id.as_ref()?,
             })
             .to_string(),
-            external_id: None,
         }))
     }
 }
@@ -213,10 +201,7 @@ async fn reconcile_federated_credential(
             resource_id: Some(config.id.clone()),
         })
     })?;
-    let fic_name = format!(
-        "{}-remote-bindings-federated-credential",
-        ctx.resource_prefix
-    );
+    let fic_name = format!("{}-access-federated-credential", ctx.resource_prefix);
     let credential = FederatedIdentityCredential {
         id: None,
         name: None,
@@ -245,7 +230,7 @@ async fn reconcile_federated_credential(
 }
 
 fn identity_name(prefix: &str) -> String {
-    format!("{prefix}-remote-bindings-identity")
+    format!("{prefix}-access-identity")
 }
 fn missing(resource_id: String, field: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::InfrastructureError {

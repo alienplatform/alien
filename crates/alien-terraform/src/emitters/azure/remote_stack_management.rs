@@ -19,8 +19,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, NetworkSettings, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteStackManagement, Result,
 };
 use alien_error::Context;
 use alien_permissions::{
@@ -88,7 +88,12 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         emit_management_role(&mut fragment, label, &grant_plan.plan);
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
         emit_management_assignments(&mut fragment, label, &grant_plan, merged_gates.as_deref())?;
-        emit_existing_network_reader_assignments(&mut fragment, label);
+        if matches!(
+            ctx.stack_settings.network.as_ref(),
+            Some(NetworkSettings::ByoVnetAzure { .. })
+        ) {
+            emit_existing_network_reader_assignments(&mut fragment, label);
+        }
 
         fragment.resource_blocks.push(resource_block(
             "azurerm_federated_identity_credential",

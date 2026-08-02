@@ -129,6 +129,9 @@ async fn imported_continuation_refuses_to_initialize_pending_resource() -> Resul
     assert!(error
         .message
         .contains("cannot continue from status Pending"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    assert!(!error.retryable);
+    assert!(!error.internal);
     Ok(())
 }
 
@@ -144,6 +147,9 @@ async fn imported_continuation_refuses_missing_setup_resource() -> Result<()> {
         .expect_err("an incomplete setup handoff must fail");
 
     assert!(error.message.contains("missing resource 'assets'"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    assert!(!error.retryable);
+    assert!(!error.internal);
     Ok(())
 }
 

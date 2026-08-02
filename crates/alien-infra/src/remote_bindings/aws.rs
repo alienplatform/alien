@@ -16,7 +16,6 @@ use crate::{
 pub struct AwsRemoteBindingsController {
     pub(crate) role_arn: Option<String>,
     pub(crate) role_name: Option<String>,
-    pub(crate) external_id: Option<String>,
 }
 
 #[controller]
@@ -35,8 +34,7 @@ impl AwsRemoteBindingsController {
                 resource_id: Some(config.id.clone()),
             })
         })?;
-        let role_name = format!("{}-remote-bindings", ctx.resource_prefix);
-        let external_id = ctx.resource_prefix.to_string();
+        let role_name = format!("{}-access", ctx.resource_prefix);
         let client = ctx
             .service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
@@ -45,12 +43,9 @@ impl AwsRemoteBindingsController {
             .create_role(
                 CreateRoleRequest::builder()
                     .role_name(role_name.clone())
-                    .assume_role_policy_document(trust_policy(
-                        &management.managing_role_arn,
-                        &external_id,
-                    ))
+                    .assume_role_policy_document(trust_policy(&management.managing_role_arn))
                     .description(format!(
-                        "Remote Bindings identity. Resource prefix: {}.",
+                        "Application access identity. Resource prefix: {}.",
                         ctx.resource_prefix
                     ))
                     .tags(
@@ -68,7 +63,6 @@ impl AwsRemoteBindingsController {
             })?;
         self.role_arn = Some(response.create_role_result.role.arn);
         self.role_name = Some(role_name);
-        self.external_id = Some(external_id);
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -76,24 +70,7 @@ impl AwsRemoteBindingsController {
     }
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
-    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let resource_id = ctx.desired_resource_config::<RemoteBindings>()?.id.clone();
-        let role_name = self.role_name.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                resource_id: Some(resource_id.clone()),
-                operation: Some("read_remote_bindings_identity".to_string()),
-                message: "Remote Bindings role name is missing".to_string(),
-            })
-        })?;
-        ctx.service_provider
-            .get_aws_iam_client(ctx.get_aws_config()?)
-            .await?
-            .get_role(role_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to read Remote Bindings IAM role".to_string(),
-                resource_id: Some(resource_id),
-            })?;
+    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -118,20 +95,15 @@ impl AwsRemoteBindingsController {
                 resource_id: Some(resource_id.clone()),
             })
         })?;
-        let external_id = ctx.resource_prefix.to_string();
         ctx.service_provider
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?
-            .update_assume_role_policy(
-                role_name,
-                &trust_policy(&management.managing_role_arn, &external_id),
-            )
+            .update_assume_role_policy(role_name, &trust_policy(&management.managing_role_arn))
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to update Remote Bindings IAM role trust".to_string(),
                 resource_id: Some(resource_id),
             })?;
-        self.external_id = Some(external_id);
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -171,7 +143,6 @@ impl AwsRemoteBindingsController {
                 {
                     self.role_name = None;
                     self.role_arn = None;
-                    self.external_id = None;
                     return Ok(HandlerAction::Continue {
                         state: Deleted,
                         suggested_delay: None,
@@ -205,7 +176,6 @@ impl AwsRemoteBindingsController {
         }
         self.role_name = None;
         self.role_arn = None;
-        self.external_id = None;
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -228,12 +198,11 @@ impl AwsRemoteBindingsController {
         Some(ResourceOutputs::new(RemoteBindingsOutputs {
             resource_id: self.role_arn.clone()?,
             access_configuration: self.role_arn.clone()?,
-            external_id: self.external_id.clone(),
         }))
     }
 }
 
-fn trust_policy(managing_role_arn: &str, external_id: &str) -> String {
+fn trust_policy(managing_role_arn: &str) -> String {
     serde_json::json!({
         "Version": "2012-10-17",
         "Statement": [{
@@ -243,7 +212,6 @@ fn trust_policy(managing_role_arn: &str, external_id: &str) -> String {
             "Action": "sts:AssumeRole",
             "Condition": { "StringEquals": {
                 "aws:PrincipalArn": managing_role_arn,
-                "sts:ExternalId": external_id,
             }},
         }],
     })

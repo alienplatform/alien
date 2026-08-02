@@ -1,13 +1,14 @@
 //! Adds the one setup-owned Remote Bindings identity required by opted-in resources.
 
-use crate::{error::Result, StackMutation};
+use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
     DeploymentConfig, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
     ResourceLifecycle, Stack, StackState,
 };
+use alien_error::AlienError;
 use async_trait::async_trait;
 
-pub const REMOTE_BINDINGS_ID: &str = "remote-bindings";
+pub const REMOTE_BINDINGS_ID: &str = "access";
 
 pub struct RemoteBindingsMutation;
 
@@ -43,6 +44,17 @@ impl StackMutation for RemoteBindingsMutation {
         _stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
+        if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: format!(
+                    "resource ID '{REMOTE_BINDINGS_ID}' is reserved for application access, but is already used by resource type '{}'",
+                    existing.config.resource_type()
+                ),
+                resource_id: Some(REMOTE_BINDINGS_ID.to_string()),
+            }));
+        }
+
         let mut grants = stack
             .resources
             .iter()
@@ -138,7 +150,35 @@ mod tests {
             .expect("Remote Bindings config");
         assert_eq!(bindings.grants.len(), 1);
         assert_eq!(bindings.grants[0].resource_id, "exports");
-        assert_eq!(bindings.grants[0].permission_set, "storage/remote-data-write");
+        assert_eq!(
+            bindings.grants[0].permission_set,
+            "storage/remote-data-write"
+        );
+    }
+
+    #[tokio::test]
+    async fn reserved_access_id_is_never_overwritten() {
+        let stack = Stack::new("byo-bucket".to_string())
+            .add(
+                Storage::new(REMOTE_BINDINGS_ID.to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Test);
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &state, &config())
+            .await
+            .expect_err("reserved resource ID must fail instead of being overwritten");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(error
+            .to_string()
+            .contains("reserved for application access"));
     }
 
     #[test]

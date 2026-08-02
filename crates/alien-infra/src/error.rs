@@ -396,6 +396,21 @@ pub enum ErrorData {
         service_name: String,
     },
 
+    /// An imported setup handoff cannot be continued safely.
+    #[error(
+        code = "IMPORTED_SETUP_STATE_INVALID",
+        message = "Imported setup state is invalid: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ImportedSetupStateInvalid {
+        /// Actionable description of the invalid handoff.
+        message: String,
+        /// Resource involved in the invalid handoff, if known.
+        resource_id: Option<String>,
+    },
+
     /// Generic catch-all error for uncommon cases.
     #[error(
         code = "INFRASTRUCTURE_ERROR",

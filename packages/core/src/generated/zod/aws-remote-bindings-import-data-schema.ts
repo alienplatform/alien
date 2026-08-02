@@ -6,8 +6,7 @@
 import * as z from "zod";
 
 export const AwsRemoteBindingsImportDataSchema = z.object({
-    "externalId": z.string(),
-"roleArn": z.string(),
+    "roleArn": z.string(),
 "roleName": z.string()
     })
 

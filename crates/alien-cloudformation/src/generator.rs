@@ -8,13 +8,11 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type,
-    remote_bindings::stack_is_bindings_only,
-    CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, DeploymentModel,
-    DomainSettings, ErrorData, HeartbeatsMode, KubernetesCluster, KubernetesSettings, Network,
-    NetworkSettings, Platform, RemoteBindings, Result, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, TelemetryMode,
-    UpdatesMode, Worker, WorkerCode,
+    ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
+    ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
+    ResourceLifecycle, Result, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -250,7 +248,10 @@ pub fn generate_cloudformation_template(
     };
 
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
-    let bindings_only = stack_is_bindings_only(stack);
+    let bindings_only = !stack
+        .resources
+        .values()
+        .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
     let stack_inputs = stack_inputs_for_cloudformation(stack, options.target);
 
     add_standard_parameters(
@@ -259,6 +260,7 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         supports_custom_domain,
         bindings_only,
+        !matches!(options.registration, RegistrationMode::OutputsFallback),
     )?;
     add_stack_input_parameters(&mut template, &stack_inputs)?;
     add_supported_region_rule(&mut template, &options.registration);
@@ -280,6 +282,7 @@ pub fn generate_cloudformation_template(
         supports_custom_domain,
         &stack_inputs,
         bindings_only,
+        !matches!(options.registration, RegistrationMode::OutputsFallback),
     );
 
     let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
@@ -914,16 +917,19 @@ fn add_standard_parameters(
     settings: &StackSettings,
     supports_custom_domain: bool,
     bindings_only: bool,
+    uses_custom_registration: bool,
 ) -> Result<()> {
-    template.parameters.insert(
-        PARAM_TOKEN.to_string(),
-        string_parameter(
-            "Install token from the application setup page.",
-            None,
-            None,
-            true,
-        ),
-    );
+    if uses_custom_registration {
+        template.parameters.insert(
+            PARAM_TOKEN.to_string(),
+            string_parameter(
+                "Install token from the application setup page.",
+                None,
+                None,
+                true,
+            ),
+        );
+    }
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
         string_parameter(
@@ -1318,19 +1324,24 @@ fn add_console_interface_metadata(
     supports_custom_domain: bool,
     stack_inputs: &[StackInputDefinition],
     bindings_only: bool,
+    uses_custom_registration: bool,
 ) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
     let compute_parameters = compute_parameter_names(stack, settings.compute.as_ref());
+    let registration_parameters = if uses_custom_registration {
+        vec![PARAM_TOKEN, PARAM_MANAGING_ROLE_ARN]
+    } else {
+        vec![PARAM_MANAGING_ROLE_ARN]
+    };
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
-        "Parameters": [
-            PARAM_TOKEN,
-            PARAM_MANAGING_ROLE_ARN,
-            if bindings_only { "" } else { PARAM_MANAGING_ACCOUNT_ID },
-        ]
+        "Parameters": registration_parameters
     })];
-    if bindings_only {
-        parameter_groups[0]["Parameters"] = json!([PARAM_TOKEN, PARAM_MANAGING_ROLE_ARN]);
+    if !bindings_only {
+        parameter_groups[0]["Parameters"]
+            .as_array_mut()
+            .expect("registration parameter group is an array")
+            .push(json!(PARAM_MANAGING_ACCOUNT_ID));
     }
     if !network_parameters.is_empty() {
         parameter_groups.push(json!({
@@ -1371,7 +1382,9 @@ fn add_console_interface_metadata(
     }
 
     let mut parameter_labels = serde_json::Map::new();
-    insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Install token");
+    if uses_custom_registration {
+        insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Install token");
+    }
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ROLE_ARN,
@@ -2012,7 +2025,7 @@ fn stack_settings_expression(
             ("deploymentModel", CfExpression::from("push")),
             ("updates", CfExpression::from("approval-required")),
             ("telemetry", CfExpression::from("off")),
-            ("heartbeats", CfExpression::from("off")),
+            ("heartbeats", CfExpression::from("on")),
         ]);
     }
     let mut values = vec![

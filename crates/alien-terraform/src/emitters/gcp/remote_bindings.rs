@@ -18,7 +18,7 @@ impl TfEmitter for GcpRemoteBindingsEmitter {
         fragment.resource_blocks.push(resource_block("google_service_account", label, [
             attr("project", expr::raw("var.gcp_project")),
             attr("account_id", service_account_id_template(label)),
-            attr("display_name", expr::template("${local.deployment_name}: Remote Bindings service account".to_string())),
+            attr("display_name", expr::template("${local.deployment_name}: application access".to_string())),
             attr("description", expr::template("Data-plane identity for explicitly published resources in ${local.deployment_name}.".to_string())),
         ]));
         for (suffix, role) in [

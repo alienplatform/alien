@@ -242,7 +242,7 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::RemoteStackManagement>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "remote-bindings" => Box::new(
+            "resource-access" | "remote-bindings" => Box::new(
                 serde_json::from_value::<crate::resources::RemoteBindings>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
@@ -288,7 +288,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "artifact-registry",
                         "service_activation",
                         "remote-stack-management",
-                        "remote-bindings",
+                        "resource-access",
                         "azure_resource_group",
                         "azure_storage_account",
                         "azure_container_apps_environment",
@@ -598,7 +598,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::RemoteStackManagementOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "remote-bindings" => Box::new(
+            "resource-access" | "remote-bindings" => Box::new(
                 serde_json::from_value::<crate::resources::RemoteBindingsOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
@@ -649,7 +649,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "artifact-registry",
                         "service_activation",
                         "remote-stack-management",
-                        "remote-bindings",
+                        "resource-access",
                         "kubernetes-cluster",
                         "azure_resource_group",
                         "azure_storage_account",

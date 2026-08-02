@@ -26,14 +26,14 @@ impl TfEmitter for AzureRemoteBindingsEmitter {
             [
                 attr(
                     "name",
-                    expr::template("${local.resource_prefix}-remote-bindings-identity".to_string()),
+                    expr::template("${local.resource_prefix}-access-identity".to_string()),
                 ),
                 attr(
                     "resource_group_name",
                     expr::raw("var.azure_resource_group_name"),
                 ),
                 attr("location", expr::raw("var.azure_location")),
-                attr("tags", tags(ctx, "remote-bindings")),
+                attr("tags", tags(ctx, "resource-access")),
             ],
         ));
         fragment.resource_blocks.push(resource_block(
@@ -49,7 +49,7 @@ impl TfEmitter for AzureRemoteBindingsEmitter {
                 attr(
                     "name",
                     expr::template(
-                        "${local.resource_prefix}-remote-bindings-federated-credential".to_string(),
+                        "${local.resource_prefix}-access-federated-credential".to_string(),
                     ),
                 ),
                 attr(

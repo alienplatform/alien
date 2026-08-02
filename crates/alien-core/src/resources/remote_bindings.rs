@@ -4,8 +4,8 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 
-/// Setup-owned identity used to issue short-lived credentials for resources
-/// explicitly published through Remote Bindings.
+/// Setup-owned identity used to issue short-lived application credentials for
+/// explicitly published resources.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -31,7 +31,7 @@ pub struct RemoteBindingGrant {
 }
 
 impl RemoteBindings {
-    pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("remote-bindings");
+    pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("resource-access");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,9 +42,6 @@ pub struct RemoteBindingsOutputs {
     pub resource_id: String,
     /// Provider-specific impersonation configuration consumed by the manager.
     pub access_configuration: String,
-    /// AWS STS ExternalId required by this role's trust policy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_id: Option<String>,
 }
 
 impl ResourceDefinition for RemoteBindings {

@@ -10,7 +10,6 @@ import * as z from "zod";
  */
 export const AwsRemoteStackManagementImportDataSchema = z.object({
     "managementPermissionsApplied": z.boolean().describe("Whether the management inline policy was attached by the generated stack."),
-"remoteBindingsRoleArn": z.string().describe("Setup-owned role used only for opted-in remote binding data access.").nullish(),
 "roleArn": z.string().describe("Cross-account management role ARN."),
 "roleName": z.string().describe("Cross-account management role name.")
     }).describe("AWS RemoteStackManagement ImportData.")

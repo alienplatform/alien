@@ -16,7 +16,7 @@ impl CfEmitter for AwsRemoteBindingsEmitter {
         let mut role = CfResource::new(role_id, "AWS::IAM::Role".to_string());
         role.properties.insert(
             "RoleName".to_string(),
-            CfExpression::sub("${AWS::StackName}-remote-bindings"),
+            CfExpression::sub("${AWS::StackName}-access"),
         );
         role.properties
             .insert("AssumeRolePolicyDocument".to_string(), trust_policy());
@@ -30,10 +30,6 @@ impl CfEmitter for AwsRemoteBindingsEmitter {
         Ok(CfExpression::object([
             ("roleName", CfExpression::ref_(&role_id)),
             ("roleArn", CfExpression::get_att(&role_id, "Arn")),
-            (
-                "externalId",
-                CfExpression::sub("${AWS::AccountId}:${AWS::StackName}"),
-            ),
         ]))
     }
 }
@@ -55,16 +51,10 @@ fn trust_policy() -> CfExpression {
                     "Condition",
                     CfExpression::object([(
                         "StringEquals",
-                        CfExpression::object([
-                            (
-                                "aws:PrincipalArn",
-                                CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-                            ),
-                            (
-                                "sts:ExternalId",
-                                CfExpression::sub("${AWS::AccountId}:${AWS::StackName}"),
-                            ),
-                        ]),
+                        CfExpression::object([(
+                            "aws:PrincipalArn",
+                            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
+                        )]),
                     )]),
                 ),
             ])]),

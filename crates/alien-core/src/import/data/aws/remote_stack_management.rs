@@ -15,5 +15,6 @@ pub struct AwsRemoteStackManagementImportData {
     pub management_permissions_applied: bool,
     /// Setup-owned role used only for opted-in remote binding data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
     pub remote_bindings_role_arn: Option<String>,
 }

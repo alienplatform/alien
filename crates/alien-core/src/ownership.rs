@@ -79,7 +79,7 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         "build"
         | "network"
         | "remote-stack-management"
-        | "remote-bindings"
+        | "resource-access"
         | "service-account"
         | "service_activation"
         | "service-activation"
@@ -202,7 +202,7 @@ mod tests {
             "build",
             "network",
             "remote-stack-management",
-            "remote-bindings",
+            "resource-access",
             "service-account",
             "service_activation",
             "azure_resource_group",

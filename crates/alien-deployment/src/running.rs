@@ -46,21 +46,6 @@ pub async fn handle_running(
         })
     })?;
 
-    // A bindings-only stack deliberately has no broad management identity. Its narrow identity
-    // must not gain infrastructure read permissions merely so the runtime can poll setup-owned
-    // resources. Resolving that identity already verifies the handoff; actual binding operations
-    // verify the data path.
-    if alien_core::remote_bindings::stack_is_bindings_only(&target_stack) {
-        next.stack_state = Some(stack_state);
-        return Ok(DeploymentStepResult {
-            state: next,
-            suggested_delay_ms: Some(30_000),
-            update_heartbeat: true,
-            heartbeats: Vec::new(),
-            observed_inventory_batches: Vec::new(),
-        });
-    }
-
     // Inject environment variables so the executor sees the same Worker config
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
@@ -199,71 +184,4 @@ pub async fn handle_refresh_failed(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alien_core::{
-        ClientConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, RemoteBindings,
-        ResourceLifecycle, RuntimeMetadata, StackState, Storage, DEPLOYMENT_PROTOCOL_VERSION,
-    };
-    use alien_infra::MockPlatformServiceProvider;
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn bindings_only_running_does_not_poll_setup_owned_resources() {
-        let stack = Stack::new("byo-bucket".to_string())
-            .add_with_remote_access(
-                Storage::new("exports".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add(
-                RemoteBindings::new("remote-bindings".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-        let stack_state = StackState::new(Platform::Test);
-        let current = DeploymentState {
-            status: DeploymentStatus::Running,
-            platform: Platform::Test,
-            current_release: None,
-            target_release: None,
-            stack_state: Some(stack_state.clone()),
-            error: None,
-            environment_info: None,
-            runtime_metadata: Some(RuntimeMetadata {
-                prepared_stack: Some(stack),
-                ..RuntimeMetadata::default()
-            }),
-            retry_requested: false,
-            protocol_version: DEPLOYMENT_PROTOCOL_VERSION,
-        };
-        let config = DeploymentConfig::builder()
-            .stack_settings(Default::default())
-            .environment_variables(EnvironmentVariablesSnapshot {
-                hash: "empty".to_string(),
-                variables: Vec::new(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
-            })
-            .external_bindings(ExternalBindings::default())
-            .allow_frozen_changes(false)
-            .build();
-
-        let result = handle_running(
-            current,
-            config,
-            ClientConfig::Test,
-            Arc::new(MockPlatformServiceProvider::new()),
-        )
-        .await
-        .expect("bindings-only health tick must not invoke a cloud controller");
-
-        assert_eq!(result.state.status, DeploymentStatus::Running);
-        let result_stack = result.state.stack_state.expect("stack state is preserved");
-        assert_eq!(result_stack.platform, stack_state.platform);
-        assert_eq!(result_stack.resources.len(), stack_state.resources.len());
-        assert!(result.update_heartbeat);
-        assert!(result.heartbeats.is_empty());
-    }
 }

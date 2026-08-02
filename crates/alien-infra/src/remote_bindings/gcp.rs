@@ -30,7 +30,7 @@ impl GcpRemoteBindingsController {
         let created = ctx.service_provider.get_gcp_iam_client(ctx.get_gcp_config()?)?
             .create_service_account(account_id, CreateServiceAccountRequest::builder()
                 .service_account(ServiceAccount::builder()
-                    .display_name("Remote Bindings service account".to_string())
+                    .display_name("Application access service account".to_string())
                     .description(format!("Data-plane identity for explicitly published resources. Resource prefix: {}.", ctx.resource_prefix))
                     .build())
                 .build())
@@ -66,19 +66,7 @@ impl GcpRemoteBindingsController {
     }
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
-    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let email = self
-            .service_account_email
-            .clone()
-            .ok_or_else(|| missing_identity(ctx))?;
-        ctx.service_provider
-            .get_gcp_iam_client(ctx.get_gcp_config()?)?
-            .get_service_account(email)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to read Remote Bindings service account".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<RemoteBindings>()?.id.clone()),
-            })?;
+    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -144,7 +132,6 @@ impl GcpRemoteBindingsController {
         Some(ResourceOutputs::new(RemoteBindingsOutputs {
             resource_id: email.clone(),
             access_configuration: email,
-            external_id: None,
         }))
     }
 }
@@ -229,7 +216,7 @@ fn missing_identity(ctx: &ResourceControllerContext<'_>) -> AlienError<ErrorData
 /// GCP service-account IDs are limited to 30 characters. Keep short prefixes readable and
 /// make longer customer-provided prefixes deterministic without risking collisions.
 fn service_account_id(prefix: &str) -> String {
-    let raw = format!("{prefix}-remote-bindings");
+    let raw = format!("{prefix}-access");
     if raw.len() <= 30 {
         return raw;
     }
@@ -245,10 +232,16 @@ mod tests {
 
     #[test]
     fn service_account_ids_respect_gcp_limits_and_are_stable() {
-        assert_eq!(service_account_id("acme"), "acme-remote-bindings");
+        assert_eq!(service_account_id("acme"), "acme-access");
         let long = service_account_id("customer-provided-resource-prefix");
         assert!(long.len() <= 30);
-        assert_eq!(long, service_account_id("customer-provided-resource-prefix"));
-        assert_ne!(long, service_account_id("customer-provided-resource-prefix-2"));
+        assert_eq!(
+            long,
+            service_account_id("customer-provided-resource-prefix")
+        );
+        assert_ne!(
+            long,
+            service_account_id("customer-provided-resource-prefix-2")
+        );
     }
 }

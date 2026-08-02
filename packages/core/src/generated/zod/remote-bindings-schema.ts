@@ -7,13 +7,13 @@ import * as z from "zod";
 import { RemoteBindingGrantSchema } from "./remote-binding-grant-schema.js";
 
 /**
- * @description Setup-owned identity used to issue short-lived credentials for resources\nexplicitly published through Remote Bindings.
+ * @description Setup-owned identity used to issue short-lived application credentials for\nexplicitly published resources.
  */
 export const RemoteBindingsSchema = z.object({
     get "grants"(){
                 return z.array(RemoteBindingGrantSchema).describe("Resource-neutral desired grants. Setup generators and direct controllers compile this\nfrom the Remote Bindings registry; users do not author it directly.").optional()
               },
 "id": z.string()
-    }).describe("Setup-owned identity used to issue short-lived credentials for resources\nexplicitly published through Remote Bindings.")
+    }).describe("Setup-owned identity used to issue short-lived application credentials for\nexplicitly published resources.")
 
 export type RemoteBindings = z.infer<typeof RemoteBindingsSchema>

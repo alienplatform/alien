@@ -19,9 +19,9 @@ impl TfEmitter for AwsRemoteBindingsEmitter {
             "aws_iam_role",
             label,
             [
-                attr("name", iam_role_name_template("remote-bindings")),
+                attr("name", iam_role_name_template("access")),
                 attr("assume_role_policy", trust_policy()),
-                attr("tags", tags(ctx, "remote-bindings")),
+                attr("tags", tags(ctx, "resource-access")),
             ],
         ));
         Ok(fragment)
@@ -32,7 +32,6 @@ impl TfEmitter for AwsRemoteBindingsEmitter {
         Ok(expr::object([
             ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
             ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
-            ("externalId", expr::raw("local.resource_prefix")),
         ]))
     }
 }
@@ -54,10 +53,7 @@ fn trust_policy() -> Expression {
                     "Condition",
                     expr::object([(
                         "StringEquals",
-                        expr::object([
-                            ("aws:PrincipalArn", expr::raw("var.managing_role_arn")),
-                            ("sts:ExternalId", expr::raw("local.resource_prefix")),
-                        ]),
+                        expr::object([("aws:PrincipalArn", expr::raw("var.managing_role_arn"))]),
                     )]),
                 ),
             ])]),

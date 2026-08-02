@@ -44,17 +44,21 @@ impl StackMutation for SecretsVaultMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
-        if alien_core::remote_bindings::stack_is_bindings_only(stack) {
-            return false;
-        }
         if stack_state.platform == Platform::Machines {
             return stack.resources.contains_key(SECRETS_VAULT_ID)
                 || config.external_bindings.has(SECRETS_VAULT_ID);
         }
 
-        // Always run to ensure required vault permissions are present
-        // even if the vault resource already exists (idempotent)
-        true
+        let explicitly_configured = stack.resources.contains_key(SECRETS_VAULT_ID)
+            || config.external_bindings.has(SECRETS_VAULT_ID);
+        let worker_needs_vault = stack.resources.values().any(|entry| {
+            entry.config.resource_type() == Worker::RESOURCE_TYPE
+                && (!SecretDelivery::resolve(stack_state.platform, ComputeKind::Worker)
+                    .is_native_projection()
+                    || config.monitoring.is_some())
+        });
+
+        explicitly_configured || worker_needs_vault
     }
 
     async fn mutate(

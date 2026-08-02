@@ -98,6 +98,7 @@ pub async fn handle_initial_setup(
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .service_provider(service_provider)
+        .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .step_running_resources(false)
         .build()

@@ -12,18 +12,11 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - Token
       - ManagingRoleArn
     ParameterLabels:
       ManagingRoleArn:
         default: Management role ARN
-      Token:
-        default: Install token
 Parameters:
-  Token:
-    Type: String
-    Description: Install token from the application setup page.
-    NoEcho: true
   ManagingRoleArn:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.
@@ -89,7 +82,7 @@ Resources:
           Condition:
             Bool:
               aws:SecureTransport: 'false'
-  ExportsRemoteBindingsRoleStoragePermission00:
+  ExportsAccessRoleStoragePermission00:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName:
@@ -118,15 +111,15 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:s3:::${Exports}/*
           Sid: ReadWriteBucketObjects
       Roles:
-      - Ref: RemoteBindingsRole
+      - Ref: AccessRole
     DependsOn:
     - Exports
-    - RemoteBindingsRole
-  RemoteBindingsRole:
+    - AccessRole
+  AccessRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName:
-        Fn::Sub: ${AWS::StackName}-remote-bindings
+        Fn::Sub: ${AWS::StackName}-access
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -140,8 +133,6 @@ Resources:
             StringEquals:
               aws:PrincipalArn:
                 Ref: ManagingRoleArn
-              sts:ExternalId:
-                Fn::Sub: ${AWS::AccountId}:${AWS::StackName}
       Tags:
       - Key: managed-by
         Value: setup
@@ -149,9 +140,9 @@ Resources:
         Value:
           Ref: AWS::StackName
       - Key: resource
-        Value: remote-bindings
+        Value: access
       - Key: resource-type
-        Value: remote-bindings
+        Value: resource-access
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
@@ -192,7 +183,7 @@ Outputs:
         deploymentModel: push
         updates: approval-required
         telemetry: off
-        heartbeats: off
+        heartbeats: on
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
@@ -206,15 +197,13 @@ Outputs:
             Fn::GetAtt:
             - Exports
             - Arn
-      - id: remote-bindings
-        type: remote-bindings
+      - id: access
+        type: resource-access
         importData:
           roleName:
-            Ref: RemoteBindingsRole
+            Ref: AccessRole
           roleArn:
             Fn::GetAtt:
-            - RemoteBindingsRole
+            - AccessRole
             - Arn
-          externalId:
-            Fn::Sub: ${AWS::AccountId}:${AWS::StackName}
     Description: Deployment registration resources JSON.

@@ -365,7 +365,7 @@ impl InfrastructureDependenciesMutation {
                     | "service-activation"
                     | "service_activation"
                     | "remote-stack-management"
-                    | "remote-bindings"
+                    | "resource-access"
                     | "permission-profile"
                     | "service-account"
             ) {

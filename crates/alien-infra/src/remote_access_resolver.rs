@@ -57,33 +57,7 @@ impl RemoteAccessResolver {
         stack_state: &StackState,
         target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
-        // Application stacks use the management identity. A bindings-only
-        // stack deliberately has no broad management role and uses its narrow
-        // data-plane identity for the resource health checks it owns.
-        let remote_mgmt_outputs = match self.find_remote_stack_management_outputs(stack_state) {
-            Ok(outputs) => outputs,
-            Err(_) => {
-                if !alien_core::remote_bindings::stack_state_is_bindings_only(stack_state) {
-                    return Err(AlienError::new(ErrorData::InfrastructureError {
-                        message: "RemoteStackManagement identity outputs are missing".to_string(),
-                        operation: Some("resolve_remote_access".to_string()),
-                        resource_id: None,
-                    }));
-                }
-                let outputs = stack_state.resources.values().find_map(|state| {
-                    (state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref())
-                        .then(|| state.outputs.as_ref())
-                        .flatten()
-                        .and_then(|outputs| outputs.downcast_ref::<RemoteBindingsOutputs>())
-                }).ok_or_else(|| AlienError::new(ErrorData::InfrastructureError {
-                    message: "Neither management nor Remote Bindings identity outputs are available".to_string(),
-                    operation: Some("resolve_remote_access".to_string()), resource_id: None,
-                }))?;
-                return self
-                    .resolve_remote_bindings(base_config, outputs, target_environment, None)
-                    .await;
-            }
-        };
+        let remote_mgmt_outputs = self.find_remote_stack_management_outputs(stack_state)?;
 
         // Determine platform and perform appropriate impersonation
         match base_config.platform() {
@@ -143,7 +117,7 @@ impl RemoteAccessResolver {
                     base_config,
                     &access,
                     target_environment,
-                    outputs.external_id.clone(),
+                    None,
                     session_name,
                 )
                 .await
@@ -405,9 +379,8 @@ impl Default for RemoteAccessResolver {
 mod tests {
     use super::*;
     use alien_core::{
-        GcpClientConfig, GcpCredentials, GcpEnvironmentInfo, GcpServiceOverrides,
-        RemoteBindingGrant, RemoteBindings, Resource, ResourceLifecycle, ResourceOutputs,
-        ResourceStatus, StackResourceState, Storage,
+        GcpClientConfig, GcpCredentials, GcpEnvironmentInfo, GcpServiceOverrides, Resource,
+        ResourceLifecycle, ResourceOutputs, ResourceStatus, StackResourceState,
     };
     use httpmock::{Method::POST, MockServer};
     use serde_json::json;
@@ -445,43 +418,6 @@ mod tests {
             }),
             project_number: Some("123456789".to_string()),
         }))
-    }
-
-    fn gcp_bindings_only_state(service_account_email: &str) -> StackState {
-        let bindings = RemoteBindings::new("remote-bindings".to_string())
-            .grants(vec![RemoteBindingGrant {
-                resource_id: "uploads".to_string(),
-                permission_set: "storage/remote-data-write".to_string(),
-                revision: 1,
-            }])
-            .build();
-        let mut state = StackState::new(Platform::Gcp);
-        state.resources.insert(
-            "remote-bindings".to_string(),
-            StackResourceState::builder()
-                .resource_type(RemoteBindings::RESOURCE_TYPE.to_string())
-                .status(ResourceStatus::Running)
-                .config(Resource::new(bindings))
-                .outputs(ResourceOutputs::new(RemoteBindingsOutputs {
-                    resource_id: service_account_email.to_string(),
-                    access_configuration: service_account_email.to_string(),
-                    external_id: None,
-                }))
-                .lifecycle(ResourceLifecycle::Frozen)
-                .dependencies(vec![])
-                .build(),
-        );
-        state.resources.insert(
-            "uploads".to_string(),
-            StackResourceState::builder()
-                .resource_type(Storage::RESOURCE_TYPE.to_string())
-                .status(ResourceStatus::Running)
-                .config(Resource::new(Storage::new("uploads".to_string()).build()))
-                .lifecycle(ResourceLifecycle::Frozen)
-                .dependencies(vec![])
-                .build(),
-        );
-        state
     }
 
     fn gcp_target_environment() -> EnvironmentInfo {
@@ -554,39 +490,6 @@ mod tests {
             credentials => panic!(
                 "resolved credentials should remain refreshable after validation, got {credentials:?}"
             ),
-        }
-    }
-
-    #[tokio::test]
-    async fn bindings_only_stack_uses_its_narrow_identity_for_handoff() {
-        let server = MockServer::start_async().await;
-        let token_exchange = server
-            .mock_async(|when, then| {
-                when.method(POST);
-                then.status(200).json_body(json!({
-                    "accessToken": "bindings-token",
-                    "expireTime": "2026-07-16T12:00:00Z"
-                }));
-            })
-            .await;
-        let email = "bindings@target-project.iam.gserviceaccount.com";
-
-        let resolved = RemoteAccessResolver::default()
-            .resolve(
-                gcp_base_config(server.url("/v1")),
-                &gcp_bindings_only_state(email),
-                Some(&gcp_target_environment()),
-            )
-            .await
-            .expect("bindings-only handoff should use the narrow identity");
-
-        token_exchange.assert_async().await;
-        let gcp = resolved.gcp_config().expect("resolved config remains GCP");
-        match &gcp.credentials {
-            GcpCredentials::ImpersonatedServiceAccount { config, .. } => {
-                assert_eq!(config.service_account_email, email);
-            }
-            credentials => panic!("expected impersonated bindings identity, got {credentials:?}"),
         }
     }
 

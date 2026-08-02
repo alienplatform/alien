@@ -6,5 +6,4 @@ use serde::{Deserialize, Serialize};
 pub struct AwsRemoteBindingsImportData {
     pub role_name: String,
     pub role_arn: String,
-    pub external_id: String,
 }

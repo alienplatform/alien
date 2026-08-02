@@ -106,7 +106,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     let context = permission_context();
 
     if let Some(profile) = ctx.stack.management().profile() {
-        for permission_set_ref in global_permission_refs(profile) {
+        for permission_set_ref in global_permission_refs(ctx, profile) {
             if let Some(permission_set) = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             {
@@ -277,11 +277,28 @@ fn policy_document_size(statements: &[CfExpression]) -> Result<usize> {
         .map(|policy| policy.len())
 }
 
-fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
+fn global_permission_refs<'a>(
+    ctx: &EmitContext<'_>,
+    profile: &'a PermissionProfile,
+) -> Vec<&'a PermissionSetReference> {
     profile
         .0
         .get("*")
-        .map(|refs| refs.iter().collect())
+        .map(|refs| {
+            refs.iter()
+                .filter(|permission_ref| {
+                    !ctx.stack.resources.values().any(|entry| {
+                        alien_core::remote_bindings::remote_binding_for_entry(entry).is_some_and(
+                            |definition| {
+                                permission_ref
+                                    .id()
+                                    .starts_with(&format!("{}/", definition.resource_type))
+                            },
+                        )
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 

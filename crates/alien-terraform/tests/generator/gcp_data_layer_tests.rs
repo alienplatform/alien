@@ -69,7 +69,7 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteBindings::new("remote-bindings".to_string()).build(),
+            RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .add_with_remote_access(
@@ -79,7 +79,7 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
         .build();
     stack.resources.get_mut("uploads").unwrap().dependencies = vec![
         ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management"),
-        ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "remote-bindings"),
+        ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access"),
     ];
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_storage_remote_access", &module);
@@ -91,9 +91,9 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
     assert!(rendered
         .contains("google_project_iam_custom_role\" \"gcp_role_storage_remote_data_write\""));
     assert!(rendered.contains(
-        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_remote_bindings_storage_0\""
+        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_access_storage_0\""
     ));
-    assert!(rendered.contains("google_service_account.remote_bindings.email"));
+    assert!(rendered.contains("google_service_account.access.email"));
     assert!(
         rendered.contains("member = \"serviceAccount:${google_service_account.management.email}\"")
     );
@@ -113,14 +113,12 @@ fn gcp_byo_bucket_is_acyclic_and_valid() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteBindings::new("remote-bindings".to_string()).build(),
+            RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
-    stack.resources.get_mut("files").unwrap().dependencies = vec![ResourceRef::new(
-        RemoteBindings::RESOURCE_TYPE,
-        "remote-bindings",
-    )];
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
 
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_byo_bucket", &module);

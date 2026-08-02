@@ -283,13 +283,10 @@ fn aws_s3_import_request(
                     role_name: "AlienManager".to_string(),
                     role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
                     management_permissions_applied: true,
-                    remote_bindings_role_arn: Some(
-                        "arn:aws:iam::123456789012:role/AlienRemoteBindings".to_string(),
-                    ),
+                    remote_bindings_role_arn: None,
                 })
                 .unwrap(),
             },
-            aws_vault_import(deployment_name, region, "123456789012"),
         ],
     }
 }
@@ -664,7 +661,7 @@ async fn happy_path_creates_imported_deployment() {
     let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(parsed.deployment_id.starts_with("dep_"));
     let resources = &parsed.stack_state.resources;
-    assert_eq!(resources.len(), 3);
+    assert_eq!(resources.len(), 2);
     let imported = resources.get("assets").expect("resource id round-trips");
     assert_eq!(
         imported.status,

@@ -72,7 +72,7 @@ fn aws_storage_minimal_uses_safe_defaults() {
 #[test]
 fn remote_storage_management_dependencies_are_acyclic() {
     let management_ref = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
-    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "remote-bindings");
+    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
     let mut stack = Stack::new("remote-storage".to_string())
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
@@ -83,7 +83,7 @@ fn remote_storage_management_dependencies_are_acyclic() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteBindings::new("remote-bindings".to_string()).build(),
+            RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .add_with_dependencies(
@@ -215,14 +215,14 @@ fn remote_storage_management_dependencies_are_acyclic() {
 
 #[test]
 fn byo_bucket_is_a_standalone_reviewable_template() {
-    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "remote-bindings");
+    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
     let mut stack = Stack::new("customer-exports".to_string())
         .add_with_remote_access(
             Storage::new("exports".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteBindings::new("remote-bindings".to_string()).build(),
+            RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();

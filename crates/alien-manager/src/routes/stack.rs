@@ -41,10 +41,9 @@ use alien_core::{
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
-    GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
-    RemoteStackManagement, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
-    StackState,
-    RESOURCE_PREFIX_ERROR_MESSAGE,
+    GcpEnvironmentInfo, KubernetesCluster, Platform, RemoteStackManagement, ResourceLifecycle,
+    ResourceStatus, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
+    StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -513,7 +512,7 @@ fn migrate_legacy_remote_bindings_handoff(
     req: &mut StackImportRequest,
     stack: &Stack,
 ) -> crate::error::Result<()> {
-    const BINDINGS_ID: &str = "remote-bindings";
+    const BINDINGS_ID: &str = "access";
     if !stack.resources.contains_key(BINDINGS_ID)
         || req
             .resources
@@ -544,7 +543,6 @@ fn migrate_legacy_remote_bindings_handoff(
             serde_json::to_value(alien_core::AwsRemoteBindingsImportData {
                 role_name: role_arn.rsplit('/').next().unwrap_or(&role_arn).to_string(),
                 role_arn,
-                external_id: req.resource_prefix.clone(),
             })
         }
         Platform::Gcp => {

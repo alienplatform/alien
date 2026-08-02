@@ -41,12 +41,6 @@ variable "token" {
   sensitive   = true
 }
 
-variable "management_url" {
-  type        = string
-  description = "Optional management endpoint used by pull-style runtimes."
-  default     = ""
-}
-
 variable "aws_region" {
   type        = string
   description = "AWS region used by the AWS provider."
@@ -84,7 +78,7 @@ locals {
     deploymentModel = "push"
     updates         = "approval-required"
     telemetry       = "off"
-    heartbeats      = "off"
+    heartbeats      = "on"
   }
   deployment_resources = [
     {
@@ -96,12 +90,11 @@ locals {
       }
     },
     {
-      id   = "remote-bindings"
-      type = "remote-bindings"
+      id   = "access"
+      type = "resource-access"
       importData = {
-        roleName   = aws_iam_role.remote_bindings.name
-        roleArn    = aws_iam_role.remote_bindings.arn
-        externalId = local.resource_prefix
+        roleName = aws_iam_role.access.name
+        roleArn  = aws_iam_role.access.arn
       }
     }
   ]
@@ -150,21 +143,21 @@ resource "aws_s3_bucket_policy" "files" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.files.arn, "${aws_s3_bucket.files.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
 }
 
-resource "aws_iam_role_policy" "files_remote_bindings_storage-remote-data-write_0" {
+resource "aws_iam_role_policy" "files_access_storage-remote-data-write_0" {
   name   = "files-storage-remote-data-write-0"
-  role   = aws_iam_role.remote_bindings.id
+  role   = aws_iam_role.access.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ListBucketAndUploads", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}"] }, { Sid = "ReadWriteBucketObjects", Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}/*"] }] })
 }
 
-=== remote_bindings.tf ===
-resource "aws_iam_role" "remote_bindings" {
-  name               = length(format("%s-%s", local.resource_prefix, "remote-bindings")) <= 64 ? format("%s-%s", local.resource_prefix, "remote-bindings") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "remote-bindings"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "remote-bindings")), 0, 8))
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn, "sts:ExternalId" = local.resource_prefix } } }] })
+=== access.tf ===
+resource "aws_iam_role" "access" {
+  name               = length(format("%s-%s", local.resource_prefix, "access")) <= 64 ? format("%s-%s", local.resource_prefix, "access") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "access"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "access")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix
-    resource        = "remote-bindings"
-    "resource-type" = "remote-bindings"
+    resource        = "access"
+    "resource-type" = "resource-access"
   }
 }
 
@@ -179,7 +172,7 @@ resource "terraform_data" "deployment_registration" {
     setup_import_format_version = 1
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
-    management_url              = var.management_url
+    management_url              = ""
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
@@ -191,8 +184,8 @@ resource "terraform_data" "deployment_registration" {
     aws_s3_bucket_ownership_controls.files,
     aws_s3_bucket_public_access_block.files,
     aws_s3_bucket_policy.files,
-    aws_iam_role_policy.files_remote_bindings_storage-remote-data-write_0,
-    aws_iam_role.remote_bindings
+    aws_iam_role_policy.files_access_storage-remote-data-write_0,
+    aws_iam_role.access
   ]
 }
 
@@ -254,9 +247,9 @@ output "deployment_resources" {
 }
 
 === PERMISSIONS.md ===
-# Remote Bindings permissions
+# Application access permissions
 
-The setup creates one narrow Remote Bindings identity. It can access only the resources listed below; it does not receive Alien's management permissions.
+The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive Alien's management permissions.
 
 ## `files` (storage)
 
@@ -295,13 +288,6 @@ Required:
 Common optional settings:
 
 - `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
-- `management_url`: optional management endpoint used by pull-style runtimes.
-- `deployment_model`: `push` or `pull`.
-- `updates_mode`: `auto` or `approval-required`.
-- `telemetry_mode`: `off`, `auto`, or `approval-required`.
-- `heartbeats_mode`: `off` or `on`.
-- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
-- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
 
 AWS settings:
 

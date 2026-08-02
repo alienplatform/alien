@@ -7,7 +7,6 @@ import * as z from "zod";
 
 export const RemoteBindingsOutputsSchema = z.object({
     "accessConfiguration": z.string().describe("Provider-specific impersonation configuration consumed by the manager."),
-"externalId": z.string().describe("AWS STS ExternalId required by this role's trust policy.").nullish(),
 "resourceId": z.string().describe("Role ARN, service-account email, or managed-identity resource ID.")
     })
 

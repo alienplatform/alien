@@ -165,6 +165,7 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
         permission_type: &str,
     ) -> Result<()> {
+        Self::ensure_permission_write_authority(ctx, resource_id)?;
         info!(
             resource_id = %resource_id,
             resource_name = %resource_name,
@@ -207,6 +208,7 @@ impl ResourcePermissionsHelper {
         F: FnOnce(T, IamPolicy) -> Fut,
         Fut: std::future::Future<Output = Result<()>>,
     {
+        Self::ensure_permission_write_authority(ctx, resource_id)?;
         let mut all_bindings = Vec::new();
         Self::collect_gcp_resource_scoped_bindings(
             ctx,
@@ -1146,7 +1148,7 @@ impl ResourcePermissionsHelper {
         resource_name: &str,
         resource_type: &str,
     ) -> Result<()> {
-        if !Self::resource_is_setup_owned(ctx, resource_id) {
+        if !Self::resource_is_setup_owned(ctx, resource_id)? {
             debug!(
                 resource_id = %resource_id,
                 resource_name = %resource_name,
@@ -1268,9 +1270,7 @@ impl ResourcePermissionsHelper {
             .state
             .resources
             .values()
-            .find(|state| {
-                state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
-            })
+            .find(|state| state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref())
             .and_then(|state| state.outputs.as_ref())
             .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
             .and_then(|outputs| outputs.resource_id.rsplit('/').next())
@@ -1339,11 +1339,33 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    fn resource_is_setup_owned(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        ctx.desired_stack
+    fn resource_is_setup_owned(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let setup_owned = ctx
+            .desired_stack
             .resources
             .get(resource_id)
-            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
+            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
+        if setup_owned
+            && ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+        {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: format!(
+                    "resource '{resource_id}' reached a permission-applying state after setup handoff; regenerate and rerun setup"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        Ok(setup_owned)
+    }
+
+    fn ensure_permission_write_authority(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<()> {
+        Self::resource_is_setup_owned(ctx, resource_id).map(|_| ())
     }
 
     /// Process AWS permissions for a specific profile by attaching inline policies

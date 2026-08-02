@@ -13,8 +13,6 @@ export const AzureRemoteStackManagementImportDataSchema = z.object({
 "identityId": z.string().describe("Management UAMI resource id."),
 "managementPermissionsApplied": z.boolean().describe("Whether the management role assignments were applied by the\ngenerated stack."),
 "principalId": z.string().describe("Management UAMI principal id."),
-"remoteBindingsClientId": z.string().describe("Remote Bindings UAMI client id used for workload identity exchange.").nullish(),
-"remoteBindingsIdentityId": z.string().describe("Setup-owned UAMI resource id used only for opted-in remote bindings.").nullish(),
 "resourceGroup": z.string().describe("Resource group containing the management identity."),
 "subscriptionId": z.string().describe("Subscription ID containing the management identity."),
 "tenantId": z.string().describe("Tenant ID containing the management identity.")

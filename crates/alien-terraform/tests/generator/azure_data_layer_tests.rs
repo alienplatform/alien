@@ -112,14 +112,12 @@ fn azure_byo_bucket_is_acyclic_and_valid() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteBindings::new("remote-bindings".to_string()).build(),
+            RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
-    stack.resources.get_mut("files").unwrap().dependencies = vec![ResourceRef::new(
-        RemoteBindings::RESOURCE_TYPE,
-        "remote-bindings",
-    )];
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_byo_bucket", &module);

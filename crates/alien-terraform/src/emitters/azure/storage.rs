@@ -356,7 +356,7 @@ fn emit_storage_permissions(
                 fragment,
                 ctx.resource_id,
                 storage_label,
-                "remote-bindings",
+                "access",
                 binding_index,
                 &binding.role_name,
                 expr::template(binding.scope.clone()),
@@ -650,7 +650,7 @@ mod tests {
                 ResourceLifecycle::Frozen,
             )
             .add(
-                RemoteBindings::new("remote-bindings".to_string()).build(),
+                RemoteBindings::new("access".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
             .add(

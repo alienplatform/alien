@@ -30,12 +30,12 @@ use crate::{
     },
     error::{ErrorData, Result},
 };
-use alien_core::ClientConfig;
 use alien_core::{
     alien_event, ownership_policy_for_resource_type, AlienEvent, Platform, Resource,
     ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
     StackState,
 };
+use alien_core::{ClientConfig, InitialSetupAuthority};
 
 const MAX_CONCURRENT_RESOURCE_STEPS: usize = 4;
 
@@ -138,6 +138,7 @@ pub struct StackExecutor {
     resource_registry: Arc<ResourceRegistry>,
     service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: alien_core::DeploymentConfig,
+    initial_setup_authority: InitialSetupAuthority,
 }
 
 const MAX_RETRIES: u32 = 10;
@@ -271,6 +272,10 @@ pub struct StackExecutorConfig<'a> {
     /// Custom service provider for testing (defaults to real cloud clients)
     #[builder(default = Arc::new(DefaultPlatformServiceProvider::default()))]
     service_provider: Arc<dyn PlatformServiceProvider>,
+
+    /// Authority available for setup-owned structural and permission changes.
+    #[builder(default = InitialSetupAuthority::ImportedHandoff)]
+    initial_setup_authority: InitialSetupAuthority,
 }
 
 /// Extension trait to add `build()` method to the builder that returns `Result<StackExecutor>`.
@@ -357,6 +362,7 @@ impl StackExecutor {
                     RunningResourcePolicy::None
                 });
         let step_out_of_scope_resources = config.step_out_of_scope_resources;
+        let initial_setup_authority = config.initial_setup_authority;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
 
@@ -491,6 +497,7 @@ impl StackExecutor {
             resource_registry,
             service_provider,
             deployment_config,
+            initial_setup_authority,
         })
     }
 
@@ -1000,6 +1007,7 @@ impl StackExecutor {
                                 desired_stack: &self.desired_stack,
                                 service_provider: &self.service_provider,
                                 deployment_config: &self.deployment_config,
+                                initial_setup_authority: self.initial_setup_authority,
                                 heartbeat_collector: HeartbeatCollector::default(),
                             };
 
@@ -1170,36 +1178,33 @@ impl StackExecutor {
             .keys()
             .find(|resource_id| !self.resources.contains_key(*resource_id))
         {
-            return Err(AlienError::new(ErrorData::InfrastructureError {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
                 message: format!(
                     "Imported setup contains unexpected resource '{}'; regenerate and rerun setup",
                     resource_id
                 ),
-                operation: Some("continue_imported".to_string()),
                 resource_id: Some(resource_id.clone()),
             }));
         }
 
         for (resource_id, desired) in &self.resources {
             let resource = state.resources.get(resource_id).ok_or_else(|| {
-                AlienError::new(ErrorData::InfrastructureError {
+                AlienError::new(ErrorData::ImportedSetupStateInvalid {
                     message: format!(
                         "Imported setup is missing resource '{}'; regenerate and rerun setup",
                         resource_id
                     ),
-                    operation: Some("continue_imported".to_string()),
                     resource_id: Some(resource_id.clone()),
                 })
             })?;
 
             if resource.config != desired.resource || resource.dependencies != desired.dependencies
             {
-                return Err(AlienError::new(ErrorData::InfrastructureError {
+                return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
                     message: format!(
                         "Imported setup state for '{}' does not match the registered setup artifact; regenerate and rerun setup",
                         resource_id
                     ),
-                    operation: Some("continue_imported".to_string()),
                     resource_id: Some(resource_id.clone()),
                 }));
             }
@@ -1208,12 +1213,11 @@ impl StackExecutor {
                 ResourceStatus::Running => {}
                 ResourceStatus::Provisioning if resource.has_internal_state() => {}
                 status => {
-                    return Err(AlienError::new(ErrorData::InfrastructureError {
+                    return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
                         message: format!(
                             "Imported setup resource '{}' cannot continue from status {:?}; regenerate and rerun setup",
                             resource_id, status
                         ),
-                        operation: Some("continue_imported".to_string()),
                         resource_id: Some(resource_id.clone()),
                     }));
                 }
@@ -1842,6 +1846,7 @@ impl StackExecutor {
                 desired_stack: &self.desired_stack,
                 service_provider: &self.service_provider,
                 deployment_config: &self.deployment_config,
+                initial_setup_authority: self.initial_setup_authority,
                 heartbeat_collector: heartbeat_collector.clone(),
             };
 

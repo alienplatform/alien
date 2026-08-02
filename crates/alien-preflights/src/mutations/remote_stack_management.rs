@@ -61,13 +61,6 @@ impl StackMutation for RemoteStackManagementMutation {
             return false;
         }
 
-        // A setup containing only externally published resources needs the
-        // narrow Remote Bindings identity, not the broad runtime-management
-        // identity. Mixed and application stacks still require management.
-        if alien_core::remote_bindings::stack_is_bindings_only(stack) {
-            return false;
-        }
-
         !stack
             .resources
             .values()
@@ -172,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn bindings_only_stack_does_not_get_broad_management_identity() {
+    fn access_only_stack_gets_scoped_management_identity() {
         let stack = Stack::new("byo-bucket".to_string())
             .add_with_remote_access(
                 Storage::new("exports".to_string()).build(),
@@ -182,7 +175,7 @@ mod tests {
         let mut config = config(None, DeploymentModel::Push);
         config.management_config = Some(alien_core::ManagementConfig::Kubernetes);
 
-        assert!(!RemoteStackManagementMutation.should_run(
+        assert!(RemoteStackManagementMutation.should_run(
             &stack,
             &StackState::new(Platform::Test),
             &config
