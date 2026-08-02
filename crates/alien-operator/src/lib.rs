@@ -73,13 +73,30 @@ pub async fn run_operator_with_cancel(
     run_operator_with_cancel_and_debug_loop(config, service_provider, None, cancel).await
 }
 
-/// Full-control entry point. Binary callers that ship a real
-/// [`DebugSessionLoop`] implementation pass it here; the OSS default is
-/// `None`, which falls back to the no-op stub.
+/// Back-compat entry point that injects only a [`DebugSessionLoop`]. Forwards to
+/// [`run_operator_with_cancel_and_loops`] with no operations-approval loop.
 pub async fn run_operator_with_cancel_and_debug_loop(
     config: OperatorConfig,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    cancel: CancellationToken,
+) -> error::Result<()> {
+    run_operator_with_cancel_and_loops(config, service_provider, debug_session_loop, None, cancel)
+        .await
+}
+
+/// Full-control entry point. Binary callers that ship real pluggable-loop
+/// implementations pass them here; the OSS default is `None` for each, falling
+/// back to the corresponding no-op stub.
+///
+/// - `debug_session_loop` — the `alien debug` tunnel loop.
+/// - `operations_crd_loop` — the operations approval controller (materializes
+///   leased operation-commands as `AlienOperation` CRs and runs approved ones).
+pub async fn run_operator_with_cancel_and_loops(
+    config: OperatorConfig,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    operations_crd_loop: Option<Arc<dyn loops::operations_crd::OperationsCrdLoop>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
     use tracing::{info, warn};
@@ -204,6 +221,26 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         None
     };
 
+    // Operations approval controller. Materializes leased operation-commands as
+    // `AlienOperation` custom resources for customer approval and runs approved
+    // ones — a Kubernetes-only flow. OSS builds inject no loop and fall through
+    // to the no-op stub, which parks until shutdown.
+    let operations_crd_handle =
+        if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes) {
+            let loop_impl: Arc<dyn loops::operations_crd::OperationsCrdLoop> = operations_crd_loop
+                .unwrap_or_else(|| {
+                    Arc::new(loops::operations_crd::UnimplementedOperationsCrdLoop)
+                });
+            Some(tokio::spawn({
+                let state = state.clone();
+                async move {
+                    loop_impl.run(state).await;
+                }
+            }))
+        } else {
+            None
+        };
+
     // Wait for cancellation or any loop to exit unexpectedly
     tokio::select! {
         _ = cancel.cancelled() => {
@@ -247,6 +284,15 @@ pub async fn run_operator_with_cancel_and_debug_loop(
             }
         } => {
             warn!("Commands dispatch loop exited unexpectedly");
+        },
+        _ = async {
+            if let Some(h) = operations_crd_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            warn!("Operations approval controller exited unexpectedly");
         },
     }
 

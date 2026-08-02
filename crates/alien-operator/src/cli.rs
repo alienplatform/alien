@@ -5,7 +5,8 @@
 
 use crate::error::{ErrorData, Result};
 use crate::loops::debug_session::DebugSessionLoop;
-use crate::{run_operator_with_cancel_and_debug_loop, InstanceLock, OperatorConfig};
+use crate::loops::operations_crd::OperationsCrdLoop;
+use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
@@ -152,8 +153,14 @@ pub type InitHook = fn();
 /// the OSS no-op stub in place.
 pub type DebugLoopHook = fn() -> Option<std::sync::Arc<dyn DebugSessionLoop>>;
 
+/// Optional third hook that lets downstream binaries inject a real
+/// [`OperationsCrdLoop`] (the operations approval controller). Defaults to
+/// `None`, which leaves the OSS no-op stub in place.
+pub type OperationsCrdLoopHook = fn() -> Option<std::sync::Arc<dyn OperationsCrdLoop>>;
+
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
+const NOOP_OPERATIONS_CRD_LOOP_HOOK: OperationsCrdLoopHook = || None;
 
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeploymentId {
@@ -172,9 +179,20 @@ pub fn cli_main_with_hook(init_hook: InitHook) {
 }
 
 /// Like [`cli_main_with_hook`] but also accepts a [`DebugLoopHook`] so
-/// downstream binaries can inject a real [`DebugSessionLoop`] before the
-/// operator starts.
+/// downstream binaries can inject a real [`DebugSessionLoop`]. Injects no
+/// operations approval controller (OSS no-op stub).
 pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) {
+    cli_main_with_all_loops(init_hook, debug_loop_hook, NOOP_OPERATIONS_CRD_LOOP_HOOK);
+}
+
+/// Full-control CLI entry point: injects the init hook plus both pluggable
+/// loops (debug-session and operations-approval). Downstream binaries call this
+/// to wire in their real implementations; the OSS binary uses no-op hooks.
+pub fn cli_main_with_all_loops(
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+    operations_crd_loop_hook: OperationsCrdLoopHook,
+) {
     // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
     // (pulled by other deps) present in the tree can't auto-pick a provider
     // and panics on first TLS use ("Could not automatically determine the
@@ -195,7 +213,7 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
         .build()
         .expect("failed to build tokio runtime");
 
-    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook)) {
+    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook, operations_crd_loop_hook)) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -206,7 +224,12 @@ pub fn cli_main() {
     cli_main_with_hook(NOOP_INIT);
 }
 
-async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook) -> Result<()> {
+async fn run(
+    mut args: Args,
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+    operations_crd_loop_hook: OperationsCrdLoopHook,
+) -> Result<()> {
     let embedded_config: Option<EmbeddedOperatorConfig> = load_embedded_config().ok().flatten();
 
     args.operator_name = args.operator_name.or_else(|| env_string("OPERATOR_NAME"));
@@ -432,10 +455,11 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
             None
         };
 
-    run_operator_with_cancel_and_debug_loop(
+    run_operator_with_cancel_and_loops(
         operator_config,
         service_provider,
         debug_loop_hook(),
+        operations_crd_loop_hook(),
         cancel,
     )
     .await?;
@@ -606,8 +630,12 @@ mod windows_entry {
             .build()
             .expect("failed to build tokio runtime");
 
-        let exit_code = match rt.block_on(super::run(args, init_hook, super::NOOP_DEBUG_LOOP_HOOK))
-        {
+        let exit_code = match rt.block_on(super::run(
+            args,
+            init_hook,
+            super::NOOP_DEBUG_LOOP_HOOK,
+            super::NOOP_OPERATIONS_CRD_LOOP_HOOK,
+        )) {
             Ok(()) => 0,
             Err(e) => {
                 error!(error = %e, "Operator exited with error");
