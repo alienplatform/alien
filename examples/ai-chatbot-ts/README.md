@@ -39,6 +39,8 @@ alien deploy production --platform aws   # or gcp / azure
 
 Alien builds the container image from the Dockerfile, pushes it, and provisions the compute, the database, and the load balancer. The deploy output prints the public URL.
 
+That URL is open, so anyone who has it can ask questions and spend model quota. It is what makes the example something you can click and try, but a real deployment should put authentication and a per-caller rate limit in front of `/api/chat`.
+
 ## Model availability
 
 `getAvailableModels()` returns what is enabled on your deployment's cloud right now. Open-weight models work out of the box; Claude needs a one-time activation first -- the Anthropic use-case form on AWS Bedrock, Model Garden on GCP Vertex, or Marketplace terms on Azure AI Foundry. Until then it simply does not appear in the picker, and every other model keeps working.
