@@ -242,7 +242,7 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::RemoteStackManagement>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "resource-access" | "remote-bindings" => Box::new(
+            "resource-access" => Box::new(
                 serde_json::from_value::<crate::resources::RemoteBindings>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
@@ -598,7 +598,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::RemoteStackManagementOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "resource-access" | "remote-bindings" => Box::new(
+            "resource-access" => Box::new(
                 serde_json::from_value::<crate::resources::RemoteBindingsOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),

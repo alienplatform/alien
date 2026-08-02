@@ -1139,9 +1139,9 @@ impl ResourcePermissionsHelper {
     /// 3. Generates an IAM policy with `BindingTarget::Resource` and attaches it as
     ///    an inline policy on the SA role.
     ///
-    /// For setup-owned resources, it also applies concrete **management SA**
-    /// resource-scoped permissions. Live resources do not broaden the management
-    /// role at runtime; AWS setup output must grant those permissions up front.
+    /// It applies these setup-owned policies only while Alien has direct setup
+    /// authority. Imported handoffs and normal runtime execution must never
+    /// create or broaden resource-scoped IAM policies.
     pub async fn apply_aws_resource_scoped_permissions(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,

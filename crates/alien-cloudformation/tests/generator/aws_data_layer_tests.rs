@@ -214,7 +214,7 @@ fn remote_storage_management_dependencies_are_acyclic() {
 }
 
 #[test]
-fn byo_bucket_is_a_standalone_reviewable_template() {
+fn remote_access_generator_fragment_is_reviewable() {
     let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
     let mut stack = Stack::new("customer-exports".to_string())
         .add_with_remote_access(
@@ -234,6 +234,8 @@ fn byo_bucket_is_a_standalone_reviewable_template() {
         RegistrationMode::OutputsFallback,
         "BYO Bucket",
     );
+    // This exercises the generator fragment directly. Product rendering runs
+    // preflight mutations first and also injects the scoped management role.
     insta::assert_snapshot!("aws_byo_bucket", yaml);
 }
 
