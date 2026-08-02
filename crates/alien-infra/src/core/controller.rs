@@ -1117,6 +1117,20 @@ fn deserialize_controller_by_tag(
             deser!(crate::remote_stack_management::TestRemoteStackManagementController)
         }
 
+        // Application access controllers
+        #[cfg(feature = "aws")]
+        "AwsRemoteBindingsController" => {
+            deser!(crate::remote_bindings::AwsRemoteBindingsController)
+        }
+        #[cfg(feature = "gcp")]
+        "GcpRemoteBindingsController" => {
+            deser!(crate::remote_bindings::GcpRemoteBindingsController)
+        }
+        #[cfg(feature = "azure")]
+        "AzureRemoteBindingsController" => {
+            deser!(crate::remote_bindings::AzureRemoteBindingsController)
+        }
+
         // AI controllers
         #[cfg(feature = "aws")]
         "AwsAiController" => deser!(crate::ai::AwsAiController),
@@ -1399,6 +1413,41 @@ impl ResourceControllerContext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_controller_state_round_trips<T>(controller: T)
+    where
+        T: ResourceController + 'static,
+    {
+        let expected_type = controller.controller_type();
+        let value = serialize_controller(&controller).expect("controller state must serialize");
+        let restored = deserialize_controller(value).expect("controller state must deserialize");
+
+        assert_eq!(restored.controller_type(), expected_type);
+    }
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn aws_remote_bindings_controller_state_round_trips() {
+        assert_controller_state_round_trips(
+            crate::remote_bindings::AwsRemoteBindingsController::default(),
+        );
+    }
+
+    #[cfg(feature = "gcp")]
+    #[test]
+    fn gcp_remote_bindings_controller_state_round_trips() {
+        assert_controller_state_round_trips(
+            crate::remote_bindings::GcpRemoteBindingsController::default(),
+        );
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn azure_remote_bindings_controller_state_round_trips() {
+        assert_controller_state_round_trips(
+            crate::remote_bindings::AzureRemoteBindingsController::default(),
+        );
+    }
 
     #[test]
     fn controller_state_validation_rejects_missing_version() {
