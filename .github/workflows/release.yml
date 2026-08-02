@@ -248,20 +248,26 @@ jobs:
               const root = 'client-sdks/' + sdk + '/typescript/.speakeasy/';
               const configPath = root + 'gen.yaml';
               const config = fs.readFileSync(configPath, 'utf8');
+              const configVersionPattern = /(typescript:\\n  version: )[^\\n]+/;
+              if (!configVersionPattern.test(config)) {
+                throw new Error(sdk + ' SDK version not found in gen.yaml');
+              }
               const updatedConfig = config.replace(
-                /(typescript:\\n  version: )[^\\n]+/,
+                configVersionPattern,
                 (_, prefix) => prefix + '${VERSION}',
               );
-              if (updatedConfig === config) throw new Error(sdk + ' SDK version not found in gen.yaml');
               fs.writeFileSync(configPath, updatedConfig);
 
               const lockPath = root + 'gen.lock';
               const lock = fs.readFileSync(lockPath, 'utf8');
+              const lockVersionPattern = /(  releaseVersion: )[^\\n]+/;
+              if (!lockVersionPattern.test(lock)) {
+                throw new Error(sdk + ' SDK releaseVersion not found in gen.lock');
+              }
               const updatedLock = lock.replace(
-                /(  releaseVersion: )[^\\n]+/,
+                lockVersionPattern,
                 (_, prefix) => prefix + '${VERSION}',
               );
-              if (updatedLock === lock) throw new Error(sdk + ' SDK releaseVersion not found in gen.lock');
               fs.writeFileSync(lockPath, updatedLock);
             }
           "
