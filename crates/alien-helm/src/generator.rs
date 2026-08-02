@@ -279,6 +279,9 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     let cluster_wide = options.scope.is_cluster_wide();
 
     let mut docs = Vec::new();
+    // The AlienOperation CRD is cluster-scoped and must exist before any CR is
+    // created. Register it up front, regardless of namespace/cluster scope.
+    docs.push(alien_operation_crd_doc());
     docs.push(operator_service_account_doc(
         namespace,
         &operator_name,
@@ -598,6 +601,11 @@ roleRef:
 
 /// Read-only observe rules, shared by the namespaced `Role` and the cluster-wide
 /// `ClusterRole`. Only `get/list/watch`; never `secrets` or `pods/log`.
+///
+/// Plus the `AlienOperation` custom resource, which the operator both creates
+/// (materializing a leased operation-command awaiting customer approval) and
+/// executes (once the customer patches `spec.approved: true`). This is the one
+/// resource the operator writes; everything else stays read-only.
 const OPERATOR_OBSERVE_RULES: &str = r#"rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
@@ -611,7 +619,95 @@ const OPERATOR_OBSERVE_RULES: &str = r#"rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["operations.alien.dev"]
+    resources: ["alienoperations"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["operations.alien.dev"]
+    resources: ["alienoperations/status"]
+    verbs: ["get", "update", "patch"]
 "#;
+
+/// The `AlienOperation` CustomResourceDefinition. Each proposed operation from a
+/// remediation plan becomes an `AlienOperation` the customer can review and
+/// approve in their own cluster (`kubectl patch … --type=merge -p
+/// '{"spec":{"approved":true}}'`), and the operator executes approved ones and
+/// writes the result to `status`. The printer columns make `kubectl get
+/// alienoperations` show APPROVED / STATE / AGE / DETAILS.
+const ALIEN_OPERATION_CRD: &str = r#"apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: alienoperations.operations.alien.dev
+spec:
+  group: operations.alien.dev
+  scope: Namespaced
+  names:
+    plural: alienoperations
+    singular: alienoperation
+    kind: AlienOperation
+    shortNames: ["alienop"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Approved
+          type: boolean
+          jsonPath: .spec.approved
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+        - name: Details
+          type: string
+          jsonPath: .status.details
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["plugin", "operation"]
+              properties:
+                plugin:
+                  type: string
+                  description: Operations plugin name (e.g. kubernetes).
+                operation:
+                  type: string
+                  description: Operation the plugin exposes (e.g. restart-pod).
+                params:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: JSON params passed to the operation.
+                approved:
+                  type: boolean
+                  default: false
+                  description: Set to true to authorize execution.
+                commandId:
+                  type: string
+                  description: Correlates this operation to its source command.
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: REQUIRES_APPROVAL | RUNNING | SUCCESS | FAILED
+                details:
+                  type: string
+                message:
+                  type: string
+                approvedAt:
+                  type: string
+"#;
+
+/// The CRD document, appended to the operator manifest so `kubectl apply` (or a
+/// Helm install) registers the `AlienOperation` kind before any CR is created.
+fn alien_operation_crd_doc() -> String {
+    ALIEN_OPERATION_CRD.to_string()
+}
 
 /// Cluster-scoped metadata header (no `metadata.namespace`) for `ClusterRole` and
 /// `ClusterRoleBinding`, which are not namespaced objects.
@@ -3938,6 +4034,9 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
+                // The AlienOperation CRD is cluster-scoped and leads the manifest
+                // so the kind is registered before any namespaced object.
+                "CustomResourceDefinition",
                 "ServiceAccount",
                 "Role",
                 "RoleBinding",
@@ -3955,10 +4054,19 @@ mod tests {
             "operator manifest must not bind cluster-scoped RBAC"
         );
         for doc in docs {
+            // The CRD is a cluster-scoped object; only namespaced docs carry a
+            // metadata.namespace.
+            if yaml_str(&doc, "kind") == Some("CustomResourceDefinition") {
+                assert!(
+                    yaml_path(&doc, &["metadata", "namespace"]).is_none(),
+                    "the CRD is cluster-scoped and must not be namespaced"
+                );
+                continue;
+            }
             assert_eq!(
                 yaml_path(&doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
                 Some("demo"),
-                "every operator document should be namespaced"
+                "every namespaced operator document should be namespaced"
             );
         }
     }
@@ -3976,6 +4084,13 @@ mod tests {
             .expect("Role should include rules");
 
         for rule in rules {
+            let api_groups = rule
+                .get("apiGroups")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include apiGroups")
+                .iter()
+                .map(|g| g.as_str().expect("apiGroup should be string"))
+                .collect::<Vec<_>>();
             let verbs = rule
                 .get("verbs")
                 .and_then(YamlValue::as_sequence)
@@ -3983,7 +4098,29 @@ mod tests {
                 .iter()
                 .map(|verb| verb.as_str().expect("verb should be string"))
                 .collect::<Vec<_>>();
-            assert_eq!(verbs, vec!["get", "list", "watch"]);
+
+            // The AlienOperation CRD is the one resource the operator writes:
+            // it creates operations awaiting approval and executes approved
+            // ones. Every other rule stays strictly read-only.
+            if api_groups == vec!["operations.alien.dev"] {
+                assert!(
+                    verbs.iter().all(|v| matches!(
+                        *v,
+                        "get" | "list" | "watch" | "create" | "update" | "patch"
+                    )),
+                    "alienoperations rule verbs must stay within the approve/execute set: {verbs:?}"
+                );
+                assert!(
+                    !verbs.contains(&"delete") && !verbs.contains(&"deletecollection"),
+                    "operator must not delete AlienOperations"
+                );
+            } else {
+                assert_eq!(
+                    verbs,
+                    vec!["get", "list", "watch"],
+                    "non-AlienOperation rules must be read-only"
+                );
+            }
 
             let resources = rule
                 .get("resources")
@@ -4234,6 +4371,11 @@ mod tests {
 
         let docs = parse_manifest_docs(&manifest);
         for doc in &docs {
+            // The CRD is cluster-scoped — no namespace on any output format.
+            if yaml_str(doc, "kind") == Some("CustomResourceDefinition") {
+                assert!(yaml_path(doc, &["metadata", "namespace"]).is_none());
+                continue;
+            }
             assert_eq!(
                 yaml_path(doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
                 Some("{{ .Release.Namespace }}"),
