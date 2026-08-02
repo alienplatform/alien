@@ -91,6 +91,7 @@ pub mod embedded_config;
 pub mod sync;
 
 pub mod commands_types;
+pub mod operations_crd;
 pub use commands_types::*;
 
 pub mod debug_session;

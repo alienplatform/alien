@@ -10,10 +10,11 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
-    ErrorData, KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
-    KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
-    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    import::EmitContext, operations_crd::OperationsCrdNames, AzureResourceGroupOutputs, Container,
+    ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster, KubernetesClusterOutputs,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
+    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -116,6 +117,10 @@ pub struct OperatorManifestOptions<'a> {
     /// `RawManifest`; ignored for `HelmTemplate`, which uses `.Release.Namespace`.
     /// In `Namespace` scope this is also the namespace observed.
     pub install_namespace: Option<&'a str>,
+    /// The vendor's branded DNS domain (e.g. `acme.dev`), used to white-label
+    /// the operations CRD (group/kind/plural). `None` → the Alien defaults.
+    /// Same value the operator carries at runtime, so both agree on the CRD.
+    pub label_domain: Option<&'a str>,
     pub scope: OperatorScope,
     /// Optional Kubernetes label selector that narrows what the operator manages,
     /// applied on top of `scope`. Independent of namespace vs cluster scope: a
@@ -278,26 +283,30 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     let labels = operator_labels(&base_name);
     let cluster_wide = options.scope.is_cluster_wide();
 
+    // White-labeled operations CRD names, derived from the branded domain.
+    // The operator carries the same domain at runtime, so both agree on the CRD.
+    let crd_names = alien_core::operations_crd::operations_crd_names(options.label_domain);
+
     let mut docs = Vec::new();
-    // The AlienOperation CRD is cluster-scoped and must exist before any CR is
+    // The operations CRD is cluster-scoped and must exist before any CR is
     // created. Register it up front, regardless of namespace/cluster scope.
-    docs.push(alien_operation_crd_doc());
+    docs.push(operations_crd_doc(&crd_names));
     docs.push(operator_service_account_doc(
         namespace,
         &operator_name,
         &labels,
     ));
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
-    // stays a namespaced Role. Both grant only get/list/watch.
+    // stays a namespaced Role. Both grant read-only + the operations CRD.
     if cluster_wide {
-        docs.push(operator_clusterrole_doc(&operator_name, &labels));
+        docs.push(operator_clusterrole_doc(&operator_name, &labels, &crd_names));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
             &operator_name,
             &labels,
         ));
     } else {
-        docs.push(operator_role_doc(namespace, &operator_name, &labels));
+        docs.push(operator_role_doc(namespace, &operator_name, &labels, &crd_names));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
     docs.push(operator_secret_doc(
@@ -558,6 +567,7 @@ fn operator_role_doc(
     namespace: &str,
     operator_name: &str,
     labels: &BTreeMap<String, String>,
+    crd_names: &OperationsCrdNames,
 ) -> String {
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -566,7 +576,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(OPERATOR_OBSERVE_RULES);
+    yaml.push_str(&operator_observe_rules(crd_names));
     yaml
 }
 
@@ -606,7 +616,13 @@ roleRef:
 /// (materializing a leased operation-command awaiting customer approval) and
 /// executes (once the customer patches `spec.approved: true`). This is the one
 /// resource the operator writes; everything else stays read-only.
-const OPERATOR_OBSERVE_RULES: &str = r#"rules:
+/// Read-only observe rules plus the operations custom resource (get/list/watch
+/// + create/update/patch — the one resource the operator writes; no delete).
+/// The operations `apiGroups`/`resources` are white-labeled from `names` so a
+/// vendor build grants access to *their* CRD, matching the CRD doc below.
+fn operator_observe_rules(names: &OperationsCrdNames) -> String {
+    format!(
+        r#"rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
     verbs: ["get", "list", "watch"]
@@ -619,38 +635,46 @@ const OPERATOR_OBSERVE_RULES: &str = r#"rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["operations.alien.dev"]
-    resources: ["alienoperations"]
+  - apiGroups: ["{group}"]
+    resources: ["{plural}"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["operations.alien.dev"]
-    resources: ["alienoperations/status"]
+  - apiGroups: ["{group}"]
+    resources: ["{plural}/status"]
     verbs: ["get", "update", "patch"]
-"#;
+"#,
+        group = names.group,
+        plural = names.plural,
+    )
+}
 
-/// The `AlienOperation` CustomResourceDefinition. Each proposed operation from a
-/// remediation plan becomes an `AlienOperation` the customer can review and
-/// approve in their own cluster (`kubectl patch … --type=merge -p
-/// '{"spec":{"approved":true}}'`), and the operator executes approved ones and
-/// writes the result to `status`. The printer columns make `kubectl get
-/// alienoperations` show APPROVED / STATE / AGE / DETAILS.
-const ALIEN_OPERATION_CRD: &str = r#"apiVersion: apiextensions.k8s.io/v1
+/// The operations `CustomResourceDefinition`, white-labeled from `names`. Each
+/// proposed operation from a remediation plan becomes one of these the customer
+/// can review and approve in their own cluster (`kubectl patch … --type=merge
+/// -p '{"spec":{"approved":true}}'`); the operator executes approved ones and
+/// writes the result to `status`. Printer columns show APPROVED/STATE/AGE/DETAILS.
+///
+/// Appended to the operator manifest so `kubectl apply`/Helm registers the kind
+/// before any CR is created.
+fn operations_crd_doc(names: &OperationsCrdNames) -> String {
+    format!(
+        r#"apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: alienoperations.operations.alien.dev
+  name: {crd_name}
 spec:
-  group: operations.alien.dev
+  group: {group}
   scope: Namespaced
   names:
-    plural: alienoperations
-    singular: alienoperation
-    kind: AlienOperation
-    shortNames: ["alienop"]
+    plural: {plural}
+    singular: {singular}
+    kind: {kind}
+    shortNames: ["{short_name}"]
   versions:
-    - name: v1alpha1
+    - name: {version}
       served: true
       storage: true
       subresources:
-        status: {}
+        status: {{}}
       additionalPrinterColumns:
         - name: Approved
           type: boolean
@@ -701,12 +725,15 @@ spec:
                   type: string
                 approvedAt:
                   type: string
-"#;
-
-/// The CRD document, appended to the operator manifest so `kubectl apply` (or a
-/// Helm install) registers the `AlienOperation` kind before any CR is created.
-fn alien_operation_crd_doc() -> String {
-    ALIEN_OPERATION_CRD.to_string()
+"#,
+        crd_name = names.crd_name,
+        group = names.group,
+        plural = names.plural,
+        singular = names.singular,
+        kind = names.kind,
+        short_name = names.short_name,
+        version = alien_core::operations_crd::OPERATIONS_CRD_VERSION,
+    )
 }
 
 /// Cluster-scoped metadata header (no `metadata.namespace`) for `ClusterRole` and
@@ -726,9 +753,13 @@ fn operator_cluster_metadata_doc(
     yaml
 }
 
-fn operator_clusterrole_doc(operator_name: &str, labels: &BTreeMap<String, String>) -> String {
+fn operator_clusterrole_doc(
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+    crd_names: &OperationsCrdNames,
+) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(OPERATOR_OBSERVE_RULES);
+    yaml.push_str(&operator_observe_rules(crd_names));
     yaml
 }
 
@@ -3957,6 +3988,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -3978,6 +4010,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4138,6 +4171,70 @@ mod tests {
                 "logs must flow through the log collector, not Kubernetes API tailing"
             );
         }
+    }
+
+    #[test]
+    fn operations_crd_is_white_labeled_from_the_brand_domain() {
+        // A vendor whose branded domain is acme.dev gets AcmeOperation, not
+        // AlienOperation — the CRD, RBAC, and (elsewhere) the operator runtime
+        // all derive from the same domain.
+        let manifest = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod"),
+            install_namespace: Some("demo"),
+            label_domain: Some("acme.dev"),
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("branded operator manifest should render");
+        let docs = parse_manifest_docs(&manifest);
+
+        let crd = docs_by_kind(&docs, "CustomResourceDefinition")
+            .into_iter()
+            .next()
+            .expect("manifest should include the operations CRD");
+        assert_eq!(
+            yaml_path(&crd, &["metadata", "name"]).and_then(YamlValue::as_str),
+            Some("acmeoperations.operations.acme.dev")
+        );
+        assert_eq!(
+            yaml_path(&crd, &["spec", "group"]).and_then(YamlValue::as_str),
+            Some("operations.acme.dev")
+        );
+        assert_eq!(
+            yaml_path(&crd, &["spec", "names", "kind"]).and_then(YamlValue::as_str),
+            Some("AcmeOperation")
+        );
+        assert_eq!(
+            yaml_path(&crd, &["spec", "names", "plural"]).and_then(YamlValue::as_str),
+            Some("acmeoperations")
+        );
+        // Not the Alien defaults.
+        let text = &manifest;
+        assert!(!text.contains("alienoperations"), "no alien-named resource in a branded build");
+        assert!(!text.contains("operations.alien.dev"), "no alien group in a branded build");
+
+        // RBAC targets the branded group/resource.
+        let role = docs_by_kind(&docs, "Role").into_iter().next().unwrap();
+        let has_branded_rule = role
+            .get("rules")
+            .and_then(YamlValue::as_sequence)
+            .unwrap()
+            .iter()
+            .any(|r| {
+                r.get("apiGroups")
+                    .and_then(YamlValue::as_sequence)
+                    .map(|g| g.iter().any(|x| x.as_str() == Some("operations.acme.dev")))
+                    .unwrap_or(false)
+            });
+        assert!(has_branded_rule, "RBAC must grant the branded operations group");
     }
 
     #[test]
@@ -4306,6 +4403,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("app.kubernetes.io/part-of=my-saas"),
             permission: OperatorPermission::Observe,
@@ -4362,6 +4460,7 @@ mod tests {
             // Ignored for Helm output — the value comes from .Values / .Release per install.
             environment_name: None,
             install_namespace: None,
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4409,6 +4508,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme"),
             install_namespace: None,
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4428,6 +4528,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: None,
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4445,6 +4546,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("   "),
             permission: OperatorPermission::Observe,
