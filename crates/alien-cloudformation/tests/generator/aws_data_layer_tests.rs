@@ -111,14 +111,13 @@ fn remote_storage_management_dependencies_are_acyclic() {
             resource.resource_type == "AWS::IAM::Role" && resource.logical_id == "ManagementRole"
         })
         .expect("management role");
-    let remote_bindings_role = template
+    let access_role = template
         .resources
         .values()
         .find(|resource| {
-            resource.resource_type == "AWS::IAM::Role"
-                && resource.logical_id == "RemoteBindingsRole"
+            resource.resource_type == "AWS::IAM::Role" && resource.logical_id == "AccessRole"
         })
-        .expect("remote bindings role");
+        .expect("access role");
     let storage_bucket = template
         .resources
         .values()
@@ -141,12 +140,8 @@ fn remote_storage_management_dependencies_are_acyclic() {
     assert!(storage_bucket
         .depends_on
         .contains(&management_role.logical_id));
-    assert!(!storage_bucket
-        .depends_on
-        .contains(&remote_bindings_role.logical_id));
-    assert!(storage_grant
-        .depends_on
-        .contains(&remote_bindings_role.logical_id));
+    assert!(!storage_bucket.depends_on.contains(&access_role.logical_id));
+    assert!(storage_grant.depends_on.contains(&access_role.logical_id));
     assert!(storage_grant
         .depends_on
         .contains(&storage_bucket.logical_id));
@@ -156,8 +151,8 @@ fn remote_storage_management_dependencies_are_acyclic() {
         serde_json::to_value(&storage_grant.properties).expect("serialize storage grant");
     assert_eq!(
         grant_properties["Roles"],
-        serde_json::json!([{ "Ref": remote_bindings_role.logical_id }]),
-        "setup must attach the exact storage grant to the Remote Bindings role"
+        serde_json::json!([{ "Ref": access_role.logical_id }]),
+        "setup must attach the exact storage grant to the access role"
     );
     let grant_actions = grant_properties["PolicyDocument"]["Statement"]
         .as_array()

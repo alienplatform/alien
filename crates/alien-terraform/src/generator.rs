@@ -336,10 +336,14 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action");
-    let setup_only = !stack
+    let setup_only = stack
         .resources
         .values()
-        .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
+        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+        && !stack
+            .resources
+            .values()
+            .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
     let has_remote_management =
         stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE);
     let has_remote_bindings = stack_has_resource_type(stack, RemoteBindings::RESOURCE_TYPE);
@@ -3046,10 +3050,14 @@ fn readme_md(
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
     let mut input_sections = vec![readme_required_inputs(registration.is_some())];
-    let setup_only = !stack
+    let setup_only = stack
         .resources
         .values()
-        .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
+        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+        && !stack
+            .resources
+            .values()
+            .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
     input_sections.push(readme_common_inputs(setup_only));
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         input_sections.push(readme_aws_inputs());

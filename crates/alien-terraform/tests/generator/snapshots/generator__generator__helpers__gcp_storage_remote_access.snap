@@ -45,70 +45,6 @@ variable "token" {
   sensitive   = true
 }
 
-variable "management_url" {
-  type        = string
-  description = "Optional management endpoint used by pull-style runtimes."
-  default     = ""
-}
-
-variable "deployment_model" {
-  type        = string
-  description = "How runtime updates are delivered after setup."
-  default     = "push"
-
-  validation {
-    condition     = contains(["push", "pull"], var.deployment_model)
-    error_message = "deployment_model must be one of: push, pull."
-  }
-}
-
-variable "advanced_settings_json" {
-  type        = string
-  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
-  default     = "{}"
-  sensitive   = true
-}
-
-variable "advanced_settings_overlay_json" {
-  type        = string
-  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
-  default     = "{}"
-  sensitive   = true
-}
-
-variable "updates_mode" {
-  type        = string
-  description = "How application updates are delivered after setup."
-  default     = "auto"
-
-  validation {
-    condition     = contains(["auto", "approval-required"], var.updates_mode)
-    error_message = "updates_mode must be one of: auto, approval-required."
-  }
-}
-
-variable "telemetry_mode" {
-  type        = string
-  description = "How logs, metrics, and traces are collected."
-  default     = "auto"
-
-  validation {
-    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
-    error_message = "telemetry_mode must be one of: off, auto, approval-required."
-  }
-}
-
-variable "heartbeats_mode" {
-  type        = string
-  description = "Whether runtime health checks are enabled."
-  default     = "on"
-
-  validation {
-    condition     = contains(["off", "on"], var.heartbeats_mode)
-    error_message = "heartbeats_mode must be one of: off, on."
-  }
-}
-
 variable "gcp_project" {
   type        = string
   description = "GCP project ID."
@@ -122,8 +58,7 @@ variable "gcp_region" {
 
 variable "managing_service_account_email" {
   type        = string
-  description = "Email of the management service account allowed to impersonate setup-created identities. Empty disables the binding."
-  default     = ""
+  description = "Email of the management service account allowed to impersonate setup-created identities."
 }
 
 variable "gcp_manage_custom_roles" {
@@ -151,15 +86,23 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name              = var.name
-  gcp_custom_role_prefix       = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
-  deployment_platform          = "gcp"
-  deployment_target            = "gcp"
-  deployment_region            = var.gcp_region
-  deployment_management_config = var.deployment_model == "push" ? { platform = "gcp", projectId = var.gcp_project, serviceAccountEmail = var.managing_service_account_email } : null
-  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
-  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
+  resource_prefix        = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name        = var.name
+  gcp_custom_role_prefix = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform    = "gcp"
+  deployment_target      = "gcp"
+  deployment_region      = var.gcp_region
+  deployment_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  deployment_settings = {
+    deploymentModel = "push"
+    updates         = "approval-required"
+    telemetry       = "off"
+    heartbeats      = "on"
+  }
   deployment_resources = [
     {
       id   = "management"
@@ -173,12 +116,12 @@ locals {
       }
     },
     {
-      id   = "remote-bindings"
-      type = "remote-bindings"
+      id   = "access"
+      type = "resource-access"
       importData = {
         projectId              = var.gcp_project
-        serviceAccountEmail    = google_service_account.remote_bindings.email
-        serviceAccountUniqueId = google_service_account.remote_bindings.unique_id
+        serviceAccountEmail    = google_service_account.access.email
+        serviceAccountUniqueId = google_service_account.access.unique_id
       }
     },
     {
@@ -246,24 +189,24 @@ resource "google_service_account_iam_member" "management_manager_user" {
   member             = "serviceAccount:${each.value}"
 }
 
-=== remote_bindings.tf ===
-resource "google_service_account" "remote_bindings" {
+=== access.tf ===
+resource "google_service_account" "access" {
   project      = var.gcp_project
-  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-remote_bindings", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-remote_bindings", local.resource_prefix)), "_", "-")), 0, 8))
-  display_name = "${local.deployment_name}: Remote Bindings service account"
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-access", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-access", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "${local.deployment_name}: application access"
   description  = "Data-plane identity for explicitly published resources in ${local.deployment_name}."
 }
 
-resource "google_service_account_iam_member" "remote_bindings_manager_token_creator" {
+resource "google_service_account_iam_member" "access_manager_token_creator" {
   for_each           = toset(compact([var.managing_service_account_email]))
-  service_account_id = google_service_account.remote_bindings.id
+  service_account_id = google_service_account.access.id
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${each.value}"
 }
 
-resource "google_service_account_iam_member" "remote_bindings_manager_user" {
+resource "google_service_account_iam_member" "access_manager_user" {
   for_each           = toset(compact([var.managing_service_account_email]))
-  service_account_id = google_service_account.remote_bindings.id
+  service_account_id = google_service_account.access.id
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${each.value}"
 }
@@ -288,10 +231,7 @@ resource "google_storage_bucket" "uploads" {
     google_project_iam_custom_role.gcp_role_check_cloud_storage_health,
     google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
-    google_service_account_iam_member.management_manager_user,
-    google_service_account.remote_bindings,
-    google_service_account_iam_member.remote_bindings_manager_token_creator,
-    google_service_account_iam_member.remote_bindings_manager_user
+    google_service_account_iam_member.management_manager_user
   ]
 }
 
@@ -301,12 +241,12 @@ resource "google_storage_bucket_iam_member" "gcp_role_check_cloud_storage_health
   member = "serviceAccount:${google_service_account.management.email}"
 }
 
-resource "google_project_iam_custom_role" "gcp_role_storage_remote_data_write" {
+resource "google_project_iam_custom_role" "gcp_role_read_write_bucket_objects" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_remote_data_write", local.gcp_custom_role_prefix)
-  title       = "${local.deployment_name}: Storage remote data write"
-  description = "Used by ${local.deployment_name}. Allows remote binding object operations on one storage bucket or container. Resource prefix: ${local.resource_prefix}."
+  role_id     = format("role_%s_read_write_bucket_objects", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Read Write Bucket Objects"
+  description = "Used by ${local.deployment_name}. Read, list, create, and delete objects in the selected Cloud Storage bucket. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "storage.objects.create",
@@ -316,10 +256,10 @@ resource "google_project_iam_custom_role" "gcp_role_storage_remote_data_write" {
   ]
 }
 
-resource "google_storage_bucket_iam_member" "gcp_role_storage_remote_data_write_uploads_remote_bindings_storage_0" {
+resource "google_storage_bucket_iam_member" "gcp_role_read_write_bucket_objects_uploads_access_storage_0" {
   bucket = google_storage_bucket.uploads.name
-  role   = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_remote_data_write[0].name : format("projects/%s/roles/role_%s_storage_remote_data_write", var.gcp_project, local.gcp_custom_role_prefix)
-  member = "serviceAccount:${google_service_account.remote_bindings.email}"
+  role   = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_read_write_bucket_objects[0].name : format("projects/%s/roles/role_%s_read_write_bucket_objects", var.gcp_project, local.gcp_custom_role_prefix)
+  member = "serviceAccount:${google_service_account.access.email}"
 }
 
 === iam_propagation.tf ===
@@ -329,8 +269,8 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
-    google_service_account_iam_member.remote_bindings_manager_token_creator,
-    google_service_account_iam_member.remote_bindings_manager_user
+    google_service_account_iam_member.access_manager_token_creator,
+    google_service_account_iam_member.access_manager_user
   ]
 }
 
@@ -345,7 +285,7 @@ resource "terraform_data" "deployment_registration" {
     setup_import_format_version = 1
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
-    management_url              = var.management_url
+    management_url              = ""
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
@@ -357,13 +297,13 @@ resource "terraform_data" "deployment_registration" {
     google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
-    google_service_account.remote_bindings,
-    google_service_account_iam_member.remote_bindings_manager_token_creator,
-    google_service_account_iam_member.remote_bindings_manager_user,
+    google_service_account.access,
+    google_service_account_iam_member.access_manager_token_creator,
+    google_service_account_iam_member.access_manager_user,
     google_storage_bucket.uploads,
     google_storage_bucket_iam_member.gcp_role_check_cloud_storage_health_uploads_management_storage_0,
-    google_project_iam_custom_role.gcp_role_storage_remote_data_write,
-    google_storage_bucket_iam_member.gcp_role_storage_remote_data_write_uploads_remote_bindings_storage_0,
+    google_project_iam_custom_role.gcp_role_read_write_bucket_objects,
+    google_storage_bucket_iam_member.gcp_role_read_write_bucket_objects_uploads_access_storage_0,
     time_sleep.gcp_iam_propagation
   ]
 }
@@ -425,6 +365,24 @@ output "deployment_resources" {
   description = "Deployment registration resource metadata JSON."
 }
 
+=== PERMISSIONS.md ===
+# Application access permissions
+
+The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive Alien's management permissions.
+
+## `uploads` (storage)
+
+Read and write objects in this storage resource.
+
+Permission set: `storage/remote-data-write` (revision 1).
+
+- Read, list, create, and delete objects in the selected Cloud Storage bucket.
+  Scope: `projects/${var.gcp_project}/buckets/${local.resource_prefix}-uploads`
+  - `storage.objects.get`
+  - `storage.objects.list`
+  - `storage.objects.create`
+  - `storage.objects.delete`
+
 === README.md ===
 # Deployment setup - acme-remote-storage
 
@@ -442,13 +400,6 @@ Required:
 Common optional settings:
 
 - `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
-- `management_url`: optional management endpoint used by pull-style runtimes.
-- `deployment_model`: `push` or `pull`.
-- `updates_mode`: `auto` or `approval-required`.
-- `telemetry_mode`: `off`, `auto`, or `approval-required`.
-- `heartbeats_mode`: `off` or `on`.
-- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
-- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
 
 GCP settings:
 

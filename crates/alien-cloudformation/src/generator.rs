@@ -248,10 +248,14 @@ pub fn generate_cloudformation_template(
     };
 
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
-    let bindings_only = !stack
+    let access_only = stack
         .resources
         .values()
-        .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
+        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+        && !stack
+            .resources
+            .values()
+            .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
     let stack_inputs = stack_inputs_for_cloudformation(stack, options.target);
 
     add_standard_parameters(
@@ -259,7 +263,7 @@ pub fn generate_cloudformation_template(
         stack,
         &stack_settings,
         supports_custom_domain,
-        bindings_only,
+        access_only,
         !matches!(options.registration, RegistrationMode::OutputsFallback),
     )?;
     add_stack_input_parameters(&mut template, &stack_inputs)?;
@@ -267,7 +271,7 @@ pub fn generate_cloudformation_template(
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
     }
-    if !bindings_only {
+    if !access_only {
         add_standard_conditions(
             &mut template,
             stack,
@@ -281,7 +285,7 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         supports_custom_domain,
         &stack_inputs,
-        bindings_only,
+        access_only,
         !matches!(options.registration, RegistrationMode::OutputsFallback),
     );
 
@@ -395,7 +399,7 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         kubernetes_namespace.clone(),
         supports_custom_domain,
-        bindings_only,
+        access_only,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
