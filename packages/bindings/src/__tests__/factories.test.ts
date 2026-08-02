@@ -162,6 +162,20 @@ function addonForKv(kvHandle: RawKvHandle): NativeAddon {
   }
 }
 
+/** Build an addon whose `storage(name)` resolves to a caller-supplied handle. */
+function addonForStorage(storageHandle: RawStorageHandle): NativeAddon {
+  class FakeBindingsHandle {
+    async storage(): Promise<RawStorageHandle> {
+      return storageHandle
+    }
+  }
+  return {
+    BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    RemoteBindingsHandle: unusedRemoteBindingsHandle(),
+    version: () => "test",
+  }
+}
+
 describe("createFactories laziness", () => {
   it("constructs factories without loading the addon; loads only on first op", async () => {
     const getAddon = vi.fn<() => NativeAddon>(() => {
@@ -283,6 +297,55 @@ describe("createFactories kv surface", () => {
 })
 
 describe("createFactories method mapping", () => {
+  it("forwards storage object attributes and converts Uint8Array data", async () => {
+    const put = vi.fn<RawStorageHandle["put"]>(async () => {})
+    const storageHandle: RawStorageHandle = {
+      get: async () => Buffer.from("x"),
+      put,
+      delete: async () => {},
+      list: async () => [],
+      head: async () => ({ location: "p", size: 0, lastModified: "" }),
+      copy: async () => {},
+      signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
+    }
+    const { storage } = createFactories(() => addonForStorage(storageHandle))
+    const options = {
+      contentType: "text/plain",
+      contentDisposition: 'attachment; filename="note.txt"',
+      contentEncoding: "gzip",
+      contentLanguage: "en-US",
+      cacheControl: "private, max-age=60",
+      metadata: { source: "upload", checksum: "abc123" },
+    }
+
+    await storage("files").put("notes/note.txt", new Uint8Array([1, 2, 3]), options)
+
+    expect(put).toHaveBeenCalledOnce()
+    const firstCall = put.mock.calls[0]
+    if (!firstCall) throw new Error("put was not called")
+    expect(firstCall[0]).toBe("notes/note.txt")
+    expect(firstCall[1]).toEqual(Buffer.from([1, 2, 3]))
+    expect(firstCall[2]).toEqual(options)
+  })
+
+  it("preserves two-argument storage puts", async () => {
+    const put = vi.fn<RawStorageHandle["put"]>(async () => {})
+    const storageHandle: RawStorageHandle = {
+      get: async () => Buffer.from("x"),
+      put,
+      delete: async () => {},
+      list: async () => [],
+      head: async () => ({ location: "p", size: 0, lastModified: "" }),
+      copy: async () => {},
+      signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
+    }
+    const { storage } = createFactories(() => addonForStorage(storageHandle))
+
+    await storage("files").put("note.txt", Buffer.from("hello"))
+
+    expect(put).toHaveBeenCalledWith("note.txt", Buffer.from("hello"), null)
+  })
+
   it("serializes queue.send payloads as JSON via the bound queue handle", async () => {
     const sendJson = vi.fn(async () => {})
     const queueHandle: RawQueueHandle = {

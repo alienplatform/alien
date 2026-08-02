@@ -2,7 +2,9 @@
 //! operations and cannot expose the wider local `StorageHandle` API.
 
 use crate::error::map_object_store_error;
-use crate::storage::{object_meta_to_js, ObjectMetaJs};
+use crate::storage::{
+    object_meta_to_js, object_store_put_options, ObjectMetaJs, StoragePutOptionsJs,
+};
 use alien_bindings::RemoteStorage;
 use futures::StreamExt;
 use napi::bindgen_prelude::Buffer;
@@ -40,11 +42,23 @@ impl RemoteStorageHandle {
     }
 
     #[napi]
-    pub async fn put(&self, path: String, data: Buffer) -> napi::Result<()> {
-        self.inner
-            .put(&Path::from(path), PutPayload::from(data.to_vec()))
-            .await
-            .map_err(|error| map_object_store_error(error, &self.binding, "put"))?;
+    pub async fn put(
+        &self,
+        path: String,
+        data: Buffer,
+        options: Option<StoragePutOptionsJs>,
+    ) -> napi::Result<()> {
+        let path = Path::from(path);
+        let payload = PutPayload::from(data.to_vec());
+        match options {
+            Some(options) => {
+                self.inner
+                    .put_opts(&path, payload, object_store_put_options(options))
+                    .await
+            }
+            None => self.inner.put(&path, payload).await,
+        }
+        .map_err(|error| map_object_store_error(error, &self.binding, "put"))?;
         Ok(())
     }
 

@@ -35,6 +35,25 @@ describe("storage (local file-tree provider)", () => {
     expect(fetched.equals(data)).toBe(true)
   })
 
+  it("accepts object attributes through the real napi boundary", async () => {
+    const s = freshStorage()
+    const data = Buffer.from("attribute-bearing object")
+
+    await s.put("attributes.txt", data, {
+      contentType: "text/plain; charset=utf-8",
+      contentDisposition: 'attachment; filename="attributes.txt"',
+      contentEncoding: "identity",
+      contentLanguage: "en-US",
+      cacheControl: "private, max-age=60",
+      metadata: { source: "integration-test", checksum: "abc123" },
+    })
+
+    // The local filesystem backend does not expose object attributes, but the
+    // successful round trip proves the public JS object crossed the real napi
+    // boundary and reached the storage write path.
+    expect(await s.get("attributes.txt")).toEqual(data)
+  })
+
   it("lists, heads, copies, and deletes objects", async () => {
     const s = freshStorage()
     await s.put("a.txt", Buffer.from("a-content"))

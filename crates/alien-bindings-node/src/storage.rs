@@ -10,7 +10,7 @@ use futures::StreamExt;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use object_store::path::Path;
-use object_store::{ObjectMeta, PutPayload};
+use object_store::{Attribute, Attributes, ObjectMeta, PutOptions, PutPayload};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +35,45 @@ pub struct PresignedRequestJs {
     pub method: String,
     /// Headers to include with the request.
     pub headers: HashMap<String, String>,
+}
+
+/// Provider-neutral object attributes for a storage write.
+#[napi(object)]
+pub struct StoragePutOptionsJs {
+    /// MIME type stored with the object.
+    pub content_type: Option<String>,
+    /// Browser content-disposition behavior stored with the object.
+    pub content_disposition: Option<String>,
+    /// Content encoding stored with the object.
+    pub content_encoding: Option<String>,
+    /// Content language stored with the object.
+    pub content_language: Option<String>,
+    /// Cache-control policy stored with the object.
+    pub cache_control: Option<String>,
+    /// User-defined object metadata.
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+pub(crate) fn object_store_put_options(options: StoragePutOptionsJs) -> PutOptions {
+    let mut attributes = Attributes::new();
+    for (attribute, value) in [
+        (Attribute::ContentType, options.content_type),
+        (Attribute::ContentDisposition, options.content_disposition),
+        (Attribute::ContentEncoding, options.content_encoding),
+        (Attribute::ContentLanguage, options.content_language),
+        (Attribute::CacheControl, options.cache_control),
+    ] {
+        if let Some(value) = value {
+            attributes.insert(attribute, value.into());
+        }
+    }
+    for (key, value) in options.metadata.unwrap_or_default() {
+        attributes.insert(Attribute::Metadata(key.into()), value.into());
+    }
+    PutOptions {
+        attributes,
+        ..Default::default()
+    }
 }
 
 /// Translate an `object_store::ObjectMeta` into its JS shape.
@@ -101,14 +140,25 @@ impl StorageHandle {
 
     /// Store `data` at `path`.
     #[napi]
-    pub async fn put(&self, path: String, data: Buffer) -> napi::Result<()> {
+    pub async fn put(
+        &self,
+        path: String,
+        data: Buffer,
+        options: Option<StoragePutOptionsJs>,
+    ) -> napi::Result<()> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
         let location = parse_path(path, "path", "put")?;
-        store
-            .put(&location, PutPayload::from(data.to_vec()))
-            .await
-            .map_err(|e| map_object_store_error(e, &binding, "put"))?;
+        let payload = PutPayload::from(data.to_vec());
+        match options {
+            Some(options) => {
+                store
+                    .put_opts(&location, payload, object_store_put_options(options))
+                    .await
+            }
+            None => store.put(&location, payload).await,
+        }
+        .map_err(|e| map_object_store_error(e, &binding, "put"))?;
         Ok(())
     }
 
@@ -205,6 +255,7 @@ mod tests {
     use super::*;
     use alien_bindings::presigned::PresignedOperation;
     use chrono::{TimeZone, Utc};
+    use object_store::AttributeValue;
 
     #[test]
     fn parse_path_preserves_rfc_message_id_characters() {
@@ -281,5 +332,47 @@ mod tests {
         assert_eq!(js.url, "local:///tmp/data/obj");
         assert_eq!(js.method, "GET");
         assert!(js.headers.is_empty());
+    }
+
+    #[test]
+    fn storage_put_options_map_every_object_attribute() {
+        let options = object_store_put_options(StoragePutOptionsJs {
+            content_type: Some("message/rfc822".to_string()),
+            content_disposition: Some("attachment; filename=message.eml".to_string()),
+            content_encoding: Some("gzip".to_string()),
+            content_language: Some("en-US".to_string()),
+            cache_control: Some("private, max-age=60".to_string()),
+            metadata: Some(HashMap::from([
+                ("message-id".to_string(), "msg_123".to_string()),
+                ("source".to_string(), "inbound".to_string()),
+            ])),
+        });
+
+        let expected = Attributes::from_iter([
+            (
+                Attribute::ContentType,
+                AttributeValue::from("message/rfc822"),
+            ),
+            (
+                Attribute::ContentDisposition,
+                AttributeValue::from("attachment; filename=message.eml"),
+            ),
+            (Attribute::ContentEncoding, AttributeValue::from("gzip")),
+            (Attribute::ContentLanguage, AttributeValue::from("en-US")),
+            (
+                Attribute::CacheControl,
+                AttributeValue::from("private, max-age=60"),
+            ),
+            (
+                Attribute::Metadata("message-id".into()),
+                AttributeValue::from("msg_123"),
+            ),
+            (
+                Attribute::Metadata("source".into()),
+                AttributeValue::from("inbound"),
+            ),
+        ]);
+
+        assert_eq!(options.attributes, expected);
     }
 }

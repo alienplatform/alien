@@ -34,6 +34,7 @@ import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import type { StoragePutOptions } from "./types.js"
 
 const require = createRequire(import.meta.url)
 
@@ -74,7 +75,7 @@ export interface RawQueueMessage {
 /** Raw napi storage handle. */
 export interface RawStorageHandle {
   get(path: string): Promise<Buffer>
-  put(path: string, data: Buffer): Promise<void>
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<void>
   delete(path: string): Promise<void>
   list(prefix?: string | null): Promise<RawObjectMeta[]>
   head(path: string): Promise<RawObjectMeta>
@@ -85,7 +86,7 @@ export interface RawStorageHandle {
 /** Raw napi remote Storage v0 handle. */
 export interface RawRemoteStorageHandle {
   get(path: string): Promise<Buffer>
-  put(path: string, data: Buffer): Promise<void>
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<void>
   delete(path: string): Promise<void>
   list(prefix?: string | null): Promise<RawObjectMeta[]>
   head(path: string): Promise<RawObjectMeta>

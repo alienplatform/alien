@@ -22,7 +22,11 @@ const bindings = await Bindings.forRemoteDeployment({
 })
 
 const archive = bindings.storage("archive")
-await archive.put("reports/latest.json", Buffer.from(JSON.stringify({ ready: true })))
+await archive.put("reports/latest.json", Buffer.from(JSON.stringify({ ready: true })), {
+  contentType: "application/json",
+  cacheControl: "private, max-age=60",
+  metadata: { schema: "report-v1" },
+})
 
 const metadata = await archive.head("reports/latest.json")
 const report = await archive.get("reports/latest.json")

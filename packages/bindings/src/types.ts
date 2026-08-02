@@ -38,12 +38,28 @@ export interface PresignedRequest {
   headers: Record<string, string>
 }
 
+/** Provider-neutral object attributes for {@link Storage.put}. */
+export interface StoragePutOptions {
+  /** MIME type stored with the object. */
+  contentType?: string
+  /** Browser content-disposition behavior stored with the object. */
+  contentDisposition?: string
+  /** Content encoding stored with the object. */
+  contentEncoding?: string
+  /** Content language stored with the object. */
+  contentLanguage?: string
+  /** Cache-control policy stored with the object. */
+  cacheControl?: string
+  /** User-defined object metadata. */
+  metadata?: Record<string, string>
+}
+
 /** A resolved object-storage binding. */
 export interface Storage {
   /** Fetch the object at `path`. */
   get(path: string): Promise<Buffer>
-  /** Store `data` at `path`. */
-  put(path: string, data: Buffer | Uint8Array): Promise<void>
+  /** Store `data` at `path`, optionally with provider-neutral object attributes. */
+  put(path: string, data: Buffer | Uint8Array, options?: StoragePutOptions): Promise<void>
   /** Delete the object at `path`. */
   delete(path: string): Promise<void>
   /** List objects, optionally filtered by `prefix`. */

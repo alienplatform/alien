@@ -315,6 +315,15 @@ impl RemoteStorage for RefreshingStorage {
         ObjectStore::put(self, path, payload).await
     }
 
+    async fn put_opts(
+        &self,
+        path: &Path,
+        payload: PutPayload,
+        options: ObjectStorePutOptions,
+    ) -> object_store::Result<PutResult> {
+        ObjectStore::put_opts(self, path, payload, options).await
+    }
+
     async fn head(&self, path: &Path) -> object_store::Result<ObjectMeta> {
         ObjectStore::head(self, path).await
     }
