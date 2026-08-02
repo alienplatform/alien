@@ -38,10 +38,10 @@ importers:
         version: 4.3.2
     devDependencies:
       '@eslint/js':
-        specifier: ^9.26.0
+        specifier: ^9.19.0
         version: 9.39.2
       eslint:
-        specifier: ^9.26.0
+        specifier: ^9.19.0
         version: 9.39.2(jiti@2.6.1)
       globals:
         specifier: ^15.14.0
