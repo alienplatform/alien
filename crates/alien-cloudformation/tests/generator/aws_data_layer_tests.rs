@@ -317,30 +317,22 @@ fn aws_queue_resource_permissions_attach_to_service_account_role() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    let read_policy = &template["Resources"]["JobsExecutionSaRoleQueuePermission00"];
-    let write_policy = &template["Resources"]["JobsExecutionSaRoleQueuePermission01"];
-    assert_eq!(read_policy["Type"], "AWS::IAM::Policy");
-    assert_eq!(write_policy["Type"], "AWS::IAM::Policy");
-
-    let read_actions = read_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("read statement should list actions");
-    assert!(read_actions.contains(&serde_json::json!("sqs:ReceiveMessage")));
-    let write_actions = write_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("write statement should list actions");
-    assert!(write_actions.contains(&serde_json::json!("sqs:DeleteMessage")));
+    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1);
+    let policy = policies[0];
+    let actions = policy_actions(policy);
+    assert!(actions.contains(&"sqs:ReceiveMessage"));
+    assert!(actions.contains(&"sqs:DeleteMessage"));
 
     // Statements must be pinned to the queue ARN: the physical queue name is
     // CloudFormation-generated, so a name-pattern binding would never match.
-    for policy in [read_policy, write_policy] {
+    for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("queue policy statements")
+    {
         assert_eq!(
-            policy["Properties"]["PolicyDocument"]["Statement"][0]["Resource"]["Fn::GetAtt"],
+            statement["Resource"]["Fn::GetAtt"],
             serde_json::json!(["Jobs", "Arn"])
-        );
-        assert_eq!(
-            policy["Properties"]["Roles"][0]["Ref"],
-            serde_json::json!("ExecutionSaRole")
         );
     }
 }
@@ -390,31 +382,23 @@ fn aws_kv_resource_permissions_attach_to_service_account_role() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    let read_policy = &template["Resources"]["StoreExecutionSaRoleKvPermission00"];
-    let write_policy = &template["Resources"]["StoreExecutionSaRoleKvPermission01"];
-    assert_eq!(read_policy["Type"], "AWS::IAM::Policy");
-    assert_eq!(write_policy["Type"], "AWS::IAM::Policy");
-
-    let read_actions = read_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("read statement should list actions");
-    assert!(read_actions.contains(&serde_json::json!("dynamodb:GetItem")));
-    assert!(read_actions.contains(&serde_json::json!("dynamodb:Query")));
-    let write_actions = write_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("write statement should list actions");
-    assert!(write_actions.contains(&serde_json::json!("dynamodb:PutItem")));
+    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1);
+    let policy = policies[0];
+    let actions = policy_actions(policy);
+    assert!(actions.contains(&"dynamodb:GetItem"));
+    assert!(actions.contains(&"dynamodb:Query"));
+    assert!(actions.contains(&"dynamodb:PutItem"));
 
     // Statements must be pinned to the table ARN: the physical table name is
     // CloudFormation-generated, so a name-pattern binding would never match.
-    for policy in [read_policy, write_policy] {
+    for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("kv policy statements")
+    {
         assert_eq!(
-            policy["Properties"]["PolicyDocument"]["Statement"][0]["Resource"]["Fn::GetAtt"],
+            statement["Resource"]["Fn::GetAtt"],
             serde_json::json!(["Store", "Arn"])
-        );
-        assert_eq!(
-            policy["Properties"]["Roles"][0]["Ref"],
-            serde_json::json!("ExecutionSaRole")
         );
     }
 }
@@ -469,7 +453,7 @@ fn aws_vault_resource_permissions_attach_to_service_account_role() {
 }
 
 #[test]
-fn aws_vault_permissions_include_vault_logical_id() {
+fn aws_vault_permissions_include_every_vault_scope() {
     let stack = Stack::new("vault-permissions".to_string())
         .permission(
             "execution",
@@ -498,6 +482,116 @@ fn aws_vault_permissions_include_vault_logical_id() {
         "aws multiple vault service account permissions",
     );
 
-    assert!(yaml.contains("SecretsExecutionSaRoleVaultPermission00"));
-    assert!(yaml.contains("ProviderKeysExecutionSaRoleVaultPermission00"));
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1);
+    let policy = serde_json::to_string(policies[0]).expect("policy should serialize");
+    assert!(policy.contains("parameter/${AWS::StackName}-secrets-*"));
+    assert!(policy.contains("parameter/${AWS::StackName}-provider-keys-*"));
+}
+
+#[test]
+fn many_resource_grants_stay_within_the_role_inline_policy_quota() {
+    let mut stack = Stack::new("many-resource-grants".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global([
+                "storage/data-read",
+                "storage/data-write",
+                "kv/data-read",
+                "kv/data-write",
+            ]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+
+    for index in 0..12 {
+        stack = stack.add(
+            Storage::new(format!("data-{index}")).build(),
+            ResourceLifecycle::Frozen,
+        );
+    }
+
+    let yaml = render_built_ins(
+        &stack.build(),
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "many AWS resource grants",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1, "resource grants should share one policy");
+
+    let aggregate_size = role_inline_policy_documents(&template, "ExecutionSaRole")
+        .into_iter()
+        .map(|document| {
+            serde_json::to_string(document)
+                .expect("policy should serialize")
+                .len()
+        })
+        .sum::<usize>();
+    assert!(
+        aggregate_size < 10_240,
+        "rendered inline policy documents use {aggregate_size} non-whitespace characters"
+    );
+
+    let policy = serde_json::to_string(policies[0]).expect("policy should serialize");
+    for index in 0..12 {
+        assert!(
+            policy.contains(&format!("Data{index}")),
+            "storage {index} should remain granted"
+        );
+    }
+}
+
+fn inline_policies_for_role<'a>(
+    template: &'a serde_json::Value,
+    role_id: &str,
+) -> Vec<&'a serde_json::Value> {
+    template["Resources"]
+        .as_object()
+        .expect("resources should be an object")
+        .values()
+        .filter(|resource| {
+            resource["Type"] == "AWS::IAM::Policy"
+                && resource["Properties"]["Roles"]
+                    .as_array()
+                    .is_some_and(|roles| roles.contains(&serde_json::json!({ "Ref": role_id })))
+        })
+        .collect()
+}
+
+fn policy_actions(policy: &serde_json::Value) -> Vec<&str> {
+    policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("policy statements")
+        .iter()
+        .flat_map(|statement| match &statement["Action"] {
+            serde_json::Value::Array(actions) => actions.iter().collect::<Vec<_>>(),
+            action => vec![action],
+        })
+        .filter_map(serde_json::Value::as_str)
+        .collect()
+}
+
+fn role_inline_policy_documents<'a>(
+    template: &'a serde_json::Value,
+    role_id: &str,
+) -> Vec<&'a serde_json::Value> {
+    let mut documents = template["Resources"][role_id]["Properties"]["Policies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|policy| &policy["PolicyDocument"])
+        .collect::<Vec<_>>();
+    documents.extend(
+        inline_policies_for_role(template, role_id)
+            .into_iter()
+            .map(|policy| &policy["Properties"]["PolicyDocument"]),
+    );
+    documents
 }
