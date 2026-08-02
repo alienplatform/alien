@@ -7,11 +7,7 @@
         "label": "list-bucket-and-uploads",
         "description": "List the selected S3 bucket and its in-progress multipart uploads.",
         "grant": {
-          "actions": [
-            "s3:ListBucket",
-            "s3:GetBucketLocation",
-            "s3:ListBucketMultipartUploads"
-          ]
+          "actions": ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"]
         },
         "binding": {
           "stack": {
