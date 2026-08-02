@@ -89,9 +89,9 @@ fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
         .collect::<String>();
 
     assert!(rendered
-        .contains("google_project_iam_custom_role\" \"gcp_role_storage_remote_data_write\""));
+        .contains("google_project_iam_custom_role\" \"gcp_role_read_write_bucket_objects\""));
     assert!(rendered.contains(
-        "google_storage_bucket_iam_member\" \"gcp_role_storage_remote_data_write_uploads_access_storage_0\""
+        "google_storage_bucket_iam_member\" \"gcp_role_read_write_bucket_objects_uploads_access_storage_0\""
     ));
     assert!(rendered.contains("google_service_account.access.email"));
     assert!(

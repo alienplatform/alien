@@ -4,8 +4,9 @@ use super::helpers::{
     try_render,
 };
 use alien_core::{
-    AzureResourceGroup, AzureStorageAccount, Kv, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackBuilder, StackSettings, Storage,
+    AzureResourceGroup, AzureStorageAccount, Kv, PermissionProfile, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackBuilder, StackSettings,
+    Storage,
 };
 use alien_terraform::TerraformTarget;
 
@@ -445,10 +446,13 @@ fn gated_remote_access_storage_stack() -> Stack {
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_with_dependencies(
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
-            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
         )
         .build();
     // `add_with_remote_access` and `add_enabled_when` each vary one field of
