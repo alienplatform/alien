@@ -725,6 +725,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Validate npm auth
         if: ${{ inputs.stable_action == 'publish' }}
