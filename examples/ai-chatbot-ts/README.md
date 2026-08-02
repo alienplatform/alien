@@ -1,6 +1,6 @@
 # AI Chatbot
 
-A streaming chatbot that answers questions about a private Postgres by writing SQL and running it through a tool. The model is served by the deployment's own cloud and the database is reachable only from inside the stack, so there are no API keys and no database credentials in the app.
+A streaming chatbot that answers questions about a private Postgres through a tool. The model is served by the deployment's own cloud and the database is reachable only from inside the stack, so there are no API keys and no database credentials in the app.
 
 The app builds with the included Dockerfile (Next.js [standalone output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output)) and runs as a single container behind an HTTPS load balancer.
 
@@ -17,7 +17,7 @@ The app builds with the included Dockerfile (Next.js [standalone output](https:/
 - `alien.ts` links both resources to the container, so Alien grants the workload `ai/invoke` and `postgres/data-access` and injects `ALIEN_LLM_BINDING` and `ALIEN_DB_BINDING`.
 - `app/api/chat/route.ts` resolves the model endpoint with `getAiConnection("llm")` and streams with the Vercel AI SDK. On a cloud the binding routes through Alien's embedded gateway, which injects the workload's ambient credential; on `alien dev` it carries your own provider key and the app calls the provider directly.
 - The gateway forwards each model to its own upstream wire format instead of translating, so the route picks the client to match: Claude models get the Anthropic client, everything else the OpenAI-compatible one. Both take the same `baseURL` and the same binding.
-- The `queryDatabase` tool runs one SQL statement per call, bounded by the database rather than by parsing the model's output: a read-only transaction, a statement timeout, and a row limit applied in SQL. It reads the connection with `postgres("db").connection()`, which resolves the password at runtime under the workload's own identity.
+- The `queryDatabase` tool takes a question name and a few filters, never SQL. `app/queries.ts` holds the seven statements it can run and binds the model's arguments as parameters, so the model chooses *which* question to ask and the app owns what actually reaches the database. It reads the connection with `postgres("db").connection()`, which resolves the password at runtime under the workload's own identity.
 - `app/api/models/route.ts` calls `ai("llm").getAvailableModels()`, so the picker lists only the models this cloud has enabled.
 - **See the data** in the header opens a drawer over the chat with the demo tables, read through the same read-only pool, so an answer can be checked against the rows it came from.
 
@@ -29,7 +29,7 @@ Bring your own provider key -- locally there is no cloud identity, so the SDK us
 OPENAI_API_KEY=sk-... alien dev
 ```
 
-Open the printed URL and ask a data question, e.g. *"How many enterprise customers do we have and what's the total MRR?"* The model writes the SQL, calls `queryDatabase`, and summarizes the result. The demo tables are created and filled on the first question, so there is nothing to seed by hand.
+Open the printed URL and ask a data question, e.g. *"How many enterprise customers do we have and what's the total MRR?"* The model calls `queryDatabase` and summarizes the result. The demo tables are created and filled on the first question, so there is nothing to seed by hand.
 
 ## Deploying
 

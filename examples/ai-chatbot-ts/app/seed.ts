@@ -63,6 +63,9 @@ async function run(): Promise<void> {
     user: conn.username,
     password: conn.password,
     ssl: conn.ssl,
+    // A container that dies holding the advisory lock would otherwise park every
+    // other container's seed on `pg_advisory_lock` forever.
+    options: "-c statement_timeout=30000",
   })
   await client.connect()
   try {

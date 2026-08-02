@@ -2,8 +2,8 @@ import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { type AiConnection, ai, getAiConnection } from "@alienplatform/sdk"
 import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
-import { z } from "zod"
 import { query } from "../../db"
+import { type Ask, askSchema, plan, supportedFilters, unsupportedFilters } from "../../queries"
 import { ensureSeeded } from "../../seed"
 
 // The gateway forwards each model to its own upstream wire format rather than
@@ -23,27 +23,26 @@ function modelFor(modelId: string, connection: AiConnection) {
   return createOpenAICompatible({ name: "alien", ...connection })(modelId)
 }
 
-const MAX_ROWS = 50
-
 const queryDatabase = tool({
   description:
-    "Run a read-only SQL query against the company's private Postgres database. " +
-    "Tables: customers(id, name, plan, country, mrr_usd), orders(id, customer_id, amount_usd, status, created).",
-  inputSchema: z.object({
-    sql: z.string().describe("a single read-only SELECT or WITH statement for Postgres"),
-  }),
-  execute: async ({ sql }) => {
-    // node-postgres runs semicolon-separated statements, so reject chained SQL here;
-    // writes are stopped by the read-only transaction in `query`, not by parsing.
-    const statement = sql.trim().replace(/;\s*$/, "")
-    if (!/^(select|with)\b/i.test(statement) || statement.includes(";")) {
-      return { error: "only a single read-only SELECT or WITH statement is allowed" }
+    "Answer a question about the company's Postgres data. Pick the question that fits and " +
+    "narrow it with the optional filters. Data: customers (name, plan, country, monthly " +
+    "recurring revenue) and their orders (amount, status, date).",
+  inputSchema: askSchema,
+  execute: async (ask: Ask) => {
+    const ignored = unsupportedFilters(ask)
+    if (ignored.length > 0) {
+      const takes = supportedFilters(ask.question)
+      return {
+        error: `${ask.question} does not take ${ignored.join(" or ")}; it takes ${
+          takes.length > 0 ? takes.join(" and ") : "no filters"
+        }`,
+      }
     }
     await ensureSeeded()
-    const bounded = `select * from (${statement}) as q limit ${MAX_ROWS + 1}`
-    const result = await query(bounded)
-    const rows = result.rows.slice(0, MAX_ROWS)
-    return { rows, rowCount: rows.length, truncated: result.rows.length > MAX_ROWS }
+    const { text, values } = plan(ask)
+    const { rows } = await query(text, values)
+    return { question: ask.question, rows, rowCount: rows.length }
   },
 })
 
@@ -62,9 +61,9 @@ export async function POST(req: Request) {
   const result = streamText({
     model: modelFor(modelId, connection),
     system:
-      "You answer questions about the company's data. When a question needs data, write a " +
-      "single read-only Postgres SELECT and call the queryDatabase tool, then summarize the " +
-      "result for the user in plain English.",
+      "You answer questions about the company's data. When a question needs data, call the " +
+      "queryDatabase tool and summarize what comes back in plain English. If no question in " +
+      "the tool covers what was asked, say what the data can and cannot answer.",
     messages: await convertToModelMessages(messages),
     // Without a stop condition the model never streams the answer after the tool result.
     stopWhen: stepCountIs(6),
