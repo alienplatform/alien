@@ -108,6 +108,11 @@ pub(crate) async fn proxy_bedrock_anthropic(
         .is_some_and(|t| t != "enabled" && t != "disabled");
     if thinking_unsupported {
         obj.remove("thinking");
+    } else if let Some(thinking) = obj.get_mut("thinking").and_then(Value::as_object_mut) {
+        // `display` is newer than the pinned schema. The current models tolerate it,
+        // but Opus 4.1 answers `thinking.enabled.display: Extra inputs are not
+        // permitted`, so Claude Code cannot reach it at all without this.
+        thinking.remove("display");
     }
     // Anthropic *server*-executed tool types (web_search, code_execution, web fetch,
     // advisor) run on Anthropic's own API servers, which InvokeModel is not, so
