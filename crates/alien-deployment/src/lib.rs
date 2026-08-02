@@ -35,6 +35,7 @@ pub use alien_core::{
 pub use helpers::collect_environment_info;
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
+pub use helpers::deployment_state_error_from_headline;
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};

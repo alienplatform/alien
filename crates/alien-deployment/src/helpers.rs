@@ -903,12 +903,54 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
 pub fn deployment_headline_error_from_state(
     state: &alien_core::DeploymentState,
 ) -> Option<AlienError> {
-    state.error.clone().or_else(|| {
-        state
-            .stack_state
-            .as_ref()
-            .and_then(create_aggregated_error_from_stack_state)
-    })
+    let deployment_error = deployment_state_error_from_headline(state.error.clone());
+    if deployment_error.is_some() {
+        return deployment_error;
+    }
+
+    if !state.status.is_failed() {
+        return None;
+    }
+
+    state
+        .stack_state
+        .as_ref()
+        .and_then(create_aggregated_error_from_stack_state)
+}
+
+/// Removes a derived resource-error summary before rebuilding deployment state.
+///
+/// DEPLOYMENT_FAILED with resource counts is a display projection of
+/// StackState resource errors, not a deployment-level error.
+pub fn deployment_state_error_from_headline(error: Option<AlienError>) -> Option<AlienError> {
+    error.filter(|error| !is_resource_error_headline(error))
+}
+
+fn is_resource_error_headline(error: &AlienError) -> bool {
+    if error.code != "DEPLOYMENT_FAILED" {
+        return false;
+    }
+
+    let Some(context) = error
+        .context
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+
+    context
+        .get("resource_errors")
+        .is_some_and(serde_json::Value::is_array)
+        && context
+            .get("total_resources")
+            .is_some_and(serde_json::Value::is_number)
+        && context
+            .get("failed_resources")
+            .is_some_and(serde_json::Value::is_number)
+        && context
+            .get("interrupted_resources")
+            .is_some_and(serde_json::Value::is_number)
 }
 
 #[cfg(test)]
@@ -967,9 +1009,9 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        ExternalBindings, Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceStatus,
-        RuntimeMetadata, StackResourceState, StackSettings, Vault, VaultBinding, Worker,
-        WorkerCode,
+        DeploymentState, DeploymentStatus, ExternalBindings, Platform, Resource, ResourceEntry,
+        ResourceLifecycle, ResourceStatus, RuntimeMetadata, StackResourceState, StackSettings,
+        Vault, VaultBinding, Worker, WorkerCode,
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
@@ -1076,6 +1118,73 @@ mod tests {
         AlienError::new(GenericError {
             message: code_message.to_string(),
         })
+    }
+
+    fn make_deployment_state(
+        status: DeploymentStatus,
+        stack_state: Option<StackState>,
+        error: Option<AlienError>,
+    ) -> DeploymentState {
+        DeploymentState {
+            status,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state,
+            error,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn stack_state_with_resource_error() -> StackState {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "worker".to_string(),
+            make_worker_resource_state("worker", Some(generic_error("worker failed"))),
+        );
+        stack_state
+    }
+
+    #[test]
+    fn running_deployment_does_not_publish_resource_error_headline() {
+        let state = make_deployment_state(
+            DeploymentStatus::Running,
+            Some(stack_state_with_resource_error()),
+            None,
+        );
+
+        assert!(deployment_headline_error_from_state(&state).is_none());
+    }
+
+    #[test]
+    fn failed_deployment_publishes_resource_error_headline() {
+        let state = make_deployment_state(
+            DeploymentStatus::ProvisioningFailed,
+            Some(stack_state_with_resource_error()),
+            None,
+        );
+
+        let error = deployment_headline_error_from_state(&state).unwrap();
+        assert_eq!(error.code, "DEPLOYMENT_FAILED");
+    }
+
+    #[test]
+    fn derived_resource_headline_is_not_replayed_as_deployment_error() {
+        let headline = create_aggregated_error_from_stack_state(&stack_state_with_resource_error());
+
+        assert!(deployment_state_error_from_headline(headline).is_none());
+    }
+
+    #[test]
+    fn genuine_deployment_error_is_preserved() {
+        let error = generic_error("deployment failed");
+
+        let preserved = deployment_state_error_from_headline(Some(error.clone())).unwrap();
+        assert_eq!(preserved.code, error.code);
+        assert_eq!(preserved.message, error.message);
     }
 
     #[test]

@@ -1714,9 +1714,10 @@ fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
 }
 
 fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {
-    error
+    let error = error
         .clone()
-        .and_then(|value| serde_json::from_value::<AlienError>(value).ok())
+        .and_then(|value| serde_json::from_value::<AlienError>(value).ok());
+    alien_deployment::deployment_state_error_from_headline(error)
 }
 
 fn release_info_from_record(
