@@ -678,9 +678,7 @@ mod tests {
             .split("resource \"azurerm_role_assignment\"")
             .skip(1)
             .filter_map(|chunk| chunk.split_once("\n}\n").map(|(block, _)| block))
-            .filter(|block| {
-                block.contains("azurerm_user_assigned_identity.remote_bindings.principal_id")
-            })
+            .filter(|block| block.contains("azurerm_user_assigned_identity.access.principal_id"))
             .collect::<Vec<_>>();
 
         assert_eq!(assignments.len(), 1, "expected one container-scoped grant");
