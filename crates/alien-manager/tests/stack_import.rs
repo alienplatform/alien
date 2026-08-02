@@ -29,12 +29,12 @@ use alien_core::import::{
 use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
-    AwsServiceAccountImportData, AwsStorageImportData, AwsVaultImportData, AzureEnvironmentInfo,
-    AzureManagementConfig, AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus,
-    EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData,
-    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
-    Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus,
-    ServiceAccount, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
+    AwsServiceAccountImportData, AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
+    AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus, EnvironmentInfo,
+    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
+    KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo,
+    RemoteStackManagement, ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackSettings,
+    Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -289,19 +289,6 @@ fn aws_s3_import_request(
     }
 }
 
-fn aws_vault_import(deployment_name: &str, region: &str, account_id: &str) -> ImportedResource {
-    ImportedResource {
-        id: "secrets".to_string(),
-        resource_type: Vault::RESOURCE_TYPE.into(),
-        import_data: serde_json::to_value(AwsVaultImportData {
-            account_id: account_id.to_string(),
-            region: region.to_string(),
-            parameter_prefix: format!("/{deployment_name}/secrets"),
-        })
-        .unwrap(),
-    }
-}
-
 /// Build a Stack with one Storage resource matching `aws_s3_import_request`.
 fn stack_with_storage(resource_id: &str) -> Stack {
     Stack::new("imported".to_string())
@@ -431,7 +418,6 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
                 })
                 .unwrap(),
             },
-            aws_vault_import(deployment_name, region, "123456789012"),
         ],
     }
 }
