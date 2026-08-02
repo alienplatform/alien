@@ -18,13 +18,13 @@ const objectPath = "hello.txt"
 
 await uploads.put(objectPath, new TextEncoder().encode("hello from the vendor backend"))
 
-const metadata = await uploads.head(objectPath)
-const contents = await uploads.get(objectPath)
+const head = await uploads.head(objectPath)
+const object = await uploads.get(objectPath)
 const objects = await uploads.list()
 
 console.log({
-  metadata,
-  contents: new TextDecoder().decode(contents),
+  head,
+  contents: new TextDecoder().decode(object.data),
   objects,
 })
 

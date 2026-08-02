@@ -5,25 +5,44 @@ const object = "alien-e2e/remote-storage-smoke/test/payload.txt"
 
 function fakeStorage() {
   const values = new Map()
-  const put = vi.fn(async (path, data) => {
-    values.set(path, Buffer.from(data))
+  const put = vi.fn(async (path, data, options) => {
+    values.set(path, {
+      data: Buffer.from(data),
+      attributes: options?.attributes ?? { metadata: {} },
+    })
+    return { eTag: "test-etag", version: "test-version" }
   })
   const get = vi.fn(async path => {
     const value = values.get(path)
     if (!value) throw new Error(`missing ${path}`)
-    return value
+    return {
+      data: value.data,
+      meta: {
+        location: path,
+        size: value.data.byteLength,
+        lastModified: "2026-01-01T00:00:00Z",
+      },
+      attributes: value.attributes,
+    }
   })
   const head = vi.fn(async path => {
     const value = values.get(path)
     if (!value) throw new Error(`missing ${path}`)
-    return { location: path, size: value.byteLength, lastModified: "2026-01-01T00:00:00Z" }
+    return {
+      meta: {
+        location: path,
+        size: value.data.byteLength,
+        lastModified: "2026-01-01T00:00:00Z",
+      },
+      attributes: value.attributes,
+    }
   })
   const list = vi.fn(async prefix =>
     [...values.entries()]
       .filter(([path]) => path.startsWith(prefix ?? ""))
       .map(([location, value]) => ({
         location,
-        size: value.byteLength,
+        size: value.data.byteLength,
         lastModified: "2026-01-01T00:00:00Z",
       })),
   )
@@ -62,6 +81,14 @@ describe("remote Storage smoke", () => {
     await verifyRemoteStorage(fixture.storage, object)
 
     expect(fixture.put).toHaveBeenCalledOnce()
+    expect(fixture.put).toHaveBeenCalledWith(object, expect.any(Buffer), {
+      attributes: {
+        contentType: "application/octet-stream",
+        contentDisposition: 'attachment; filename="payload.txt"',
+        cacheControl: "private, max-age=60",
+        metadata: { source: "remote-storage-smoke" },
+      },
+    })
     expect(fixture.get).toHaveBeenCalledWith(object)
     expect(fixture.head).toHaveBeenCalledOnce()
     expect(fixture.list).toHaveBeenCalledTimes(2)

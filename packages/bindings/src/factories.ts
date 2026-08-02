@@ -46,6 +46,7 @@ import type {
   RemoteStorage,
   SignedUrlOptions,
   Storage,
+  StoragePutOptions,
   Vault,
 } from "./types.js"
 
@@ -97,7 +98,8 @@ async function guard<THandle, TResult>(
 function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
   return {
     get: path => guard(handle, raw => raw.get(path)),
-    put: (path, data) => guard(handle, raw => raw.put(path, toBuffer(data))),
+    put: (path, data, options?: StoragePutOptions) =>
+      guard(handle, raw => raw.put(path, toBuffer(data), options ?? null)),
     delete: path => guard(handle, raw => raw.delete(path)),
     list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
     head: path => guard(handle, raw => raw.head(path)),
@@ -110,7 +112,8 @@ function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
 function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): RemoteStorage {
   return {
     get: path => guard(handle, raw => raw.get(path)),
-    put: (path, data) => guard(handle, raw => raw.put(path, toBuffer(data))),
+    put: (path, data, options?: StoragePutOptions) =>
+      guard(handle, raw => raw.put(path, toBuffer(data), options ?? null)),
     delete: path => guard(handle, raw => raw.delete(path)),
     list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
     head: path => guard(handle, raw => raw.head(path)),

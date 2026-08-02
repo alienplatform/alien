@@ -76,5 +76,11 @@ export type {
   SignedUrlMethod,
   SignedUrlOptions,
   Storage,
+  StorageGetResult,
+  StorageHeadResult,
+  StorageObjectAttributes,
+  StoragePutAttributes,
+  StoragePutOptions,
+  StoragePutResult,
   Vault,
 } from "./types.js"

@@ -12,6 +12,10 @@ export interface ObjectMeta {
   size: number
   /** Last-modified timestamp as an RFC 3339 string. */
   lastModified: string
+  /** Provider entity tag, when available. */
+  eTag?: string
+  /** Provider object version, when available. */
+  version?: string
 }
 
 /** HTTP method a presigned request may be issued for. */
@@ -38,18 +42,80 @@ export interface PresignedRequest {
   headers: Record<string, string>
 }
 
+/** Provider-neutral attributes returned with a stored object. */
+export interface StorageObjectAttributes {
+  /** Stored MIME type. */
+  contentType?: string
+  /** Stored browser content-disposition behavior. */
+  contentDisposition?: string
+  /** Stored content encoding. */
+  contentEncoding?: string
+  /** Stored content language. */
+  contentLanguage?: string
+  /** Stored cache-control policy. */
+  cacheControl?: string
+  /** Provider storage class, when reported. */
+  storageClass?: string
+  /** User-defined object metadata. */
+  metadata: Record<string, string>
+}
+
+/** Provider-neutral object attributes accepted by {@link Storage.put}. */
+export interface StoragePutAttributes {
+  /** MIME type to store with the object. */
+  contentType?: string
+  /** Browser content-disposition behavior to store with the object. */
+  contentDisposition?: string
+  /** Content encoding to store. GCS rejects `gzip` because it transcodes gzip responses. */
+  contentEncoding?: string
+  /** Content language to store with the object. */
+  contentLanguage?: string
+  /** Cache-control policy to store with the object. */
+  cacheControl?: string
+  /** User-defined object metadata to store. */
+  metadata?: Record<string, string>
+}
+
+/** Options for {@link Storage.put}. */
+export interface StoragePutOptions {
+  attributes?: StoragePutAttributes
+}
+
+/** Result of reading a stored object. */
+export interface StorageGetResult {
+  data: Buffer
+  meta: ObjectMeta
+  attributes: StorageObjectAttributes
+}
+
+/** Result of reading object information without its payload. */
+export interface StorageHeadResult {
+  meta: ObjectMeta
+  attributes: StorageObjectAttributes
+}
+
+/** Provider identifiers returned after a successful storage write. */
+export interface StoragePutResult {
+  eTag?: string
+  version?: string
+}
+
 /** A resolved object-storage binding. */
 export interface Storage {
   /** Fetch the object at `path`. */
-  get(path: string): Promise<Buffer>
-  /** Store `data` at `path`. */
-  put(path: string, data: Buffer | Uint8Array): Promise<void>
+  get(path: string): Promise<StorageGetResult>
+  /** Store `data` at `path`, optionally with provider-neutral object attributes. */
+  put(
+    path: string,
+    data: Buffer | Uint8Array,
+    options?: StoragePutOptions,
+  ): Promise<StoragePutResult>
   /** Delete the object at `path`. */
   delete(path: string): Promise<void>
   /** List objects, optionally filtered by `prefix`. */
   list(prefix?: string): Promise<ObjectMeta[]>
-  /** Fetch metadata for the object at `path`. */
-  head(path: string): Promise<ObjectMeta>
+  /** Fetch metadata and attributes for `path` without downloading its payload. */
+  head(path: string): Promise<StorageHeadResult>
   /** Copy the object at `from` to `to`. */
   copy(from: string, to: string): Promise<void>
   /** Create a presigned request for `path`. */
