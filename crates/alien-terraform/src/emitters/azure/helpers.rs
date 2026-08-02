@@ -520,7 +520,7 @@ pub fn emit_remote_bindings_role_definitions(
         let role_label = remote_bindings_role_label(&role_definition.name, index);
         let role_segment = azure_resource_role_key_segment(&custom_role.key);
         role_definition.name = format!(
-            "${{local.resource_prefix}}-{} [remote-bindings]",
+            "${{local.resource_prefix}}-{} [application-access]",
             role_definition.name
         );
 
@@ -528,7 +528,7 @@ pub fn emit_remote_bindings_role_definitions(
             &role_label,
             expr::template(role_definition.name.clone()),
             expr::raw(&format!(
-                "uuidv5(\"oid\", \"deployment:azure:remote-bindings-role-def:${{local.resource_prefix}}:{}:{role_segment}\")",
+                "uuidv5(\"oid\", \"deployment:azure:application-access-role-def:${{local.resource_prefix}}:{}:{role_segment}\")",
                 permission_set.id
             )),
             custom_role.role_definition,
@@ -584,10 +584,7 @@ fn role_definition_block(
                     "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
                 ),
             ),
-            attr(
-                "description",
-                Expression::String(role_definition.description),
-            ),
+            attr("description", expr::template(role_definition.description)),
             nested(block(
                 "permissions",
                 [
@@ -633,7 +630,7 @@ pub fn setup_management_role_label(role_name: &str, index: usize) -> String {
 
 pub fn remote_bindings_role_label(role_name: &str, index: usize) -> String {
     format!(
-        "remote_bindings_{}_{}",
+        "application_access_{}_{}",
         sanitize_role_label(role_name),
         index
     )

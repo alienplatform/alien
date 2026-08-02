@@ -8,7 +8,7 @@ use alien_core::KubernetesCluster;
 use alien_core::{
     Ai, ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker,
 };
-use alien_core::{RemoteStackManagement, ServiceAccount, ServiceActivation};
+use alien_core::{RemoteBindings, RemoteStackManagement, ServiceAccount, ServiceActivation};
 
 use crate::ai::GcpAiImporter;
 use crate::artifact_registry::GcpArtifactRegistryImporter;
@@ -18,6 +18,7 @@ use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::GcpKvImporter;
 use crate::network::GcpNetworkImporter;
 use crate::queue::GcpQueueImporter;
+use crate::remote_bindings::GcpRemoteBindingsImporter;
 use crate::remote_stack_management::GcpRemoteStackManagementImporter;
 use crate::service_account::GcpServiceAccountImporter;
 use crate::service_activation::GcpServiceActivationImporter;
@@ -44,6 +45,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             RemoteStackManagement::RESOURCE_TYPE,
             Platform::Gcp,
             GcpRemoteStackManagementImporter,
+        )
+        .register(
+            RemoteBindings::RESOURCE_TYPE,
+            Platform::Gcp,
+            GcpRemoteBindingsImporter,
         )
         .register(Build::RESOURCE_TYPE, Platform::Gcp, GcpBuildImporter)
         .register(

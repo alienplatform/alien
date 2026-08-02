@@ -165,6 +165,7 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
         permission_type: &str,
     ) -> Result<()> {
+        Self::ensure_permission_write_authority(ctx, resource_id)?;
         info!(
             resource_id = %resource_id,
             resource_name = %resource_name,
@@ -207,6 +208,7 @@ impl ResourcePermissionsHelper {
         F: FnOnce(T, IamPolicy) -> Fut,
         Fut: std::future::Future<Output = Result<()>>,
     {
+        Self::ensure_permission_write_authority(ctx, resource_id)?;
         let mut all_bindings = Vec::new();
         Self::collect_gcp_resource_scoped_bindings(
             ctx,
@@ -741,6 +743,83 @@ impl ResourcePermissionsHelper {
         )
         .await?;
 
+        Self::collect_gcp_remote_bindings(
+            ctx,
+            resource_id,
+            &generator,
+            &permission_context,
+            all_bindings,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn collect_gcp_remote_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        generator: &GcpRuntimePermissionsGenerator,
+        permission_context: &PermissionContext,
+        all_bindings: &mut Vec<GcpIamBinding>,
+    ) -> Result<()> {
+        let Some(entry) = ctx.desired_stack.resources.get(resource_id) else {
+            return Ok(());
+        };
+        let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(entry) else {
+            return Ok(());
+        };
+        let Some((_, identity_entry)) = ctx.desired_stack.resources.iter().find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
+        }) else {
+            return Err(AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: resource_id.to_string(),
+                dependency_id: "remote-bindings".to_string(),
+            }));
+        };
+        let controller = ctx
+            .require_dependency::<crate::remote_bindings::GcpRemoteBindingsController>(
+                &(&identity_entry.config).into(),
+            )?;
+        let email = controller.service_account_email.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: resource_id.to_string(),
+                dependency_id: "remote-bindings".to_string(),
+            })
+        })?;
+        let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Remote Bindings permission set '{}' is not registered",
+                        definition.permission_set
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to generate Remote Bindings grant '{}'",
+                    definition.permission_set
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        let mut selected = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+        Self::ensure_gcp_custom_roles_for_resource_if_frozen(
+            ctx,
+            resource_id,
+            &permission_set.id,
+            &grant_plan,
+            &selected,
+        )
+        .await?;
+        let member = format!("serviceAccount:{email}");
+        for binding in &mut selected {
+            binding.members = vec![member.clone()];
+        }
+        all_bindings.extend(selected);
         Ok(())
     }
 
@@ -1060,16 +1139,16 @@ impl ResourcePermissionsHelper {
     /// 3. Generates an IAM policy with `BindingTarget::Resource` and attaches it as
     ///    an inline policy on the SA role.
     ///
-    /// For setup-owned resources, it also applies concrete **management SA**
-    /// resource-scoped permissions. Live resources do not broaden the management
-    /// role at runtime; AWS setup output must grant those permissions up front.
+    /// It applies these setup-owned policies only while Alien has direct setup
+    /// authority. Imported handoffs and normal runtime execution must never
+    /// create or broaden resource-scoped IAM policies.
     pub async fn apply_aws_resource_scoped_permissions(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
         resource_name: &str,
         resource_type: &str,
     ) -> Result<()> {
-        if !Self::resource_is_setup_owned(ctx, resource_id) {
+        if !Self::resource_is_setup_owned(ctx, resource_id)? {
             debug!(
                 resource_id = %resource_id,
                 resource_name = %resource_name,
@@ -1152,14 +1231,141 @@ impl ResourcePermissionsHelper {
         )
         .await?;
 
+        Self::apply_aws_remote_bindings_resource_permission(
+            ctx,
+            resource_id,
+            &generator,
+            &permission_context,
+        )
+        .await?;
+
         Ok(())
     }
 
-    fn resource_is_setup_owned(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        ctx.desired_stack
+    async fn apply_aws_remote_bindings_resource_permission(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        generator: &AwsRuntimePermissionsGenerator,
+        permission_context: &PermissionContext,
+    ) -> Result<()> {
+        let Some(entry) = ctx.desired_stack.resources.get(resource_id) else {
+            return Ok(());
+        };
+        let definition = alien_core::remote_bindings::remote_binding_for_entry(entry);
+        let desired_bindings_entry = ctx.desired_stack.resources.iter().find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
+        });
+        let role_name = if let Some((_, bindings_entry)) = desired_bindings_entry {
+            let controller = ctx
+                .require_dependency::<crate::remote_bindings::AwsRemoteBindingsController>(
+                    &(&bindings_entry.config).into(),
+                )?;
+            controller.role_name.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: resource_id.to_string(),
+                    dependency_id: "remote-bindings".to_string(),
+                })
+            })?
+        } else if let Some(role_name) = ctx
+            .state
+            .resources
+            .values()
+            .find(|state| state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref())
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
+            .and_then(|outputs| outputs.resource_id.rsplit('/').next())
+        {
+            role_name.to_string()
+        } else {
+            return Ok(());
+        };
+        let policy_name = format!("alien-{resource_id}-remote-access");
+        let iam = ctx
+            .service_provider
+            .get_aws_iam_client(ctx.get_aws_config()?)
+            .await?;
+
+        let Some(definition) = definition else {
+            return match iam.delete_role_policy(&role_name, &policy_name).await {
+                Ok(()) => Ok(()),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to revoke Remote Bindings policy from role '{role_name}'"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })),
+            };
+        };
+        let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Remote Bindings permission set '{}' is not registered",
+                        definition.permission_set
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
+        let policy = generator
+            .generate_policy(&permission_set, BindingTarget::Resource, permission_context)
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to generate Remote Bindings policy '{}'",
+                    definition.permission_set
+                ),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        let policy_json = serde_json::to_string_pretty(&policy)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to serialize Remote Bindings IAM policy".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        iam.put_role_policy(&role_name, &policy_name, &policy_json)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to apply Remote Bindings policy to role '{role_name}'"),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        Ok(())
+    }
+
+    fn resource_is_setup_owned(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let setup_owned = ctx
+            .desired_stack
             .resources
             .get(resource_id)
-            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
+            .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen);
+        if setup_owned
+            && ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup
+        {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: format!(
+                    "resource '{resource_id}' reached a permission-applying state after setup handoff; regenerate and rerun setup"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        Ok(setup_owned)
+    }
+
+    fn ensure_permission_write_authority(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<()> {
+        Self::resource_is_setup_owned(ctx, resource_id).map(|_| ())
     }
 
     /// Process AWS permissions for a specific profile by attaching inline policies

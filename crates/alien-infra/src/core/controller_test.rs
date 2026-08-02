@@ -390,6 +390,7 @@ impl SingleControllerExecutor {
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             heartbeat_collector: HeartbeatCollector::default(),
         };
 

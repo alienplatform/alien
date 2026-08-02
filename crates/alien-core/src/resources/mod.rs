@@ -54,6 +54,9 @@ pub use service_account::*;
 mod remote_stack_management;
 pub use remote_stack_management::*;
 
+mod remote_bindings;
+pub use remote_bindings::*;
+
 mod vault;
 pub use vault::*;
 

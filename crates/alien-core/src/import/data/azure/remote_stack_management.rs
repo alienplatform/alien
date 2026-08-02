@@ -25,8 +25,10 @@ pub struct AzureRemoteStackManagementImportData {
     pub management_permissions_applied: bool,
     /// Setup-owned UAMI resource id used only for opted-in remote bindings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
     pub remote_bindings_identity_id: Option<String>,
     /// Remote Bindings UAMI client id used for workload identity exchange.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
     pub remote_bindings_client_id: Option<String>,
 }

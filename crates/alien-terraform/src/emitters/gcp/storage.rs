@@ -84,7 +84,10 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         attr("location", expr::raw("upper(var.gcp_region)")),
         attr("storage_class", Expression::String("STANDARD".to_string())),
         attr("uniform_bucket_level_access", Expression::Bool(true)),
-        attr("force_destroy", Expression::Bool(true)),
+        attr(
+            "force_destroy",
+            Expression::Bool(!ctx.resource.has_remote_bindings()),
+        ),
         attr(
             "public_access_prevention",
             Expression::String(if storage.public_read {
@@ -234,13 +237,11 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         }
     }
 
-    if ctx.resource.is_remote_frozen_storage() {
-        if let Some(label) = remote_stack_management_label(ctx) {
+    if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {
+        if let Some(label) = remote_bindings_label(ctx) {
             owners.push((
-                format!("{label}_remote_bindings"),
-                vec![PermissionSetReference::from_name(
-                    "storage/remote-data-write",
-                )],
+                label.to_string(),
+                vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
         }
     }
@@ -297,5 +298,13 @@ fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str
         } else {
             None
         }
+    })
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
     })
 }

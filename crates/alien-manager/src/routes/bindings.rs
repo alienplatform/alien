@@ -442,7 +442,7 @@ async fn resolve_binding(
     let scope = binding.credential_scope();
     let resolved = match state
         .credential_resolver
-        .resolve_remote_storage_source(&deployment)
+        .resolve_remote_storage_source(&deployment, &request.resource_id)
         .await
     {
         Ok(source) => source,
@@ -584,9 +584,16 @@ async fn require_current_release_remote_access(
     .await?;
     let (_, resource) = current_release_resource(&release, deployment, release_id, resource_id)?;
 
-    if resource.config.resource_type() != Storage::RESOURCE_TYPE {
+    let definition =
+        alien_core::remote_bindings::remote_binding_definition(&resource.config.resource_type())
+            .ok_or_else(|| {
+                ErrorData::bad_request(format!(
+                    "Resource '{resource_id}' does not support Remote Bindings"
+                ))
+            })?;
+    if definition.kind != alien_core::remote_bindings::RemoteBindingKind::Storage {
         return Err(ErrorData::bad_request(format!(
-            "Resource '{resource_id}' is not storage in the deployment's current release"
+            "Resource '{resource_id}' has a Remote Binding kind this endpoint does not support"
         )));
     }
     if resource.lifecycle != ResourceLifecycle::Frozen {

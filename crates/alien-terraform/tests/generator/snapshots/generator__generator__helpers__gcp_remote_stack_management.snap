@@ -122,7 +122,7 @@ variable "gcp_region" {
 
 variable "managing_service_account_email" {
   type        = string
-  description = "Email of the management service account allowed to impersonate setup-created identities. Empty disables the binding."
+  description = "Email of the management service account allowed to impersonate setup-created identities."
   default     = ""
 }
 

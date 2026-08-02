@@ -55,7 +55,7 @@ chrono = "0.4"
 
 [dev-dependencies.alien-infra]
 workspace = true
-features = ["test"]
+features = ["test", "test-utils"]
 
 [dev-dependencies.alien-bindings]
 workspace = true

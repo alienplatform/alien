@@ -4,17 +4,13 @@
 */
 
 import * as z from "zod";
-import { RemoteBindingsAccessOutputsSchema } from "./remote-bindings-access-outputs-schema.js";
 
 /**
  * @description Resource outputs for RemoteStackManagement.\nDifferent platforms will provide different outputs based on their implementation.
  */
 export const RemoteStackManagementOutputsSchema = z.object({
     "accessConfiguration": z.string().describe("Platform-specific access configuration\nFor AWS: The role ARN to assume\nFor GCP: The service account email to impersonate\nFor Azure: JSON containing the target managed identity client ID and tenant ID"),
-"managementResourceId": z.string().describe("Platform-specific management resource identifier\nFor AWS: The ARN of the created cross-account role\nFor GCP: The email of the created service account\nFor Azure: The resource ID of the target user-assigned managed identity"),
-get "remoteBindingsAccess"(){
-                return z.union([RemoteBindingsAccessOutputsSchema, z.null()]).optional()
-              }
+"managementResourceId": z.string().describe("Platform-specific management resource identifier\nFor AWS: The ARN of the created cross-account role\nFor GCP: The email of the created service account\nFor Azure: The resource ID of the target user-assigned managed identity")
     }).describe("Resource outputs for RemoteStackManagement.\nDifferent platforms will provide different outputs based on their implementation.")
 
 export type RemoteStackManagementOutputs = z.infer<typeof RemoteStackManagementOutputsSchema>

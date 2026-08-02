@@ -192,7 +192,7 @@ impl TestRemoteStackManagementController {
                 Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: management_resource_id.clone(),
                     access_configuration: access_configuration.clone(),
-                    remote_bindings_access: None,
+                    legacy_remote_bindings_access: None,
                 }))
             }
             _ => None,

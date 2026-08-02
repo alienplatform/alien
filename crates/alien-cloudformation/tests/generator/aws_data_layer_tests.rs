@@ -3,9 +3,9 @@
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
-    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
-    WorkerTrigger,
+    Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -71,23 +71,29 @@ fn aws_storage_minimal_uses_safe_defaults() {
 
 #[test]
 fn remote_storage_management_dependencies_are_acyclic() {
-    let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "files");
-    let stack = Stack::new("remote-storage".to_string())
+    let management_ref = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
+    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
+    let mut stack = Stack::new("remote-storage".to_string())
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_with_dependencies(
+        .add(
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
-            vec![storage_ref.clone()],
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
         )
         .add_with_dependencies(
             Queue::new("jobs".to_string()).build(),
             ResourceLifecycle::Frozen,
-            vec![storage_ref],
+            vec![management_ref.clone()],
         )
         .build();
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![management_ref.clone(), bindings_ref.clone()];
 
     let (template, _) = render_built_ins_template(
         &stack,
@@ -102,18 +108,16 @@ fn remote_storage_management_dependencies_are_acyclic() {
         .resources
         .values()
         .find(|resource| {
-            resource.resource_type == "AWS::IAM::Role"
-                && !resource.logical_id.ends_with("RemoteBindings")
+            resource.resource_type == "AWS::IAM::Role" && resource.logical_id == "ManagementRole"
         })
         .expect("management role");
-    let remote_bindings_role = template
+    let access_role = template
         .resources
         .values()
         .find(|resource| {
-            resource.resource_type == "AWS::IAM::Role"
-                && resource.logical_id.ends_with("RemoteBindings")
+            resource.resource_type == "AWS::IAM::Role" && resource.logical_id == "AccessRole"
         })
-        .expect("remote bindings role");
+        .expect("access role");
     let storage_bucket = template
         .resources
         .values()
@@ -130,28 +134,37 @@ fn remote_storage_management_dependencies_are_acyclic() {
         .find(|resource| resource.resource_type == "AWS::SQS::Queue")
         .expect("unrelated storage dependent");
 
-    assert!(management_role
-        .depends_on
-        .contains(&storage_bucket.logical_id));
     assert!(!management_role
         .depends_on
-        .contains(&storage_grant.logical_id));
+        .contains(&storage_bucket.logical_id));
+    assert!(storage_bucket
+        .depends_on
+        .contains(&management_role.logical_id));
+    assert!(!storage_bucket.depends_on.contains(&access_role.logical_id));
+    assert!(storage_grant.depends_on.contains(&access_role.logical_id));
     assert!(storage_grant
         .depends_on
-        .contains(&remote_bindings_role.logical_id));
-    assert!(queue.depends_on.contains(&storage_grant.logical_id));
+        .contains(&storage_bucket.logical_id));
+    assert!(queue.depends_on.contains(&management_role.logical_id));
 
     let grant_properties =
         serde_json::to_value(&storage_grant.properties).expect("serialize storage grant");
     assert_eq!(
         grant_properties["Roles"],
-        serde_json::json!([{ "Ref": remote_bindings_role.logical_id }]),
-        "setup must attach the exact storage grant to the Remote Bindings role"
+        serde_json::json!([{ "Ref": access_role.logical_id }]),
+        "setup must attach the exact storage grant to the access role"
     );
-    let grant_actions = grant_properties["PolicyDocument"]["Statement"][0]["Action"]
+    let grant_actions = grant_properties["PolicyDocument"]["Statement"]
         .as_array()
-        .expect("storage grant must list actions");
-    assert_eq!(grant_actions.len(), 4);
+        .expect("storage grant must contain statements")
+        .iter()
+        .flat_map(|statement| {
+            statement["Action"]
+                .as_array()
+                .expect("storage grant must list actions")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(grant_actions.len(), 8);
     for action in [
         "s3:ListBucket",
         "s3:GetObject",
@@ -159,22 +172,24 @@ fn remote_storage_management_dependencies_are_acyclic() {
         "s3:DeleteObject",
     ] {
         assert!(
-            grant_actions.contains(&serde_json::json!(action)),
+            grant_actions.iter().any(|value| **value == action),
             "storage grant must contain {action}"
         );
     }
     assert_eq!(
         grant_properties["PolicyDocument"]["Statement"][0]["Resource"],
-        serde_json::json!([
-            { "Fn::GetAtt": [storage_bucket.logical_id, "Arn"] },
-            {
-                "Fn::Sub": format!(
-                    "arn:${{AWS::Partition}}:s3:::${{{}}}/*",
-                    storage_bucket.logical_id
-                )
-            }
-        ]),
-        "setup must scope remote binding access to the concrete bucket"
+        serde_json::json!([{ "Fn::GetAtt": [storage_bucket.logical_id, "Arn"] }]),
+        "bucket-level actions must use the bucket ARN"
+    );
+    assert_eq!(
+        grant_properties["PolicyDocument"]["Statement"][1]["Resource"],
+        serde_json::json!([{
+            "Fn::Sub": format!(
+                "arn:${{AWS::Partition}}:s3:::${{{}}}/*",
+                storage_bucket.logical_id
+            )
+        }]),
+        "object-level actions must use the object ARN"
     );
 
     for setup_policy in template
@@ -191,6 +206,32 @@ fn remote_storage_management_dependencies_are_acyclic() {
             "the management role must not be able to expand its own permissions"
         );
     }
+}
+
+#[test]
+fn remote_access_generator_fragment_is_reviewable() {
+    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
+    let mut stack = Stack::new("customer-exports".to_string())
+        .add_with_remote_access(
+            Storage::new("exports".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("exports").unwrap().dependencies = vec![bindings_ref];
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "BYO Bucket",
+    );
+    // This exercises the generator fragment directly. Product rendering runs
+    // preflight mutations first and also injects the scoped management role.
+    insta::assert_snapshot!("aws_byo_bucket", yaml);
 }
 
 #[test]

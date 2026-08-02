@@ -3,7 +3,6 @@
  */
 
 import { credentialsMintCredentials } from "../funcs/credentialsMintCredentials.js";
-import { credentialsResolveCredentials } from "../funcs/credentialsResolveCredentials.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import { unwrapAsync } from "../types/fp.js";
@@ -14,17 +13,6 @@ export class Credentials extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.MintCredentialsResponse> {
     return unwrapAsync(credentialsMintCredentials(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async resolveCredentials(
-    request: models.ResolveCredentialsRequest,
-    options?: RequestOptions,
-  ): Promise<models.ResolveCredentialsResponse> {
-    return unwrapAsync(credentialsResolveCredentials(
       this,
       request,
       options,

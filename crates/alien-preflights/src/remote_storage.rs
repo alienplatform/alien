@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 
-/// Remote Storage is supported only for setup-owned cloud resources that opt
+/// Remote Bindings are supported only for setup-owned cloud resources that opt
 /// into publication. This is shared by permission derivation and validation so
 /// the two preflight phases cannot disagree about which resources are exposed.
 pub(crate) fn resource_ids(stack: &Stack, platform: Platform) -> Vec<String> {
@@ -12,7 +12,7 @@ pub(crate) fn resource_ids(stack: &Stack, platform: Platform) -> Vec<String> {
 
     stack
         .resources()
-        .filter(|(_, entry)| entry.is_remote_frozen_storage())
+        .filter(|(_, entry)| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
         .map(|(resource_id, _)| resource_id.clone())
         .collect()
 }
@@ -25,11 +25,11 @@ pub(crate) struct ExternalBindingCheck;
 #[async_trait::async_trait]
 impl DeploymentPrerequisiteCheck for ExternalBindingCheck {
     fn code(&self) -> Option<&'static str> {
-        Some("REMOTE_STORAGE_EXTERNAL_BINDING_UNSUPPORTED")
+        Some("REMOTE_BINDING_EXTERNAL_RESOURCE_UNSUPPORTED")
     }
 
     fn description(&self) -> &'static str {
-        "Remote Storage must be created by setup rather than supplied as an external binding"
+        "Remote Binding resources must be created by setup rather than supplied as external bindings"
     }
 
     fn should_run(
@@ -54,7 +54,7 @@ impl DeploymentPrerequisiteCheck for ExternalBindingCheck {
             .filter(|resource_id| config.external_bindings.has(resource_id))
             .map(|resource_id| {
                 format!(
-                    "Remote Storage resource '{resource_id}' cannot use an external binding. Remove the external binding so customer setup creates and owns a dedicated bucket or container."
+                    "Remote Binding resource '{resource_id}' cannot use an external binding. Remove the external binding so customer setup creates and owns the resource."
                 )
             })
             .collect::<Vec<_>>();
@@ -105,7 +105,7 @@ mod tests {
 
         assert_eq!(
             check.code(),
-            Some("REMOTE_STORAGE_EXTERNAL_BINDING_UNSUPPORTED")
+            Some("REMOTE_BINDING_EXTERNAL_RESOURCE_UNSUPPORTED")
         );
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             let state = StackState::new(platform);

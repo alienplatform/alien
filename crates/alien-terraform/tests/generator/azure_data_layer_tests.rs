@@ -14,8 +14,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
-    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef,
-    ServiceAccount, Stack, StackSettings, Storage, Vault,
+    PermissionProfile, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, ServiceAccount,
+    Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -103,22 +103,24 @@ fn azure_storage_profile_permissions_emit_container_role_assignment() {
 }
 
 #[test]
-fn azure_remote_storage_management_dependencies_are_acyclic() {
-    let stack = Stack::new("acme-remote-storage".to_string())
+fn azure_byo_bucket_is_acyclic_and_valid() {
+    let mut stack = Stack::new("acme-remote-storage".to_string())
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(storage_account(), ResourceLifecycle::Frozen)
         .add_with_remote_access(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_with_dependencies(
-            RemoteStackManagement::new("management".to_string()).build(),
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
-            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "files")],
         )
         .build();
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    snapshot_module("azure_byo_bucket", &module);
     assert_terraform_valid(&module, "azure_remote_storage_management_dependencies");
 }
 

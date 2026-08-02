@@ -165,12 +165,6 @@ pub struct AzureRemoteStackManagementController {
     pub(crate) uami_client_id: Option<String>,
     /// The principal ID (object ID) of the target UAMI (used for role assignment)
     pub(crate) uami_principal_id: Option<String>,
-    /// Setup-owned UAMI used only for Remote Bindings data access.
-    #[serde(default)]
-    pub(crate) remote_bindings_identity_id: Option<String>,
-    /// Client ID of the setup-owned Remote Bindings UAMI.
-    #[serde(default)]
-    pub(crate) remote_bindings_client_id: Option<String>,
     /// The customer's tenant ID (stored for build_outputs)
     pub(crate) tenant_id: Option<String>,
     /// The name of the FIC.
@@ -993,20 +987,7 @@ impl AzureRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: uami_resource_id.clone(),
                 access_configuration: access_config.to_string(),
-                remote_bindings_access: self
-                    .remote_bindings_identity_id
-                    .as_ref()
-                    .zip(self.remote_bindings_client_id.as_ref())
-                    .map(|(identity_id, bindings_client_id)| {
-                        alien_core::RemoteBindingsAccessOutputs {
-                            resource_id: identity_id.clone(),
-                            access_configuration: serde_json::json!({
-                                "uamiClientId": bindings_client_id,
-                                "tenantId": tenant_id,
-                            })
-                            .to_string(),
-                        }
-                    }),
+                legacy_remote_bindings_access: None,
             }))
         } else {
             None
@@ -1610,8 +1591,6 @@ impl AzureRemoteStackManagementController {
             )),
             uami_client_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
             uami_principal_id: Some("87654321-4321-4321-4321-210987654321".to_string()),
-            remote_bindings_identity_id: None,
-            remote_bindings_client_id: None,
             tenant_id: Some("tenant-1234".to_string()),
             fic_name: Some(format!("{}-management-fic", prefix)),
             role_definition_id: Some(format!(

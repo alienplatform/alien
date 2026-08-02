@@ -580,9 +580,9 @@ use alien_aws_clients::AwsClientConfig;
 use alien_azure_clients::AzureClientConfig;
 use alien_core::ClientConfig;
 use alien_core::{
-    AwsManagementConfig, AzureManagementConfig, GcpManagementConfig, KubernetesClientConfig,
-    Platform, Resource, ResourceDefinition, ResourceHeartbeat, ResourceOutputs, ResourceRef,
-    ResourceStatus, StackState,
+    AwsManagementConfig, AzureManagementConfig, GcpManagementConfig, InitialSetupAuthority,
+    KubernetesClientConfig, Platform, Resource, ResourceDefinition, ResourceHeartbeat,
+    ResourceOutputs, ResourceRef, ResourceStatus, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
@@ -620,6 +620,8 @@ pub struct ResourceControllerContext<'a> {
     pub service_provider: &'a Arc<dyn PlatformServiceProvider>,
     /// Deployment configuration containing stack settings, management config, and deployment-time settings.
     pub deployment_config: &'a alien_core::DeploymentConfig,
+    /// Authority available for setup-owned structural and permission changes.
+    pub initial_setup_authority: InitialSetupAuthority,
     /// Per-step typed heartbeat collector.
     pub heartbeat_collector: HeartbeatCollector,
 }

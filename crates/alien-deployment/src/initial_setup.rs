@@ -1,7 +1,9 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus};
+use alien_core::{
+    InitialSetupAuthority, ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus,
+};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::{debug, info};
@@ -96,6 +98,7 @@ pub async fn handle_initial_setup(
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .service_provider(service_provider)
+        .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .step_running_resources(false)
         .build()
@@ -103,14 +106,13 @@ pub async fn handle_initial_setup(
             message: "Failed to create stack executor for initial setup".to_string(),
         })?;
 
-    // Execute one step
-    let step_result =
-        executor
-            .step(stack_state)
-            .await
-            .context(ErrorData::StackExecutionFailed {
-                message: "Failed to execute deployment step".to_string(),
-            })?;
+    let step_result = match runtime_metadata.initial_setup_authority {
+        InitialSetupAuthority::DirectSetup => executor.step(stack_state).await,
+        InitialSetupAuthority::ImportedHandoff => executor.continue_imported(stack_state).await,
+    }
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to execute deployment step".to_string(),
+    })?;
 
     // Compute status only for Frozen resources. A stack with no Frozen
     // resources can hand off immediately to Provisioning.

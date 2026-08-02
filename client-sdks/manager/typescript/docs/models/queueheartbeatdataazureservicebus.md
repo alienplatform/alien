@@ -11,9 +11,9 @@ let value: QueueHeartbeatDataAzureServiceBus = {
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "deleted",
-    partial: true,
-    stale: false,
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   backend: "azureServiceBus",
 };

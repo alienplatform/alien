@@ -2,7 +2,9 @@
 
 use super::helpers::*;
 use crate::error::Result;
-use alien_core::{Resource, ResourceLifecycle, ResourceStatus, Stack};
+use alien_core::{
+    Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
+};
 
 /// Tests that a config change triggers an update.
 #[tokio::test]
@@ -70,6 +72,84 @@ async fn test_refresh_does_not_plan_config_changes() -> Result<()> {
         "refresh must retain the deployed config instead of applying desired drift"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn imported_continuation_preserves_complete_truthful_state() -> Result<()> {
+    let dependency = test_storage("dependency");
+    let dependent = test_storage("dependent");
+    let stack = Stack::new("imported-continuation".to_owned())
+        .add(dependency, ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            dependent,
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new("storage".into(), "dependency")],
+        )
+        .build();
+    let executor = new_executor(&stack)?;
+    let state = run_to_synced(&executor, new_test_state()).await?;
+
+    let continued = executor.continue_imported(state).await?.next_state;
+
+    assert_eq!(
+        continued.resources["dependent"].dependencies,
+        vec![ResourceRef::new("storage".into(), "dependency")]
+    );
+    assert!(continued
+        .resources
+        .values()
+        .all(|resource| resource.status == ResourceStatus::Running));
+    Ok(())
+}
+
+#[tokio::test]
+async fn imported_continuation_refuses_to_initialize_pending_resource() -> Result<()> {
+    let storage = test_storage("assets");
+    let stack = Stack::new("imported-pending".to_owned())
+        .add(storage.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let executor = new_executor(&stack)?;
+    let mut state = new_test_state();
+    state.resources.insert(
+        "assets".to_string(),
+        StackResourceState::new_pending(
+            "storage".to_string(),
+            Resource::new(storage),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        ),
+    );
+
+    let error = executor
+        .continue_imported(state)
+        .await
+        .expect_err("imported Pending state must not initialize a controller");
+
+    assert!(error
+        .message
+        .contains("cannot continue from status Pending"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    assert!(!error.retryable);
+    assert!(!error.internal);
+    Ok(())
+}
+
+#[tokio::test]
+async fn imported_continuation_refuses_missing_setup_resource() -> Result<()> {
+    let stack = Stack::new("imported-missing".to_owned())
+        .add(test_storage("assets"), ResourceLifecycle::Frozen)
+        .build();
+
+    let error = new_executor(&stack)?
+        .continue_imported(new_test_state())
+        .await
+        .expect_err("an incomplete setup handoff must fail");
+
+    assert!(error.message.contains("missing resource 'assets'"));
+    assert_eq!(error.code, "IMPORTED_SETUP_STATE_INVALID");
+    assert!(!error.retryable);
+    assert!(!error.internal);
     Ok(())
 }
 

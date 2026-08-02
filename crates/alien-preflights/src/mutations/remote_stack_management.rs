@@ -107,7 +107,7 @@ impl StackMutation for RemoteStackManagementMutation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{EnvironmentVariablesSnapshot, ExternalBindings, StackSettings};
+    use alien_core::{EnvironmentVariablesSnapshot, ExternalBindings, StackSettings, Storage};
 
     fn empty_stack() -> Stack {
         Stack::new("test".to_string()).build()
@@ -162,5 +162,35 @@ mod tests {
         let config = config(Some(Platform::Aws), DeploymentModel::Push);
 
         assert!(!mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
+    }
+
+    #[tokio::test]
+    async fn access_only_stack_gets_both_setup_identities() {
+        let stack = Stack::new("byo-bucket".to_string())
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let mut config = config(None, DeploymentModel::Push);
+        config.management_config = Some(alien_core::ManagementConfig::Kubernetes);
+        let state = StackState::new(Platform::Test);
+
+        let stack = crate::mutations::RemoteBindingsMutation
+            .mutate(stack, &state, &config)
+            .await
+            .expect("access identity mutation");
+        let stack = RemoteStackManagementMutation
+            .mutate(stack, &state, &config)
+            .await
+            .expect("management identity mutation");
+
+        assert!(stack.resources.values().any(|entry| {
+            entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
+        }));
+        assert!(stack
+            .resources
+            .values()
+            .any(|entry| { entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE }));
     }
 }

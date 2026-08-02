@@ -469,13 +469,11 @@ fn storage_permission_owners(
         }
     }
 
-    if ctx.resource.is_remote_frozen_storage() {
+    if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {
         if let Some(role_id) = remote_bindings_role_id(ctx) {
             owners.push((
                 role_id,
-                vec![PermissionSetReference::from_name(
-                    "storage/remote-data-write",
-                )],
+                vec![PermissionSetReference::from_name(definition.permission_set)],
             ));
         }
     }
@@ -525,11 +523,11 @@ fn service_account_for_id<'a>(
 
 fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {
     ctx.stack.resources().find_map(|(id, entry)| {
-        if entry.config.resource_type() != RemoteStackManagement::RESOURCE_TYPE {
+        if entry.config.resource_type() != alien_core::RemoteBindings::RESOURCE_TYPE {
             return None;
         }
         let logical_id = ctx.name_for(id)?;
-        Some(super::remote_stack_management::remote_bindings_role_logical_id(logical_id))
+        Some(format!("{logical_id}Role"))
     })
 }
 

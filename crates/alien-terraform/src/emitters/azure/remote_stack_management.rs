@@ -19,8 +19,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, NetworkSettings, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteStackManagement, Result,
 };
 use alien_error::Context;
 use alien_permissions::{
@@ -65,67 +65,6 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             ],
         ));
 
-        if has_remote_bindings(ctx) {
-            let bindings_label = format!("{label}_remote_bindings");
-            fragment.resource_blocks.push(resource_block(
-                "azurerm_user_assigned_identity",
-                &bindings_label,
-                [
-                    attr(
-                        "name",
-                        expr::template(
-                            "${local.resource_prefix}-remote-bindings-identity".to_string(),
-                        ),
-                    ),
-                    attr(
-                        "resource_group_name",
-                        expr::raw("var.azure_resource_group_name"),
-                    ),
-                    attr("location", expr::raw("var.azure_location")),
-                    attr("tags", tags(ctx, "remote-bindings")),
-                ],
-            ));
-            fragment.resource_blocks.push(resource_block(
-                "azurerm_federated_identity_credential",
-                &format!("{bindings_label}_fic"),
-                [
-                    attr(
-                        "count",
-                        expr::raw(
-                            "var.azure_oidc_issuer != \"\" && var.azure_oidc_subject != \"\" ? 1 : 0",
-                        ),
-                    ),
-                    attr(
-                        "name",
-                        expr::template(
-                            "${local.resource_prefix}-remote-bindings-federated-credential"
-                                .to_string(),
-                        ),
-                    ),
-                    attr(
-                        "resource_group_name",
-                        expr::raw("var.azure_resource_group_name"),
-                    ),
-                    attr(
-                        "parent_id",
-                        expr::traversal([
-                            "azurerm_user_assigned_identity",
-                            bindings_label.as_str(),
-                            "id",
-                        ]),
-                    ),
-                    attr(
-                        "audience",
-                        Expression::Array(vec![Expression::String(
-                            "api://AzureADTokenExchange".to_string(),
-                        )]),
-                    ),
-                    attr("issuer", expr::raw("var.azure_oidc_issuer")),
-                    attr("subject", expr::raw("var.azure_oidc_subject")),
-                ],
-            ));
-        }
-
         let (global_refs, resource_scoped_refs) = ctx
             .stack
             .management()
@@ -149,7 +88,12 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         emit_management_role(&mut fragment, label, &grant_plan.plan);
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
         emit_management_assignments(&mut fragment, label, &grant_plan, merged_gates.as_deref())?;
-        emit_existing_network_reader_assignments(&mut fragment, label);
+        if matches!(
+            ctx.stack_settings.network.as_ref(),
+            Some(NetworkSettings::ByoVnetAzure { .. })
+        ) {
+            emit_existing_network_reader_assignments(&mut fragment, label);
+        }
 
         fragment.resource_blocks.push(resource_block(
             "azurerm_federated_identity_credential",
@@ -188,7 +132,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        let mut fields = vec![
+        let fields = vec![
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             (
@@ -214,35 +158,8 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
         ];
-        if has_remote_bindings(ctx) {
-            let bindings_label = format!("{label}_remote_bindings");
-            fields.extend([
-                (
-                    "remoteBindingsIdentityId",
-                    expr::traversal([
-                        "azurerm_user_assigned_identity",
-                        bindings_label.as_str(),
-                        "id",
-                    ]),
-                ),
-                (
-                    "remoteBindingsClientId",
-                    expr::traversal([
-                        "azurerm_user_assigned_identity",
-                        bindings_label.as_str(),
-                        "client_id",
-                    ]),
-                ),
-            ]);
-        }
         Ok(expr::object(fields))
     }
-}
-
-fn has_remote_bindings(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack
-        .resources()
-        .any(|(_, entry)| entry.has_remote_bindings())
 }
 
 fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &str) {

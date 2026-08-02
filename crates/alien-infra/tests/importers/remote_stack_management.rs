@@ -30,19 +30,11 @@ fn aws_remote_stack_management_import_preserves_setup_ownership() {
     );
     assert_eq!(internal["state"], "ready");
     assert_eq!(internal["managementPermissionsApplied"], true);
-    let outputs = state
+    state
         .outputs
         .as_ref()
         .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
         .expect("AWS remote-stack-management import must produce outputs");
-    assert_eq!(
-        outputs
-            .remote_bindings_access
-            .as_ref()
-            .expect("Remote Bindings handoff")
-            .resource_id,
-        data.remote_bindings_role_arn.as_deref().unwrap()
-    );
     assert_eq!(
         internal["appliedManagementGrantFingerprint"],
         serde_json::Value::Null,
@@ -77,21 +69,11 @@ fn gcp_remote_stack_management_import_preserves_setup_ownership() {
     let internal = internal_state(&state);
     assert_eq!(internal["roleBound"], true);
     assert_eq!(internal["impersonationGranted"], true);
-    let outputs = state
+    state
         .outputs
         .as_ref()
         .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
         .expect("GCP remote-stack-management import must produce outputs");
-    assert_eq!(
-        outputs
-            .remote_bindings_access
-            .as_ref()
-            .expect("Remote Bindings handoff")
-            .resource_id,
-        data.remote_bindings_service_account_email
-            .as_deref()
-            .unwrap()
-    );
 }
 
 #[test]
@@ -118,10 +100,6 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
     );
     assert_eq!(state.status, ResourceStatus::Provisioning);
     assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
-    assert_eq!(
-        internal_state(&state)["remoteBindingsIdentityId"],
-        data.remote_bindings_identity_id.as_deref().unwrap(),
-    );
     assert_eq!(internal_state(&state)["roleAssignmentIds"], json!([]));
 
     let outputs = state
@@ -130,15 +108,6 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
         .expect("Azure remote-stack-management import must produce outputs");
     assert_eq!(outputs.management_resource_id, data.identity_id);
-    assert_eq!(
-        outputs
-            .remote_bindings_access
-            .as_ref()
-            .expect("Remote Bindings handoff")
-            .resource_id,
-        data.remote_bindings_identity_id.as_deref().unwrap()
-    );
-
     let access_config: serde_json::Value =
         serde_json::from_str(&outputs.access_configuration).unwrap();
     assert_eq!(
@@ -148,4 +117,63 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
             "tenantId": data.tenant_id,
         })
     );
+}
+
+#[test]
+fn remote_bindings_imports_are_first_class_on_every_cloud() {
+    let cases = [
+        (
+            Platform::Aws,
+            serde_json::to_value(AwsRemoteBindingsImportData {
+                role_name: "alien-bindings".to_string(),
+                role_arn: "arn:aws:iam::123456789012:role/alien-bindings".to_string(),
+            })
+            .unwrap(),
+            "arn:aws:iam::123456789012:role/alien-bindings",
+        ),
+        (
+            Platform::Gcp,
+            serde_json::to_value(GcpRemoteBindingsImportData {
+                project_id: "my-project".to_string(),
+                service_account_email: "bindings@my-project.iam.gserviceaccount.com".to_string(),
+                service_account_unique_id: "123456789012345678901".to_string(),
+            })
+            .unwrap(),
+            "bindings@my-project.iam.gserviceaccount.com",
+        ),
+        (
+            Platform::Azure,
+            serde_json::to_value(AzureRemoteBindingsImportData {
+                identity_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/bindings".to_string(),
+                client_id: "11111111-1111-1111-1111-111111111111".to_string(),
+                principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
+                tenant_id: "33333333-3333-3333-3333-333333333333".to_string(),
+            })
+            .unwrap(),
+            "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/bindings",
+        ),
+    ];
+
+    for (platform, import_data, expected_id) in cases {
+        let entry = entry(RemoteBindings::new("remote-bindings".to_string()).build());
+        let state = run_through_registry(
+            &RemoteBindings::RESOURCE_TYPE,
+            platform,
+            import_data,
+            &entry,
+            "us-east-1",
+            &match platform {
+                Platform::Aws => aws_management_config(),
+                Platform::Gcp => gcp_management_config(),
+                Platform::Azure => azure_management_config(),
+                _ => unreachable!(),
+            },
+        );
+        let outputs = state
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<RemoteBindingsOutputs>())
+            .expect("Remote Bindings import must produce first-class outputs");
+        assert_eq!(outputs.resource_id, expected_id);
+    }
 }

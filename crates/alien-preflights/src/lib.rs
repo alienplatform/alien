@@ -426,6 +426,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
+        registry.add_mutation(Box::new(mutations::RemoteBindingsMutation));
         registry.add_mutation(Box::new(mutations::ResourceLinkPermissionsMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
 

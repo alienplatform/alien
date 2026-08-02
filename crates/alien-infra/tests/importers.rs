@@ -24,13 +24,14 @@
 
 use alien_core::import::{
     data::{
-        AwsAiImportData, AwsKvImportData, AwsRemoteStackManagementImportData,
-        AwsServiceAccountImportData, AwsStorageImportData, AzureAiImportData,
-        AzureContainerAppsEnvironmentImportData, AzureRemoteStackManagementImportData,
-        AzureResourceGroupImportData, AzureServiceAccountImportData, AzureStorageAccountImportData,
-        AzureStorageImportData, GcpAiImportData, GcpBuildImportData, GcpKvImportData,
-        GcpNetworkImportData, GcpRemoteStackManagementImportData, GcpServiceActivationImportData,
-        GcpStorageImportData, KubernetesClusterImportData,
+        AwsAiImportData, AwsKvImportData, AwsRemoteBindingsImportData,
+        AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
+        AzureAiImportData, AzureContainerAppsEnvironmentImportData, AzureRemoteBindingsImportData,
+        AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+        AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
+        GcpAiImportData, GcpBuildImportData, GcpKvImportData, GcpNetworkImportData,
+        GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData,
+        GcpServiceActivationImportData, GcpStorageImportData, KubernetesClusterImportData,
     },
     ImportContext,
 };
@@ -41,9 +42,10 @@ use alien_core::{
     AzureStorageAccountOutputs, Build, Email, EmailInbound, EmailOutputs, GcpManagementConfig,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
     KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, ManagementConfig, Network,
-    NetworkSettings, Platform, Queue, RemoteStackManagement, RemoteStackManagementOutputs,
-    Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
-    ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault, Worker,
+    NetworkSettings, Platform, Queue, RemoteBindings, RemoteBindingsOutputs, RemoteStackManagement,
+    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
+    ResourceRef, ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings,
+    Storage, Vault, Worker,
 };
 use alien_infra::{ImporterRegistry, StackResourceStateExt};
 use serde_json::json;

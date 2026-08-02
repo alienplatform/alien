@@ -1,0 +1,1 @@
+{"type":"object","required":["tenantId","identityId","principalId","clientId"],"properties":{"clientId":{"type":"string"},"identityId":{"type":"string"},"principalId":{"type":"string"},"tenantId":{"type":"string"}},"additionalProperties":false,"x-readme-ref-name":"AzureRemoteBindingsImportData"}

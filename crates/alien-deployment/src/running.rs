@@ -61,8 +61,6 @@ pub async fn handle_running(
         )?;
     }
 
-    // Create executor with the target stack configuration
-    // No lifecycle filter - check all resources during health checks
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .service_provider(service_provider.clone())

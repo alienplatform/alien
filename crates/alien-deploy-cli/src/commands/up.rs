@@ -1181,6 +1181,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     if current_deployment.status == "running"
         && public_endpoints.is_none()
         && platform != Platform::Machines
+        && init.deployment_model != DeploymentModel::Push
     {
         eprintln!();
         output::success(&format!("Deployment '{}' is already active.", name));
@@ -3635,6 +3636,42 @@ pub async fn push_initial_setup(
         .context(ErrorData::ConfigurationError {
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
+
+    if state.status == DeploymentStatus::Running {
+        let stack_state = state.stack_state.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "A running deployment has no stack state for setup update".to_string(),
+            })
+        })?;
+        let target_stack = state
+            .target_release
+            .as_ref()
+            .map(|release| release.stack.clone())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "A setup update requires a desired release".to_string(),
+                })
+            })?;
+        let existing_metadata = state.runtime_metadata.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "A running deployment has no prepared setup metadata".to_string(),
+            })
+        })?;
+        state.runtime_metadata = Some(
+            alien_deployment::prepare_direct_setup_update(
+                target_stack,
+                stack_state,
+                &config,
+                &client_config,
+                existing_metadata,
+            )
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "prepare direct setup update".to_string(),
+            })?,
+        );
+        state.status = DeploymentStatus::InitialSetup;
+    }
 
     tracing::info!(
         has_runtime_metadata = state.runtime_metadata.is_some(),
