@@ -35,6 +35,9 @@ const reports = await archive.list("reports/")
 await archive.delete("reports/latest.json")
 ```
 
+Cloud storage providers persist these object attributes. The local filesystem
+provider rejects attribute-bearing writes because it cannot represent them.
+
 Remote Storage exposes `get`, `put`, `head`, `list`, and `delete`. It does not
 expose copy or signed URLs. The same `Bindings` and Storage handles remain valid
 while the native client refreshes short-lived cloud credentials and periodically

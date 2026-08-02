@@ -35,23 +35,24 @@ describe("storage (local file-tree provider)", () => {
     expect(fetched.equals(data)).toBe(true)
   })
 
-  it("accepts object attributes through the real napi boundary", async () => {
+  it("rejects object attributes when the backend cannot persist them", async () => {
     const s = freshStorage()
     const data = Buffer.from("attribute-bearing object")
 
-    await s.put("attributes.txt", data, {
-      contentType: "text/plain; charset=utf-8",
-      contentDisposition: 'attachment; filename="attributes.txt"',
-      contentEncoding: "identity",
-      contentLanguage: "en-US",
-      cacheControl: "private, max-age=60",
-      metadata: { source: "integration-test", checksum: "abc123" },
+    await expect(
+      s.put("attributes.txt", data, {
+        contentType: "text/plain; charset=utf-8",
+        contentDisposition: 'attachment; filename="attributes.txt"',
+        contentEncoding: "identity",
+        contentLanguage: "en-US",
+        cacheControl: "private, max-age=60",
+        metadata: { source: "integration-test", checksum: "abc123" },
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATION_NOT_SUPPORTED",
+      retryable: false,
     })
-
-    // The local filesystem backend does not expose object attributes, but the
-    // successful round trip proves the public JS object crossed the real napi
-    // boundary and reached the storage write path.
-    expect(await s.get("attributes.txt")).toEqual(data)
+    expect(await s.list()).toEqual([])
   })
 
   it("lists, heads, copies, and deletes objects", async () => {

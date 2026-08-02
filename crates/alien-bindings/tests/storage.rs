@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use alien_bindings::{
+    providers::storage::LocalStorage,
     traits::{BindingsProviderApi, Storage},
     BindingsProvider,
 };
@@ -13,8 +14,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use object_store::{
-    path::Path, GetOptions, GetRange as OsGetRange, MultipartUpload, ObjectMeta, PutMode,
-    PutMultipartOpts, PutOptions,
+    path::Path, Attribute, AttributeValue, Attributes, GetOptions, GetRange as OsGetRange,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
 };
 use rstest::rstest;
 use std::path::PathBuf as StdPathBuf;
@@ -85,6 +86,40 @@ impl StorageTestContext for LocalProviderTestContext {
     fn provider_name(&self) -> &'static str {
         "local"
     }
+}
+
+#[tokio::test]
+async fn local_storage_rejects_object_attributes_without_writing_the_payload() {
+    let temp_dir = tempfile::tempdir().expect("create local storage directory");
+    let storage = LocalStorage::new_from_path(
+        temp_dir
+            .path()
+            .to_str()
+            .expect("temporary directory path is valid UTF-8"),
+    )
+    .expect("create local storage");
+    let path = Path::from("attributes.txt");
+    let options = PutOptions {
+        attributes: Attributes::from_iter([(
+            Attribute::ContentType,
+            AttributeValue::from("text/plain"),
+        )]),
+        ..Default::default()
+    };
+
+    let error = storage
+        .put_opts(&path, Bytes::from_static(b"data").into(), options)
+        .await
+        .expect_err("local storage must not silently discard object attributes");
+
+    assert!(matches!(&error, object_store::Error::Generic { .. }));
+    assert!(error
+        .to_string()
+        .contains("the local filesystem backend cannot persist object attributes"));
+    assert!(matches!(
+        storage.get(&path).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
 }
 
 // --- gRPC Provider Context ---

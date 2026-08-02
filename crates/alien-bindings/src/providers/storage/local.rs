@@ -4,7 +4,7 @@ use crate::{
     presigned::{LocalOperation, PresignedOperation, PresignedRequest, PresignedRequestBackend},
     traits::{Binding, Storage},
 };
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
@@ -252,7 +252,18 @@ impl ObjectStore for LocalStorage {
         opts: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         let dst = prefixed_path(&self.base_dir, location);
-        // LocalFileSystem doesn't support attributes or tags, strip them to avoid UNIMPLEMENTED
+        if !opts.attributes.is_empty() {
+            return Err(object_store::Error::Generic {
+                store: "LocalStorage",
+                source: Box::new(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "storage.put object attributes".to_string(),
+                    reason: "the local filesystem backend cannot persist object attributes"
+                        .to_string(),
+                })),
+            });
+        }
+        // LocalFileSystem doesn't support tags. Preserve the existing behavior
+        // for Rust callers that use PutOptions only for conditional writes.
         let opts = PutOptions {
             mode: opts.mode,
             tags: Default::default(),
