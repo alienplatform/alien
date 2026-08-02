@@ -34,7 +34,7 @@ const queryDatabase = tool({
   }),
   execute: async ({ sql }) => {
     // node-postgres runs semicolon-separated statements, so reject chained SQL here;
-    // writes are stopped by the pool's read-only sessions, not by parsing.
+    // writes are stopped by the read-only transaction in `query`, not by parsing.
     const statement = sql.trim().replace(/;\s*$/, "")
     if (!/^(select|with)\b/i.test(statement) || statement.includes(";")) {
       return { error: "only a single read-only SELECT or WITH statement is allowed" }
