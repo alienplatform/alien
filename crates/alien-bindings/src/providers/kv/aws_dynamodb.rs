@@ -318,13 +318,6 @@ impl Kv for AwsDynamodbKv {
     ) -> Result<ScanResult> {
         validate_key(prefix)?;
         let limit = limit.unwrap_or(1000);
-        if limit == 0 {
-            return Ok(ScanResult {
-                items: Vec::new(),
-                next_cursor: cursor,
-            });
-        }
-
         let initial = cursor
             .as_deref()
             .map(|cursor| Self::decode_cursor(prefix, cursor))
@@ -335,6 +328,13 @@ impl Kv for AwsDynamodbKv {
                 bucket: 0,
                 last_key: None,
             });
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
+
         let mut items = Vec::with_capacity(limit);
         let mut bucket_id = initial.bucket;
         let mut last_key = initial.last_key;

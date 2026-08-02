@@ -482,13 +482,6 @@ impl Kv for AzureTableStorageKv {
     ) -> Result<ScanResult> {
         validate_key(prefix)?;
         let limit = limit.unwrap_or(1000);
-        if limit == 0 {
-            return Ok(ScanResult {
-                items: Vec::new(),
-                next_cursor: cursor,
-            });
-        }
-
         let initial = cursor
             .as_deref()
             .map(|cursor| self.decode_cursor(prefix, cursor))
@@ -499,6 +492,13 @@ impl Kv for AzureTableStorageKv {
                 current_partition: 0,
                 continuation: None,
             });
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
+
         let mut items = Vec::with_capacity(limit);
         let mut partition_id = initial.current_partition;
         let mut continuation = initial.continuation;

@@ -508,17 +508,16 @@ impl Kv for GcpFirestoreKv {
         validate_key(prefix)?;
 
         let limit = limit.unwrap_or(1000);
+        let cursor_state = cursor
+            .as_deref()
+            .map(|cursor| self.decode_cursor(prefix, cursor))
+            .transpose()?;
         if limit == 0 {
             return Ok(ScanResult {
                 items: Vec::new(),
                 next_cursor: cursor,
             });
         }
-
-        let cursor_state = cursor
-            .as_deref()
-            .map(|cursor| self.decode_cursor(prefix, cursor))
-            .transpose()?;
 
         let collection_selector = CollectionSelector::builder()
             .collection_id(self.collection_name.clone())

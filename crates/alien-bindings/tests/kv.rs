@@ -1446,7 +1446,7 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
         kv.scan_prefix(
             &format!("different-{}", unique_id),
             Some(3),
-            Some(first_cursor)
+            Some(first_cursor.clone())
         )
         .await
         .is_err(),
@@ -1458,6 +1458,24 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
             .await
             .is_err(),
         "[{}] A malformed cursor must fail",
+        provider_name
+    );
+    assert!(
+        kv.scan_prefix(&prefix, Some(0), Some("not-a-cursor".to_string()))
+            .await
+            .is_err(),
+        "[{}] A zero-limit scan must still reject a malformed cursor",
+        provider_name
+    );
+    assert!(
+        kv.scan_prefix(
+            &format!("different-{}", unique_id),
+            Some(0),
+            Some(first_cursor)
+        )
+        .await
+        .is_err(),
+        "[{}] A zero-limit scan must still enforce the cursor prefix",
         provider_name
     );
 }

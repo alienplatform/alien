@@ -337,18 +337,17 @@ impl Kv for LocalKv {
         Self::validate_key(prefix)?;
 
         let limit = limit.unwrap_or(1000);
+        let last_key = cursor
+            .as_deref()
+            .map(|cursor| Self::decode_cursor(prefix, cursor))
+            .transpose()?
+            .map(|state| state.last_key);
         if limit == 0 {
             return Ok(ScanResult {
                 items: Vec::new(),
                 next_cursor: cursor,
             });
         }
-        let last_key = cursor
-            .as_deref()
-            .map(|cursor| Self::decode_cursor(prefix, cursor))
-            .transpose()?
-            .map(|state| state.last_key);
-
         // Collect matching, non-expired items after the last key in sorted order.
         let matching: Vec<(String, Vec<u8>)> =
             self.store
@@ -594,7 +593,15 @@ mod tests {
             .next_cursor
             .expect("the first page should have a cursor");
         assert!(kv
-            .scan_prefix("second:", Some(1), Some(cursor))
+            .scan_prefix("second:", Some(1), Some(cursor.clone()))
+            .await
+            .is_err());
+        assert!(kv
+            .scan_prefix("second:", Some(0), Some(cursor))
+            .await
+            .is_err());
+        assert!(kv
+            .scan_prefix("first:", Some(0), Some("not-a-cursor".to_string()))
             .await
             .is_err());
     }
