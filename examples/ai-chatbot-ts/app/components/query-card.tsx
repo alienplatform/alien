@@ -4,7 +4,7 @@ import { Spinner } from "./spinner"
 
 const PREVIEW_ROWS = 5
 
-export type QueryInput = { sql?: string }
+export type QueryInput = { question?: string; plan?: string; status?: string }
 export type QueryOutput = {
   rowCount?: number | null
   rows?: Record<string, unknown>[]
@@ -25,6 +25,7 @@ export function QueryCard({
   const running = state === "input-streaming" || state === "input-available"
   const failure =
     state === "output-error" ? (errorText ?? "The query could not be run.") : output?.error
+  const call = input?.question && describe(input)
   const rows = output?.rows ?? []
   const columns = rows.length > 0 ? Object.keys(rows[0]) : []
   const numeric = new Set(columns.filter(column => typeof rows[0]?.[column] === "number"))
@@ -46,9 +47,9 @@ export function QueryCard({
         )}
       </div>
 
-      {input?.sql && (
+      {call && (
         <pre className="overflow-x-auto bg-white/[0.03] px-4 py-2.5 font-mono text-[13px] leading-[1.7] text-zinc-100">
-          {input.sql}
+          {call}
         </pre>
       )}
 
@@ -94,6 +95,11 @@ export function QueryCard({
       )}
     </div>
   )
+}
+
+function describe({ question, plan, status }: QueryInput): string {
+  const filters = [plan && `plan=${plan}`, status && `status=${status}`].filter(Boolean)
+  return [question, ...filters].join("  ·  ")
 }
 
 function DatabaseIcon() {
