@@ -3,7 +3,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { type AiConnection, ai, getAiConnection } from "@alienplatform/sdk"
 import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
 import { z } from "zod"
-import { queryPool } from "../../db"
+import { query } from "../../db"
 import { ensureSeeded } from "../../seed"
 
 // The gateway forwards each model to its own upstream wire format rather than
@@ -40,10 +40,8 @@ const queryDatabase = tool({
       return { error: "only a single read-only SELECT or WITH statement is allowed" }
     }
     await ensureSeeded()
-    const pool = await queryPool()
-    // A LIMIT keeps the database from returning rows the client would only buffer
-    // and drop; the extra row is what tells the model its answer was truncated.
-    const result = await pool.query(`select * from (${statement}) as q limit ${MAX_ROWS + 1}`)
+    const bounded = `select * from (${statement}) as q limit ${MAX_ROWS + 1}`
+    const result = await query(bounded)
     const rows = result.rows.slice(0, MAX_ROWS)
     return { rows, rowCount: rows.length, truncated: result.rows.length > MAX_ROWS }
   },

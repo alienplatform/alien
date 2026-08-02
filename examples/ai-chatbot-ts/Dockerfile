@@ -13,9 +13,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 # .next/static and public are not part of the standalone output and must be
 # copied alongside it for server.js to serve them.
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+# The base image's unprivileged account, so a compromised server is not root.
+USER node
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 EXPOSE 3000

@@ -34,18 +34,23 @@ const ORDERS = `
     (8,150,'paid','2026-06-14'),(6,2000,'paid','2026-06-20');
 `
 
+const SEED_LOCK = 4212025
+
 let seeded: Promise<void> | undefined
 
-/** Create the demo tables and fill them once per container. */
+/** Create the demo tables and fill them, at most once per container. */
 export function ensureSeeded(): Promise<void> {
   if (!seeded) {
     seeded = run().catch(err => {
-      // Don't cache a failure; the next request retries.
       seeded = undefined
       throw err
     })
   }
   return seeded
+}
+
+export function forgetSeeded(): void {
+  seeded = undefined
 }
 
 async function run(): Promise<void> {
@@ -61,11 +66,20 @@ async function run(): Promise<void> {
   })
   await client.connect()
   try {
-    await client.query(SCHEMA)
-    const { rows } = await client.query("select count(*)::int as count from customers")
-    if (rows[0].count > 0) return
-    await client.query(CUSTOMERS)
-    await client.query(ORDERS)
+    await client.query("select pg_advisory_lock($1)", [SEED_LOCK])
+    await client.query("begin")
+    try {
+      await client.query(SCHEMA)
+      const { rows } = await client.query("select count(*)::int as count from customers")
+      if (rows[0].count === 0) {
+        await client.query(CUSTOMERS)
+        await client.query(ORDERS)
+      }
+      await client.query("commit")
+    } catch (err) {
+      await client.query("rollback")
+      throw err
+    }
   } finally {
     await client.end()
   }
