@@ -20,6 +20,8 @@
 //! stays listed (never worse than the old static catalog) and the result is left
 //! uncached so the next call re-probes.
 
+use std::time::Duration;
+
 use alien_core::{
     ai_catalog::{self, CatalogModel, Protocol},
     Platform,
@@ -34,14 +36,19 @@ use crate::router::{
     FOUNDRY_ANTHROPIC_VERSION,
 };
 
+/// `join_all` below waits for every probe and the HTTP client has no timeout of its
+/// own, so an upstream that accepts the connection and never answers would hang
+/// `/v1/models` for the process lifetime.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The outcome of probing one model.
 enum Availability {
     /// Reached, authed, and served (2xx, or a 429 rate-limit).
     Available,
     /// Definitively off: rejected the model or the caller (400/401/403/404).
     Unavailable,
-    /// Could not tell (transport error, 5xx, or the route lacked a field to build
-    /// the probe). Kept in the list for this response, but the result is not cached.
+    /// Could not tell (transport error, timeout, 5xx, or the route lacked a field to
+    /// build the probe). Kept in the list for this response, but not cached.
     Indeterminate,
 }
 
@@ -75,7 +82,7 @@ pub(crate) async fn available_models(
     let probes: Vec<_> = candidates
         .iter()
         .copied()
-        .map(|cm| async move { (cm, probe_model(route, client, cm).await) })
+        .map(|cm| async move { (cm, probe_model(route, client, cm, PROBE_TIMEOUT).await) })
         .collect();
     let verdicts = futures::future::join_all(probes).await;
 
@@ -103,6 +110,7 @@ async fn probe_model(
     route: &GatewayRoute,
     client: &reqwest::Client,
     cm: &CatalogModel,
+    timeout: Duration,
 ) -> Availability {
     let built = match cm.protocol {
         Protocol::OpenAi => openai_probe(route, cm),
@@ -118,10 +126,15 @@ async fn probe_model(
     };
     let header_refs: Vec<(&str, &str)> =
         extra_headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    match sign_and_execute(client, &route.cred, &url, service, body, &header_refs).await {
-        Ok(resp) => classify_status(resp.status().as_u16()),
-        Err(error) => {
+    let sent = sign_and_execute(client, &route.cred, &url, service, body, &header_refs);
+    match tokio::time::timeout(timeout, sent).await {
+        Ok(Ok(resp)) => classify_status(resp.status().as_u16()),
+        Ok(Err(error)) => {
             debug!(model = cm.public_id, %error, "availability probe did not reach the upstream");
+            Availability::Indeterminate
+        }
+        Err(_) => {
+            debug!(model = cm.public_id, "availability probe timed out");
             Availability::Indeterminate
         }
     }
@@ -233,7 +246,76 @@ fn anthropic_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+    use std::time::Instant;
+
+    use aws_credential_types::provider::SharedCredentialsProvider;
+    use aws_credential_types::Credentials;
+
     use super::*;
+    use crate::creds::{AmbientCred, AwsSigV4Cred};
+
+    /// An upstream that accepts the connection and never writes a byte.
+    async fn silent_upstream() -> String {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind the silent upstream");
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            // Hold every socket: dropping one closes the connection, which the probe
+            // reads as a transport error rather than the timeout this test pins.
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_silent_upstream_times_out_instead_of_hanging_the_probe() {
+        let route = GatewayRoute {
+            name: "llm".to_string(),
+            cloud: Platform::Aws,
+            region: Some("us-east-1".to_string()),
+            project: None,
+            azure_endpoint: None,
+            cred: AmbientCred::Aws(AwsSigV4Cred::with_provider(
+                "us-east-1",
+                SharedCredentialsProvider::new(Credentials::new(
+                    "AKIAIOSFODNN7EXAMPLE",
+                    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                    None,
+                    None,
+                    "test",
+                )),
+            )),
+            upstream_base_override: Some(silent_upstream().await),
+        };
+        let cm = ai_catalog::lookup("gpt-oss-20b").expect("a known OpenAI-protocol model");
+
+        let started = Instant::now();
+        let verdict =
+            probe_model(&route, &reqwest::Client::new(), cm, Duration::from_millis(200)).await;
+
+        assert!(
+            matches!(verdict, Availability::Indeterminate),
+            "a probe that never gets an answer cannot judge the model, so it stays listed"
+        );
+        // Every other path to Indeterminate — a route that won't build, a refused
+        // connection, a 5xx — returns well inside the deadline, so the lower bound is
+        // what pins this to the timeout.
+        assert!(
+            started.elapsed() >= Duration::from_millis(200),
+            "the probe returned in {:?}, before the timeout could fire, so it took some other path",
+            started.elapsed()
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the probe returned after {:?}, so the timeout is not bounding it",
+            started.elapsed()
+        );
+    }
 
     #[test]
     fn classify_treats_429_as_available_and_400_as_off() {
