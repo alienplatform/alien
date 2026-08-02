@@ -30,13 +30,11 @@ use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
     AwsServiceAccountImportData, AwsStorageImportData, AwsVaultImportData, AzureEnvironmentInfo,
-    AzureManagementConfig, AzureRemoteStackManagementImportData, AzureServiceActivationImportData,
-    AzureVaultImportData, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
-    GcpManagementConfig, GcpRemoteStackManagementImportData, GcpServiceActivationImportData,
-    GcpVaultImportData, KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-    ManagementConfig, Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle,
-    ResourceStatus, ServiceAccount, ServiceActivation, Stack, StackSettings, Storage, Vault,
-    Worker, WorkerCode,
+    AzureManagementConfig, AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus,
+    EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData,
+    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig,
+    Platform, ReleaseInfo, RemoteStackManagement, ResourceLifecycle, ResourceStatus,
+    ServiceAccount, Stack, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -361,22 +359,17 @@ fn aws_remote_management_import_request(
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
         input_values: Default::default(),
-        resources: vec![
-            ImportedResource {
-                id: resource_id.to_string(),
-                resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
-                import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
-                    role_name: format!("{deployment_name}-management"),
-                    role_arn: format!(
-                        "arn:aws:iam::{account_id}:role/{deployment_name}-management"
-                    ),
-                    remote_bindings_role_arn: None,
-                    management_permissions_applied: true,
-                })
-                .unwrap(),
-            },
-            aws_vault_import(deployment_name, region, account_id),
-        ],
+        resources: vec![ImportedResource {
+            id: resource_id.to_string(),
+            resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
+                role_name: format!("{deployment_name}-management"),
+                role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
+                remote_bindings_role_arn: None,
+                management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
     }
 }
 
@@ -469,42 +462,21 @@ fn gcp_remote_management_import_request(
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
         })),
         input_values: Default::default(),
-        resources: vec![
-            ImportedResource {
-                id: resource_id.to_string(),
-                resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
-                import_data: serde_json::to_value(GcpRemoteStackManagementImportData {
-                    project_id: project_id.to_string(),
-                    project_number: project_number.map(ToString::to_string),
-                    service_account_email: format!(
-                        "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
-                    ),
-                    service_account_unique_id: "1234567890".to_string(),
-                    remote_bindings_service_account_email: None,
-                    management_permissions_applied: true,
-                })
-                .unwrap(),
-            },
-            ImportedResource {
-                id: "enable-secret-manager".to_string(),
-                resource_type: ServiceActivation::RESOURCE_TYPE.into(),
-                import_data: serde_json::to_value(GcpServiceActivationImportData {
-                    project_id: project_id.to_string(),
-                    service_name: "secretmanager.googleapis.com".to_string(),
-                    activated: true,
-                })
-                .unwrap(),
-            },
-            ImportedResource {
-                id: "secrets".to_string(),
-                resource_type: Vault::RESOURCE_TYPE.into(),
-                import_data: serde_json::to_value(GcpVaultImportData {
-                    project_id: project_id.to_string(),
-                    secret_prefix: format!("{deployment_name}-secrets"),
-                })
-                .unwrap(),
-            },
-        ],
+        resources: vec![ImportedResource {
+            id: resource_id.to_string(),
+            resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(GcpRemoteStackManagementImportData {
+                project_id: project_id.to_string(),
+                project_number: project_number.map(ToString::to_string),
+                service_account_email: format!(
+                    "{deployment_name}-management@{project_id}.iam.gserviceaccount.com"
+                ),
+                service_account_unique_id: "1234567890".to_string(),
+                remote_bindings_service_account_email: None,
+                management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
     }
 }
 
@@ -536,8 +508,7 @@ fn azure_remote_management_import_request(
             oidc_subject: "system:serviceaccount:alien:manager".to_string(),
         })),
         input_values: Default::default(),
-        resources: vec![
-            ImportedResource {
+        resources: vec![ImportedResource {
                 id: resource_id.to_string(),
                 resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
                 import_data: serde_json::to_value(AzureRemoteStackManagementImportData {
@@ -554,29 +525,7 @@ fn azure_remote_management_import_request(
                     management_permissions_applied: true,
                 })
                 .unwrap(),
-            },
-            ImportedResource {
-                id: "enable-keyvault".to_string(),
-                resource_type: ServiceActivation::RESOURCE_TYPE.into(),
-                import_data: serde_json::to_value(AzureServiceActivationImportData {
-                    subscription_id: subscription_id.to_string(),
-                    provider_namespace: "Microsoft.KeyVault".to_string(),
-                    registered: true,
-                })
-                .unwrap(),
-            },
-            ImportedResource {
-                id: "secrets".to_string(),
-                resource_type: Vault::RESOURCE_TYPE.into(),
-                import_data: serde_json::to_value(AzureVaultImportData {
-                    subscription_id: subscription_id.to_string(),
-                    resource_group: format!("{deployment_name}-rg"),
-                    vault_name: format!("{deployment_name}-secrets"),
-                    vault_uri: format!("https://{deployment_name}-secrets.vault.azure.net/"),
-                })
-                .unwrap(),
-            },
-        ],
+            }],
     }
 }
 
