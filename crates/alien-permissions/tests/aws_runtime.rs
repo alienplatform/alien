@@ -24,7 +24,7 @@ fn test_aws_storage_data_read_policy_generation(#[case] binding_target: BindingT
 }
 
 #[test]
-fn remote_storage_data_write_generates_only_v0_object_operations() {
+fn remote_storage_data_write_separates_bucket_and_object_operations() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =
         get_permission_set("storage/remote-data-write").expect("permission set exists");
@@ -34,22 +34,32 @@ fn remote_storage_data_write_generates_only_v0_object_operations() {
         .generate_policy(permission_set, BindingTarget::Resource, &context)
         .expect("remote Storage policy should generate");
 
-    assert_eq!(policy.statement.len(), 1);
+    assert_eq!(policy.statement.len(), 2);
     assert_eq!(
         policy.statement[0].action,
         [
             "s3:ListBucket",
-            "s3:GetObject",
-            "s3:PutObject",
-            "s3:DeleteObject",
+            "s3:GetBucketLocation",
+            "s3:ListBucketMultipartUploads",
         ]
     );
     assert_eq!(
         policy.statement[0].resource,
+        ["arn:aws:s3:::my-stack-payments-data"]
+    );
+    assert_eq!(
+        policy.statement[1].action,
         [
-            "arn:aws:s3:::my-stack-payments-data",
-            "arn:aws:s3:::my-stack-payments-data/*",
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts",
         ]
+    );
+    assert_eq!(
+        policy.statement[1].resource,
+        ["arn:aws:s3:::my-stack-payments-data/*"]
     );
 }
 
