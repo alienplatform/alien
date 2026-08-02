@@ -9,14 +9,33 @@ const UNDEFINED_TABLE = "42P01"
 let pool: Promise<Pool> | undefined
 
 export async function query(sql: string): Promise<QueryResult> {
-  const pool = await queryPool()
   try {
-    return await pool.query(sql)
+    return await readOnly(sql)
   } catch (err) {
     if ((err as { code?: string }).code !== UNDEFINED_TABLE) throw err
     forgetSeeded()
     await ensureSeeded()
-    return pool.query(sql)
+    return readOnly(sql)
+  }
+}
+
+// `begin read only` and not just the session default: the model's statement runs
+// on a pooled connection, and a session setting is reversible from inside the very
+// SQL being bounded (`select set_config('default_transaction_read_only','off')`).
+// A read-only transaction cannot be reopened for writing, so the bound holds.
+async function readOnly(sql: string): Promise<QueryResult> {
+  const pool = await queryPool()
+  const client = await pool.connect()
+  try {
+    await client.query("begin read only")
+    const result = await client.query(sql)
+    await client.query("commit")
+    return result
+  } catch (err) {
+    await client.query("rollback").catch(() => {})
+    throw err
+  } finally {
+    client.release()
   }
 }
 
@@ -34,9 +53,8 @@ export function queryPool(): Promise<Pool> {
         user: conn.username,
         password: conn.password,
         ssl: conn.ssl,
-        // The model writes the SQL, so the session bounds it rather than the parser:
-        // read-only stops writes, and the timeout stops a `pg_sleep` or runaway scan
-        // from pinning a pool connection.
+        // The timeout stops a `pg_sleep` or runaway scan from pinning a connection;
+        // writes are stopped per transaction in `readOnly`, not by this default.
         options: "-c default_transaction_read_only=on -c statement_timeout=10000",
       })
     })().catch(err => {
