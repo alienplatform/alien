@@ -1,9 +1,24 @@
 import { postgres } from "@alienplatform/sdk"
-import { Pool } from "pg"
+import { Pool, type QueryResult } from "pg"
+import { ensureSeeded, forgetSeeded } from "./seed"
+
+const UNDEFINED_TABLE = "42P01"
 
 // The binding reads the password from the cloud secret store at runtime with the
 // workload's own identity — it is never in the environment.
 let pool: Promise<Pool> | undefined
+
+export async function query(sql: string): Promise<QueryResult> {
+  const pool = await queryPool()
+  try {
+    return await pool.query(sql)
+  } catch (err) {
+    if ((err as { code?: string }).code !== UNDEFINED_TABLE) throw err
+    forgetSeeded()
+    await ensureSeeded()
+    return pool.query(sql)
+  }
+}
 
 /** The pool every read goes through, including the SQL the model writes. */
 export function queryPool(): Promise<Pool> {
