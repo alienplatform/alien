@@ -8,6 +8,19 @@ use serde::{Deserialize, Serialize};
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
 
+/// Actor that owns structural work during the initial setup phase.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum InitialSetupAuthority {
+    /// Setup state was registered by an external setup engine. Alien may only
+    /// continue controller states that the importer explicitly initialized.
+    #[default]
+    ImportedHandoff,
+    /// Alien is the setup engine and is running with administrator credentials.
+    DirectSetup,
+}
+
 /// One-shot authority for a setup re-import to replace setup-owned resources.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -36,6 +49,11 @@ pub struct SetupUpdateAuthorization {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeMetadata {
+    /// Actor authorized to perform structural Frozen-resource work during
+    /// InitialSetup. Missing legacy values fail closed as ImportedHandoff.
+    #[serde(default)]
+    pub initial_setup_authority: InitialSetupAuthority,
+
     /// Hash of the environment variables snapshot that was last synced to the vault
     /// Used to avoid redundant sync operations during incremental deployment
     #[serde(skip_serializing_if = "Option::is_none")]

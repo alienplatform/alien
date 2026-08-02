@@ -32,6 +32,13 @@ pub struct ResourceEntry {
 }
 
 impl ResourceEntry {
+    /// Returns intrinsic and stack-authored dependencies in planner order.
+    pub fn combined_dependencies(&self) -> Vec<ResourceRef> {
+        let mut dependencies = self.config.get_dependencies();
+        dependencies.extend(self.dependencies.clone());
+        dependencies
+    }
+
     /// Returns whether this resource is published through Remote Bindings.
     ///
     /// Provider emitters use this generic signal to create the stack-level

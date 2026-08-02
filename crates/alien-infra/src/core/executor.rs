@@ -395,8 +395,7 @@ impl StackExecutor {
             id_to_node.insert(id.clone(), node_index);
             node_to_id.insert(node_index, id.clone());
             // Combine intrinsic dependencies from the resource with additional dependencies from the stack entry
-            let mut all_dependencies = resource_entry.config.get_dependencies();
-            all_dependencies.extend(resource_entry.dependencies.clone());
+            let all_dependencies = resource_entry.combined_dependencies();
 
             resource_map.insert(
                 id.clone(),
@@ -1062,19 +1061,6 @@ impl StackExecutor {
                                     });
 
                                 if dependencies_ready {
-                                    if current_resource_state
-                                        .get_internal_controller()?
-                                        .is_some_and(|controller| {
-                                            !controller.updates_when_dependencies_change()
-                                        })
-                                    {
-                                        debug!(
-                                            "Skipping dependency-driven UPDATE for resource '{}'",
-                                            resource_id
-                                        );
-                                        continue;
-                                    }
-
                                     debug!(
                                         "Planning UPDATE for resource '{}' due to dependency changes (create/update)",
                                         resource_id
@@ -1173,6 +1159,67 @@ impl StackExecutor {
     /// stack, resume failed updates, or initiate create/update/delete transitions.
     /// It is suitable for periodic observation of a Running deployment.
     pub async fn refresh(&self, state: StackState) -> Result<StepResult> {
+        self.step_inner(state, false).await
+    }
+
+    /// Continues controller states registered by an external setup engine
+    /// without planning structural changes or initializing new controllers.
+    pub async fn continue_imported(&self, state: StackState) -> Result<StepResult> {
+        if let Some(resource_id) = state
+            .resources
+            .keys()
+            .find(|resource_id| !self.resources.contains_key(*resource_id))
+        {
+            return Err(AlienError::new(ErrorData::InfrastructureError {
+                message: format!(
+                    "Imported setup contains unexpected resource '{}'; regenerate and rerun setup",
+                    resource_id
+                ),
+                operation: Some("continue_imported".to_string()),
+                resource_id: Some(resource_id.clone()),
+            }));
+        }
+
+        for (resource_id, desired) in &self.resources {
+            let resource = state.resources.get(resource_id).ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Imported setup is missing resource '{}'; regenerate and rerun setup",
+                        resource_id
+                    ),
+                    operation: Some("continue_imported".to_string()),
+                    resource_id: Some(resource_id.clone()),
+                })
+            })?;
+
+            if resource.config != desired.resource || resource.dependencies != desired.dependencies
+            {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Imported setup state for '{}' does not match the registered setup artifact; regenerate and rerun setup",
+                        resource_id
+                    ),
+                    operation: Some("continue_imported".to_string()),
+                    resource_id: Some(resource_id.clone()),
+                }));
+            }
+
+            match resource.status {
+                ResourceStatus::Running => {}
+                ResourceStatus::Provisioning if resource.has_internal_state() => {}
+                status => {
+                    return Err(AlienError::new(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Imported setup resource '{}' cannot continue from status {:?}; regenerate and rerun setup",
+                            resource_id, status
+                        ),
+                        operation: Some("continue_imported".to_string()),
+                        resource_id: Some(resource_id.clone()),
+                    }));
+                }
+            }
+        }
+
         self.step_inner(state, false).await
     }
 

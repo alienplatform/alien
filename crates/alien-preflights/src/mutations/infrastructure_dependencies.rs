@@ -401,8 +401,8 @@ fn remote_frozen_storage_refs(stack: &Stack) -> Vec<ResourceRef> {
 /// Reject exact management grants on resources that must become ready before
 /// RemoteStackManagement. Their controllers apply exact grants through the
 /// management identity, which would make the prerequisite wait on its own
-/// dependent. Remote Storage is exempt because its exact grants are reconciled
-/// by RemoteStackManagement after the storage resource exists.
+/// dependent. Remote Storage is exempt because the setup engine applies its
+/// exact Remote Bindings grants after the storage resource exists.
 fn validate_management_bootstrap_permissions(stack: &Stack) -> Result<()> {
     let Some(management_id) = remote_stack_management_id(stack) else {
         return Ok(());

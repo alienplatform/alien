@@ -49,8 +49,9 @@ pub async fn handle_pending(
     let persisted_gate_answers =
         resolve_frozen_gate_answers(&target_stack, &stack_state, &config.input_values)?;
     let frozen_gating = frozen_gating_inputs(&target_stack);
-    let target_stack =
-        strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
+    let target_stack = strip_frozen_declines(target_stack, &persisted_gate_answers, &frozen_gating);
+
+    validate_direct_setup_features(&target_stack)?;
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -80,7 +81,10 @@ pub async fn handle_pending(
     )?;
 
     // Step 4: Store prepared stack and inject environment variables
-    let mut runtime_metadata = alien_core::RuntimeMetadata::default();
+    let mut runtime_metadata = alien_core::RuntimeMetadata {
+        initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+        ..alien_core::RuntimeMetadata::default()
+    };
     runtime_metadata.prepared_stack = Some(mutated_stack.clone());
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
 
@@ -118,6 +122,16 @@ pub async fn handle_pending(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+fn validate_direct_setup_features(stack: &Stack) -> Result<()> {
+    if stack
+        .resources()
+        .any(|(_, entry)| entry.has_remote_bindings())
+    {
+        return Err(AlienError::new(ErrorData::RemoteBindingsSetupRequired));
+    }
+    Ok(())
 }
 
 /// Remove the gated setup-created resources the deployer declined. Runs
@@ -651,7 +665,7 @@ mod tests {
     use super::*;
     use alien_core::{
         KubernetesClientConfig, Kv, Resource, ResourceLifecycle, ResourceStatus, ServiceAccount,
-        StackInputDefinition, StackResourceState,
+        StackInputDefinition, StackResourceState, Storage,
     };
 
     fn imported_state_with(resource_id: &str, resource: Resource) -> StackState {
@@ -665,6 +679,21 @@ mod tests {
         let mut state = StackState::new(Platform::Aws);
         state.resources.insert(resource_id.to_string(), entry);
         state
+    }
+
+    #[test]
+    fn direct_setup_rejects_remote_bindings() {
+        let stack = Stack::new("remote-bindings".to_string())
+            .add_with_remote_access(
+                Storage::new("assets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let error = validate_direct_setup_features(&stack)
+            .expect_err("direct setup does not create the Remote Bindings identity");
+
+        assert_eq!(error.code, "REMOTE_BINDINGS_SETUP_REQUIRED");
     }
 
     fn gated_stack() -> Stack {

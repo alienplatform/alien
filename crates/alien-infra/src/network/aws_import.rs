@@ -81,7 +81,7 @@ mod tests {
     use alien_core::{
         import::{data::AwsNetworkImportData, ImportContext},
         AwsManagementConfig, ManagementConfig, Network, Platform, Resource, ResourceEntry,
-        ResourceLifecycle, StackSettings,
+        ResourceLifecycle, ResourceRef, StackSettings,
     };
 
     use super::*;
@@ -159,6 +159,27 @@ mod tests {
         assert_eq!(internal["state"], "createStart");
         assert_eq!(internal["isByoVpc"], true);
         assert!(imported.outputs.is_none());
+    }
+
+    #[test]
+    fn import_records_stack_authored_dependencies() {
+        let settings = StackSettings {
+            network: Some(NetworkSettings::UseDefault),
+            ..StackSettings::default()
+        };
+        let mut entry = network_entry();
+        entry
+            .dependencies
+            .push(ResourceRef::new("service-activation".into(), "bootstrap"));
+
+        let imported = AwsNetworkImporter
+            .import(
+                empty_default_import_data(),
+                &import_context(&settings, &entry),
+            )
+            .expect("network import should succeed");
+
+        assert_eq!(imported.dependencies, entry.combined_dependencies());
     }
 
     #[test]

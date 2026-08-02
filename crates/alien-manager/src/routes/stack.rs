@@ -221,6 +221,10 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
+    if let Err(error) = validate_import_handoff(&req, &prepared_stack) {
+        return error.into_response();
+    }
+
     let mut stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -544,7 +548,7 @@ fn merge_reimported_stack_state(
                 ),
             })
         })?;
-        let merged = state
+        let mut merged = state
             .import_registry
             .merge_reimport(
                 &resource.resource_type,
@@ -568,6 +572,7 @@ fn merge_reimported_stack_state(
                     ),
                 })
             })?;
+        merged.dependencies = entry.combined_dependencies();
         imported.resources.insert(resource.id.clone(), merged);
     }
 
@@ -906,6 +911,7 @@ fn reimport_runtime_metadata(
     imported_gate_answers: alien_core::GateAnswers,
 ) -> crate::error::Result<RuntimeMetadata> {
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
     // The route refused conflicting answers before calling this, so what
     // remains is bookkeeping: answers for inputs a new release introduces are
     // recorded, and recorded answers are never overwritten.
@@ -1131,6 +1137,13 @@ fn build_stack_state(
                 ),
             })
         })?;
+        let expected_type = entry.config.resource_type();
+        if imported.resource_type != expected_type {
+            return Err(ErrorData::bad_request(format!(
+                "Imported resource '{}' has type '{}', but the setup artifact expects '{}'",
+                imported.id, imported.resource_type, expected_type
+            )));
+        }
 
         // `ImporterRegistry::run` returns an `AlienError<alien_core::ErrorData>`
         // (the importer's typed error surface). The route's error type is
@@ -1172,6 +1185,47 @@ fn build_stack_state(
         StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
     Ok(stack_state)
+}
+
+fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::error::Result<()> {
+    let delivered: std::collections::HashSet<&str> = req
+        .resources
+        .iter()
+        .map(|resource| resource.id.as_str())
+        .collect();
+    if delivered.len() != req.resources.len() {
+        return Err(ErrorData::bad_request(
+            "Setup registration contains duplicate resource ids",
+        ));
+    }
+    let expected: std::collections::HashSet<&str> = stack
+        .resources()
+        .filter(|(_, entry)| {
+            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+                .should_emit_in_setup(entry.lifecycle)
+        })
+        .map(|(resource_id, _)| resource_id.as_str())
+        .collect();
+
+    let mut missing: Vec<&str> = expected.difference(&delivered).copied().collect();
+    missing.sort_unstable();
+    if !missing.is_empty() {
+        return Err(ErrorData::bad_request(format!(
+            "Setup registration is missing setup-owned resources: {}. Regenerate and rerun the setup artifact.",
+            missing.join(", ")
+        )));
+    }
+
+    let mut runtime_owned: Vec<&str> = delivered.difference(&expected).copied().collect();
+    runtime_owned.sort_unstable();
+    if !runtime_owned.is_empty() {
+        return Err(ErrorData::bad_request(format!(
+            "Setup registration includes resources that setup does not own: {}",
+            runtime_owned.join(", ")
+        )));
+    }
+
+    Ok(())
 }
 
 fn import_platform_for_resource(

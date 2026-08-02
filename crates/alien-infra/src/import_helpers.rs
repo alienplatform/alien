@@ -74,6 +74,6 @@ where
         .maybe_outputs(outputs)
         .maybe_remote_binding_params(remote_binding_params)
         .lifecycle(ctx.resource.lifecycle)
-        .dependencies(Vec::new())
+        .dependencies(ctx.resource.combined_dependencies())
         .build())
 }
