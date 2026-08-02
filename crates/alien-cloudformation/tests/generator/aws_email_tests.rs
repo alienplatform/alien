@@ -81,6 +81,21 @@ fn aws_email_renders_ses_infrastructure() {
         destination["SnsDestination"]["TopicARN"]["Ref"],
         "MailerEventsTopic"
     );
+    assert_eq!(
+        resources["MailerEventDestination"]["DependsOn"],
+        serde_json::json!(["MailerEventsTopicPolicy"]),
+        "SES validates topic publish access while creating the event destination"
+    );
+    let topic_policy_statement =
+        &resources["MailerEventsTopicPolicy"]["Properties"]["PolicyDocument"]["Statement"][0];
+    assert_eq!(
+        topic_policy_statement["Principal"]["Service"],
+        "ses.amazonaws.com"
+    );
+    assert_eq!(
+        topic_policy_statement["Condition"]["StringEquals"]["AWS:SourceAccount"]["Ref"],
+        "AWS::AccountId"
+    );
     let subscription = &resources["MailerEventsSubscription"]["Properties"];
     assert_eq!(subscription["Protocol"], "sqs");
     assert_eq!(
@@ -118,8 +133,12 @@ fn aws_email_renders_ses_infrastructure() {
         "Mailbox"
     );
     assert_eq!(
+        rule["Properties"]["Rule"]["Actions"][0]["S3Action"]["TopicArn"]["Ref"],
+        "MailerEventsTopic"
+    );
+    assert_eq!(
         rule["DependsOn"],
-        serde_json::json!(["MailboxBucketPolicy"])
+        serde_json::json!(["MailboxBucketPolicy", "MailerEventsTopicPolicy"])
     );
     let activation = &resources["MailerRuleSetActivation"];
     assert_eq!(activation["Type"], "AWS::CloudFormation::CustomResource");
