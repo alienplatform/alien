@@ -81,7 +81,14 @@ pub async fn run_operator_with_cancel_and_debug_loop(
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
-    run_operator_with_cancel_and_loops(config, service_provider, debug_session_loop, None, cancel)
+    run_operator_with_cancel_and_loops(
+        config,
+        service_provider,
+        debug_session_loop,
+        None,
+        None,
+        cancel,
+    )
         .await
 }
 
@@ -93,11 +100,15 @@ pub async fn run_operator_with_cancel_and_debug_loop(
 /// - `access_request_loop` — the access-request sync loop (materializes access
 ///   requests for customer approval and reports approvals back; execution flows
 ///   separately through the commands queue).
+/// - `operations_exec_loop` — the pull-mode operations-execution loop (runs
+///   authorized `<plugin>/<operation>` commands the customer approved; OSS
+///   builds inject none and run nothing).
 pub async fn run_operator_with_cancel_and_loops(
     config: OperatorConfig,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
     access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
+    operations_exec_loop: Option<Arc<dyn loops::operations_exec::OperationsExecLoop>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
     use tracing::{info, warn};
@@ -244,6 +255,21 @@ pub async fn run_operator_with_cancel_and_loops(
             None
         };
 
+    // Operations-execution loop (pull mode). Runs authorized `<plugin>/<operation>`
+    // commands the customer already approved. Only spawned when a binary injects
+    // a real executor loop — OSS builds pass `None` here and the operator runs no
+    // operations commands. The loop leases + runs regardless of platform (the
+    // executor decides what it can run).
+    let operations_exec_handle = match operations_exec_loop {
+        Some(loop_impl) if !config.is_airgapped() => Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop_impl.run(state).await;
+            }
+        })),
+        _ => None,
+    };
+
     // Wait for cancellation or any loop to exit unexpectedly
     tokio::select! {
         _ = cancel.cancelled() => {
@@ -296,6 +322,15 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Access-request sync loop exited unexpectedly");
+        },
+        _ = async {
+            if let Some(h) = operations_exec_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            warn!("Operations-execution loop exited unexpectedly");
         },
     }
 

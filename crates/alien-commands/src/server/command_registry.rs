@@ -137,12 +137,21 @@ pub fn validate_command_name(command: &str) -> Result<()> {
     Ok(())
 }
 
+/// The reserved command-target id for the operator itself. Commands addressed
+/// to this id are operator-level operations (e.g. an operations-plugin command)
+/// the operator runs via its embedded receiver — not a resource in the
+/// deployment's stack. It is resolved to a pull-mode daemon target without
+/// consulting the stack, since the operator is not a stack resource.
+pub const OPERATOR_COMMAND_TARGET_ID: &str = "operator";
+
 /// Target-selection rules shared by both the
 /// in-memory and SQLite registries route through.
 ///
 /// - `requested = Some(id)`: the id must be well-formed (no `:`) and name an
 ///   existing command-capable target, else `COMMAND_TARGET_NOT_FOUND`. An empty
-///   id never falls back to shorthand.
+///   id never falls back to shorthand. The reserved
+///   [`OPERATOR_COMMAND_TARGET_ID`] always resolves to a pull-mode daemon
+///   target for the operator, independent of the stack.
 /// - `requested = None` (single-target shorthand): exactly one target must
 ///   exist, else `COMMAND_TARGET_AMBIGUOUS` (more than one) or
 ///   `NO_COMMAND_TARGETS` (none).
@@ -154,6 +163,16 @@ pub fn select_command_target(
     targets: &[CommandTarget],
     requested: Option<&str>,
 ) -> Result<CommandTarget> {
+    // The operator is a reserved target, not a stack resource — resolve it
+    // directly so operations commands can be addressed to the operator without
+    // it having to appear in the deployment's command-capable stack targets.
+    if requested == Some(OPERATOR_COMMAND_TARGET_ID) {
+        return Ok(CommandTarget::new(
+            OPERATOR_COMMAND_TARGET_ID.to_string(),
+            CommandTargetType::Daemon,
+        ));
+    }
+
     let target = match requested {
         Some(resource_id) => {
             // Reject ids that would break the key grammar before any lookup.
@@ -897,5 +916,34 @@ mod tests {
         let targets = vec![CommandTarget::new("a:pending:x", CommandTargetType::Worker)];
         let err = select_command_target("dep-1", &targets, None).unwrap_err();
         assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
+    }
+
+    #[test]
+    fn operator_target_resolves_without_a_stack_resource() {
+        // The reserved operator id resolves to a pull-mode daemon target even
+        // when no stack targets exist — operations commands address the operator
+        // itself, which is never a stack resource.
+        let target =
+            select_command_target("dep-1", &[], Some(OPERATOR_COMMAND_TARGET_ID)).unwrap();
+        assert_eq!(target.resource_id, OPERATOR_COMMAND_TARGET_ID);
+        assert_eq!(target.resource_type, CommandTargetType::Daemon);
+        // A daemon target always delivers via pull, regardless of worker mode.
+        assert_eq!(
+            delivery_mode_for(target.resource_type, CommandDeliveryMode::Push),
+            CommandDeliveryMode::Pull
+        );
+    }
+
+    #[test]
+    fn operator_target_is_not_shadowed_by_a_same_named_stack_resource() {
+        // Even if a stack somehow registered a "operator" worker, the reserved id
+        // resolves to the operator daemon (the short-circuit wins).
+        let targets = vec![CommandTarget::new(
+            OPERATOR_COMMAND_TARGET_ID,
+            CommandTargetType::Worker,
+        )];
+        let target =
+            select_command_target("dep-1", &targets, Some(OPERATOR_COMMAND_TARGET_ID)).unwrap();
+        assert_eq!(target.resource_type, CommandTargetType::Daemon);
     }
 }
