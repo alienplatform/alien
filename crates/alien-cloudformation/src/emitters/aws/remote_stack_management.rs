@@ -8,8 +8,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
-            PARAM_MANAGING_ROLE_ARN,
+            cf_from_json, chunk_managed_policy_statements, required_logical_id, resource_config,
+            tags, uniquify_iam_statement_sids, PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -196,14 +196,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         ),
     ]));
 
-    chunk_policy_statements(uniquify_iam_statement_sids(statements))
-}
-
-fn policy_document(statements: Vec<CfExpression>) -> CfExpression {
-    CfExpression::object([
-        ("Version", CfExpression::from("2012-10-17")),
-        ("Statement", CfExpression::list(statements)),
-    ])
+    chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))
 }
 
 fn management_policy_resources(
@@ -233,48 +226,6 @@ fn management_policy_resources(
             policy
         })
         .collect()
-}
-
-fn chunk_policy_statements(statements: Vec<CfExpression>) -> Result<Vec<CfExpression>> {
-    const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
-
-    let mut chunks = Vec::new();
-    let mut current = Vec::new();
-
-    for statement in statements {
-        let mut candidate = current.clone();
-        candidate.push(statement.clone());
-        if policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
-            current = candidate;
-            continue;
-        }
-
-        if current.is_empty() {
-            return Err(AlienError::new(ErrorData::GenericError {
-                message: "AWS management IAM statement is too large for a managed policy"
-                    .to_string(),
-            }));
-        }
-
-        chunks.push(policy_document(current));
-        current = vec![statement];
-    }
-
-    if !current.is_empty() {
-        chunks.push(policy_document(current));
-    }
-
-    Ok(chunks)
-}
-
-fn policy_document_size(statements: &[CfExpression]) -> Result<usize> {
-    serde_json::to_string(&policy_document(statements.to_vec()))
-        .into_alien_error()
-        .context(ErrorData::TemplateSerializationFailed {
-            format: "CloudFormation IAM policy".to_string(),
-            reason: "Failed to serialize IAM policy for size validation".to_string(),
-        })
-        .map(|policy| policy.len())
 }
 
 fn global_permission_refs<'a>(
