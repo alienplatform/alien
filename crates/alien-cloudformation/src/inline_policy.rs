@@ -2,9 +2,13 @@ use crate::{
     emitters::aws::helpers::uniquify_iam_statement_sids,
     template::{CfExpression, CfResource, CfTemplate},
 };
+use alien_core::{ErrorData, Result};
+use alien_error::AlienError;
 use indexmap::IndexMap;
 
 const IAM_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::Policy";
+const IAM_MANAGED_POLICY_RESOURCE_TYPE: &str = "AWS::IAM::ManagedPolicy";
+const IAM_MANAGED_POLICIES_PER_ROLE: usize = 10;
 
 #[derive(PartialEq)]
 struct PolicyGroupKey {
@@ -18,15 +22,16 @@ struct PolicyGroup {
     policy_ids: Vec<String>,
 }
 
-/// Combines compatible external inline policies attached to the same roles.
+/// Combines compatible external inline policies into managed policies.
 ///
 /// IAM applies one aggregate size quota to every inline policy on a role. The
 /// resource emitters intentionally produce independent permission grants, so a
 /// role with many grants otherwise repeats policy-document and statement
-/// overhead until it reaches that quota. Combining the documents also lets us
-/// safely combine equal actions across resources and equal resources across
-/// actions without broadening access.
-pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) {
+/// overhead until it reaches that quota. The consolidated grants use managed
+/// policies so CloudFormation can attach them before deleting legacy inline
+/// policies without temporarily exceeding the inline-policy quota. Equal
+/// action/resource axes are still combined without broadening access.
+pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) -> Result<()> {
     let mut groups: Vec<PolicyGroup> = Vec::new();
 
     for (logical_id, resource) in &template.resources {
@@ -56,9 +61,6 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) {
             continue;
         }
 
-        let logical_id =
-            consolidated_policy_logical_id(template, &consolidated_ids, &group.key, group_index);
-        consolidated_ids.push(logical_id.clone());
         let mut statements = Vec::new();
         let mut dependencies = Vec::new();
         for policy_id in &group.policy_ids {
@@ -78,32 +80,51 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) {
             dependencies.extend(policy.depends_on.iter().cloned());
         }
 
-        let mut consolidated = template
-            .resources
-            .get(&group.policy_ids[0])
-            .expect("grouped IAM policy should exist")
-            .clone();
-        consolidated.logical_id = logical_id.clone();
-        consolidated.properties.insert(
-            "PolicyName".to_string(),
-            CfExpression::from(format!("resource-permissions-{}", group_index + 1)),
-        );
-        let CfExpression::Object(policy_document) = consolidated
-            .properties
-            .get_mut("PolicyDocument")
-            .expect("consolidated IAM policy document should exist")
-        else {
-            unreachable!("consolidated IAM policy document should be an object");
-        };
-        policy_document.insert(
-            "Statement".to_string(),
-            CfExpression::list(compact_statements(statements)),
-        );
-        consolidated.depends_on = deduplicate(dependencies);
-        consolidated_resources.push(consolidated);
+        let statements = compact_statements(statements);
+        if statements.len() > IAM_MANAGED_POLICIES_PER_ROLE {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "generate_cloudformation_template".to_string(),
+                reason: format!(
+                    "permission grants for one IAM role require {} managed policies after safe compaction, exceeding AWS's attachment limit of {IAM_MANAGED_POLICIES_PER_ROLE}",
+                    statements.len()
+                ),
+            }));
+        }
+
+        let mut replacement_ids = Vec::new();
+        for (statement_index, statement) in statements.into_iter().enumerate() {
+            let logical_id = consolidated_policy_logical_id(
+                template,
+                &consolidated_ids,
+                &group.key,
+                group_index,
+                statement_index,
+            );
+            consolidated_ids.push(logical_id.clone());
+            replacement_ids.push(logical_id.clone());
+
+            let mut consolidated = template
+                .resources
+                .get(&group.policy_ids[0])
+                .expect("grouped IAM policy should exist")
+                .clone();
+            consolidated.logical_id = logical_id;
+            consolidated.resource_type = IAM_MANAGED_POLICY_RESOURCE_TYPE.to_string();
+            consolidated.properties.shift_remove("PolicyName");
+            let CfExpression::Object(policy_document) = consolidated
+                .properties
+                .get_mut("PolicyDocument")
+                .expect("consolidated IAM policy document should exist")
+            else {
+                unreachable!("consolidated IAM policy document should be an object");
+            };
+            policy_document.insert("Statement".to_string(), CfExpression::list([statement]));
+            consolidated.depends_on = deduplicate(dependencies.clone());
+            consolidated_resources.push(consolidated);
+        }
 
         for removed_id in &group.policy_ids {
-            replacements.insert(removed_id.clone(), logical_id.clone());
+            replacements.insert(removed_id.clone(), replacement_ids.clone());
         }
     }
 
@@ -116,13 +137,20 @@ pub(crate) fn consolidate_role_inline_policies(template: &mut CfTemplate) {
             .insert(resource.logical_id.clone(), resource);
     }
     for resource in template.resources.values_mut() {
-        for dependency in &mut resource.depends_on {
-            if let Some(retained_id) = replacements.get(dependency) {
-                *dependency = retained_id.clone();
-            }
-        }
-        resource.depends_on = deduplicate(std::mem::take(&mut resource.depends_on));
+        resource.depends_on = deduplicate(
+            std::mem::take(&mut resource.depends_on)
+                .into_iter()
+                .flat_map(|dependency| {
+                    replacements
+                        .get(&dependency)
+                        .cloned()
+                        .unwrap_or_else(|| vec![dependency])
+                })
+                .collect(),
+        );
     }
+
+    Ok(())
 }
 
 fn consolidated_policy_logical_id(
@@ -130,6 +158,7 @@ fn consolidated_policy_logical_id(
     consolidated_ids: &[String],
     key: &PolicyGroupKey,
     group_index: usize,
+    statement_index: usize,
 ) -> String {
     let role_id = match &key.roles {
         CfExpression::List(roles) if roles.len() == 1 => match &roles[0] {
@@ -142,8 +171,14 @@ fn consolidated_policy_logical_id(
         _ => None,
     };
     let base = role_id
-        .map(|role_id| format!("{role_id}InlinePermissions"))
-        .unwrap_or_else(|| format!("ConsolidatedRoleInlinePermissions{}", group_index + 1));
+        .map(|role_id| format!("{role_id}ManagedPermissions{}", statement_index + 1))
+        .unwrap_or_else(|| {
+            format!(
+                "ConsolidatedRoleManagedPermissions{}{}",
+                group_index + 1,
+                statement_index + 1
+            )
+        });
 
     if !template.resources.contains_key(&base) && !consolidated_ids.contains(&base) {
         return base;

@@ -1548,10 +1548,9 @@ Resources:
         Value: build
     DependsOn:
     - BuilderLogGroup
-  ManagementRoleInlinePermissions:
-    Type: AWS::IAM::Policy
+  ManagementRoleManagedPermissions1:
+    Type: AWS::IAM::ManagedPolicy
     Properties:
-      PolicyName: resource-permissions-1
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -1572,6 +1571,18 @@ Resources:
           - s3:GetBucketVersioning
           - s3:GetEncryptionConfiguration
           - s3:GetLifecycleConfiguration
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - Assets
+    - ManagementRole
+    - Mailbox
+  ManagementRoleManagedPermissions2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
         - Effect: Allow
           Resource:
             Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
@@ -1912,7 +1923,8 @@ Resources:
     - RegistryPushRole
     - BuilderLogGroup
     - Builder
-    - ManagementRoleInlinePermissions
+    - ManagementRoleManagedPermissions1
+    - ManagementRoleManagedPermissions2
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
