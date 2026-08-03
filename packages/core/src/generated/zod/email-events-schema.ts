@@ -7,12 +7,12 @@ import * as z from "zod";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 
 /**
- * @description Sending-event configuration for an [`Email`] resource.
+ * @description Event configuration for an [`Email`] resource.
  */
 export const EmailEventsSchema = z.object({
     get "queue"(){
                 return ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")
               }
-    }).describe("Sending-event configuration for an [`Email`] resource.")
+    }).describe("Event configuration for an [`Email`] resource.")
 
 export type EmailEvents = z.infer<typeof EmailEventsSchema>
