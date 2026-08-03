@@ -19,6 +19,7 @@ mod artifact_registry;
 mod build;
 mod container;
 mod container_apps_environment;
+mod key;
 mod kv;
 mod postgres;
 mod queue;
@@ -27,9 +28,7 @@ mod storage;
 mod vault;
 mod worker;
 
-pub use ai::{
-    AiBinding, BedrockAiBinding, ExternalAiBinding, FoundryAiBinding, VertexAiBinding,
-};
+pub use ai::{AiBinding, BedrockAiBinding, ExternalAiBinding, FoundryAiBinding, VertexAiBinding};
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,
     GarArtifactRegistryBinding, LocalArtifactRegistryBinding,
@@ -41,6 +40,7 @@ pub use container::{
     ContainerBinding, HorizonContainerBinding, KubernetesContainerBinding, LocalContainerBinding,
 };
 pub use container_apps_environment::ContainerAppsEnvironmentBinding;
+pub use key::{AwsKmsKeyBinding, AzureKeyVaultKeyBinding, GcpCloudKmsKeyBinding, KeyBinding};
 pub use kv::{
     DynamodbKvBinding, FirestoreKvBinding, KvBinding, LocalKvBinding, RedisKvBinding,
     TableStorageKvBinding,

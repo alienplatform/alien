@@ -1,0 +1,1 @@
+{"type":"object","description":"AWS KMS key created by the customer-installed setup stack.","required":["keyArn"],"properties":{"keyArn":{"type":"string","description":"Immutable KMS key ARN. Alias ARNs are not accepted."}},"x-readme-ref-name":"AwsKeyImportData"}

@@ -24,14 +24,15 @@
 
 use alien_core::import::{
     data::{
-        AwsAiImportData, AwsKvImportData, AwsRemoteBindingsImportData,
+        AwsAiImportData, AwsKeyImportData, AwsKvImportData, AwsRemoteBindingsImportData,
         AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
-        AzureAiImportData, AzureContainerAppsEnvironmentImportData, AzureRemoteBindingsImportData,
-        AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
-        AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
-        GcpAiImportData, GcpBuildImportData, GcpKvImportData, GcpNetworkImportData,
-        GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData,
-        GcpServiceActivationImportData, GcpStorageImportData, KubernetesClusterImportData,
+        AzureAiImportData, AzureContainerAppsEnvironmentImportData, AzureKeyImportData,
+        AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
+        AzureResourceGroupImportData, AzureServiceAccountImportData, AzureStorageAccountImportData,
+        AzureStorageImportData, GcpAiImportData, GcpBuildImportData, GcpKeyImportData,
+        GcpKvImportData, GcpNetworkImportData, GcpRemoteBindingsImportData,
+        GcpRemoteStackManagementImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        KubernetesClusterImportData,
     },
     ImportContext,
 };
@@ -39,13 +40,13 @@ use alien_core::{
     Ai, ArtifactRegistry, AwsManagementConfig, AwsOpenSearch, AwsOpenSearchOutputs,
     AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentOutputs, AzureManagementConfig,
     AzureResourceGroup, AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
-    AzureStorageAccountOutputs, Build, Email, EmailInbound, EmailOutputs, GcpManagementConfig,
-    KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
-    KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, ManagementConfig, Network,
-    NetworkSettings, Platform, Queue, RemoteBindings, RemoteBindingsOutputs, RemoteStackManagement,
-    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
-    ResourceRef, ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings,
-    Storage, Vault, Worker,
+    AzureStorageAccountOutputs, Build, Email, EmailInbound, EmailOutputs, GcpManagementConfig, Key,
+    KeyFingerprint, KeyOutputs, KubernetesCluster, KubernetesClusterOutputs,
+    KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesHeartbeatMode, Kv,
+    ManagementConfig, Network, NetworkSettings, Platform, Queue, RemoteBindings,
+    RemoteBindingsOutputs, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
+    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
+    ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault, Worker,
 };
 use alien_infra::{ImporterRegistry, StackResourceStateExt};
 use serde_json::json;
@@ -988,6 +989,92 @@ fn azure_ai_round_trip() {
 }
 
 #[test]
+fn key_handoff_preserves_provider_identity_and_remote_binding() {
+    let cases = [
+        (
+            Platform::Aws,
+            serde_json::to_value(AwsKeyImportData {
+                key_arn: "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555".to_string(),
+            })
+            .unwrap(),
+            KeyFingerprint::Aws {
+                key_arn: "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555".to_string(),
+            },
+            "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555",
+            "kms",
+        ),
+        (
+            Platform::Gcp,
+            serde_json::to_value(GcpKeyImportData {
+                crypto_key_name: "projects/example/locations/us/keyRings/data/cryptoKeys/customer".to_string(),
+                primary_version: "projects/example/locations/us/keyRings/data/cryptoKeys/customer/cryptoKeyVersions/1".to_string(),
+            })
+            .unwrap(),
+            KeyFingerprint::Gcp {
+                crypto_key_name: "projects/example/locations/us/keyRings/data/cryptoKeys/customer".to_string(),
+            },
+            "projects/example/locations/us/keyRings/data/cryptoKeys/customer/cryptoKeyVersions/1",
+            "cloud-kms",
+        ),
+        (
+            Platform::Azure,
+            serde_json::to_value(AzureKeyImportData {
+                vault_resource_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/example".to_string(),
+                key_name: "customer".to_string(),
+                lineage_version_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                key_id: "https://example.vault.azure.net/keys/customer/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            })
+            .unwrap(),
+            KeyFingerprint::Azure {
+                vault_resource_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/example".to_string(),
+                key_name: "customer".to_string(),
+                lineage_version_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            },
+            "https://example.vault.azure.net/keys/customer/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "key-vault-key",
+        ),
+    ];
+
+    for (platform, payload, expected_fingerprint, expected_wrapping_key, expected_service) in cases
+    {
+        let entry = remote_entry(Key::new("enterprise-key".to_string()).build());
+        let management = match platform {
+            Platform::Aws => aws_management_config(),
+            Platform::Gcp => gcp_management_config(),
+            Platform::Azure => azure_management_config(),
+            _ => unreachable!(),
+        };
+        let state = run_through_registry(
+            &Key::RESOURCE_TYPE,
+            platform,
+            payload,
+            &entry,
+            "test-region",
+            &management,
+        );
+
+        assert_running_with_internal_state(&state);
+        let outputs = state
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+            .expect("key import must expose typed outputs");
+        assert_eq!(outputs.fingerprint, expected_fingerprint);
+        assert_eq!(outputs.wrapping_key_id, expected_wrapping_key);
+        assert_eq!(
+            state.remote_binding_params.as_ref().unwrap()["service"],
+            expected_service
+        );
+        if platform == Platform::Aws {
+            assert_eq!(
+                state.remote_binding_params.as_ref().unwrap()["region"],
+                "test-region"
+            );
+        }
+    }
+}
+
+#[test]
 fn registry_built_in_covers_all_oss_pairs() {
     let registry = ImporterRegistry::built_in();
 
@@ -995,6 +1082,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         Ai::RESOURCE_TYPE,
         Storage::RESOURCE_TYPE,
         Kv::RESOURCE_TYPE,
+        Key::RESOURCE_TYPE,
         Vault::RESOURCE_TYPE,
         Queue::RESOURCE_TYPE,
         Network::RESOURCE_TYPE,
@@ -1018,6 +1106,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         Ai::RESOURCE_TYPE,
         Storage::RESOURCE_TYPE,
         Kv::RESOURCE_TYPE,
+        Key::RESOURCE_TYPE,
         Vault::RESOURCE_TYPE,
         Queue::RESOURCE_TYPE,
         Network::RESOURCE_TYPE,
@@ -1040,6 +1129,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         Ai::RESOURCE_TYPE,
         Storage::RESOURCE_TYPE,
         Kv::RESOURCE_TYPE,
+        Key::RESOURCE_TYPE,
         Vault::RESOURCE_TYPE,
         Queue::RESOURCE_TYPE,
         Network::RESOURCE_TYPE,
