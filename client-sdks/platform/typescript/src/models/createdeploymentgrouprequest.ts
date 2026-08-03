@@ -10,6 +10,10 @@ export type CreateDeploymentGroupRequest = {
    */
   name: string;
   /**
+   * Case-sensitive identifier from the integrating application.
+   */
+  externalId?: string | undefined;
+  /**
    * Project ID or name this deployment group belongs to
    */
   project: string;
@@ -22,6 +26,7 @@ export type CreateDeploymentGroupRequest = {
 /** @internal */
 export type CreateDeploymentGroupRequest$Outbound = {
   name: string;
+  externalId?: string | undefined;
   project: string;
   maxDeployments: number;
 };
@@ -32,6 +37,7 @@ export const CreateDeploymentGroupRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupRequest
 > = z.object({
   name: z.string(),
+  externalId: z.string().optional(),
   project: z.string(),
   maxDeployments: z.int().default(100),
 });

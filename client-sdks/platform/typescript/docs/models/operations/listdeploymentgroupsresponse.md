@@ -12,6 +12,7 @@ let value: ListDeploymentGroupsResponse = {
     {
       id: "dg_r27ict8c7vcgsumpj90ackf7b",
       name: "prod-us-east-1",
+      externalId: "ext_example_01",
       projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
       workspaceId: "ws_It13CUaGEhLLAB87simX0",
       createdAt: new Date("2025-06-07T13:26:09.959Z"),

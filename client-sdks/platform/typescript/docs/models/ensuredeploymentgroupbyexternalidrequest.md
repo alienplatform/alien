@@ -1,13 +1,13 @@
-# CreateDeploymentGroupRequest
+# EnsureDeploymentGroupByExternalIdRequest
 
 ## Example Usage
 
 ```typescript
-import { CreateDeploymentGroupRequest } from "@alienplatform/platform-api/models";
+import { EnsureDeploymentGroupByExternalIdRequest } from "@alienplatform/platform-api/models";
 
-let value: CreateDeploymentGroupRequest = {
-  name: "prod-us-east-1",
+let value: EnsureDeploymentGroupByExternalIdRequest = {
   externalId: "ext_example_01",
+  name: "prod-us-east-1",
   project: "<value>",
 };
 ```
@@ -16,7 +16,7 @@ let value: CreateDeploymentGroupRequest = {
 
 | Field                                                       | Type                                                        | Required                                                    | Description                                                 | Example                                                     |
 | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `externalId`                                                | *string*                                                    | :heavy_check_mark:                                          | Case-sensitive identifier from the integrating application. | ext_example_01                                              |
 | `name`                                                      | *string*                                                    | :heavy_check_mark:                                          | Deployment group name.                                      | prod-us-east-1                                              |
-| `externalId`                                                | *string*                                                    | :heavy_minus_sign:                                          | Case-sensitive identifier from the integrating application. | ext_example_01                                              |
 | `project`                                                   | *string*                                                    | :heavy_check_mark:                                          | Project ID or name this deployment group belongs to         |                                                             |
-| `maxDeployments`                                            | *number*                                                    | :heavy_minus_sign:                                          | Maximum number of deployments in this deployment group      |                                                             |
+| `maxDeployments`                                            | *number*                                                    | :heavy_minus_sign:                                          | Maximum number of deployments for newly created groups      |                                                             |
