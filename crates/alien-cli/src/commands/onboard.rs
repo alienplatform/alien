@@ -152,6 +152,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     message: format!("{}", e),
                 })
             })?,
+            external_id: None,
             max_deployments: std::num::NonZeroU64::new(args.max_deployments as u64)
                 .unwrap_or(std::num::NonZeroU64::new(100).unwrap()),
         })
