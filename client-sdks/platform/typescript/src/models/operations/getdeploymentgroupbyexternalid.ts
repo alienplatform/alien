@@ -14,7 +14,7 @@ export type GetDeploymentGroupByExternalIdRequest = {
    */
   project?: string | undefined;
   /**
-   * Case-sensitive identifier from the integrating application.
+   * Case-sensitive, URL- and header-safe identifier from the integrating application.
    */
   externalId: string;
 };
