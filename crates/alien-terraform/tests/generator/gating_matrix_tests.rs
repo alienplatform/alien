@@ -9,8 +9,8 @@
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Kv, PermissionProfile, Platform, Queue, ResourceLifecycle,
-    ServiceAccount, Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
+    AzureStorageAccount, Kv, PermissionProfile, Platform, Queue, ResourceLifecycle, ServiceAccount,
+    Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
 

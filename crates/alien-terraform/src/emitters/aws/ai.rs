@@ -64,7 +64,10 @@ impl TfEmitter for AwsAiEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let _ = downcast::<Ai>(ctx, Ai::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
-        Ok(expr::object([("region", expr::raw("data.aws_region.current.region"))]))
+        Ok(expr::object([(
+            "region",
+            expr::raw("data.aws_region.current.region"),
+        )]))
     }
 }
 
@@ -83,7 +86,10 @@ fn ai_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSet
     owners
 }
 
-fn ai_permission_refs(profile: &PermissionProfile, resource_id: &str) -> Vec<PermissionSetReference> {
+fn ai_permission_refs(
+    profile: &PermissionProfile,
+    resource_id: &str,
+) -> Vec<PermissionSetReference> {
     let mut refs = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
     if let Some(resource_refs) = profile.0.get(resource_id) {
@@ -96,7 +102,10 @@ fn ai_permission_refs(profile: &PermissionProfile, resource_id: &str) -> Vec<Per
     refs
 }
 
-fn service_account_label<'a>(ctx: &'a EmitContext<'_>, service_account_id: &str) -> Option<&'a str> {
+fn service_account_label<'a>(
+    ctx: &'a EmitContext<'_>,
+    service_account_id: &str,
+) -> Option<&'a str> {
     let (_id, entry) = ctx
         .stack
         .resources()

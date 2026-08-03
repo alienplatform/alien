@@ -14,8 +14,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
-    PermissionProfile, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
-    Storage, Vault,
+    PermissionProfile, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, ServiceAccount,
+    Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -100,6 +100,28 @@ fn azure_storage_profile_permissions_emit_container_role_assignment() {
     assert!(rendered.contains("azurerm_user_assigned_identity.app_sa.principal_id"));
     assert!(rendered.contains("blobServices/default/containers"));
     assert_terraform_valid(&module, "azure_storage_profile_permissions");
+}
+
+#[test]
+fn azure_byo_bucket_is_acyclic_and_valid() {
+    let mut stack = Stack::new("acme-remote-storage".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(storage_account(), ResourceLifecycle::Frozen)
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    snapshot_module("azure_byo_bucket", &module);
+    assert_terraform_valid(&module, "azure_remote_storage_management_dependencies");
 }
 
 #[test]
@@ -280,7 +302,10 @@ fn azure_ai_renders_cognitive_account() {
     // Azure AI provisions an azurerm_cognitive_account (kind=AIServices, sku=S0).
     let stack = Stack::new("acme-ai".to_string())
         .add(resource_group(), ResourceLifecycle::Frozen)
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_ai_minimal", &module);
@@ -301,7 +326,10 @@ fn azure_ai_renders_cognitive_account() {
         rendered.contains("azurerm_cognitive_deployment"),
         "must emit a model deployment"
     );
-    assert!(rendered.contains("gpt-4.1"), "must deploy the curated gpt-4.1 model");
+    assert!(
+        rendered.contains("gpt-4.1"),
+        "must deploy the curated gpt-4.1 model"
+    );
     assert!(
         rendered.contains("cognitive_account_id"),
         "deployment must reference the account via cognitive_account_id"
@@ -313,13 +341,23 @@ fn azure_ai_renders_cognitive_account() {
 
     // Import metadata must carry accountName, endpoint, resourceGroup, location.
     // The import ref appears in locals.tf.
-    let locals = module
-        .get("locals.tf")
-        .expect("locals.tf should render");
-    assert!(locals.contains("accountName"), "import ref must carry accountName");
-    assert!(locals.contains("endpoint"), "import ref must carry endpoint");
-    assert!(locals.contains("resourceGroup"), "import ref must carry resourceGroup");
-    assert!(locals.contains("location"), "import ref must carry location");
+    let locals = module.get("locals.tf").expect("locals.tf should render");
+    assert!(
+        locals.contains("accountName"),
+        "import ref must carry accountName"
+    );
+    assert!(
+        locals.contains("endpoint"),
+        "import ref must carry endpoint"
+    );
+    assert!(
+        locals.contains("resourceGroup"),
+        "import ref must carry resourceGroup"
+    );
+    assert!(
+        locals.contains("location"),
+        "import ref must carry location"
+    );
 }
 
 #[test]
@@ -337,7 +375,10 @@ fn azure_ai_invoke_permissions_emit_cognitive_services_openai_user_role() {
             ServiceAccount::new("execution-sa".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     let rendered = module

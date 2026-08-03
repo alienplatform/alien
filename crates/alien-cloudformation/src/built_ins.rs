@@ -7,15 +7,15 @@ use crate::{
     emitters::aws::{
         AwsAiEmitter, AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsEmailEmitter,
         AwsKubernetesClusterEmitter, AwsKvEmitter, AwsNetworkEmitter, AwsOpenSearchEmitter,
-        AwsQueueEmitter, AwsRemoteStackManagementEmitter, AwsServiceAccountEmitter,
-        AwsStorageEmitter, AwsVaultEmitter, AwsWorkerEmitter,
+        AwsQueueEmitter, AwsRemoteBindingsEmitter, AwsRemoteStackManagementEmitter,
+        AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter, AwsWorkerEmitter,
     },
     registry::CfRegistry,
 };
 use alien_core::{
     Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, KubernetesCluster, Kv, Network, Platform,
-    Queue,
-    RemoteStackManagement, ResourceType, ServiceAccount, Storage, Vault, Worker,
+    Queue, RemoteBindings, RemoteStackManagement, ResourceType, ServiceAccount, Storage, Vault,
+    Worker,
 };
 
 pub(crate) fn register_aws(registry: &mut CfRegistry) {
@@ -53,6 +53,11 @@ pub(crate) fn register_aws(registry: &mut CfRegistry) {
         registry,
         RemoteStackManagement::RESOURCE_TYPE,
         AwsRemoteStackManagementEmitter,
+    );
+    aws(
+        registry,
+        RemoteBindings::RESOURCE_TYPE,
+        AwsRemoteBindingsEmitter,
     );
     aws(
         registry,

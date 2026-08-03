@@ -43,14 +43,18 @@ where
     C: ResourceController + 'static,
 {
     let outputs = controller.get_outputs();
-    let binding = controller.get_binding_params().map_err(|err| {
-        AlienError::new(CoreErrorData::GenericError {
-            message: format!(
-                "binding params extraction failed for resource '{}': {}",
-                ctx.resource_id, err
-            ),
-        })
-    })?;
+    let remote_binding_params = if ctx.resource.publishes_binding_params() {
+        controller.get_binding_params().map_err(|err| {
+            AlienError::new(CoreErrorData::GenericError {
+                message: format!(
+                    "binding params extraction failed for resource '{}': {}",
+                    ctx.resource_id, err
+                ),
+            })
+        })?
+    } else {
+        None
+    };
     let internal_state = serialize_controller(&controller).map_err(|err| {
         AlienError::new(CoreErrorData::JsonSerializationFailed {
             reason: format!(
@@ -68,8 +72,8 @@ where
         .config(ctx.resource.config.clone())
         .internal_state(internal_state)
         .maybe_outputs(outputs)
-        .maybe_remote_binding_params(binding)
+        .maybe_remote_binding_params(remote_binding_params)
         .lifecycle(ctx.resource.lifecycle)
-        .dependencies(Vec::new())
+        .dependencies(ctx.resource.combined_dependencies())
         .build())
 }

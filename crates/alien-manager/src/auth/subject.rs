@@ -186,6 +186,11 @@ pub enum Role {
     DeploymentGroupDeployer,
     /// Inert outside command-specific authorization gates.
     CommandCapability,
+    /// Exact capability for resolving remote bindings for one deployment.
+    ///
+    /// This role is paired with [`Scope::Deployment`] and must not imply generic
+    /// deployment read or mutation access.
+    RemoteBindingResolver,
 }
 
 #[cfg(test)]
@@ -339,5 +344,15 @@ mod tests {
             } if target
                 == CommandTarget::new("daemon-a", alien_core::CommandTargetType::Daemon)
         ));
+    }
+
+    #[test]
+    fn remote_binding_capability_has_a_stable_wire_name() {
+        let json = serde_json::to_string(&Role::RemoteBindingResolver).expect("serialize role");
+        assert_eq!(json, r#""remote-binding-resolver""#);
+        assert_eq!(
+            serde_json::from_str::<Role>(&json).expect("deserialize role"),
+            Role::RemoteBindingResolver
+        );
     }
 }

@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(
             injected,
             json!({
-                "service": "external",
+                "service": "external-ai",
                 "provider": "openai",
                 "apiKey": "sk-test",
             }),

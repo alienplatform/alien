@@ -43,6 +43,7 @@ export type { AwsPermissionEffect } from "./aws-permission-effect-schema.js";
 export type { AwsPlatformPermission } from "./aws-platform-permission-schema.js";
 export type { AwsPostgresImportData } from "./aws-postgres-import-data-schema.js";
 export type { AwsQueueImportData } from "./aws-queue-import-data-schema.js";
+export type { AwsRemoteBindingsImportData } from "./aws-remote-bindings-import-data-schema.js";
 export type { AwsRemoteStackManagementHeartbeatData } from "./aws-remote-stack-management-heartbeat-data-schema.js";
 export type { AwsRemoteStackManagementImportData } from "./aws-remote-stack-management-import-data-schema.js";
 export type { AwsS3StorageHeartbeatData } from "./aws-s3-storage-heartbeat-data-schema.js";
@@ -76,6 +77,7 @@ export type { AzureManagementConfig } from "./azure-management-config-schema.js"
 export type { AzureNetworkImportData } from "./azure-network-import-data-schema.js";
 export type { AzurePlatformPermission } from "./azure-platform-permission-schema.js";
 export type { AzureQueueImportData } from "./azure-queue-import-data-schema.js";
+export type { AzureRemoteBindingsImportData } from "./azure-remote-bindings-import-data-schema.js";
 export type { AzureRemoteStackManagementHeartbeatData } from "./azure-remote-stack-management-heartbeat-data-schema.js";
 export type { AzureRemoteStackManagementImportData } from "./azure-remote-stack-management-import-data-schema.js";
 export type { AzureResourceGroupHeartbeatData } from "./azure-resource-group-heartbeat-data-schema.js";
@@ -185,6 +187,7 @@ export type { GcpPlatformPermission } from "./gcp-platform-permission-schema.js"
 export type { GcpPostgresImportData } from "./gcp-postgres-import-data-schema.js";
 export type { GcpPubSubQueueHeartbeatData } from "./gcp-pub-sub-queue-heartbeat-data-schema.js";
 export type { GcpQueueImportData } from "./gcp-queue-import-data-schema.js";
+export type { GcpRemoteBindingsImportData } from "./gcp-remote-bindings-import-data-schema.js";
 export type { GcpRemoteStackManagementHeartbeatData } from "./gcp-remote-stack-management-heartbeat-data-schema.js";
 export type { GcpRemoteStackManagementImportData } from "./gcp-remote-stack-management-import-data-schema.js";
 export type { GcpSecretManagerVaultHeartbeatData } from "./gcp-secret-manager-vault-heartbeat-data-schema.js";
@@ -316,6 +319,9 @@ export type { RawHeartbeatSnippetFormat } from "./raw-heartbeat-snippet-format-s
 export type { RawHeartbeatSnippet } from "./raw-heartbeat-snippet-schema.js";
 export type { ReadinessProbe } from "./readiness-probe-schema.js";
 export type { ReleaseRequest } from "./release-request-schema.js";
+export type { RemoteBindingGrant } from "./remote-binding-grant-schema.js";
+export type { RemoteBindingsOutputs } from "./remote-bindings-outputs-schema.js";
+export type { RemoteBindings } from "./remote-bindings-schema.js";
 export type { RemoteStackManagementHeartbeatData } from "./remote-stack-management-heartbeat-data-schema.js";
 export type { RemoteStackManagementHeartbeatStatus } from "./remote-stack-management-heartbeat-status-schema.js";
 export type { RemoteStackManagementOutputs } from "./remote-stack-management-outputs-schema.js";
@@ -425,6 +431,7 @@ export { AwsPermissionEffectSchema } from "./aws-permission-effect-schema.js";
 export { AwsPlatformPermissionSchema } from "./aws-platform-permission-schema.js";
 export { AwsPostgresImportDataSchema } from "./aws-postgres-import-data-schema.js";
 export { AwsQueueImportDataSchema } from "./aws-queue-import-data-schema.js";
+export { AwsRemoteBindingsImportDataSchema } from "./aws-remote-bindings-import-data-schema.js";
 export { AwsRemoteStackManagementHeartbeatDataSchema } from "./aws-remote-stack-management-heartbeat-data-schema.js";
 export { AwsRemoteStackManagementImportDataSchema } from "./aws-remote-stack-management-import-data-schema.js";
 export { AwsS3StorageHeartbeatDataSchema } from "./aws-s3-storage-heartbeat-data-schema.js";
@@ -458,6 +465,7 @@ export { AzureManagementConfigSchema } from "./azure-management-config-schema.js
 export { AzureNetworkImportDataSchema } from "./azure-network-import-data-schema.js";
 export { AzurePlatformPermissionSchema } from "./azure-platform-permission-schema.js";
 export { AzureQueueImportDataSchema } from "./azure-queue-import-data-schema.js";
+export { AzureRemoteBindingsImportDataSchema } from "./azure-remote-bindings-import-data-schema.js";
 export { AzureRemoteStackManagementHeartbeatDataSchema } from "./azure-remote-stack-management-heartbeat-data-schema.js";
 export { AzureRemoteStackManagementImportDataSchema } from "./azure-remote-stack-management-import-data-schema.js";
 export { AzureResourceGroupHeartbeatDataSchema } from "./azure-resource-group-heartbeat-data-schema.js";
@@ -567,6 +575,7 @@ export { GcpPlatformPermissionSchema } from "./gcp-platform-permission-schema.js
 export { GcpPostgresImportDataSchema } from "./gcp-postgres-import-data-schema.js";
 export { GcpPubSubQueueHeartbeatDataSchema } from "./gcp-pub-sub-queue-heartbeat-data-schema.js";
 export { GcpQueueImportDataSchema } from "./gcp-queue-import-data-schema.js";
+export { GcpRemoteBindingsImportDataSchema } from "./gcp-remote-bindings-import-data-schema.js";
 export { GcpRemoteStackManagementHeartbeatDataSchema } from "./gcp-remote-stack-management-heartbeat-data-schema.js";
 export { GcpRemoteStackManagementImportDataSchema } from "./gcp-remote-stack-management-import-data-schema.js";
 export { GcpSecretManagerVaultHeartbeatDataSchema } from "./gcp-secret-manager-vault-heartbeat-data-schema.js";
@@ -698,6 +707,9 @@ export { RawHeartbeatSnippetFormatSchema } from "./raw-heartbeat-snippet-format-
 export { RawHeartbeatSnippetSchema } from "./raw-heartbeat-snippet-schema.js";
 export { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 export { ReleaseRequestSchema } from "./release-request-schema.js";
+export { RemoteBindingGrantSchema } from "./remote-binding-grant-schema.js";
+export { RemoteBindingsOutputsSchema } from "./remote-bindings-outputs-schema.js";
+export { RemoteBindingsSchema } from "./remote-bindings-schema.js";
 export { RemoteStackManagementHeartbeatDataSchema } from "./remote-stack-management-heartbeat-data-schema.js";
 export { RemoteStackManagementHeartbeatStatusSchema } from "./remote-stack-management-heartbeat-status-schema.js";
 export { RemoteStackManagementOutputsSchema } from "./remote-stack-management-outputs-schema.js";

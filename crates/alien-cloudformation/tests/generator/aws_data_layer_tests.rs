@@ -1,10 +1,11 @@
 //! AWS data-layer scenarios — storage / kv / queue / vault.
 
-use super::helpers::render_built_ins;
+use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
+    WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -66,6 +67,171 @@ fn aws_storage_minimal_uses_safe_defaults() {
         "aws storage minimal",
     );
     insta::assert_snapshot!("aws_storage_minimal", yaml);
+}
+
+#[test]
+fn remote_storage_management_dependencies_are_acyclic() {
+    let management_ref = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
+    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
+    let mut stack = Stack::new("remote-storage".to_string())
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            vec![management_ref.clone()],
+        )
+        .build();
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![management_ref.clone(), bindings_ref.clone()];
+
+    let (template, _) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "remote storage management dependencies",
+    );
+
+    let management_role = template
+        .resources
+        .values()
+        .find(|resource| {
+            resource.resource_type == "AWS::IAM::Role" && resource.logical_id == "ManagementRole"
+        })
+        .expect("management role");
+    let access_role = template
+        .resources
+        .values()
+        .find(|resource| {
+            resource.resource_type == "AWS::IAM::Role" && resource.logical_id == "AccessRole"
+        })
+        .expect("access role");
+    let storage_bucket = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::S3::Bucket")
+        .expect("storage bucket");
+    let storage_grant = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::IAM::Policy")
+        .expect("storage management grant");
+    let queue = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::SQS::Queue")
+        .expect("unrelated storage dependent");
+
+    assert!(!management_role
+        .depends_on
+        .contains(&storage_bucket.logical_id));
+    assert!(storage_bucket
+        .depends_on
+        .contains(&management_role.logical_id));
+    assert!(!storage_bucket.depends_on.contains(&access_role.logical_id));
+    assert!(storage_grant.depends_on.contains(&access_role.logical_id));
+    assert!(storage_grant
+        .depends_on
+        .contains(&storage_bucket.logical_id));
+    assert!(queue.depends_on.contains(&management_role.logical_id));
+
+    let grant_properties =
+        serde_json::to_value(&storage_grant.properties).expect("serialize storage grant");
+    assert_eq!(
+        grant_properties["Roles"],
+        serde_json::json!([{ "Ref": access_role.logical_id }]),
+        "setup must attach the exact storage grant to the access role"
+    );
+    let grant_actions = grant_properties["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("storage grant must contain statements")
+        .iter()
+        .flat_map(|statement| {
+            statement["Action"]
+                .as_array()
+                .expect("storage grant must list actions")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(grant_actions.len(), 8);
+    for action in [
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+    ] {
+        assert!(
+            grant_actions.iter().any(|value| **value == action),
+            "storage grant must contain {action}"
+        );
+    }
+    assert_eq!(
+        grant_properties["PolicyDocument"]["Statement"][0]["Resource"],
+        serde_json::json!([{ "Fn::GetAtt": [storage_bucket.logical_id, "Arn"] }]),
+        "bucket-level actions must use the bucket ARN"
+    );
+    assert_eq!(
+        grant_properties["PolicyDocument"]["Statement"][1]["Resource"],
+        serde_json::json!([{
+            "Fn::Sub": format!(
+                "arn:${{AWS::Partition}}:s3:::${{{}}}/*",
+                storage_bucket.logical_id
+            )
+        }]),
+        "object-level actions must use the object ARN"
+    );
+
+    for setup_policy in template
+        .resources
+        .values()
+        .filter(|resource| resource.resource_type == "AWS::IAM::ManagedPolicy")
+    {
+        let policy = serde_json::to_string(&setup_policy.properties)
+            .expect("serialize setup management policy");
+        assert!(
+            !policy.contains("iam:CreatePolicy")
+                && !policy.contains("iam:CreatePolicyVersion")
+                && !policy.contains("iam:AttachRolePolicy"),
+            "the management role must not be able to expand its own permissions"
+        );
+    }
+}
+
+#[test]
+fn remote_access_generator_fragment_is_reviewable() {
+    let bindings_ref = ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access");
+    let mut stack = Stack::new("customer-exports".to_string())
+        .add_with_remote_access(
+            Storage::new("exports".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("exports").unwrap().dependencies = vec![bindings_ref];
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "BYO Bucket",
+    );
+    // This exercises the generator fragment directly. Product rendering runs
+    // preflight mutations first and also injects the scoped management role.
+    insta::assert_snapshot!("aws_byo_bucket", yaml);
 }
 
 #[test]
@@ -192,30 +358,22 @@ fn aws_queue_resource_permissions_attach_to_service_account_role() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    let read_policy = &template["Resources"]["JobsExecutionSaRoleQueuePermission00"];
-    let write_policy = &template["Resources"]["JobsExecutionSaRoleQueuePermission01"];
-    assert_eq!(read_policy["Type"], "AWS::IAM::Policy");
-    assert_eq!(write_policy["Type"], "AWS::IAM::Policy");
-
-    let read_actions = read_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("read statement should list actions");
-    assert!(read_actions.contains(&serde_json::json!("sqs:ReceiveMessage")));
-    let write_actions = write_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("write statement should list actions");
-    assert!(write_actions.contains(&serde_json::json!("sqs:DeleteMessage")));
+    let policies = policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1);
+    let policy = policies[0];
+    let actions = policy_actions(policy);
+    assert!(actions.contains(&"sqs:ReceiveMessage"));
+    assert!(actions.contains(&"sqs:DeleteMessage"));
 
     // Statements must be pinned to the queue ARN: the physical queue name is
     // CloudFormation-generated, so a name-pattern binding would never match.
-    for policy in [read_policy, write_policy] {
+    for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("queue policy statements")
+    {
         assert_eq!(
-            policy["Properties"]["PolicyDocument"]["Statement"][0]["Resource"]["Fn::GetAtt"],
+            statement["Resource"]["Fn::GetAtt"],
             serde_json::json!(["Jobs", "Arn"])
-        );
-        assert_eq!(
-            policy["Properties"]["Roles"][0]["Ref"],
-            serde_json::json!("ExecutionSaRole")
         );
     }
 }
@@ -237,6 +395,72 @@ fn aws_queue_without_grants_emits_no_iam_policies() {
     );
 
     assert!(!yaml.contains("QueuePermission"));
+}
+
+#[test]
+fn aws_kv_resource_permissions_attach_to_service_account_role() {
+    let stack = Stack::new("kv-permissions".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("store", ["kv/data-read", "kv/data-write"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Kv::new("store".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws kv service account permissions",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+
+    let policies = policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1);
+    let policy = policies[0];
+    let actions = policy_actions(policy);
+    assert!(actions.contains(&"dynamodb:GetItem"));
+    assert!(actions.contains(&"dynamodb:Query"));
+    assert!(actions.contains(&"dynamodb:PutItem"));
+
+    // Statements must be pinned to the table ARN: the physical table name is
+    // CloudFormation-generated, so a name-pattern binding would never match.
+    for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("kv policy statements")
+    {
+        assert_eq!(
+            statement["Resource"]["Fn::GetAtt"],
+            serde_json::json!(["Store", "Arn"])
+        );
+    }
+}
+
+#[test]
+fn aws_kv_without_grants_emits_no_iam_policies() {
+    let stack = Stack::new("kv-plain".to_string())
+        .add(
+            Kv::new("store".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws kv without grants",
+    );
+
+    assert!(!yaml.contains("KvPermission"));
 }
 
 #[test]
@@ -270,7 +494,7 @@ fn aws_vault_resource_permissions_attach_to_service_account_role() {
 }
 
 #[test]
-fn aws_vault_permissions_include_vault_logical_id() {
+fn aws_vault_permissions_include_every_vault_scope() {
     let stack = Stack::new("vault-permissions".to_string())
         .permission(
             "execution",
@@ -299,6 +523,114 @@ fn aws_vault_permissions_include_vault_logical_id() {
         "aws multiple vault service account permissions",
     );
 
-    assert!(yaml.contains("SecretsExecutionSaRoleVaultPermission00"));
-    assert!(yaml.contains("ProviderKeysExecutionSaRoleVaultPermission00"));
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let policies = policies_for_role(&template, "ExecutionSaRole");
+    assert_eq!(policies.len(), 1);
+    let policy = serde_json::to_string(policies[0]).expect("policy should serialize");
+    assert!(policy.contains("parameter/${AWS::StackName}-secrets-*"));
+    assert!(policy.contains("parameter/${AWS::StackName}-provider-keys-*"));
+}
+
+#[test]
+fn many_resource_grants_use_quota_safe_managed_policies() {
+    let mut stack = Stack::new("many-resource-grants".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global([
+                "storage/data-read",
+                "storage/data-write",
+                "kv/data-read",
+                "kv/data-write",
+            ]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+
+    for index in 0..12 {
+        stack = stack.add(
+            Storage::new(format!("data-{index}")).build(),
+            ResourceLifecycle::Frozen,
+        );
+    }
+
+    let yaml = render_built_ins(
+        &stack.build(),
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "many AWS resource grants",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let policies = policies_for_role(&template, "ExecutionSaRole");
+    assert!(!policies.is_empty());
+    assert!(
+        policies.len() <= 10,
+        "AWS allows ten managed policies per role"
+    );
+    assert!(policies
+        .iter()
+        .all(|policy| policy["Type"] == "AWS::IAM::ManagedPolicy"));
+    assert!(role_inline_policy_documents(&template, "ExecutionSaRole").is_empty());
+
+    let policy = serde_json::to_string(&policies).expect("policies should serialize");
+    for index in 0..12 {
+        assert!(
+            policy.contains(&format!("Data{index}")),
+            "storage {index} should remain granted"
+        );
+    }
+}
+
+fn policies_for_role<'a>(
+    template: &'a serde_json::Value,
+    role_id: &str,
+) -> Vec<&'a serde_json::Value> {
+    template["Resources"]
+        .as_object()
+        .expect("resources should be an object")
+        .values()
+        .filter(|resource| {
+            matches!(
+                resource["Type"].as_str(),
+                Some("AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy")
+            ) && resource["Properties"]["Roles"]
+                .as_array()
+                .is_some_and(|roles| roles.contains(&serde_json::json!({ "Ref": role_id })))
+        })
+        .collect()
+}
+
+fn policy_actions(policy: &serde_json::Value) -> Vec<&str> {
+    policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("policy statements")
+        .iter()
+        .flat_map(|statement| match &statement["Action"] {
+            serde_json::Value::Array(actions) => actions.iter().collect::<Vec<_>>(),
+            action => vec![action],
+        })
+        .filter_map(serde_json::Value::as_str)
+        .collect()
+}
+
+fn role_inline_policy_documents<'a>(
+    template: &'a serde_json::Value,
+    role_id: &str,
+) -> Vec<&'a serde_json::Value> {
+    let mut documents = template["Resources"][role_id]["Properties"]["Policies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|policy| &policy["PolicyDocument"])
+        .collect::<Vec<_>>();
+    documents.extend(
+        policies_for_role(template, role_id)
+            .into_iter()
+            .filter(|policy| policy["Type"] == "AWS::IAM::Policy")
+            .map(|policy| &policy["Properties"]["PolicyDocument"]),
+    );
+    documents
 }

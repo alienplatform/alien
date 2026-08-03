@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use alien_bindings::{
+    providers::storage::LocalStorage,
     traits::{BindingsProviderApi, Storage},
     BindingsProvider,
 };
@@ -13,8 +14,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use object_store::{
-    path::Path, GetOptions, GetRange as OsGetRange, MultipartUpload, ObjectMeta, PutMode,
-    PutMultipartOpts, PutOptions,
+    path::Path, Attribute, AttributeValue, Attributes, GetOptions, GetRange as OsGetRange,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
 };
 use rstest::rstest;
 use std::path::PathBuf as StdPathBuf;
@@ -85,6 +86,129 @@ impl StorageTestContext for LocalProviderTestContext {
     fn provider_name(&self) -> &'static str {
         "local"
     }
+}
+
+#[tokio::test]
+async fn local_storage_rejects_object_attributes_without_writing_the_payload() {
+    let temp_dir = tempfile::tempdir().expect("create local storage directory");
+    let storage = LocalStorage::new_from_path(
+        temp_dir
+            .path()
+            .to_str()
+            .expect("temporary directory path is valid UTF-8"),
+    )
+    .expect("create local storage");
+    let path = Path::from("attributes.txt");
+    let options = PutOptions {
+        attributes: Attributes::from_iter([(
+            Attribute::ContentType,
+            AttributeValue::from("text/plain"),
+        )]),
+        ..Default::default()
+    };
+
+    let error = storage
+        .put_opts(&path, Bytes::from_static(b"data").into(), options)
+        .await
+        .expect_err("local storage must not silently discard object attributes");
+
+    assert!(matches!(&error, object_store::Error::Generic { .. }));
+    assert!(error
+        .to_string()
+        .contains("the local filesystem backend cannot persist object attributes"));
+    assert!(matches!(
+        storage.get(&path).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
+}
+
+#[rstest]
+#[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
+#[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
+#[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[tokio::test]
+async fn cloud_storage_round_trips_object_attributes(#[case] ctx: impl StorageTestContext) {
+    let storage = ctx.get_storage().await;
+    let provider_name = ctx.provider_name();
+    let path = Path::from(format!(
+        "object-attributes/{provider_name}/{}.txt",
+        uuid::Uuid::new_v4()
+    ));
+    // Brotli-compressed "object attributes e2e". GCS preserves this encoding
+    // without applying the gzip-only decompressive transcoding behavior.
+    let data = Bytes::from_static(&[
+        27, 20, 0, 248, 165, 100, 202, 146, 16, 77, 128, 41, 76, 214, 193, 205, 84,
+    ]);
+    let expected_attributes = Attributes::from_iter([
+        (
+            Attribute::ContentType,
+            AttributeValue::from("text/plain; charset=utf-8"),
+        ),
+        (
+            Attribute::ContentDisposition,
+            AttributeValue::from("attachment; filename=payload.txt"),
+        ),
+        (Attribute::ContentEncoding, AttributeValue::from("br")),
+        (Attribute::ContentLanguage, AttributeValue::from("en-US")),
+        (
+            Attribute::CacheControl,
+            AttributeValue::from("private, max-age=60"),
+        ),
+        (
+            Attribute::Metadata("source".into()),
+            AttributeValue::from("object-attributes-e2e"),
+        ),
+    ]);
+
+    let operation = async {
+        let put_result = storage
+            .put_opts(
+                &path,
+                data.clone().into(),
+                PutOptions {
+                    attributes: expected_attributes.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let get_result = storage.get(&path).await?;
+        let get_meta = get_result.meta.clone();
+        let get_attributes = get_result.attributes.clone();
+        let retrieved = get_result.bytes().await?;
+        let head_result = storage
+            .get_opts(
+                &path,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok::<_, object_store::Error>((put_result, get_meta, get_attributes, retrieved, head_result))
+    }
+    .await;
+    let cleanup = storage.delete(&path).await;
+    let (put_result, get_meta, get_attributes, retrieved, head_result) = operation
+        .unwrap_or_else(|error| panic!("[{provider_name}] attribute round trip failed: {error:?}"));
+    cleanup.unwrap_or_else(|error| panic!("[{provider_name}] attribute cleanup failed: {error:?}"));
+
+    assert_eq!(retrieved, data, "[{provider_name}] payload changed");
+    assert_eq!(get_meta.location, path);
+    assert_eq!(get_meta.e_tag, put_result.e_tag);
+    for (attribute, expected) in &expected_attributes {
+        assert_eq!(
+            get_attributes.get(attribute),
+            Some(expected),
+            "[{provider_name}] get omitted or changed {attribute:?}"
+        );
+        assert_eq!(
+            head_result.attributes.get(attribute),
+            Some(expected),
+            "[{provider_name}] head omitted or changed {attribute:?}"
+        );
+    }
+    assert_eq!(head_result.meta, get_meta);
 }
 
 // --- gRPC Provider Context ---

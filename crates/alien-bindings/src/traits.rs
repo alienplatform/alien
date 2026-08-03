@@ -105,7 +105,7 @@ pub enum ServiceAccountInfo {
 pub struct ImpersonationRequest {
     /// Optional session name (AWS only)
     pub session_name: Option<String>,
-    /// Optional session duration in seconds  
+    /// Optional session duration in seconds
     pub duration_seconds: Option<i32>,
     /// Optional scopes (GCP only)
     pub scopes: Option<Vec<String>>,
@@ -651,8 +651,8 @@ pub struct PutOptions {
 pub struct ScanResult {
     /// Key-value pairs found (may be ≤ limit, no guarantee to fill)
     pub items: Vec<(String, Vec<u8>)>,
-    /// Opaque cursor for pagination. None if no more results.
-    /// **Warning**: Cursor may become invalid if data changes. No TTL guarantees.
+    /// Opaque, prefix-bound cursor for pagination. None if the traversal is complete.
+    /// A non-empty cursor may lead to an empty page when records expire between pages.
     pub next_cursor: Option<String>,
 }
 
@@ -714,10 +714,13 @@ pub trait Kv: Binding {
     /// - **May return ≤ limit items** (not guaranteed to fill even if more data exists)
     /// - **Clients MUST de-duplicate** keys across pages (backends may return duplicates)
     /// - **No completeness guarantee** under concurrent writes (may miss or duplicate)
+    /// - Without concurrent changes, following every returned cursor until `None`
+    ///   visits every matching, unexpired key visible to the backend
     ///
     /// **Cursor Behavior**:
     /// - Opaque string, implementation-specific format
-    /// - **May become invalid** anytime after backend state changes
+    /// - Bound to the prefix that created it; using it with another prefix is invalid
+    /// - May become invalid after backend state changes
     /// - **No TTL guarantees** - can expire without notice
     /// - Passing invalid cursor should return error, not partial results
     ///
@@ -773,7 +776,7 @@ fn first_attempt() -> u32 {
 ///
 /// This limit ensures compatibility across all queue backends:
 /// - **AWS SQS**: 256KB message limit (much higher, not constraining)
-/// - **Azure Service Bus**: 1MB message limit (much higher, not constraining)  
+/// - **Azure Service Bus**: 1MB message limit (much higher, not constraining)
 /// - **GCP Pub/Sub**: 10MB message limit (much higher, not constraining)
 ///
 /// The 64KB limit provides:
@@ -868,7 +871,7 @@ pub trait Worker: Binding {
     ///
     /// Platform implementations:
     /// - AWS: Uses InvokeWorker API directly
-    /// - GCP: Calls private service URL directly  
+    /// - GCP: Calls private service URL directly
     /// - Azure: Calls private container app URL directly
     /// - Kubernetes: HTTP call to internal service
     async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse>;

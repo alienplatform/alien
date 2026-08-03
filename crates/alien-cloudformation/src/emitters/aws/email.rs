@@ -11,7 +11,10 @@
 //! `AWS::SNS::Topic`, which is subscribed to the linked SQS queue (plus the
 //! queue policy that allows the topic to send). When `inbound` is configured:
 //! an `AWS::SES::ReceiptRuleSet` and a catch-all `AWS::SES::ReceiptRule` whose
-//! `S3Action` writes raw incoming mail into the linked storage bucket (the
+//! `S3Action` writes raw incoming mail into the linked storage bucket and,
+//! when events are configured, publishes the SES receipt notification to the
+//! same topic. The notification carries the envelope recipients and verdicts
+//! that cannot be recovered safely from message headers (the
 //! bucket policy statement that allows `ses.amazonaws.com` writes is emitted
 //! by the storage emitter — S3 supports only one bucket policy resource per
 //! bucket). Because CloudFormation has no native resource for the account-wide
@@ -25,7 +28,7 @@ use crate::{
     emitters::aws::{
         helpers::{
             cf_from_json, logical_id_for_ref, required_logical_id, resource_config,
-            service_account_role_id, stack_name, tags, uniquify_iam_statement_sids,
+            resource_permission_owners, stack_name, tags, uniquify_iam_statement_sids,
         },
         service_account::permission_context,
     },
@@ -33,8 +36,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
-    PermissionSetReference, Queue, ResourceRef, ResourceType, Result, ServiceAccount, Storage,
+    import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, Queue, ResourceRef,
+    ResourceType, Result, Storage,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -140,7 +143,17 @@ impl CfEmitter for AwsEmailEmitter {
                 &Storage::RESOURCE_TYPE,
                 "inbound.storage",
             )?;
-            resources.extend(inbound_resources(ctx, email, logical_id, bucket_id));
+            let event_topic_id = email
+                .events
+                .as_ref()
+                .map(|_| format!("{logical_id}EventsTopic"));
+            resources.extend(inbound_resources(
+                ctx,
+                email,
+                logical_id,
+                bucket_id,
+                event_topic_id.as_deref(),
+            ));
         }
 
         resources.extend(email_iam_policies(ctx, email, logical_id)?);
@@ -331,6 +344,46 @@ fn event_resources(
     );
     topic.properties.insert("Tags".to_string(), tags(ctx));
 
+    let topic_policy_id = format!("{logical_id}EventsTopicPolicy");
+    let mut topic_policy =
+        CfResource::new(topic_policy_id.clone(), "AWS::SNS::TopicPolicy".to_string());
+    topic_policy.properties.insert(
+        "Topics".to_string(),
+        CfExpression::list([CfExpression::ref_(&topic_id)]),
+    );
+    topic_policy.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Sid", CfExpression::from("AllowSesPublish")),
+                    ("Effect", CfExpression::from("Allow")),
+                    (
+                        "Principal",
+                        CfExpression::object([(
+                            "Service",
+                            CfExpression::from("ses.amazonaws.com"),
+                        )]),
+                    ),
+                    ("Action", CfExpression::from("sns:Publish")),
+                    ("Resource", CfExpression::ref_(&topic_id)),
+                    (
+                        "Condition",
+                        CfExpression::object([(
+                            "StringEquals",
+                            CfExpression::object([(
+                                "AWS:SourceAccount",
+                                CfExpression::ref_("AWS::AccountId"),
+                            )]),
+                        )]),
+                    ),
+                ])]),
+            ),
+        ]),
+    );
+
     let mut destination = CfResource::new(
         format!("{logical_id}EventDestination"),
         "AWS::SES::ConfigurationSetEventDestination".to_string(),
@@ -339,6 +392,8 @@ fn event_resources(
         "ConfigurationSetName".to_string(),
         CfExpression::ref_(config_set_id),
     );
+    // SES validates SNS publish access while creating the destination.
+    destination.depends_on.push(topic_policy_id);
     destination.properties.insert(
         "EventDestination".to_string(),
         CfExpression::object([
@@ -427,7 +482,7 @@ fn event_resources(
         ]),
     );
 
-    vec![topic, destination, subscription, queue_policy]
+    vec![topic, topic_policy, destination, subscription, queue_policy]
 }
 
 /// SES receipt rule set + receipt rule with an S3 action into the linked
@@ -439,6 +494,7 @@ fn inbound_resources(
     email: &Email,
     logical_id: &str,
     bucket_id: &str,
+    event_topic_id: Option<&str>,
 ) -> Vec<CfResource> {
     let rule_set_id = format!("{logical_id}RuleSet");
     let activator_role_id = format!("{logical_id}RuleSetActivatorRole");
@@ -456,6 +512,11 @@ fn inbound_resources(
     );
     rule.properties
         .insert("RuleSetName".to_string(), CfExpression::ref_(&rule_set_id));
+    let mut s3_action = vec![("BucketName", CfExpression::ref_(bucket_id))];
+    if let Some(topic_id) = event_topic_id {
+        s3_action.push(("TopicArn", CfExpression::ref_(topic_id)));
+    }
+
     rule.properties.insert(
         "Rule".to_string(),
         CfExpression::object([
@@ -471,7 +532,7 @@ fn inbound_resources(
                 "Actions",
                 CfExpression::list([CfExpression::object([(
                     "S3Action",
-                    CfExpression::object([("BucketName", CfExpression::ref_(bucket_id))]),
+                    CfExpression::object(s3_action),
                 )])]),
             ),
         ]),
@@ -479,6 +540,11 @@ fn inbound_resources(
     // The storage emitter emits `{bucket}BucketPolicy` with the statement that
     // allows ses.amazonaws.com to write; SES rejects the rule without it.
     rule.depends_on.push(format!("{bucket_id}BucketPolicy"));
+    // When TopicArn is present, SES validates publish access at rule creation.
+    if event_topic_id.is_some() {
+        rule.depends_on
+            .push(format!("{logical_id}EventsTopicPolicy"));
+    }
 
     let mut activator_role =
         CfResource::new(activator_role_id.clone(), "AWS::IAM::Role".to_string());
@@ -620,7 +686,10 @@ fn email_iam_policies(
     let context =
         permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", email.id()));
 
-    for (owner_index, (role_id, permission_refs)) in permission_owners(ctx).into_iter().enumerate()
+    for (owner_index, (role_id, permission_refs)) in
+        resource_permission_owners(ctx, PERMISSION_SET_PREFIX)
+            .into_iter()
+            .enumerate()
     {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
             let Some(permission_set) =
@@ -688,68 +757,4 @@ fn email_iam_policies(
     }
 
     Ok(resources)
-}
-
-/// Service-account roles whose permission profile references an `email/*`
-/// permission set for this resource (either directly by resource id or
-/// through a `*` wildcard grant).
-fn permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
-    let mut owners = Vec::new();
-    for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = resource_permission_refs(profile, ctx.resource_id);
-        if refs.is_empty() {
-            continue;
-        }
-
-        let service_account_id = format!("{profile_name}-sa");
-        if service_account_for_id(ctx, &service_account_id).is_some() {
-            if let Some(role_id) = service_account_role_id(ctx, profile_name) {
-                owners.push((role_id, refs));
-            }
-        }
-    }
-    owners
-}
-
-fn resource_permission_refs(
-    profile: &PermissionProfile,
-    resource_id: &str,
-) -> Vec<PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
-
-    if let Some(resource_refs) = profile.0.get(resource_id) {
-        for permission_ref in resource_refs
-            .iter()
-            .filter(|permission_ref| permission_ref.id().starts_with(PERMISSION_SET_PREFIX))
-        {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
-            }
-        }
-    }
-
-    if let Some(wildcard_refs) = profile.0.get("*") {
-        for permission_ref in wildcard_refs
-            .iter()
-            .filter(|permission_ref| permission_ref.id().starts_with(PERMISSION_SET_PREFIX))
-        {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
-            }
-        }
-    }
-
-    refs
-}
-
-fn service_account_for_id<'a>(
-    ctx: &'a EmitContext<'_>,
-    service_account_id: &str,
-) -> Option<&'a ServiceAccount> {
-    let (_id, entry) = ctx
-        .stack
-        .resources()
-        .find(|(id, _entry)| id.as_str() == service_account_id)?;
-    entry.config.downcast_ref::<ServiceAccount>()
 }

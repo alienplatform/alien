@@ -72,9 +72,11 @@ pub struct Email {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbound: Option<EmailInbound>,
 
-    /// Optional sending-event configuration: send / delivery / bounce /
-    /// complaint / delivery-delay / reject events are delivered to the
-    /// linked Queue.
+    /// Optional event configuration: send / delivery / bounce / complaint /
+    /// delivery-delay / reject events are delivered to the linked Queue. On
+    /// AWS, when `inbound` is also configured, that Queue additionally
+    /// receives SES `Received` notifications containing the envelope
+    /// recipients, receipt verdicts, and inbound Storage object key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<EmailEvents>,
 }
@@ -88,12 +90,13 @@ pub struct EmailInbound {
     pub storage: ResourceRef,
 }
 
-/// Sending-event configuration for an [`Email`] resource.
+/// Event configuration for an [`Email`] resource.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmailEvents {
-    /// The Queue resource that receives sending events.
+    /// The Queue resource that receives sending events and, when inbound mail
+    /// is configured on AWS, SES `Received` notifications.
     pub queue: ResourceRef,
 }
 

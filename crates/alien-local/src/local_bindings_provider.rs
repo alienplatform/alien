@@ -668,7 +668,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(raw).expect("binding is JSON");
         assert_eq!(
             value.get("service").and_then(|v| v.as_str()),
-            Some("external")
+            Some("external-ai")
         );
         assert_eq!(
             value.get("provider").and_then(|v| v.as_str()),

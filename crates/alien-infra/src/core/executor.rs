@@ -11,7 +11,7 @@
 //! * [`StackExecutor::step`] – advance every **ready** resource by one step.
 //! * [`StackExecutor::run_until_synced`] – test helper that runs until desired == current.
 
-use alien_error::{AlienError, Context, GenericError, IntoAlienError};
+use alien_error::{AlienError, Context, GenericError};
 use futures::{stream, StreamExt, TryStreamExt};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -30,12 +30,12 @@ use crate::{
     },
     error::{ErrorData, Result},
 };
-use alien_core::ClientConfig;
 use alien_core::{
     alien_event, ownership_policy_for_resource_type, AlienEvent, Platform, Resource,
     ResourceHeartbeat, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
     StackState,
 };
+use alien_core::{ClientConfig, InitialSetupAuthority};
 
 const MAX_CONCURRENT_RESOURCE_STEPS: usize = 4;
 
@@ -138,6 +138,7 @@ pub struct StackExecutor {
     resource_registry: Arc<ResourceRegistry>,
     service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: alien_core::DeploymentConfig,
+    initial_setup_authority: InitialSetupAuthority,
 }
 
 const MAX_RETRIES: u32 = 10;
@@ -271,6 +272,10 @@ pub struct StackExecutorConfig<'a> {
     /// Custom service provider for testing (defaults to real cloud clients)
     #[builder(default = Arc::new(DefaultPlatformServiceProvider::default()))]
     service_provider: Arc<dyn PlatformServiceProvider>,
+
+    /// Authority available for setup-owned structural and permission changes.
+    #[builder(default = InitialSetupAuthority::ImportedHandoff)]
+    initial_setup_authority: InitialSetupAuthority,
 }
 
 /// Extension trait to add `build()` method to the builder that returns `Result<StackExecutor>`.
@@ -357,6 +362,7 @@ impl StackExecutor {
                     RunningResourcePolicy::None
                 });
         let step_out_of_scope_resources = config.step_out_of_scope_resources;
+        let initial_setup_authority = config.initial_setup_authority;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
 
@@ -395,8 +401,7 @@ impl StackExecutor {
             id_to_node.insert(id.clone(), node_index);
             node_to_id.insert(node_index, id.clone());
             // Combine intrinsic dependencies from the resource with additional dependencies from the stack entry
-            let mut all_dependencies = resource_entry.config.get_dependencies();
-            all_dependencies.extend(resource_entry.dependencies.clone());
+            let all_dependencies = resource_entry.combined_dependencies();
 
             resource_map.insert(
                 id.clone(),
@@ -492,6 +497,7 @@ impl StackExecutor {
             resource_registry,
             service_provider,
             deployment_config,
+            initial_setup_authority,
         })
     }
 
@@ -552,6 +558,25 @@ impl StackExecutor {
 
     fn is_external_binding_resource(&self, resource_id: &str) -> bool {
         self.deployment_config.external_bindings.has(resource_id)
+    }
+
+    fn external_binding_requests_remote_access(&self, resource_id: &str) -> bool {
+        self.desired_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| entry.remote_access)
+    }
+
+    fn validate_external_binding_remote_access(&self, resource_id: &str) -> Result<()> {
+        if self.external_binding_requests_remote_access(resource_id) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' cannot use an external binding; remote access is limited to resources created by setup"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        Ok(())
     }
 
     /// Whether this resource is one Alien adopted from a binding rather than provisioned.
@@ -615,8 +640,11 @@ impl StackExecutor {
         Ok(true)
     }
 
-    /// The state an external binding dictates: what its target resolves to, and the params
-    /// synced only while the entry opts into remote access.
+    /// The state an external binding dictates: what its target resolves to.
+    ///
+    /// External bindings never publish `remote_binding_params` — their binding may carry
+    /// inline credentials, and remote access is limited to resources created by setup —
+    /// so requesting remote access on one is a configuration error.
     fn external_binding_state(
         &self,
         resource_id: &str,
@@ -627,22 +655,8 @@ impl StackExecutor {
         let Some(binding) = self.deployment_config.external_bindings.get(resource_id) else {
             return Ok((None, None));
         };
-        let remote_access = self
-            .desired_stack
-            .resources
-            .get(resource_id)
-            .map(|entry| entry.remote_access)
-            .unwrap_or(false);
-        let params = match remote_access {
-            true => Some(serde_json::to_value(binding).into_alien_error().context(
-                ErrorData::ResourceStateSerializationFailed {
-                    resource_id: resource_id.to_string(),
-                    message: "Failed to serialize external binding parameters".to_string(),
-                },
-            )?),
-            false => None,
-        };
-        Ok((params, binding.to_resource_outputs()))
+        self.validate_external_binding_remote_access(resource_id)?;
+        Ok((None, binding.to_resource_outputs()))
     }
 
     /// Whether a bound resource's recorded state no longer matches its binding.
@@ -993,6 +1007,7 @@ impl StackExecutor {
                                 desired_stack: &self.desired_stack,
                                 service_provider: &self.service_provider,
                                 deployment_config: &self.deployment_config,
+                                initial_setup_authority: self.initial_setup_authority,
                                 heartbeat_collector: HeartbeatCollector::default(),
                             };
 
@@ -1155,6 +1170,63 @@ impl StackExecutor {
         self.step_inner(state, false).await
     }
 
+    /// Continues controller states registered by an external setup engine
+    /// without planning structural changes or initializing new controllers.
+    pub async fn continue_imported(&self, state: StackState) -> Result<StepResult> {
+        if let Some(resource_id) = state
+            .resources
+            .keys()
+            .find(|resource_id| !self.resources.contains_key(*resource_id))
+        {
+            return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                message: format!(
+                    "Imported setup contains unexpected resource '{}'; regenerate and rerun setup",
+                    resource_id
+                ),
+                resource_id: Some(resource_id.clone()),
+            }));
+        }
+
+        for (resource_id, desired) in &self.resources {
+            let resource = state.resources.get(resource_id).ok_or_else(|| {
+                AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                    message: format!(
+                        "Imported setup is missing resource '{}'; regenerate and rerun setup",
+                        resource_id
+                    ),
+                    resource_id: Some(resource_id.clone()),
+                })
+            })?;
+
+            if resource.config != desired.resource || resource.dependencies != desired.dependencies
+            {
+                return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                    message: format!(
+                        "Imported setup state for '{}' does not match the registered setup artifact; regenerate and rerun setup",
+                        resource_id
+                    ),
+                    resource_id: Some(resource_id.clone()),
+                }));
+            }
+
+            match resource.status {
+                ResourceStatus::Running => {}
+                ResourceStatus::Provisioning if resource.has_internal_state() => {}
+                status => {
+                    return Err(AlienError::new(ErrorData::ImportedSetupStateInvalid {
+                        message: format!(
+                            "Imported setup resource '{}' cannot continue from status {:?}; regenerate and rerun setup",
+                            resource_id, status
+                        ),
+                        resource_id: Some(resource_id.clone()),
+                    }));
+                }
+            }
+        }
+
+        self.step_inner(state, false).await
+    }
+
     #[alien_event(AlienEvent::StackStep {
         next_state: state.clone(),
         suggested_delay_ms: None,
@@ -1243,7 +1315,9 @@ impl StackExecutor {
                 resource_state.status = ResourceStatus::Running;
 
                 // Seeded through the same helper the planner diffs against, so a create
-                // cannot land in a state the next plan immediately calls drifted.
+                // cannot land in a state the next plan immediately calls drifted. External
+                // resources never publish `remote_binding_params`; their binding may
+                // contain inline credentials.
                 let (remote_binding_params, binding_outputs) =
                     self.external_binding_state(resource_id)?;
                 resource_state.remote_binding_params = remote_binding_params;
@@ -1733,16 +1807,20 @@ impl StackExecutor {
             // in the internal_state and handles its own stepping
             if !current_resource_state.has_internal_state() {
                 if self.is_external_binding_resource(&resource_id) {
-                    debug!(
-                        resource_id = %resource_id,
-                        "External binding resource has no controller state; skipping step"
-                    );
-                } else {
-                    warn!(
-                        "Resource '{}' has no controller state. Skipping step.",
-                        resource_id
-                    );
+                    // External bindings intentionally have no controller to
+                    // step. Reconcile the explicit publication gate directly.
+                    self.validate_external_binding_remote_access(&resource_id)?;
+                    current_resource_state.remote_binding_params = None;
+                    return Ok(Some((
+                        resource_id,
+                        current_resource_state,
+                        resource_min_delay,
+                    )));
                 }
+                warn!(
+                    "Resource '{}' has no controller state. Skipping step.",
+                    resource_id
+                );
                 return Ok(None);
             }
 
@@ -1768,6 +1846,7 @@ impl StackExecutor {
                 desired_stack: &self.desired_stack,
                 service_provider: &self.service_provider,
                 deployment_config: &self.deployment_config,
+                initial_setup_authority: self.initial_setup_authority,
                 heartbeat_collector: heartbeat_collector.clone(),
             };
 
@@ -1950,17 +2029,17 @@ impl StackExecutor {
             // inline secret (e.g. a Local Postgres password), and same-stack workers resolve bindings
             // via the controller/manager, not this synced field, so a non-remote binding has no
             // business in `remote_binding_params`.
-            let remote_access = self
+            let publish_binding_params = self
                 .desired_stack
                 .resources
                 .get(&resource_id)
-                .map(|entry| entry.remote_access)
+                .map(|entry| entry.publishes_binding_params())
                 .unwrap_or(false);
 
             let next_state = next_state.with_updates(|state| {
                 state.status = next_status;
                 state.outputs = next_outputs;
-                state.remote_binding_params = if remote_access {
+                state.remote_binding_params = if publish_binding_params {
                     next_binding_params
                 } else {
                     None
@@ -2255,7 +2334,11 @@ impl StackExecutor {
                         let is_running = current_view.status == ResourceStatus::Running;
 
                         let config_matches = if self.is_external_binding_resource(id) {
+                            let remote_binding_matches = !self
+                                .external_binding_requests_remote_access(id)
+                                && current_view.remote_binding_params.is_none();
                             current_view.config == desired_resource_config.resource
+                                && remote_binding_matches
                         } else {
                             current_view
                                 .internal_state

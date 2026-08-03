@@ -13,6 +13,10 @@ on:
         type: string
         required: false
         default: main
+      qualification_run_id:
+        type: string
+        required: false
+        default: ""
       dry_run:
         type: boolean
         required: false
@@ -28,10 +32,10 @@ on:
         default: stable
         options: [stable, dev]
       stable_action:
-        description: Prepare a version PR or publish the qualified merged version
+        description: Prepare a version PR
         type: choice
         default: prepare
-        options: [prepare, publish]
+        options: [prepare]
       release_branch:
         description: Linear-derived branch name for the version PR (prepare only)
         type: string
@@ -72,8 +76,8 @@ jobs:
       version: ${{ steps.bump.outputs.version || steps.qualification_version.outputs.version || steps.merged_version.outputs.version }}
       ready: ${{ steps.release_state.outputs.ready }}
       source_ref: ${{ steps.release_source.outputs.ref }}
-      qualification_run_id: ${{ steps.verify_qualification.outputs.run_id }}
-      qualification_head_sha: ${{ steps.verify_qualification.outputs.head_sha }}
+      qualification_run_id: ${{ steps.qualification.outputs.run_id }}
+      qualification_head_sha: ${{ steps.qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
@@ -98,24 +102,10 @@ jobs:
             exit 1
           fi
 
-          COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s%n%b")
-
-          if echo "$COMMITS" | grep -qE "(BREAKING[- ]CHANGE|^[a-z]+(\([^)]+\))?!:)"; then
-            BUMP="major"
-          elif echo "$COMMITS" | grep -qE "^feat(\([^)]+\))?:"; then
-            BUMP="minor"
-          else
-            BUMP="patch"
-          fi
-
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          case "$BUMP" in
-            major) VERSION="$((MAJOR + 1)).0.0" ;;
-            minor) VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
-            patch) VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
-          esac
+          VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
 
-          echo "Bump type: $BUMP"
+          echo "Bump type: patch"
           echo "New version: v${VERSION}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -205,7 +195,7 @@ jobs:
         env:
           VERSION: ${{ steps.bump.outputs.version }}
 
-      - name: Set npm package versions
+      - name: Set JavaScript package versions
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
@@ -226,6 +216,61 @@ jobs:
               fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
             "
           done
+          # Both generated SDKs publish a JSR manifest alongside package.json.
+          # Keep the two registries on the release version.
+          node -e "
+            const fs = require('fs');
+            for (const path of [
+              'client-sdks/platform/typescript/jsr.json',
+              'client-sdks/manager/typescript/jsr.json',
+            ]) {
+              const content = fs.readFileSync(path, 'utf8');
+              fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
+            }
+          "
+          # Stamp package metadata in generated npm locks when present.
+          node -e "
+            const fs = require('fs');
+            for (const sdk of ['platform', 'manager']) {
+              const lockPath = 'client-sdks/' + sdk + '/typescript/package-lock.json';
+              if (!fs.existsSync(lockPath)) continue;
+              const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+              lock.version = '${VERSION}';
+              lock.packages[''].version = '${VERSION}';
+              fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\\n');
+            }
+          "
+          # Both checked-in generation workflows use the version from gen.yaml.
+          # Advance them with the release so later regeneration cannot reset manifests.
+          node -e "
+            const fs = require('fs');
+            for (const sdk of ['platform', 'manager']) {
+              const root = 'client-sdks/' + sdk + '/typescript/.speakeasy/';
+              const configPath = root + 'gen.yaml';
+              const config = fs.readFileSync(configPath, 'utf8');
+              const configVersionPattern = /(typescript:\\n  version: )[^\\n]+/;
+              if (!configVersionPattern.test(config)) {
+                throw new Error(sdk + ' SDK version not found in gen.yaml');
+              }
+              const updatedConfig = config.replace(
+                configVersionPattern,
+                (_, prefix) => prefix + '${VERSION}',
+              );
+              fs.writeFileSync(configPath, updatedConfig);
+
+              const lockPath = root + 'gen.lock';
+              const lock = fs.readFileSync(lockPath, 'utf8');
+              const lockVersionPattern = /(  releaseVersion: )[^\\n]+/;
+              if (!lockVersionPattern.test(lock)) {
+                throw new Error(sdk + ' SDK releaseVersion not found in gen.lock');
+              }
+              const updatedLock = lock.replace(
+                lockVersionPattern,
+                (_, prefix) => prefix + '${VERSION}',
+              );
+              fs.writeFileSync(lockPath, updatedLock);
+            }
+          "
 
       - name: Regenerate Cargo lockfile
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
@@ -249,7 +294,16 @@ jobs:
             packages/sdk/package.json
             packages/testing/package.json
             client-sdks/platform/typescript/package.json
+            client-sdks/platform/typescript/jsr.json
+            client-sdks/platform/typescript/package-lock.json
+            client-sdks/platform/typescript/.speakeasy/gen.yaml
+            client-sdks/platform/typescript/.speakeasy/gen.lock
             client-sdks/manager/typescript/package.json
+            client-sdks/manager/typescript/jsr.json
+            client-sdks/manager/typescript/package-lock.json
+            client-sdks/manager/typescript/examples/package-lock.json
+            client-sdks/manager/typescript/.speakeasy/gen.yaml
+            client-sdks/manager/typescript/.speakeasy/gen.lock
             packages/bindings/package.json
             crates/alien-bindings-node/package.json
             packages/bindings/npm/darwin-arm64/package.json
@@ -271,13 +325,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock packages/core/package.json packages/commands/package.json \
-            packages/sdk/package.json packages/testing/package.json \
-            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
-            packages/bindings/package.json crates/alien-bindings-node/package.json \
-            packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
-            packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json \
-            packages/ai-gateway/package.json
+          git add --update
           git commit -m "chore: release v${VERSION}"
           BRANCH="$RELEASE_BRANCH"
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
@@ -316,95 +364,19 @@ jobs:
             fi
           done
 
-      - name: Login to GHCR for qualification verification
-        if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify release qualification
-        id: verify_qualification
+      - name: Select same-run qualification artifacts
+        id: qualification
         if: ${{ inputs.stable_action == 'publish' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           RELEASE_COMMIT: ${{ steps.merged_version.outputs.commit }}
-          VERSION: ${{ steps.merged_version.outputs.version }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
-          PR_JSON=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${GITHUB_REPOSITORY}/commits/${RELEASE_COMMIT}/pulls" \
-            --jq '[.[] | select(.base.ref == "main" and .merged_at != null)] | sort_by(.merged_at) | last')
-          HEAD_SHA=$(jq -r '.head.sha // empty' <<< "$PR_JSON")
-          if [ -z "$HEAD_SHA" ]; then
-            echo "::error::The release commit is not associated with a merged pull request"
+          if ! grep -qE '^[0-9]+$' <<< "$QUALIFICATION_RUN_ID"; then
+            echo "::error::Stable publication requires its orchestrator run ID"
             exit 1
           fi
-
-          RUN_ID=$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow release-qualification.yml \
-            --commit "$HEAD_SHA" \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId // empty')
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No successful release qualification exists for ${HEAD_SHA}"
-            exit 1
-          fi
-
-          mkdir -p qualification
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name release-qualification-manifest \
-            --dir qualification
-          gh run download "$RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir qualification/artifacts
-
-          QUALIFIED_VERSION=$(jq -r '.version' qualification/manifest.json)
-          QUALIFIED_HEAD=$(jq -r '.headSha' qualification/manifest.json)
-          QUALIFIED_TREE=$(jq -r '.sourceTree' qualification/manifest.json)
-          RELEASE_TREE=$(git rev-parse "${RELEASE_COMMIT}^{tree}")
-          if [ "$QUALIFIED_VERSION" != "$VERSION" ] || \
-             [ "$QUALIFIED_HEAD" != "$HEAD_SHA" ] || \
-             [ "$QUALIFIED_TREE" != "$RELEASE_TREE" ]; then
-            echo "::error::Qualified artifact set does not match the merged release tree"
-            exit 1
-          fi
-
-          jq -r '.artifacts | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
-            while IFS=$'\t' read -r qualified_path expected_checksum; do
-              relative_path=${qualified_path#qualified-artifacts/}
-              artifact_path="qualification/artifacts/${relative_path}"
-              if [ ! -f "$artifact_path" ]; then
-                echo "::error::Qualified artifact is missing: ${relative_path}"
-                exit 1
-              fi
-              actual_checksum=$(sha256sum "$artifact_path" | awk '{print $1}')
-              if [ "$actual_checksum" != "$expected_checksum" ]; then
-                echo "::error::Qualified artifact checksum changed: ${relative_path}"
-                exit 1
-              fi
-            done
-
-          jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
-            while IFS=$'\t' read -r image expected_digest; do
-              ref="ghcr.io/alienplatform/${image}:qualification-${HEAD_SHA}"
-              actual_digest=$(docker buildx imagetools inspect "$ref" |
-                sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
-              if [ "$actual_digest" != "$expected_digest" ]; then
-                echo "::error::Qualified image digest changed: ${image}"
-                exit 1
-              fi
-            done
-
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "run_id=$QUALIFICATION_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Select release source
         id: release_source
@@ -749,14 +721,11 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.11.0
-
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Validate npm auth
         if: ${{ inputs.stable_action == 'publish' }}
@@ -1963,6 +1932,36 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Record qualified image digests
+        env:
+          RELEASE_COMMIT: ${{ inputs.source_ref }}
+        run: |
+          DIGESTS='{}'
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager; do
+            qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
+            digest=$(docker buildx imagetools inspect "$qualified" |
+              sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+            if [ -z "$digest" ]; then
+              echo "::error::Qualified image ${qualified} has no manifest digest"
+              exit 1
+            fi
+            DIGESTS=$(jq --arg name "$name" --arg digest "$digest" \
+              '. + {($name): $digest}' <<< "$DIGESTS")
+          done
+          jq -n \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --argjson images "$DIGESTS" \
+            '{releaseCommit: $releaseCommit, images: $images}' \
+            > qualified-image-digests.json
+
+      - name: Upload qualified image digests
+        uses: actions/upload-artifact@v6
+        with:
+          name: qualified-image-digests
+          retention-days: 30
+          if-no-files-found: error
+          path: qualified-image-digests.json
+
   publish-images:
     needs: prepare
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' }}
@@ -1976,20 +1975,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download qualification manifest
+      - name: Download qualified image digests
         uses: actions/download-artifact@v7
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          name: release-qualification-manifest
+          name: qualified-image-digests
           path: qualification
 
       - name: Promote qualified image manifests
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.qualification_head_sha }}
         run: |
+          recorded_commit=$(jq -r '.releaseCommit' qualification/qualified-image-digests.json)
+          if [ "$recorded_commit" != "$RELEASE_COMMIT" ]; then
+            echo "::error::Qualified images belong to ${recorded_commit}, expected ${RELEASE_COMMIT}"
+            exit 1
+          fi
+
           jq -r '.images | to_entries[] | [.key, .value] | @tsv' \
-            qualification/manifest.json |
+            qualification/qualified-image-digests.json |
             while IFS=$'\t' read -r name source_digest; do
               image="ghcr.io/alienplatform/${name}"
               if ! docker buildx imagetools inspect "${image}@${source_digest}" >/dev/null; then

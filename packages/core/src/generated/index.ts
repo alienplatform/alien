@@ -43,6 +43,7 @@ export type { AwsPermissionEffect } from "./zod/aws-permission-effect-schema.js"
 export type { AwsPlatformPermission } from "./zod/aws-platform-permission-schema.js";
 export type { AwsPostgresImportData } from "./zod/aws-postgres-import-data-schema.js";
 export type { AwsQueueImportData } from "./zod/aws-queue-import-data-schema.js";
+export type { AwsRemoteBindingsImportData } from "./zod/aws-remote-bindings-import-data-schema.js";
 export type { AwsRemoteStackManagementHeartbeatData } from "./zod/aws-remote-stack-management-heartbeat-data-schema.js";
 export type { AwsRemoteStackManagementImportData } from "./zod/aws-remote-stack-management-import-data-schema.js";
 export type { AwsS3StorageHeartbeatData } from "./zod/aws-s3-storage-heartbeat-data-schema.js";
@@ -76,6 +77,7 @@ export type { AzureManagementConfig } from "./zod/azure-management-config-schema
 export type { AzureNetworkImportData } from "./zod/azure-network-import-data-schema.js";
 export type { AzurePlatformPermission } from "./zod/azure-platform-permission-schema.js";
 export type { AzureQueueImportData } from "./zod/azure-queue-import-data-schema.js";
+export type { AzureRemoteBindingsImportData } from "./zod/azure-remote-bindings-import-data-schema.js";
 export type { AzureRemoteStackManagementHeartbeatData } from "./zod/azure-remote-stack-management-heartbeat-data-schema.js";
 export type { AzureRemoteStackManagementImportData } from "./zod/azure-remote-stack-management-import-data-schema.js";
 export type { AzureResourceGroupHeartbeatData } from "./zod/azure-resource-group-heartbeat-data-schema.js";
@@ -185,6 +187,7 @@ export type { GcpPlatformPermission } from "./zod/gcp-platform-permission-schema
 export type { GcpPostgresImportData } from "./zod/gcp-postgres-import-data-schema.js";
 export type { GcpPubSubQueueHeartbeatData } from "./zod/gcp-pub-sub-queue-heartbeat-data-schema.js";
 export type { GcpQueueImportData } from "./zod/gcp-queue-import-data-schema.js";
+export type { GcpRemoteBindingsImportData } from "./zod/gcp-remote-bindings-import-data-schema.js";
 export type { GcpRemoteStackManagementHeartbeatData } from "./zod/gcp-remote-stack-management-heartbeat-data-schema.js";
 export type { GcpRemoteStackManagementImportData } from "./zod/gcp-remote-stack-management-import-data-schema.js";
 export type { GcpSecretManagerVaultHeartbeatData } from "./zod/gcp-secret-manager-vault-heartbeat-data-schema.js";
@@ -316,6 +319,9 @@ export type { RawHeartbeatSnippetFormat } from "./zod/raw-heartbeat-snippet-form
 export type { RawHeartbeatSnippet } from "./zod/raw-heartbeat-snippet-schema.js";
 export type { ReadinessProbe } from "./zod/readiness-probe-schema.js";
 export type { ReleaseRequest } from "./zod/release-request-schema.js";
+export type { RemoteBindingGrant } from "./zod/remote-binding-grant-schema.js";
+export type { RemoteBindingsOutputs } from "./zod/remote-bindings-outputs-schema.js";
+export type { RemoteBindings } from "./zod/remote-bindings-schema.js";
 export type { RemoteStackManagementHeartbeatData } from "./zod/remote-stack-management-heartbeat-data-schema.js";
 export type { RemoteStackManagementHeartbeatStatus } from "./zod/remote-stack-management-heartbeat-status-schema.js";
 export type { RemoteStackManagementOutputs } from "./zod/remote-stack-management-outputs-schema.js";
@@ -425,6 +431,7 @@ export { AwsPermissionEffectSchema } from "./zod/aws-permission-effect-schema.js
 export { AwsPlatformPermissionSchema } from "./zod/aws-platform-permission-schema.js";
 export { AwsPostgresImportDataSchema } from "./zod/aws-postgres-import-data-schema.js";
 export { AwsQueueImportDataSchema } from "./zod/aws-queue-import-data-schema.js";
+export { AwsRemoteBindingsImportDataSchema } from "./zod/aws-remote-bindings-import-data-schema.js";
 export { AwsRemoteStackManagementHeartbeatDataSchema } from "./zod/aws-remote-stack-management-heartbeat-data-schema.js";
 export { AwsRemoteStackManagementImportDataSchema } from "./zod/aws-remote-stack-management-import-data-schema.js";
 export { AwsS3StorageHeartbeatDataSchema } from "./zod/aws-s3-storage-heartbeat-data-schema.js";
@@ -458,6 +465,7 @@ export { AzureManagementConfigSchema } from "./zod/azure-management-config-schem
 export { AzureNetworkImportDataSchema } from "./zod/azure-network-import-data-schema.js";
 export { AzurePlatformPermissionSchema } from "./zod/azure-platform-permission-schema.js";
 export { AzureQueueImportDataSchema } from "./zod/azure-queue-import-data-schema.js";
+export { AzureRemoteBindingsImportDataSchema } from "./zod/azure-remote-bindings-import-data-schema.js";
 export { AzureRemoteStackManagementHeartbeatDataSchema } from "./zod/azure-remote-stack-management-heartbeat-data-schema.js";
 export { AzureRemoteStackManagementImportDataSchema } from "./zod/azure-remote-stack-management-import-data-schema.js";
 export { AzureResourceGroupHeartbeatDataSchema } from "./zod/azure-resource-group-heartbeat-data-schema.js";
@@ -567,6 +575,7 @@ export { GcpPlatformPermissionSchema } from "./zod/gcp-platform-permission-schem
 export { GcpPostgresImportDataSchema } from "./zod/gcp-postgres-import-data-schema.js";
 export { GcpPubSubQueueHeartbeatDataSchema } from "./zod/gcp-pub-sub-queue-heartbeat-data-schema.js";
 export { GcpQueueImportDataSchema } from "./zod/gcp-queue-import-data-schema.js";
+export { GcpRemoteBindingsImportDataSchema } from "./zod/gcp-remote-bindings-import-data-schema.js";
 export { GcpRemoteStackManagementHeartbeatDataSchema } from "./zod/gcp-remote-stack-management-heartbeat-data-schema.js";
 export { GcpRemoteStackManagementImportDataSchema } from "./zod/gcp-remote-stack-management-import-data-schema.js";
 export { GcpSecretManagerVaultHeartbeatDataSchema } from "./zod/gcp-secret-manager-vault-heartbeat-data-schema.js";
@@ -698,6 +707,9 @@ export { RawHeartbeatSnippetFormatSchema } from "./zod/raw-heartbeat-snippet-for
 export { RawHeartbeatSnippetSchema } from "./zod/raw-heartbeat-snippet-schema.js";
 export { ReadinessProbeSchema } from "./zod/readiness-probe-schema.js";
 export { ReleaseRequestSchema } from "./zod/release-request-schema.js";
+export { RemoteBindingGrantSchema } from "./zod/remote-binding-grant-schema.js";
+export { RemoteBindingsOutputsSchema } from "./zod/remote-bindings-outputs-schema.js";
+export { RemoteBindingsSchema } from "./zod/remote-bindings-schema.js";
 export { RemoteStackManagementHeartbeatDataSchema } from "./zod/remote-stack-management-heartbeat-data-schema.js";
 export { RemoteStackManagementHeartbeatStatusSchema } from "./zod/remote-stack-management-heartbeat-status-schema.js";
 export { RemoteStackManagementOutputsSchema } from "./zod/remote-stack-management-outputs-schema.js";

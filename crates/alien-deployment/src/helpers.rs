@@ -5,8 +5,8 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
     EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
     GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
-    Stack, StackState, TestEnvironmentInfo, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS,
-    ENV_ALIEN_SECRETS,
+    Stack, StackState, TestEnvironmentInfo, Vault, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -572,6 +572,17 @@ pub async fn sync_secrets_to_vault(
         return Ok(false);
     }
 
+    // A deployment without a secrets vault never stored the legacy command token. Avoid turning
+    // its first empty reconcile into a vault dependency solely for that one-time cleanup.
+    if !has_secrets_vault(stack_state)
+        && desired_secrets.is_empty()
+        && runtime_metadata.last_synced_secret_names.is_empty()
+    {
+        debug!("No secrets vault or deployment-owned secrets to reconcile");
+        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+        return Ok(false);
+    }
+
     // The hash avoids redundant value writes, while the exact owned-key
     // inventory is what makes deletion safe. Old metadata without the
     // inventory deliberately performs one full reconcile to establish it.
@@ -676,6 +687,11 @@ pub async fn delete_deployment_vault_secrets(
         .cloned()
         .chain(desired_vault_secrets(config).into_keys())
         .collect::<Vec<_>>();
+    if !has_secrets_vault(stack_state) && owned_names.is_empty() {
+        runtime_metadata.last_synced_env_vars_hash = None;
+        runtime_metadata.last_synced_secret_names.clear();
+        return Ok(false);
+    }
     owned_names.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
     owned_names.sort();
     owned_names.dedup();
@@ -714,6 +730,13 @@ pub async fn delete_deployment_vault_secrets(
         "Deleted deployment-owned vault secrets"
     );
     Ok(true)
+}
+
+fn has_secrets_vault(stack_state: &StackState) -> bool {
+    stack_state
+        .resources
+        .get("secrets")
+        .is_some_and(|resource| resource.resource_type == Vault::RESOURCE_TYPE.as_ref())
 }
 
 fn desired_vault_secrets(config: &DeploymentConfig) -> BTreeMap<String, String> {
@@ -903,12 +926,54 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
 pub fn deployment_headline_error_from_state(
     state: &alien_core::DeploymentState,
 ) -> Option<AlienError> {
-    state.error.clone().or_else(|| {
-        state
-            .stack_state
-            .as_ref()
-            .and_then(create_aggregated_error_from_stack_state)
-    })
+    let deployment_error = deployment_state_error_from_headline(state.error.clone());
+    if deployment_error.is_some() {
+        return deployment_error;
+    }
+
+    if !state.status.is_failed() {
+        return None;
+    }
+
+    state
+        .stack_state
+        .as_ref()
+        .and_then(create_aggregated_error_from_stack_state)
+}
+
+/// Removes a derived resource-error summary before rebuilding deployment state.
+///
+/// DEPLOYMENT_FAILED with resource counts is a display projection of
+/// StackState resource errors, not a deployment-level error.
+pub fn deployment_state_error_from_headline(error: Option<AlienError>) -> Option<AlienError> {
+    error.filter(|error| !is_resource_error_headline(error))
+}
+
+fn is_resource_error_headline(error: &AlienError) -> bool {
+    if error.code != "DEPLOYMENT_FAILED" {
+        return false;
+    }
+
+    let Some(context) = error
+        .context
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+
+    context
+        .get("resource_errors")
+        .is_some_and(serde_json::Value::is_array)
+        && context
+            .get("total_resources")
+            .is_some_and(serde_json::Value::is_number)
+        && context
+            .get("failed_resources")
+            .is_some_and(serde_json::Value::is_number)
+        && context
+            .get("interrupted_resources")
+            .is_some_and(serde_json::Value::is_number)
 }
 
 #[cfg(test)]
@@ -967,9 +1032,9 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        ExternalBindings, Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceStatus,
-        RuntimeMetadata, StackResourceState, StackSettings, Vault, VaultBinding, Worker,
-        WorkerCode,
+        DeploymentState, DeploymentStatus, ExternalBindings, Platform, Resource, ResourceEntry,
+        ResourceLifecycle, ResourceStatus, RuntimeMetadata, StackResourceState, StackSettings,
+        Vault, VaultBinding, Worker, WorkerCode,
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
@@ -1076,6 +1141,73 @@ mod tests {
         AlienError::new(GenericError {
             message: code_message.to_string(),
         })
+    }
+
+    fn make_deployment_state(
+        status: DeploymentStatus,
+        stack_state: Option<StackState>,
+        error: Option<AlienError>,
+    ) -> DeploymentState {
+        DeploymentState {
+            status,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state,
+            error,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn stack_state_with_resource_error() -> StackState {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "worker".to_string(),
+            make_worker_resource_state("worker", Some(generic_error("worker failed"))),
+        );
+        stack_state
+    }
+
+    #[test]
+    fn running_deployment_does_not_publish_resource_error_headline() {
+        let state = make_deployment_state(
+            DeploymentStatus::Running,
+            Some(stack_state_with_resource_error()),
+            None,
+        );
+
+        assert!(deployment_headline_error_from_state(&state).is_none());
+    }
+
+    #[test]
+    fn failed_deployment_publishes_resource_error_headline() {
+        let state = make_deployment_state(
+            DeploymentStatus::ProvisioningFailed,
+            Some(stack_state_with_resource_error()),
+            None,
+        );
+
+        let error = deployment_headline_error_from_state(&state).unwrap();
+        assert_eq!(error.code, "DEPLOYMENT_FAILED");
+    }
+
+    #[test]
+    fn derived_resource_headline_is_not_replayed_as_deployment_error() {
+        let headline = create_aggregated_error_from_stack_state(&stack_state_with_resource_error());
+
+        assert!(deployment_state_error_from_headline(headline).is_none());
+    }
+
+    #[test]
+    fn genuine_deployment_error_is_preserved() {
+        let error = generic_error("deployment failed");
+
+        let preserved = deployment_state_error_from_headline(Some(error.clone())).unwrap();
+        assert_eq!(preserved.code, error.code);
+        assert_eq!(preserved.message, error.message);
     }
 
     #[test]
@@ -1443,6 +1575,55 @@ mod tests {
             Some(expected_hash.as_str())
         );
         assert!(runtime_metadata.last_synced_secret_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deployment_without_secrets_vault_skips_empty_reconcile_and_deletion() {
+        let stack_state = StackState::new(Platform::Test);
+        let config = make_config(make_snapshot(&[], &[]));
+        let expected_hash = secrets_sync_hash(&config);
+        let mut runtime_metadata = RuntimeMetadata::default();
+
+        let synced = sync_secrets_to_vault(
+            &stack_state,
+            &ClientConfig::Test,
+            &config,
+            &mut runtime_metadata,
+        )
+        .await
+        .expect("an empty deployment should not require a secrets vault");
+
+        assert!(!synced);
+        assert_eq!(
+            runtime_metadata.last_synced_env_vars_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert!(!delete_deployment_vault_secrets(
+            &stack_state,
+            &ClientConfig::Test,
+            &config,
+            &mut runtime_metadata,
+        )
+        .await
+        .expect("deleting an empty deployment should not require a secrets vault"));
+        assert!(runtime_metadata.last_synced_env_vars_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn deployment_without_secrets_vault_does_not_ignore_desired_secrets() {
+        let config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
+
+        assert!(
+            sync_secrets_to_vault(
+                &StackState::new(Platform::Test),
+                &ClientConfig::Test,
+                &config,
+                &mut RuntimeMetadata::default(),
+            )
+            .await
+            .is_err(),
+            "a missing vault must remain an error when secrets need persistence"
+        );
     }
 
     #[test]

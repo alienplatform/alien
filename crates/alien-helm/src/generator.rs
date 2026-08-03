@@ -4539,6 +4539,7 @@ logCollector:
                         "tenantId": "tenant"
                     })
                     .to_string(),
+                    legacy_remote_bindings_access: None,
                 }));
             }),
         );

@@ -40,6 +40,19 @@ pub struct EntityQueryResponse {
     pub entities: Vec<TableEntity>,
     #[serde(rename = "odata.nextLink")]
     pub next_link: Option<String>,
+    /// Provider continuation returned in response headers.
+    #[serde(skip)]
+    pub continuation: Option<EntityQueryContinuation>,
+}
+
+/// Opaque provider position for resuming an entity query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityQueryContinuation {
+    /// Partition key at which the next query resumes.
+    pub next_partition_key: Option<String>,
+    /// Row key at which the next query resumes.
+    pub next_row_key: Option<String>,
 }
 
 /// Query options for entity operations
@@ -48,6 +61,7 @@ pub struct EntityQueryOptions {
     pub filter: Option<String>,
     pub select: Option<String>,
     pub top: Option<u32>,
+    pub continuation: Option<EntityQueryContinuation>,
 }
 
 /// ETag wrapper for conditional operations
@@ -1040,6 +1054,14 @@ impl TableStorageApi for AzureTableStorageClient {
             if let Some(top) = opts.top {
                 query_params.push(("$top", top.to_string()));
             }
+            if let Some(continuation) = opts.continuation {
+                if let Some(next_partition_key) = continuation.next_partition_key {
+                    query_params.push(("NextPartitionKey", next_partition_key));
+                }
+                if let Some(next_row_key) = continuation.next_row_key {
+                    query_params.push(("NextRowKey", next_row_key));
+                }
+            }
         }
 
         let url = self.build_table_storage_url(
@@ -1065,6 +1087,22 @@ impl TableStorageApi for AzureTableStorageClient {
             )
             .await?;
 
+        let continuation = EntityQueryContinuation {
+            next_partition_key: resp
+                .headers()
+                .get("x-ms-continuation-nextpartitionkey")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+            next_row_key: resp
+                .headers()
+                .get("x-ms-continuation-nextrowkey")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+        };
+        let continuation = (continuation.next_partition_key.is_some()
+            || continuation.next_row_key.is_some())
+        .then_some(continuation);
+
         let response_body =
             resp.text()
                 .await
@@ -1073,7 +1111,7 @@ impl TableStorageApi for AzureTableStorageClient {
                     message: "Azure QueryEntities: failed to read response body".to_string(),
                 })?;
 
-        let query_response: EntityQueryResponse = serde_json::from_str(&response_body)
+        let mut query_response: EntityQueryResponse = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
                 message: format!(
@@ -1086,6 +1124,7 @@ impl TableStorageApi for AzureTableStorageClient {
                 http_response_text: Some(response_body),
             })?;
 
+        query_response.continuation = continuation;
         Ok(query_response)
     }
 

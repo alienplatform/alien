@@ -172,11 +172,12 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([
+        let fields = vec![
             ("roleName", expr::traversal(["aws_iam_role", label, "name"])),
             ("roleArn", expr::traversal(["aws_iam_role", label, "arn"])),
             ("managementPermissionsApplied", Expression::Bool(true)),
-        ]))
+        ];
+        Ok(expr::object(fields))
     }
 }
 

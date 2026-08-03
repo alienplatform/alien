@@ -311,9 +311,9 @@
         }
       },
       {
-        // API Gateway V2 API/domain creation. The request must carry boundary tags.
+        // API Gateway V1/V2 API/domain creation. The request must carry boundary tags.
         "label": "create-http-api-endpoints",
-        "description": "Create API Gateway HTTP APIs and custom domain names for application-owned public endpoints.",
+        "description": "Create API Gateway HTTP (V2) and REST (V1) APIs and custom domain names for application-owned public endpoints.",
         "grant": {
           "actions": ["apigateway:POST", "apigateway:PUT"]
         },
@@ -321,6 +321,7 @@
           "stack": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/restapis",
               "arn:aws:apigateway:${awsRegion}::/domainnames",
               "arn:aws:apigateway:${awsRegion}::/tags/*"
             ],
@@ -334,6 +335,7 @@
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/restapis",
               "arn:aws:apigateway:${awsRegion}::/domainnames",
               "arn:aws:apigateway:${awsRegion}::/tags/*"
             ],
@@ -348,9 +350,9 @@
         }
       },
       {
-        // API Gateway V2 child creates run under already-tagged APIs/domains.
+        // API Gateway V1/V2 child creates run under already-tagged APIs/domains.
         "label": "create-http-api-routes",
-        "description": "Create routes and mappings under API Gateway HTTP APIs and domain names owned by this application.",
+        "description": "Create routes and mappings under API Gateway HTTP (V2) and REST (V1) APIs and domain names owned by this application.",
         "grant": {
           "actions": ["apigateway:POST"]
         },
@@ -358,8 +360,10 @@
           "stack": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings"
             ],
             "condition": {
               "StringEquals": {
@@ -371,8 +375,10 @@
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings"
             ],
             "condition": {
               "StringEquals": {
@@ -385,9 +391,9 @@
         }
       },
       {
-        // API Gateway V2 tagged creates can perform implicit TagResource calls.
+        // API Gateway V1/V2 tagged creates can perform implicit TagResource calls.
         "label": "tag-http-api-endpoints",
-        "description": "Apply deployment tags to API Gateway HTTP API resources created for public endpoints.",
+        "description": "Apply deployment tags to API Gateway HTTP (V2) and REST (V1) API resources created for public endpoints.",
         "grant": {
           "actions": ["apigateway:TagResource", "apigateway:PUT"]
         },
@@ -397,6 +403,7 @@
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
               "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
               "arn:aws:apigateway:${awsRegion}::/tags/*"
             ],
@@ -412,6 +419,7 @@
               "arn:aws:apigateway:${awsRegion}::/apis/*",
               "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
               "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
               "arn:aws:apigateway:${awsRegion}::/tags/*"
             ],
@@ -426,9 +434,9 @@
         }
       },
       {
-        // API Gateway V2 — manage existing APIs and domain names.
+        // API Gateway V1/V2 — manage existing APIs and domain names.
         "label": "manage-http-api-endpoints",
-        "description": "Read, update, and delete API Gateway HTTP APIs, custom domain names, and mappings owned by this application.",
+        "description": "Read, update, and delete API Gateway HTTP (V2) and REST (V1) APIs, custom domain names, and mappings owned by this application.",
         "grant": {
           "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
         },
@@ -436,9 +444,12 @@
           "stack": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings/*"
             ],
             "condition": {
               "StringEquals": {
@@ -450,9 +461,12 @@
           "resource": {
             "resources": [
               "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/restapis/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*",
               "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
-              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*"
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/basepathmappings/*"
             ],
             "condition": {
               "StringEquals": {

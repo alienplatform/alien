@@ -38,9 +38,7 @@ impl TfEmitter for AwsStorageEmitter {
         fragment
             .resource_blocks
             .push(public_access_block(label, !storage.public_read));
-        fragment
-            .resource_blocks
-            .push(bucket_policy(label, storage));
+        fragment.resource_blocks.push(bucket_policy(label, storage));
 
         if storage.versioning {
             fragment.resource_blocks.push(versioning(label));
@@ -62,7 +60,10 @@ impl TfEmitter for AwsStorageEmitter {
                 "bucketName",
                 expr::traversal(["aws_s3_bucket", label, "bucket"]),
             ),
-            ("bucketArn", expr::traversal(["aws_s3_bucket", label, "arn"])),
+            (
+                "bucketArn",
+                expr::traversal(["aws_s3_bucket", label, "arn"]),
+            ),
         ]))
     }
 
@@ -84,7 +85,10 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
         label,
         [
             attr("bucket", resource_prefix_template(storage.id())),
-            attr("force_destroy", Expression::Bool(true)),
+            attr(
+                "force_destroy",
+                Expression::Bool(!ctx.resource.has_remote_bindings()),
+            ),
             attr("tags", tags(ctx, "storage")),
         ],
     )
@@ -301,6 +305,15 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         }
     }
 
+    if let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource) {
+        if let Some(label) = remote_bindings_label(ctx) {
+            owners.push((
+                label.to_string(),
+                vec![PermissionSetReference::from_name(definition.permission_set)],
+            ));
+        }
+    }
+
     owners
 }
 
@@ -353,5 +366,13 @@ fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str
         } else {
             None
         }
+    })
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
     })
 }

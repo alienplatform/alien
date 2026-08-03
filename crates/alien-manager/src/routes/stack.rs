@@ -36,14 +36,14 @@ use sha2::{Digest, Sha256};
 
 use alien_core::{
     import::{
-        ImportContext, StackImportRequest, StackImportResponse,
+        ImportContext, ImportedResource, StackImportRequest, StackImportResponse,
         CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
-    GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
-    RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState, StackState,
-    RESOURCE_PREFIX_ERROR_MESSAGE,
+    GcpEnvironmentInfo, KubernetesCluster, Platform, RemoteStackManagement, ResourceLifecycle,
+    ResourceStatus, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState,
+    StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -88,7 +88,7 @@ pub async fn stack_import(
     headers: HeaderMap,
     Json(raw_req): Json<serde_json::Value>,
 ) -> Response {
-    let req = match parse_stack_import_request(raw_req) {
+    let mut req = match parse_stack_import_request(raw_req) {
         Ok(req) => req,
         Err(e) => return e.into_response(),
     };
@@ -188,15 +188,14 @@ pub async fn stack_import(
         .iter()
         .map(|resource| resource.id.clone())
         .collect();
-    let imported_gate_answers =
-        match alien_deployment::resolve_frozen_gate_answers_from_presence(
-            source_stack,
-            &delivered_resource_ids,
-            &req.input_values,
-        ) {
-            Ok(answers) => answers,
-            Err(e) => return e.into_response(),
-        };
+    let imported_gate_answers = match alien_deployment::resolve_frozen_gate_answers_from_presence(
+        source_stack,
+        &delivered_resource_ids,
+        &req.input_values,
+    ) {
+        Ok(answers) => answers,
+        Err(e) => return e.into_response(),
+    };
     let frozen_gating = alien_deployment::frozen_gating_inputs(source_stack);
     if let Err(e) = alien_deployment::enforce_frozen_gate_fixity(
         &imported_gate_answers,
@@ -221,6 +220,14 @@ pub async fn stack_import(
         Ok(stack) => stack,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(error) = migrate_legacy_remote_bindings_handoff(&mut req, &prepared_stack) {
+        return error.into_response();
+    }
+
+    if let Err(error) = validate_import_handoff(&req, &prepared_stack) {
+        return error.into_response();
+    }
 
     let mut stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
@@ -354,9 +361,9 @@ pub async fn stack_import(
                 &req,
                 imported_gate_answers,
             ) {
-                    Ok(metadata) => metadata,
-                    Err(error) => return error.into_response(),
-                };
+                Ok(metadata) => metadata,
+                Err(error) => return error.into_response(),
+            };
             let should_reconcile = import_changes_deployment(
                 &existing,
                 &stack_state,
@@ -498,6 +505,98 @@ pub async fn stack_import(
         .into_response()
 }
 
+/// PR #156 carried the Remote Bindings identity inside the management import
+/// payload. Keep already-generated setup artifacts usable while new packages
+/// register the identity as its own setup-owned resource.
+fn migrate_legacy_remote_bindings_handoff(
+    req: &mut StackImportRequest,
+    stack: &Stack,
+) -> crate::error::Result<()> {
+    const BINDINGS_ID: &str = "access";
+    if !stack.resources.contains_key(BINDINGS_ID)
+        || req
+            .resources
+            .iter()
+            .any(|resource| resource.id == BINDINGS_ID)
+    {
+        return Ok(());
+    }
+    let Some(management) = req
+        .resources
+        .iter()
+        .find(|resource| resource.resource_type == RemoteStackManagement::RESOURCE_TYPE)
+    else {
+        return Ok(());
+    };
+
+    let import_data = match req.base_platform.unwrap_or(req.platform) {
+        Platform::Aws => {
+            let legacy: alien_core::AwsRemoteStackManagementImportData =
+                serde_json::from_value(management.import_data.clone()).map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "Invalid legacy AWS management handoff: {error}"
+                    ))
+                })?;
+            let Some(role_arn) = legacy.remote_bindings_role_arn else {
+                return Ok(());
+            };
+            serde_json::to_value(alien_core::AwsRemoteBindingsImportData {
+                role_name: role_arn.rsplit('/').next().unwrap_or(&role_arn).to_string(),
+                role_arn,
+            })
+        }
+        Platform::Gcp => {
+            let legacy: alien_core::GcpRemoteStackManagementImportData =
+                serde_json::from_value(management.import_data.clone()).map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "Invalid legacy GCP management handoff: {error}"
+                    ))
+                })?;
+            let Some(service_account_email) = legacy.remote_bindings_service_account_email else {
+                return Ok(());
+            };
+            serde_json::to_value(alien_core::GcpRemoteBindingsImportData {
+                project_id: legacy.project_id,
+                service_account_email,
+                service_account_unique_id: String::new(),
+            })
+        }
+        Platform::Azure => {
+            let legacy: alien_core::AzureRemoteStackManagementImportData =
+                serde_json::from_value(management.import_data.clone()).map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "Invalid legacy Azure management handoff: {error}"
+                    ))
+                })?;
+            let (Some(identity_id), Some(client_id)) = (
+                legacy.remote_bindings_identity_id,
+                legacy.remote_bindings_client_id,
+            ) else {
+                return Ok(());
+            };
+            serde_json::to_value(alien_core::AzureRemoteBindingsImportData {
+                identity_id,
+                client_id,
+                principal_id: String::new(),
+                tenant_id: legacy.tenant_id,
+            })
+        }
+        _ => return Ok(()),
+    }
+    .map_err(|error| {
+        ErrorData::bad_request(format!(
+            "Failed to migrate legacy Remote Bindings handoff: {error}"
+        ))
+    })?;
+
+    req.resources.push(ImportedResource {
+        id: BINDINGS_ID.to_string(),
+        resource_type: alien_core::RemoteBindings::RESOURCE_TYPE,
+        import_data,
+    });
+    Ok(())
+}
+
 fn merge_reimported_stack_state(
     state: &AppState,
     req: &StackImportRequest,
@@ -545,7 +644,7 @@ fn merge_reimported_stack_state(
                 ),
             })
         })?;
-        let merged = state
+        let mut merged = state
             .import_registry
             .merge_reimport(
                 &resource.resource_type,
@@ -569,6 +668,7 @@ fn merge_reimported_stack_state(
                     ),
                 })
             })?;
+        merged.dependencies = entry.combined_dependencies();
         imported.resources.insert(resource.id.clone(), merged);
     }
 
@@ -907,6 +1007,7 @@ fn reimport_runtime_metadata(
     imported_gate_answers: alien_core::GateAnswers,
 ) -> crate::error::Result<RuntimeMetadata> {
     let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    metadata.initial_setup_authority = alien_core::InitialSetupAuthority::ImportedHandoff;
     // The route refused conflicting answers before calling this, so what
     // remains is bookkeeping: answers for inputs a new release introduces are
     // recorded, and recorded answers are never overwritten.
@@ -1132,6 +1233,13 @@ fn build_stack_state(
                 ),
             })
         })?;
+        let expected_type = entry.config.resource_type();
+        if imported.resource_type != expected_type {
+            return Err(ErrorData::bad_request(format!(
+                "Imported resource '{}' has type '{}', but the setup artifact expects '{}'",
+                imported.id, imported.resource_type, expected_type
+            )));
+        }
 
         // `ImporterRegistry::run` returns an `AlienError<alien_core::ErrorData>`
         // (the importer's typed error surface). The route's error type is
@@ -1173,6 +1281,47 @@ fn build_stack_state(
         StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
     Ok(stack_state)
+}
+
+fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::error::Result<()> {
+    let delivered: std::collections::HashSet<&str> = req
+        .resources
+        .iter()
+        .map(|resource| resource.id.as_str())
+        .collect();
+    if delivered.len() != req.resources.len() {
+        return Err(ErrorData::bad_request(
+            "Setup registration contains duplicate resource ids",
+        ));
+    }
+    let expected: std::collections::HashSet<&str> = stack
+        .resources()
+        .filter(|(_, entry)| {
+            alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+                .should_emit_in_setup(entry.lifecycle)
+        })
+        .map(|(resource_id, _)| resource_id.as_str())
+        .collect();
+
+    let mut missing: Vec<&str> = expected.difference(&delivered).copied().collect();
+    missing.sort_unstable();
+    if !missing.is_empty() {
+        return Err(ErrorData::bad_request(format!(
+            "Setup registration is missing setup-owned resources: {}. Regenerate and rerun the setup artifact.",
+            missing.join(", ")
+        )));
+    }
+
+    let mut runtime_owned: Vec<&str> = delivered.difference(&expected).copied().collect();
+    runtime_owned.sort_unstable();
+    if !runtime_owned.is_empty() {
+        return Err(ErrorData::bad_request(format!(
+            "Setup registration includes resources that setup does not own: {}",
+            runtime_owned.join(", ")
+        )));
+    }
+
+    Ok(())
 }
 
 fn import_platform_for_resource(
@@ -1401,15 +1550,14 @@ mod setup_update_authorization_tests {
     fn frozen_reimport_mints_exact_authority_without_losing_runtime_metadata() {
         let baseline = stack("live", "frozen-a");
         let target = stack("live", "frozen-b");
-        let metadata =
-            reimport_runtime_metadata(
-                &record(baseline.clone()),
-                &target,
-                "release",
-                &request(),
-                Default::default(),
-            )
-                .expect("setup-owned update should succeed");
+        let metadata = reimport_runtime_metadata(
+            &record(baseline.clone()),
+            &target,
+            "release",
+            &request(),
+            Default::default(),
+        )
+        .expect("setup-owned update should succeed");
         let authorization = metadata
             .setup_update_authorization
             .expect("frozen change should mint setup authority");

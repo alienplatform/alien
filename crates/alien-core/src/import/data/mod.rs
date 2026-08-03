@@ -8,9 +8,10 @@ pub mod gcp;
 pub mod kubernetes_cluster;
 
 pub use aws::{
-    AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
-    AwsEmailDkimTokenImportData, AwsEmailDomainImportData, AwsEmailImportData, AwsKvImportData,
-    AwsNetworkImportData, AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData,
+    AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData,
+    AwsComputeClusterImportData, AwsEmailDkimTokenImportData, AwsEmailDomainImportData,
+    AwsEmailImportData, AwsKvImportData, AwsNetworkImportData, AwsOpenSearchImportData,
+    AwsPostgresImportData, AwsQueueImportData, AwsRemoteBindingsImportData,
     AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
     AwsVaultImportData, AwsWorkerImportData,
 };
@@ -18,16 +19,17 @@ pub use azure::{
     AzureAiImportData, AzureArtifactRegistryImportData, AzureBuildImportData,
     AzureComputeClusterImportData, AzureContainerAppsEnvironmentImportData,
     AzureFlexibleServerPostgresImportData, AzureKvImportData, AzureNetworkImportData,
-    AzureQueueImportData, AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
-    AzureServiceAccountImportData, AzureServiceActivationImportData,
+    AzureQueueImportData, AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
+    AzureResourceGroupImportData, AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };
 pub use gcp::{
-    GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
-    GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
-    GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
-    GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
+    GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData,
+    GcpComputeClusterImportData, GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData,
+    GcpQueueImportData, GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData,
+    GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
+    GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,

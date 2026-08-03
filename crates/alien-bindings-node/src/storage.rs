@@ -10,7 +10,9 @@ use futures::StreamExt;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use object_store::path::Path;
-use object_store::{ObjectMeta, PutPayload};
+use object_store::{
+    Attribute, Attributes, GetOptions, ObjectMeta, PutOptions, PutPayload, PutResult,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +26,10 @@ pub struct ObjectMetaJs {
     pub size: f64,
     /// Last-modified timestamp as an RFC 3339 string.
     pub last_modified: String,
+    /// Provider entity tag, when available.
+    pub e_tag: Option<String>,
+    /// Provider object version, when available.
+    pub version: Option<String>,
 }
 
 /// A presigned request: a URL plus the method and headers to replay it with.
@@ -37,12 +43,129 @@ pub struct PresignedRequestJs {
     pub headers: HashMap<String, String>,
 }
 
+/// Provider-neutral object attributes accepted on a storage write.
+#[napi(object)]
+pub struct StoragePutAttributesJs {
+    /// MIME type stored with the object.
+    pub content_type: Option<String>,
+    /// Browser content-disposition behavior stored with the object.
+    pub content_disposition: Option<String>,
+    /// Content encoding stored with the object.
+    pub content_encoding: Option<String>,
+    /// Content language stored with the object.
+    pub content_language: Option<String>,
+    /// Cache-control policy stored with the object.
+    pub cache_control: Option<String>,
+    /// User-defined object metadata.
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+/// Options for a storage write.
+#[napi(object)]
+pub struct StoragePutOptionsJs {
+    /// Object attributes to persist with the payload.
+    pub attributes: Option<StoragePutAttributesJs>,
+}
+
+/// Provider-neutral attributes returned with a stored object.
+#[napi(object)]
+pub struct StorageObjectAttributesJs {
+    pub content_type: Option<String>,
+    pub content_disposition: Option<String>,
+    pub content_encoding: Option<String>,
+    pub content_language: Option<String>,
+    pub cache_control: Option<String>,
+    pub storage_class: Option<String>,
+    pub metadata: HashMap<String, String>,
+}
+
+/// Result of reading a stored object.
+#[napi(object)]
+pub struct StorageGetResultJs {
+    pub data: Buffer,
+    pub meta: ObjectMetaJs,
+    pub attributes: StorageObjectAttributesJs,
+}
+
+/// Result of reading object metadata without its payload.
+#[napi(object)]
+pub struct StorageHeadResultJs {
+    pub meta: ObjectMetaJs,
+    pub attributes: StorageObjectAttributesJs,
+}
+
+/// Provider identifiers returned after a successful storage write.
+#[napi(object)]
+pub struct StoragePutResultJs {
+    pub e_tag: Option<String>,
+    pub version: Option<String>,
+}
+
+pub(crate) fn object_store_put_options(options: StoragePutOptionsJs) -> PutOptions {
+    let Some(options) = options.attributes else {
+        return PutOptions::default();
+    };
+    let mut attributes = Attributes::new();
+    for (attribute, value) in [
+        (Attribute::ContentType, options.content_type),
+        (Attribute::ContentDisposition, options.content_disposition),
+        (Attribute::ContentEncoding, options.content_encoding),
+        (Attribute::ContentLanguage, options.content_language),
+        (Attribute::CacheControl, options.cache_control),
+    ] {
+        if let Some(value) = value {
+            attributes.insert(attribute, value.into());
+        }
+    }
+    for (key, value) in options.metadata.unwrap_or_default() {
+        attributes.insert(Attribute::Metadata(key.into()), value.into());
+    }
+    PutOptions {
+        attributes,
+        ..Default::default()
+    }
+}
+
+pub(crate) fn object_attributes_to_js(attributes: &Attributes) -> StorageObjectAttributesJs {
+    let value = |attribute| {
+        attributes
+            .get(&attribute)
+            .map(|value| value.as_ref().to_string())
+    };
+    let metadata = attributes
+        .iter()
+        .filter_map(|(attribute, value)| match attribute {
+            Attribute::Metadata(key) => Some((key.to_string(), value.as_ref().to_string())),
+            _ => None,
+        })
+        .collect();
+
+    StorageObjectAttributesJs {
+        content_type: value(Attribute::ContentType),
+        content_disposition: value(Attribute::ContentDisposition),
+        content_encoding: value(Attribute::ContentEncoding),
+        content_language: value(Attribute::ContentLanguage),
+        cache_control: value(Attribute::CacheControl),
+        storage_class: value(Attribute::StorageClass),
+        metadata,
+    }
+}
+
 /// Translate an `object_store::ObjectMeta` into its JS shape.
-fn object_meta_to_js(meta: &ObjectMeta) -> ObjectMetaJs {
+pub(crate) fn object_meta_to_js(meta: &ObjectMeta) -> ObjectMetaJs {
     ObjectMetaJs {
         location: meta.location.to_string(),
         size: meta.size as f64,
         last_modified: meta.last_modified.to_rfc3339(),
+        e_tag: meta.e_tag.clone(),
+        version: meta.version.clone(),
+    }
+}
+
+pub(crate) fn put_result_to_js(result: PutResult) -> StoragePutResultJs {
+    StoragePutResultJs {
+        e_tag: result.e_tag,
+        version: result.version,
     }
 }
 
@@ -84,7 +207,7 @@ impl StorageHandle {
 impl StorageHandle {
     /// Fetch the object at `path`.
     #[napi]
-    pub async fn get(&self, path: String) -> napi::Result<Buffer> {
+    pub async fn get(&self, path: String) -> napi::Result<StorageGetResultJs> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
         let location = parse_path(path, "path", "get")?;
@@ -92,24 +215,41 @@ impl StorageHandle {
             .get(&location)
             .await
             .map_err(|e| map_object_store_error(e, &binding, "get"))?;
-        let bytes = result
+        let meta = object_meta_to_js(&result.meta);
+        let attributes = object_attributes_to_js(&result.attributes);
+        let data = result
             .bytes()
             .await
             .map_err(|e| map_object_store_error(e, &binding, "get"))?;
-        Ok(Buffer::from(bytes.to_vec()))
+        Ok(StorageGetResultJs {
+            data: Buffer::from(data.to_vec()),
+            meta,
+            attributes,
+        })
     }
 
     /// Store `data` at `path`.
     #[napi]
-    pub async fn put(&self, path: String, data: Buffer) -> napi::Result<()> {
+    pub async fn put(
+        &self,
+        path: String,
+        data: Buffer,
+        options: Option<StoragePutOptionsJs>,
+    ) -> napi::Result<StoragePutResultJs> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
         let location = parse_path(path, "path", "put")?;
-        store
-            .put(&location, PutPayload::from(data.to_vec()))
-            .await
-            .map_err(|e| map_object_store_error(e, &binding, "put"))?;
-        Ok(())
+        let payload = PutPayload::from(data.to_vec());
+        let result = match options {
+            Some(options) => {
+                store
+                    .put_opts(&location, payload, object_store_put_options(options))
+                    .await
+            }
+            None => store.put(&location, payload).await,
+        }
+        .map_err(|e| map_object_store_error(e, &binding, "put"))?;
+        Ok(put_result_to_js(result))
     }
 
     /// Delete the object at `path`.
@@ -144,15 +284,24 @@ impl StorageHandle {
 
     /// Fetch metadata for the object at `path`.
     #[napi]
-    pub async fn head(&self, path: String) -> napi::Result<ObjectMetaJs> {
+    pub async fn head(&self, path: String) -> napi::Result<StorageHeadResultJs> {
         let store = self.inner.clone();
         let binding = self.binding.clone();
         let location = parse_path(path, "path", "head")?;
-        let meta = store
-            .head(&location)
+        let result = store
+            .get_opts(
+                &location,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
             .await
             .map_err(|e| map_object_store_error(e, &binding, "head"))?;
-        Ok(object_meta_to_js(&meta))
+        Ok(StorageHeadResultJs {
+            meta: object_meta_to_js(&result.meta),
+            attributes: object_attributes_to_js(&result.attributes),
+        })
     }
 
     /// Copy the object at `from` to `to`.
@@ -205,6 +354,7 @@ mod tests {
     use super::*;
     use alien_bindings::presigned::PresignedOperation;
     use chrono::{TimeZone, Utc};
+    use object_store::AttributeValue;
 
     #[test]
     fn parse_path_preserves_rfc_message_id_characters() {
@@ -236,8 +386,8 @@ mod tests {
             location: Path::from("dir/file.txt"),
             last_modified: Utc.with_ymd_and_hms(2026, 7, 6, 12, 0, 0).unwrap(),
             size: 1234,
-            e_tag: None,
-            version: None,
+            e_tag: Some("etag-123".to_string()),
+            version: Some("version-456".to_string()),
         };
 
         let js = object_meta_to_js(&meta);
@@ -245,6 +395,8 @@ mod tests {
         assert_eq!(js.location, "dir/file.txt");
         assert_eq!(js.size, 1234.0);
         assert_eq!(js.last_modified, "2026-07-06T12:00:00+00:00");
+        assert_eq!(js.e_tag.as_deref(), Some("etag-123"));
+        assert_eq!(js.version.as_deref(), Some("version-456"));
     }
 
     #[test]
@@ -281,5 +433,95 @@ mod tests {
         assert_eq!(js.url, "local:///tmp/data/obj");
         assert_eq!(js.method, "GET");
         assert!(js.headers.is_empty());
+    }
+
+    #[test]
+    fn storage_put_options_map_every_object_attribute() {
+        let options = object_store_put_options(StoragePutOptionsJs {
+            attributes: Some(StoragePutAttributesJs {
+                content_type: Some("message/rfc822".to_string()),
+                content_disposition: Some("attachment; filename=message.eml".to_string()),
+                content_encoding: Some("gzip".to_string()),
+                content_language: Some("en-US".to_string()),
+                cache_control: Some("private, max-age=60".to_string()),
+                metadata: Some(HashMap::from([
+                    ("message-id".to_string(), "msg_123".to_string()),
+                    ("source".to_string(), "inbound".to_string()),
+                ])),
+            }),
+        });
+
+        let expected = Attributes::from_iter([
+            (
+                Attribute::ContentType,
+                AttributeValue::from("message/rfc822"),
+            ),
+            (
+                Attribute::ContentDisposition,
+                AttributeValue::from("attachment; filename=message.eml"),
+            ),
+            (Attribute::ContentEncoding, AttributeValue::from("gzip")),
+            (Attribute::ContentLanguage, AttributeValue::from("en-US")),
+            (
+                Attribute::CacheControl,
+                AttributeValue::from("private, max-age=60"),
+            ),
+            (
+                Attribute::Metadata("message-id".into()),
+                AttributeValue::from("msg_123"),
+            ),
+            (
+                Attribute::Metadata("source".into()),
+                AttributeValue::from("inbound"),
+            ),
+        ]);
+
+        assert_eq!(options.attributes, expected);
+    }
+
+    #[test]
+    fn object_attributes_to_js_maps_headers_storage_class_and_metadata() {
+        let attributes = Attributes::from_iter([
+            (Attribute::ContentType, AttributeValue::from("text/plain")),
+            (
+                Attribute::ContentDisposition,
+                AttributeValue::from("inline"),
+            ),
+            (Attribute::ContentEncoding, AttributeValue::from("gzip")),
+            (Attribute::ContentLanguage, AttributeValue::from("en-US")),
+            (
+                Attribute::CacheControl,
+                AttributeValue::from("private, max-age=60"),
+            ),
+            (Attribute::StorageClass, AttributeValue::from("STANDARD")),
+            (
+                Attribute::Metadata("source".into()),
+                AttributeValue::from("upload"),
+            ),
+        ]);
+
+        let js = object_attributes_to_js(&attributes);
+
+        assert_eq!(js.content_type.as_deref(), Some("text/plain"));
+        assert_eq!(js.content_disposition.as_deref(), Some("inline"));
+        assert_eq!(js.content_encoding.as_deref(), Some("gzip"));
+        assert_eq!(js.content_language.as_deref(), Some("en-US"));
+        assert_eq!(js.cache_control.as_deref(), Some("private, max-age=60"));
+        assert_eq!(js.storage_class.as_deref(), Some("STANDARD"));
+        assert_eq!(
+            js.metadata.get("source").map(String::as_str),
+            Some("upload")
+        );
+    }
+
+    #[test]
+    fn put_result_to_js_preserves_provider_identifiers() {
+        let js = put_result_to_js(PutResult {
+            e_tag: Some("etag-123".to_string()),
+            version: Some("version-456".to_string()),
+        });
+
+        assert_eq!(js.e_tag.as_deref(), Some("etag-123"));
+        assert_eq!(js.version.as_deref(), Some("version-456"));
     }
 }

@@ -1052,9 +1052,11 @@ mod tests {
     use std::sync::Arc;
 
     use alien_aws_clients::s3::{
-        DeleteObjectsOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
-        LifecycleRuleFilter, LifecycleRuleStatus, ListObjectsV2Output, ListVersionsOutput,
-        MockS3Api, PublicAccessBlockConfiguration, VersioningStatus,
+        AccessControlList, DeleteObjectsOutput, GetBucketAclOutput, GetBucketLocationOutput,
+        GetBucketPolicyOutput, GetBucketVersioningOutput, LifecycleConfiguration,
+        LifecycleExpiration, LifecycleRule, LifecycleRuleFilter, LifecycleRuleStatus,
+        ListObjectsV2Output, ListVersionsOutput, MockS3Api, PublicAccessBlockConfiguration,
+        VersioningStatus,
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
@@ -1206,6 +1208,59 @@ mod tests {
     }
 
     // ─────────────── CREATE AND DELETE FLOW TESTS ────────────────────
+
+    #[tokio::test]
+    async fn ready_storage_emits_observed_heartbeat() {
+        let storage = basic_storage();
+        let mut mock_s3 = MockS3Api::new();
+        mock_s3.expect_get_bucket_location().returning(|_| {
+            Ok(GetBucketLocationOutput {
+                location_constraint: Some("us-east-1".to_string()),
+            })
+        });
+        mock_s3.expect_get_bucket_versioning().returning(|_| {
+            Ok(GetBucketVersioningOutput {
+                status: Some(VersioningStatus::Enabled),
+                mfa_delete: None,
+            })
+        });
+        mock_s3
+            .expect_get_bucket_lifecycle_configuration()
+            .returning(|_| Ok(LifecycleConfiguration { rules: vec![] }));
+        mock_s3
+            .expect_get_bucket_encryption()
+            .returning(|_| Ok(alien_aws_clients::s3::GetBucketEncryptionOutput { rules: vec![] }));
+        mock_s3
+            .expect_get_public_access_block()
+            .returning(|_| Ok(PublicAccessBlockConfiguration::default()));
+        mock_s3.expect_get_bucket_policy().returning(|_| {
+            Ok(GetBucketPolicyOutput {
+                policy: String::new(),
+            })
+        });
+        mock_s3.expect_get_bucket_acl().returning(|_| {
+            Ok(GetBucketAclOutput {
+                owner: None,
+                access_control_list: AccessControlList::default(),
+            })
+        });
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_s3));
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage.clone())
+            .controller(AwsStorageController::mock_ready(&storage.id))
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.step().await.unwrap();
+
+        assert_eq!(executor.last_heartbeats().len(), 1);
+        assert_eq!(executor.last_heartbeats()[0].resource_id, storage.id);
+    }
 
     #[rstest]
     #[case::basic(basic_storage())]

@@ -4,6 +4,7 @@ pub mod compile_time;
 pub mod deployment_prerequisites;
 pub mod error;
 pub mod mutations;
+mod remote_storage;
 pub mod runner;
 pub mod runtime;
 
@@ -371,6 +372,7 @@ impl PreflightRegistry {
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ExternalBindingsTypeCheck,
         ));
+        registry.add_deployment_prerequisite_check(Box::new(remote_storage::ExternalBindingCheck));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::ExternalBindingStillBoundCheck,
         ));
@@ -424,6 +426,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
+        registry.add_mutation(Box::new(mutations::RemoteBindingsMutation));
         registry.add_mutation(Box::new(mutations::ResourceLinkPermissionsMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
 

@@ -36,6 +36,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
             stack_state.platform,
             Platform::Azure | Platform::Gcp | Platform::Kubernetes
         ) || remote_stack_management_id(stack).is_some()
+            || remote_bindings_id(stack).is_some()
     }
 
     async fn mutate(
@@ -93,6 +94,10 @@ impl InfrastructureDependenciesMutation {
         let mut dependencies = Vec::new();
         let is_infrastructure_resource =
             self.is_infrastructure_resource(resource_id, Some(resource_type));
+        let remote_binding = stack
+            .resources
+            .get(resource_id)
+            .and_then(alien_core::remote_bindings::remote_binding_for_entry);
 
         if platform == Platform::Azure
             && resource_id != "default-resource-group"
@@ -110,6 +115,14 @@ impl InfrastructureDependenciesMutation {
                     RemoteStackManagement::RESOURCE_TYPE,
                     management_id,
                 ));
+            }
+            if remote_binding.is_some() {
+                if let Some(bindings_id) = remote_bindings_id(stack) {
+                    dependencies.push(ResourceRef::new(
+                        alien_core::RemoteBindings::RESOURCE_TYPE,
+                        bindings_id,
+                    ));
+                }
             }
         }
 
@@ -352,6 +365,7 @@ impl InfrastructureDependenciesMutation {
                     | "service-activation"
                     | "service_activation"
                     | "remote-stack-management"
+                    | "resource-access"
                     | "permission-profile"
                     | "service-account"
             ) {
@@ -371,6 +385,16 @@ fn remote_stack_management_id(stack: &Stack) -> Option<&str> {
         .map(|(resource_id, _)| resource_id.as_str())
 }
 
+fn remote_bindings_id(stack: &Stack) -> Option<&str> {
+    stack
+        .resources
+        .iter()
+        .find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
+        })
+        .map(|(resource_id, _)| resource_id.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,8 +402,9 @@ mod tests {
     use alien_core::{
         AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
         KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-        KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, StackSettings,
-        Storage, Worker, WorkerCode, WorkerTrigger,
+        KubernetesHeartbeatMode, RemoteBindings, Resource, ResourceEntry, ResourceLifecycle,
+        ServiceAccount, ServiceActivation, StackSettings, Storage, Worker, WorkerCode,
+        WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -568,5 +593,156 @@ mod tests {
             .unwrap()
             .dependencies
             .contains(&remote_management));
+    }
+
+    #[tokio::test]
+    async fn published_storage_waits_for_both_identities_without_inverting_management() {
+        let storage = Storage::new("archive".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("worker".to_string())
+            .build();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(storage, ResourceLifecycle::Frozen)
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteBindings::new("remote-bindings".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceActivation::new("enable-cloud-storage".to_string())
+                    .service_name("storage.googleapis.com".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let management_ref = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
+        stack
+            .resources
+            .get_mut("archive")
+            .unwrap()
+            .dependencies
+            .push(management_ref.clone());
+        let execution_sa_ref = ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "execution-sa");
+        stack
+            .resources
+            .get_mut("archive")
+            .unwrap()
+            .dependencies
+            .push(execution_sa_ref);
+        let stack_state = StackState::new(Platform::Gcp);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        let storage_activation_ref =
+            ResourceRef::new(ServiceActivation::RESOURCE_TYPE, "enable-cloud-storage");
+
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&ResourceRef::new(
+                RemoteBindings::RESOURCE_TYPE,
+                "remote-bindings",
+            )));
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&storage_activation_ref));
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&ResourceRef::new(
+                ServiceAccount::RESOURCE_TYPE,
+                "execution-sa",
+            )));
+        assert!(!result
+            .resources
+            .get("enable-cloud-storage")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(!result
+            .resources
+            .get("execution-sa")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(!result
+            .resources
+            .get("management")
+            .unwrap()
+            .dependencies
+            .contains(&ResourceRef::new(Storage::RESOURCE_TYPE, "archive")));
+        assert!(result
+            .resources
+            .get("processor")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(crate::compile_time::validate_stack_dependencies(&result).success);
+    }
+
+    #[tokio::test]
+    async fn aws_bindings_only_storage_waits_for_the_narrow_identity() {
+        let stack = Stack::new("byo-bucket".to_string())
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteBindings::new("remote-bindings".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        assert!(InfrastructureDependenciesMutation.should_run(&stack, &state, &config));
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.resources["exports"].dependencies,
+            vec![ResourceRef::new(
+                RemoteBindings::RESOURCE_TYPE,
+                "remote-bindings",
+            )]
+        );
     }
 }

@@ -20,7 +20,9 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Ai, ErrorData, PermissionProfile, PermissionSetReference, Result};
+use alien_core::{
+    import::EmitContext, Ai, ErrorData, PermissionProfile, PermissionSetReference, Result,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
 
@@ -35,7 +37,10 @@ impl CfEmitter for AwsAiEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
         resource_config::<Ai>(ctx, Ai::RESOURCE_TYPE)?;
-        Ok(CfExpression::object([("region", CfExpression::ref_("AWS::Region"))]))
+        Ok(CfExpression::object([(
+            "region",
+            CfExpression::ref_("AWS::Region"),
+        )]))
     }
 }
 
@@ -45,7 +50,9 @@ fn ai_iam_policies(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
     let logical_id = required_logical_id(ctx)?;
     let context = permission_context();
 
-    for (owner_index, (role_id, permission_refs)) in ai_permission_owners(ctx).into_iter().enumerate() {
+    for (owner_index, (role_id, permission_refs)) in
+        ai_permission_owners(ctx).into_iter().enumerate()
+    {
         for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
             let Some(permission_set) =
                 permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
@@ -79,11 +86,9 @@ fn ai_iam_policies(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
                 continue;
             };
 
-            let policy_id = format!(
-                "{logical_id}{role_id}AiPermission{owner_index}{permission_index}"
-            );
-            let mut policy_resource =
-                CfResource::new(policy_id, "AWS::IAM::Policy".to_string());
+            let policy_id =
+                format!("{logical_id}{role_id}AiPermission{owner_index}{permission_index}");
+            let mut policy_resource = CfResource::new(policy_id, "AWS::IAM::Policy".to_string());
             policy_resource.properties.insert(
                 "PolicyName".to_string(),
                 CfExpression::sub(format!(
@@ -142,4 +147,3 @@ fn ai_permission_refs(
     }
     refs
 }
-

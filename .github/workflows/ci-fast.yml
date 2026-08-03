@@ -43,9 +43,65 @@ jobs:
             exit 1
           fi
 
+  changes:
+    name: Detect test areas
+    needs: pr-conventions
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      typescript: ${{ steps.filter.outputs.typescript }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - 'crates/**'
+              - 'packages/**'
+              - 'client-sdks/**'
+              - 'examples/**'
+              - 'tests/e2e/test-apps/**'
+              - '.github/actions/setup-rust/**'
+            typescript:
+              # `pnpm format-and-lint` runs Biome from the repository root.
+              # Match its source formats repository-wide instead of trying to
+              # enumerate every directory that may contain linted files.
+              - '**/*.js'
+              - '**/*.cjs'
+              - '**/*.mjs'
+              - '**/*.jsx'
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/*.json'
+              - '**/*.jsonc'
+              - '**/*.css'
+              - '**/*.graphql'
+              - '**/*.gql'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+              - 'biome.json'
+              - 'packages/**'
+              - 'client-sdks/**'
+              - 'examples/**'
+              - 'tests/e2e/test-apps/**'
+              - 'crates/alien-cli/**'
+              - 'crates/alien-deploy-cli/**'
+              - 'crates/alien-operator/**'
+              - 'crates/alien-bindings-node/**'
+              - 'crates/alien-bindings/**'
+              - 'crates/alien-build/**'
+
   rust:
     name: Rust crates
-    needs: pr-conventions
+    needs: [pr-conventions, changes]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 120
     env:
@@ -184,9 +240,23 @@ jobs:
           )
           cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
 
+      # The steps below cover code behind non-default cargo features, which the
+      # workspace run above compiles with default features only.
+      - name: Manager OpenAPI security contract
+        run: |
+          cargo test -p alien-manager --features openapi --lib api::tests::openapi_declares_http_bearer_security_without_dropping_schemas
+
+      - name: Remote bindings tests (non-cloud)
+        # `platform-sdk` is not a default feature, so `remote::` is cfg'd out of
+        # the workspace run. The cloud client crates' unit tests already run
+        # there via the `kind(test)`-only filters.
+        run: |
+          cargo test -p alien-bindings --features platform-sdk --lib remote::
+
   typescript:
     name: TypeScript packages and CLIs
-    needs: pr-conventions
+    needs: [pr-conventions, changes]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.typescript == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
     env:
@@ -284,13 +354,17 @@ jobs:
         working-directory: crates/alien-bindings-node
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
 
+      - name: Build package-layout dependencies
+        run: pnpm --filter @alienplatform/sdk... build
+
       - name: Validate package layout
         run: pnpm validate:package-layout
 
       - name: TypeScript unit tests
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
+        run: |
+          pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
@@ -328,7 +402,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, rust, typescript]
+    needs: [pr-conventions, changes, rust, typescript]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

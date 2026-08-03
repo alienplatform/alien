@@ -486,6 +486,7 @@ impl AwsRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
+                legacy_remote_bindings_access: None,
             }))
         } else {
             None

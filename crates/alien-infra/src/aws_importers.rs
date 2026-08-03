@@ -11,10 +11,10 @@
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesCluster;
 use alien_core::{
-    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage, Vault,
-    Worker,
+    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage,
+    Vault, Worker,
 };
-use alien_core::{RemoteStackManagement, ServiceAccount};
+use alien_core::{RemoteBindings, RemoteStackManagement, ServiceAccount};
 
 use crate::ai::AwsAiImporter;
 use crate::artifact_registry::AwsArtifactRegistryImporter;
@@ -26,6 +26,7 @@ use crate::kv::AwsKvImporter;
 use crate::network::AwsNetworkImporter;
 use crate::open_search::AwsOpenSearchImporter;
 use crate::queue::AwsQueueImporter;
+use crate::remote_bindings::AwsRemoteBindingsImporter;
 use crate::remote_stack_management::AwsRemoteStackManagementImporter;
 use crate::service_account::AwsServiceAccountImporter;
 use crate::storage::AwsStorageImporter;
@@ -51,6 +52,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             RemoteStackManagement::RESOURCE_TYPE,
             Platform::Aws,
             AwsRemoteStackManagementImporter,
+        )
+        .register(
+            RemoteBindings::RESOURCE_TYPE,
+            Platform::Aws,
+            AwsRemoteBindingsImporter,
         )
         .register(Build::RESOURCE_TYPE, Platform::Aws, AwsBuildImporter)
         .register(

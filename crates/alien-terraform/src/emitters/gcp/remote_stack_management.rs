@@ -143,7 +143,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([
+        let fields = vec![
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "projectNumber",
@@ -158,7 +158,8 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 expr::traversal(["google_service_account", label, "unique_id"]),
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
-        ]))
+        ];
+        Ok(expr::object(fields))
     }
 }
 

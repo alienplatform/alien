@@ -16,7 +16,7 @@ app.post("/storage-test/:bindingName", async c => {
 
     // 2. Get and verify
     const retrieved = await s.get(testKey)
-    const retrievedContent = new TextDecoder().decode(retrieved)
+    const retrievedContent = new TextDecoder().decode(retrieved.data)
     if (retrievedContent !== content) {
       return c.json({ success: false, error: "Data verification failed" }, 500)
     }

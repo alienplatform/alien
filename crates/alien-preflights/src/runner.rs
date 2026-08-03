@@ -377,6 +377,7 @@ impl PreflightRunner {
         client_config: &ClientConfig,
         old_stack: Option<&Stack>,
         setup_update_authorization: Option<&alien_core::SetupUpdateAuthorization>,
+        setup_authority: Option<alien_core::InitialSetupAuthority>,
     ) -> Result<(Stack, PreflightSummary, bool)> {
         let platform = stack_state.platform;
         info!(
@@ -393,9 +394,11 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
-        let setup_update_authorized = setup_update_authorization.is_some_and(|authorization| {
-            setup_update_authorization_matches(old_stack, &mutated_stack, authorization)
-        });
+        let setup_update_authorized = setup_authority
+            == Some(alien_core::InitialSetupAuthority::DirectSetup)
+            || setup_update_authorization.is_some_and(|authorization| {
+                setup_update_authorization_matches(old_stack, &mutated_stack, authorization)
+            });
 
         let prerequisite_summary = self
             .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)

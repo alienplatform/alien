@@ -164,7 +164,14 @@ fn critical_e2e_provider_operations_are_declared() {
                 "iam:GetRole",
                 "iam:TagRole",
             ],
-            gcp_permissions: &["iam.serviceAccounts.create", "iam.roles.create"],
+            gcp_permissions: &[
+                "iam.serviceAccounts.create",
+                "iam.roles.create",
+                "iam.roles.get",
+                "iam.roles.list",
+                "iam.roles.undelete",
+                "iam.roles.update",
+            ],
             gcp_predefined_roles: &[],
             azure_actions: &[
                 "Microsoft.Authorization/roleDefinitions/write",

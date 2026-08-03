@@ -183,7 +183,6 @@ mod azure {
                 .get_bearer_token_with_scope("https://storage.azure.com/.default")
                 .await
                 .map_err(|e| to_object_store_error("AzureBlob", e))?;
-
             let credential = Arc::new(AzureCredential::BearerToken(token));
             *cache = Some(CachedCredential {
                 credential: Arc::clone(&credential),

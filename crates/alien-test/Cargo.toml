@@ -80,7 +80,11 @@ url = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
+alien-bindings = { workspace = true, default-features = false, features = ["aws", "azure", "gcp", "platform-sdk"] }
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
 chrono = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true }
 test-context = { workspace = true }
 temp-env = { workspace = true }
 

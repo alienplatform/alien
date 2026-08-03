@@ -12,7 +12,6 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -30,15 +29,9 @@ Metadata:
         default: Management role ARN
       TelemetryMode:
         default: Telemetry
-      Token:
-        default: Install token
       UpdatesMode:
         default: Updates
 Parameters:
-  Token:
-    Type: String
-    Description: Install token from the application setup page.
-    NoEcho: true
   ManagingRoleArn:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.
@@ -222,6 +215,25 @@ Resources:
         Value: mailer
       - Key: resource-type
         Value: email
+  MailerEventsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+      - Ref: MailerEventsTopic
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowSesPublish
+          Effect: Allow
+          Principal:
+            Service: ses.amazonaws.com
+          Action: sns:Publish
+          Resource:
+            Ref: MailerEventsTopic
+          Condition:
+            StringEquals:
+              AWS:SourceAccount:
+                Ref: AWS::AccountId
   MailerEventDestination:
     Type: AWS::SES::ConfigurationSetEventDestination
     Properties:
@@ -241,6 +253,8 @@ Resources:
         SnsDestination:
           TopicARN:
             Ref: MailerEventsTopic
+    DependsOn:
+    - MailerEventsTopicPolicy
   MailerEventsSubscription:
     Type: AWS::SNS::Subscription
     Properties:
@@ -292,8 +306,11 @@ Resources:
         - S3Action:
             BucketName:
               Ref: Mailbox
+            TopicArn:
+              Ref: MailerEventsTopic
     DependsOn:
     - MailboxBucketPolicy
+    - MailerEventsTopicPolicy
   MailerRuleSetActivatorRole:
     Type: AWS::IAM::Role
     Properties:

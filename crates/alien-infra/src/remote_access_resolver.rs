@@ -8,8 +8,8 @@ use crate::ClientConfigExt as _;
 #[cfg(feature = "aws")]
 use alien_aws_clients::AwsImpersonationConfig;
 use alien_core::{
-    ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteStackManagement,
-    RemoteStackManagementOutputs, StackState,
+    ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteBindingsOutputs,
+    RemoteStackManagement, RemoteStackManagementOutputs, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
@@ -57,7 +57,6 @@ impl RemoteAccessResolver {
         stack_state: &StackState,
         target_environment: Option<&EnvironmentInfo>,
     ) -> Result<ClientConfig> {
-        // Find RemoteStackManagement resource outputs
         let remote_mgmt_outputs = self.find_remote_stack_management_outputs(stack_state)?;
 
         // Determine platform and perform appropriate impersonation
@@ -67,6 +66,8 @@ impl RemoteAccessResolver {
                     base_config,
                     &remote_mgmt_outputs,
                     target_environment,
+                    None,
+                    None,
                 )
                 .await
             }
@@ -91,6 +92,46 @@ impl RemoteAccessResolver {
                     "{:?} platform does not support remote access impersonation",
                     base_config.platform()
                 ),
+                field_name: Some("platform".to_string()),
+            })),
+        }
+    }
+
+    /// Resolve the dedicated Remote Bindings identity without borrowing the
+    /// management resource's output slot.
+    pub async fn resolve_remote_bindings(
+        &self,
+        base_config: ClientConfig,
+        outputs: &RemoteBindingsOutputs,
+        target_environment: Option<&EnvironmentInfo>,
+        session_name: Option<String>,
+    ) -> Result<ClientConfig> {
+        let access = RemoteStackManagementOutputs {
+            management_resource_id: outputs.resource_id.clone(),
+            access_configuration: outputs.access_configuration.clone(),
+            legacy_remote_bindings_access: None,
+        };
+        match base_config.platform() {
+            Platform::Aws => {
+                self.resolve_aws_impersonation(
+                    base_config,
+                    &access,
+                    target_environment,
+                    None,
+                    session_name,
+                )
+                .await
+            }
+            Platform::Gcp => {
+                self.resolve_gcp_impersonation(base_config, &access, target_environment)
+                    .await
+            }
+            Platform::Azure => {
+                self.resolve_azure_impersonation(base_config, &access, target_environment)
+                    .await
+            }
+            platform => Err(AlienError::new(ErrorData::RemoteAccessInvalid {
+                message: format!("{platform:?} platform does not support Remote Bindings"),
                 field_name: Some("platform".to_string()),
             })),
         }
@@ -129,6 +170,8 @@ impl RemoteAccessResolver {
         base_config: ClientConfig,
         outputs: &RemoteStackManagementOutputs,
         target_environment: Option<&EnvironmentInfo>,
+        external_id: Option<String>,
+        session_name: Option<String>,
     ) -> Result<ClientConfig> {
         let role_arn = &outputs.access_configuration;
         info!("Resolving AWS impersonation for role: {}", role_arn);
@@ -141,12 +184,11 @@ impl RemoteAccessResolver {
 
         let impersonation_config = ImpersonationConfig::Aws(AwsImpersonationConfig {
             role_arn: role_arn.clone(),
-            session_name: Some(format!(
-                "deployment-remote-access-{}",
-                Uuid::new_v4().simple()
-            )),
+            session_name: Some(session_name.unwrap_or_else(|| {
+                format!("deployment-remote-access-{}", Uuid::new_v4().simple())
+            })),
             duration_seconds: Some(3600),
-            external_id: None,
+            external_id,
             target_region,
         });
 
@@ -355,6 +397,7 @@ mod tests {
                 .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
                     management_resource_id: service_account_email.to_string(),
                     access_configuration: service_account_email.to_string(),
+                    legacy_remote_bindings_access: None,
                 }))
                 .lifecycle(ResourceLifecycle::Frozen)
                 .dependencies(vec![])

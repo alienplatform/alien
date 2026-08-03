@@ -24,6 +24,46 @@ fn test_aws_storage_data_read_policy_generation(#[case] binding_target: BindingT
 }
 
 #[test]
+fn remote_storage_data_write_separates_bucket_and_object_operations() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("storage/remote-data-write").expect("permission set exists");
+    let context = create_test_context();
+
+    let policy = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("remote Storage policy should generate");
+
+    assert_eq!(policy.statement.len(), 2);
+    assert_eq!(
+        policy.statement[0].action,
+        [
+            "s3:ListBucket",
+            "s3:GetBucketLocation",
+            "s3:ListBucketMultipartUploads",
+        ]
+    );
+    assert_eq!(
+        policy.statement[0].resource,
+        ["arn:aws:s3:::my-stack-payments-data"]
+    );
+    assert_eq!(
+        policy.statement[1].action,
+        [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts",
+        ]
+    );
+    assert_eq!(
+        policy.statement[1].resource,
+        ["arn:aws:s3:::my-stack-payments-data/*"]
+    );
+}
+
+#[test]
 fn test_aws_policy_with_conditions() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set = create_aws_storage_data_read_permission_set_with_condition();
@@ -59,6 +99,13 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
     let result = generator
         .generate_policy(permission_set, BindingTarget::Stack, &context)
         .expect("compute cluster execute policy should generate");
+
+    let unique_sids = result
+        .statement
+        .iter()
+        .map(|statement| statement.sid.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique_sids.len(), result.statement.len());
     let actions = result
         .statement
         .iter()
@@ -74,6 +121,35 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
         assert!(
             !actions.contains(&action),
             "machine role must not grant {action}"
+        );
+    }
+}
+
+#[test]
+fn compute_cluster_execute_can_observe_runtime_cleanup() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/execute").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("compute cluster execute policy should generate");
+
+    for action in [
+        "ec2:DescribeTags",
+        "elasticloadbalancing:DescribeTargetHealth",
+    ] {
+        let statement = result
+            .statement
+            .iter()
+            .find(|statement| statement.action.iter().any(|candidate| candidate == action))
+            .unwrap_or_else(|| panic!("compute runtime should grant {action}"));
+
+        assert_eq!(statement.resource, ["*".to_string()]);
+        assert!(
+            statement.condition.is_none(),
+            "{action} does not support resource-scoped conditions"
         );
     }
 }

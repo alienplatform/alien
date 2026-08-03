@@ -34,6 +34,12 @@ import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import type {
+  StorageGetResult,
+  StorageHeadResult,
+  StoragePutOptions,
+  StoragePutResult,
+} from "./types.js"
 
 const require = createRequire(import.meta.url)
 
@@ -54,6 +60,8 @@ export interface RawObjectMeta {
   location: string
   size: number
   lastModified: string
+  eTag?: string
+  version?: string
 }
 
 /** Raw napi presigned request. */
@@ -73,13 +81,22 @@ export interface RawQueueMessage {
 
 /** Raw napi storage handle. */
 export interface RawStorageHandle {
-  get(path: string): Promise<Buffer>
-  put(path: string, data: Buffer): Promise<void>
+  get(path: string): Promise<StorageGetResult>
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>
   delete(path: string): Promise<void>
   list(prefix?: string | null): Promise<RawObjectMeta[]>
-  head(path: string): Promise<RawObjectMeta>
+  head(path: string): Promise<StorageHeadResult>
   copy(from: string, to: string): Promise<void>
   signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>
+}
+
+/** Raw napi remote Storage v0 handle. */
+export interface RawRemoteStorageHandle {
+  get(path: string): Promise<StorageGetResult>
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>
+  delete(path: string): Promise<void>
+  list(prefix?: string | null): Promise<RawObjectMeta[]>
+  head(path: string): Promise<StorageHeadResult>
 }
 
 /** Raw napi key-value handle. */
@@ -96,7 +113,7 @@ export interface RawKvHandle {
   scan(prefix: string, limit?: number | null, cursor?: string | null): Promise<RawScanResult>
 }
 
-/** Raw napi queue handle. Every method takes the queue name as its first arg. */
+/** Raw napi queue handle, already scoped to its configured queue. */
 export interface RawQueueHandle {
   sendJson(jsonString: string): Promise<void>
   sendText(text: string): Promise<void>
@@ -153,9 +170,29 @@ export interface RawBindingsHandle {
   postgres(name: string): Promise<RawPostgresHandle>
 }
 
+/** Raw napi remote bindings entry point. Storage is the entire v0 surface. */
+export interface RawRemoteBindingsHandle {
+  storage(name: string): Promise<RawRemoteStorageHandle>
+}
+
+/** Native environment-backed bindings class. */
+export interface RawBindingsHandleConstructor {
+  new (): RawBindingsHandle
+}
+
+/** Native remote bindings class. */
+export interface RawRemoteBindingsHandleConstructor {
+  forDeployment(
+    deploymentId: string,
+    token: string,
+    apiBaseUrl?: string,
+  ): Promise<RawRemoteBindingsHandle>
+}
+
 /** The complete napi addon module surface consumed by the wrapper. */
 export interface NativeAddon {
-  BindingsHandle: new () => RawBindingsHandle
+  BindingsHandle: RawBindingsHandleConstructor
+  RemoteBindingsHandle: RawRemoteBindingsHandleConstructor
   version(): string
 }
 

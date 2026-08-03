@@ -31,6 +31,38 @@ fn gcp_storage_data_read_uses_stack_scoped_custom_role(
 }
 
 #[test]
+fn remote_storage_data_write_is_bucket_scoped_without_sign_blob() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("storage/remote-data-write").expect("permission set exists");
+    let context = create_test_context();
+
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("remote Storage grant plan should generate");
+    let resource_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+
+    assert!(grant_plan
+        .bindings_for_target(GcpBindingTargetScope::Project)
+        .is_empty());
+    assert_eq!(resource_bindings.len(), 1);
+    let remote_role = grant_plan
+        .custom_roles_for_bindings(&resource_bindings)
+        .into_iter()
+        .next()
+        .expect("remote Storage should use one exact custom role");
+    assert_eq!(
+        remote_role.included_permissions,
+        vec![
+            "storage.objects.create",
+            "storage.objects.delete",
+            "storage.objects.get",
+            "storage.objects.list",
+        ]
+    );
+}
+
+#[test]
 fn gcp_custom_role_metadata_uses_application_name_and_permission_description() {
     let generator = GcpRuntimePermissionsGenerator::new();
     let permission_set = get_permission_set("storage/data-write").expect("permission set exists");

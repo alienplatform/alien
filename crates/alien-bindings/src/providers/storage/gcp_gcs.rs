@@ -13,8 +13,8 @@ use futures::stream::BoxStream;
 use futures::TryStreamExt as _;
 use object_store::signer::Signer;
 use object_store::{
-    gcp::GoogleCloudStorage, path::Path, GetOptions, GetResult, ListResult, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    gcp::GoogleCloudStorage, path::Path, Attribute, Attributes, GetOptions, GetResult, ListResult,
+    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     Result as ObjectStoreResult,
 };
 use reqwest::Method;
@@ -82,6 +82,23 @@ impl GcsStorage {
 }
 
 impl Binding for GcsStorage {}
+
+fn validate_put_attributes(attributes: &Attributes) -> ObjectStoreResult<()> {
+    let gzip_encoding = attributes
+        .get(&Attribute::ContentEncoding)
+        .is_some_and(|value| value.as_ref().eq_ignore_ascii_case("gzip"));
+    if gzip_encoding {
+        return Err(object_store::Error::Generic {
+            store: "GcsStorage",
+            source: Box::new(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "storage.put contentEncoding=gzip".to_string(),
+                reason: "GCS decompressive transcoding is incompatible with object reads"
+                    .to_string(),
+            })),
+        });
+    }
+    Ok(())
+}
 
 #[async_trait]
 impl Storage for GcsStorage {
@@ -218,6 +235,7 @@ impl ObjectStore for GcsStorage {
         opts: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         let dst = prefixed_path(&self.base_dir, location);
+        validate_put_attributes(&opts.attributes)?;
         self.inner.put_opts(&dst, payload, opts).await
     }
 
@@ -235,6 +253,7 @@ impl ObjectStore for GcsStorage {
         opts: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn object_store::MultipartUpload>> {
         let dst = prefixed_path(&self.base_dir, location);
+        validate_put_attributes(&opts.attributes)?;
         self.inner.put_multipart_opts(&dst, opts).await
     }
 
@@ -329,5 +348,36 @@ impl ObjectStore for GcsStorage {
 impl std::fmt::Display for GcsStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "GcpStorage(url={})", self.url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::AttributeValue;
+
+    #[test]
+    fn rejects_gzip_content_encoding_before_upload() {
+        for encoding in ["gzip", "GZip"] {
+            let attributes = Attributes::from_iter([(
+                Attribute::ContentEncoding,
+                AttributeValue::from(encoding),
+            )]);
+
+            let error = validate_put_attributes(&attributes)
+                .expect_err("gzip would make the object unreadable through this backend");
+
+            assert!(matches!(error, object_store::Error::Generic { .. }));
+            assert!(error.to_string().contains("decompressive transcoding"));
+        }
+    }
+
+    #[test]
+    fn permits_non_transcoded_content_encoding() {
+        let attributes =
+            Attributes::from_iter([(Attribute::ContentEncoding, AttributeValue::from("br"))]);
+
+        validate_put_attributes(&attributes)
+            .expect("Brotli objects are served without transcoding");
     }
 }

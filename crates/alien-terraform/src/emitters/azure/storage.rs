@@ -22,7 +22,8 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, permission_context, required_label, service_account_principal_id,
+        downcast, emit_remote_bindings_role_definitions, permission_context,
+        remote_bindings_role_label, required_label, service_account_principal_id,
         setup_execution_role_label, setup_management_role_label,
     },
     expr,
@@ -238,20 +239,82 @@ fn emit_storage_permissions(
         }
     }
 
-    let Some(management_label) = remote_stack_management_label(ctx) else {
-        return Ok(());
-    };
+    if let Some(management_label) = remote_stack_management_label(ctx) {
+        let management_principal_id_expr = expr::traversal([
+            "azurerm_user_assigned_identity",
+            management_label,
+            "principal_id",
+        ]);
 
-    let principal_id_expr = expr::traversal([
-        "azurerm_user_assigned_identity",
-        management_label,
-        "principal_id",
-    ]);
+        for permission_set_ref in management_permission_refs(ctx) {
+            let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
+            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            {
+                continue;
+            }
 
-    for permission_set_ref in management_permission_refs(ctx) {
+            let generator = AzureRuntimePermissionsGenerator::new();
+            let permission_context = permission_context(storage_label)
+                .with_resource_name(container_name_expr_string(ctx.resource_id))
+                .with_storage_account_name(storage_account_name_expr_string(parent_label));
+            let grant_plan = generator
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate Azure storage management grants for '{}'",
+                        permission_set.id
+                    ),
+                })?;
+
+            for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        expr::template(role_definition_id.clone())
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let index =
+                            custom_role_index(&grant_plan.custom_roles, key, &permission_set.id)?;
+                        let role_label = setup_management_role_label(&binding.role_name, index);
+                        expr::traversal([
+                            "azurerm_role_definition",
+                            role_label.as_str(),
+                            "role_definition_resource_id",
+                        ])
+                    }
+                };
+                emit_role_assignment(
+                    fragment,
+                    ctx.resource_id,
+                    storage_label,
+                    "management",
+                    binding_index,
+                    &binding.role_name,
+                    expr::template(binding.scope.clone()),
+                    role_definition_id,
+                    management_principal_id_expr.clone(),
+                )?;
+            }
+        }
+    }
+
+    if let (Some(definition), Some(bindings_label)) = (
+        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        remote_bindings_label(ctx),
+    ) {
+        let principal_id_expr = expr::traversal([
+            "azurerm_user_assigned_identity",
+            bindings_label,
+            "principal_id",
+        ]);
+        let remote_permission = PermissionSetReference::from_name(definition.permission_set);
+        let permission_set_ref = &remote_permission;
         let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
         if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none() {
-            continue;
+            return Ok(());
         }
 
         let generator = AzureRuntimePermissionsGenerator::new();
@@ -271,6 +334,8 @@ fn emit_storage_permissions(
                 ),
             })?;
 
+        emit_remote_bindings_role_definitions(fragment, &permission_set)?;
+
         for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {
                 AzureRoleDefinitionRef::Predefined { role_definition_id } => {
@@ -279,7 +344,7 @@ fn emit_storage_permissions(
                 AzureRoleDefinitionRef::Custom { key } => {
                     let index =
                         custom_role_index(&grant_plan.custom_roles, key, &permission_set.id)?;
-                    let role_label = setup_management_role_label(&binding.role_name, index);
+                    let role_label = remote_bindings_role_label(&binding.role_name, index);
                     expr::traversal([
                         "azurerm_role_definition",
                         role_label.as_str(),
@@ -291,7 +356,7 @@ fn emit_storage_permissions(
                 fragment,
                 ctx.resource_id,
                 storage_label,
-                "management",
+                "access",
                 binding_index,
                 &binding.role_name,
                 expr::template(binding.scope.clone()),
@@ -430,6 +495,14 @@ fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str
     })
 }
 
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
+}
+
 fn storage_account_name_expr_string(parent_label: &str) -> String {
     format!("${{azurerm_storage_account.{parent_label}.name}}")
 }
@@ -495,8 +568,8 @@ mod tests {
     use super::*;
     use crate::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
     use alien_core::{
-        AzureResourceGroup, ManagementPermissions, ResourceLifecycle, ServiceAccount, Stack,
-        StackSettings,
+        AzureResourceGroup, ManagementPermissions, RemoteBindings, ResourceLifecycle,
+        ServiceAccount, Stack, StackSettings,
     };
 
     const STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";
@@ -559,6 +632,60 @@ mod tests {
             storage_module,
             "azurerm_user_assigned_identity.management.principal_id",
         );
+    }
+
+    #[test]
+    fn setup_grants_remote_storage_only_to_remote_bindings_identity() {
+        let stack = Stack::new("azure-remote-storage-scopes".to_string())
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_remote_access(
+                Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteBindings::new("access".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let registry = TfRegistry::built_in();
+        let module = generate_terraform_module(
+            &stack,
+            TerraformTarget::Azure,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect("Azure Terraform module should render");
+        let storage_module = module.get("files.tf").expect("storage resource module");
+        let assignments = storage_module
+            .split("resource \"azurerm_role_assignment\"")
+            .skip(1)
+            .filter_map(|chunk| chunk.split_once("\n}\n").map(|(block, _)| block))
+            .filter(|block| block.contains("azurerm_user_assigned_identity.access.principal_id"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(assignments.len(), 1, "expected one container-scoped grant");
+        assert!(assignments.iter().any(|block| block.contains(
+            "blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}",
+        )));
+        assert!(!storage_module.contains("azurerm_user_assigned_identity.management.principal_id"));
     }
 
     fn assert_principal_assignment_scopes(rendered: &str, principal_id: &str) {

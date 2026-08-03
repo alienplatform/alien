@@ -8,7 +8,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
+    StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -55,6 +56,73 @@ fn gcp_storage_public_read_allows_object_viewer() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_storage_public_read", &module);
     assert_terraform_valid(&module, "gcp_storage_public_read");
+}
+
+#[test]
+fn gcp_storage_remote_access_grants_exact_role_to_remote_bindings_identity() {
+    let mut stack = Stack::new("acme-remote-storage".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["storage/heartbeat"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            Storage::new("uploads".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("uploads").unwrap().dependencies = vec![
+        ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management"),
+        ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access"),
+    ];
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_storage_remote_access", &module);
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered
+        .contains("google_project_iam_custom_role\" \"gcp_role_read_write_bucket_objects\""));
+    assert!(rendered.contains(
+        "google_storage_bucket_iam_member\" \"gcp_role_read_write_bucket_objects_uploads_access_storage_0\""
+    ));
+    assert!(rendered.contains("google_service_account.access.email"));
+    assert!(
+        rendered.contains("member = \"serviceAccount:${google_service_account.management.email}\"")
+    );
+    assert!(rendered.contains("\"storage.objects.get\""));
+    assert!(rendered.contains("\"storage.objects.list\""));
+    assert!(rendered.contains("\"storage.objects.create\""));
+    assert!(rendered.contains("\"storage.objects.delete\""));
+    assert!(!rendered.contains("\"iam.serviceAccounts.signBlob\""));
+    assert_terraform_valid(&module, "gcp_storage_remote_access");
+}
+
+#[test]
+fn gcp_byo_bucket_is_acyclic_and_valid() {
+    let mut stack = Stack::new("acme-remote-storage".to_string())
+        .add_with_remote_access(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("files").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_byo_bucket", &module);
+    assert_terraform_valid(&module, "gcp_remote_storage_management_dependencies");
 }
 
 #[test]
@@ -210,7 +278,10 @@ fn gcp_ai_emits_only_import_data() {
     // GCP Vertex AI has no per-stack cloud resource to provision. The emitter
     // returns an empty fragment so only the import metadata JSON is produced.
     let stack = Stack::new("acme-ai".to_string())
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_ai_minimal", &module);
@@ -218,11 +289,15 @@ fn gcp_ai_emits_only_import_data() {
 
     // Import metadata must carry project and location so the controller can
     // reconstruct the Vertex AI endpoint. The import ref appears in locals.tf.
-    let locals = module
-        .get("locals.tf")
-        .expect("locals.tf should render");
-    assert!(locals.contains("projectId"), "import ref must carry projectId");
-    assert!(locals.contains("location"), "import ref must carry location");
+    let locals = module.get("locals.tf").expect("locals.tf should render");
+    assert!(
+        locals.contains("projectId"),
+        "import ref must carry projectId"
+    );
+    assert!(
+        locals.contains("location"),
+        "import ref must carry location"
+    );
 }
 
 #[test]
@@ -239,7 +314,10 @@ fn gcp_ai_invoke_permissions_attach_to_service_account() {
             ServiceAccount::new("execution-sa".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(
+            Ai::new("llm".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     let rendered = module

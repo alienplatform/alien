@@ -1,0 +1,87 @@
+{
+  "id": "storage/remote-data-write",
+  "description": "Allows remote binding object operations on one storage bucket or container",
+  "platforms": {
+    "aws": [
+      {
+        "label": "list-bucket-and-uploads",
+        "description": "List the selected S3 bucket and its in-progress multipart uploads.",
+        "grant": {
+          "actions": ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${resourceName}"]
+          }
+        }
+      },
+      {
+        "label": "read-write-bucket-objects",
+        "description": "Read, write, delete, and complete multipart uploads for objects in the selected S3 bucket.",
+        "grant": {
+          "actions": [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${resourceName}/*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "read-write-bucket-objects",
+        "description": "Read, list, create, and delete objects in the selected Cloud Storage bucket.",
+        "grant": {
+          "permissions": [
+            "storage.objects.get",
+            "storage.objects.list",
+            "storage.objects.create",
+            "storage.objects.delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "read-write-container-blobs",
+        "description": "Read, write, and delete blobs in the selected Azure Storage container.",
+        "grant": {
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

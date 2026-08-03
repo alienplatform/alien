@@ -34,6 +34,7 @@ pub struct GcpRemoteStackManagementController {
     pub(crate) service_account_email: Option<String>,
     /// The unique ID of the created management service account.
     pub(crate) service_account_unique_id: Option<String>,
+    /// Setup-owned service account used only for Remote Bindings data access.
     /// Whether the service account has been bound to the role.
     pub(crate) role_bound: bool,
     /// Whether impersonation permissions have been granted
@@ -647,6 +648,7 @@ impl GcpRemoteStackManagementController {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: email.clone(),
                 access_configuration: email.clone(),
+                legacy_remote_bindings_access: None,
             }))
         } else {
             None

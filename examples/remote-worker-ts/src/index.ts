@@ -9,8 +9,8 @@ const tools: Record<string, { description: string; execute: (params: any) => Pro
     description: "Read a file from the customer's private workspace",
     execute: async ({ path }: { path: string }) => {
       const store = storage("files")
-      const data = await store.get(path)
-      return { content: new TextDecoder().decode(data) }
+      const object = await store.get(path)
+      return { content: new TextDecoder().decode(object.data) }
     },
   },
   "write-file": {

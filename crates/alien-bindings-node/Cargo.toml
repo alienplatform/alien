@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 # Mirror alien-bindings' platform features. The addon is a pure argument/error
 # translation layer; it forwards every provider feature and never includes the
 # Worker protocol.
-default = ["all-platforms"]
+default = ["all-platforms", "platform-sdk"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]
 aws = ["alien-bindings/aws"]
 gcp = ["alien-bindings/gcp"]
@@ -20,6 +20,7 @@ azure = ["alien-bindings/azure"]
 kubernetes = ["alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 test = ["alien-bindings/test"]
+platform-sdk = ["alien-bindings/platform-sdk"]
 
 [dependencies]
 # alien-bindings is declared `default-features = false` in the workspace manifest,

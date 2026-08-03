@@ -1,4 +1,5 @@
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
+use crate::RemoteBindingsOutputs;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,12 @@ pub struct RemoteStackManagementOutputs {
     /// For GCP: The service account email to impersonate
     /// For Azure: JSON containing the target managed identity client ID and tenant ID
     pub access_configuration: String,
+
+    /// Read-only compatibility for deployments imported before Remote Bindings became a
+    /// first-class resource. New controllers never serialize this field.
+    #[serde(default, rename = "remoteBindingsAccess", skip_serializing)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub legacy_remote_bindings_access: Option<RemoteBindingsOutputs>,
 }
 
 // Implementation of ResourceDefinition trait for RemoteStackManagement
@@ -146,5 +153,37 @@ impl ResourceOutputsDefinition for RemoteStackManagementOutputs {
 
     fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
         serde_json::to_value(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteStackManagementOutputs;
+
+    #[test]
+    fn legacy_remote_bindings_output_remains_readable_but_is_not_reemitted() {
+        let outputs: RemoteStackManagementOutputs = serde_json::from_value(serde_json::json!({
+            "managementResourceId": "management",
+            "accessConfiguration": "management-access",
+            "remoteBindingsAccess": {
+                "resourceId": "legacy-bindings",
+                "accessConfiguration": "legacy-access"
+            }
+        }))
+        .expect("legacy persisted output must remain readable");
+        assert_eq!(
+            outputs
+                .legacy_remote_bindings_access
+                .as_ref()
+                .map(|access| access.resource_id.as_str()),
+            Some("legacy-bindings")
+        );
+        assert!(
+            serde_json::to_value(outputs)
+                .expect("serialize")
+                .get("remoteBindingsAccess")
+                .is_none(),
+            "new state must not keep writing the legacy ownership slot"
+        );
     }
 }

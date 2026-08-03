@@ -16,12 +16,11 @@ use crate::{
     block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, permission_context, required_label, tags},
-    emitters::enabled,
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, NetworkSettings, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteStackManagement, Result,
 };
 use alien_error::Context;
 use alien_permissions::{
@@ -89,7 +88,12 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         emit_management_role(&mut fragment, label, &grant_plan.plan);
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
         emit_management_assignments(&mut fragment, label, &grant_plan, merged_gates.as_deref())?;
-        emit_existing_network_reader_assignments(&mut fragment, label);
+        if matches!(
+            ctx.stack_settings.network.as_ref(),
+            Some(NetworkSettings::ByoVnetAzure { .. })
+        ) {
+            emit_existing_network_reader_assignments(&mut fragment, label);
+        }
 
         fragment.resource_blocks.push(resource_block(
             "azurerm_federated_identity_credential",
@@ -128,7 +132,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
-        Ok(expr::object([
+        let fields = vec![
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             (
@@ -153,7 +157,8 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
                 expr::traversal(["azurerm_user_assigned_identity", label, "client_id"]),
             ),
             ("managementPermissionsApplied", Expression::Bool(true)),
-        ]))
+        ];
+        Ok(expr::object(fields))
     }
 }
 

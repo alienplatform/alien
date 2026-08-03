@@ -312,7 +312,12 @@ impl DeploymentLoop {
 
             match self
                 .deployment_store
-                .acquire(&caller, &session, &filter, MAX_CONCURRENT_DEPLOYMENTS as u32)
+                .acquire(
+                    &caller,
+                    &session,
+                    &filter,
+                    MAX_CONCURRENT_DEPLOYMENTS as u32,
+                )
                 .await
             {
                 Ok(acquired) => {
@@ -1186,6 +1191,7 @@ mod tests {
                         .to_string(),
                     access_configuration: "arn:aws:iam::123456789012:role/test-management"
                         .to_string(),
+                    legacy_remote_bindings_access: None,
                 }))
                 .build()
         } else {
@@ -1812,9 +1818,10 @@ fn needs_provision_capability(status: DeploymentStatus) -> bool {
 }
 
 fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {
-    error
+    let error = error
         .clone()
-        .and_then(|value| serde_json::from_value::<AlienError>(value).ok())
+        .and_then(|value| serde_json::from_value::<AlienError>(value).ok());
+    alien_deployment::deployment_state_error_from_headline(error)
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.

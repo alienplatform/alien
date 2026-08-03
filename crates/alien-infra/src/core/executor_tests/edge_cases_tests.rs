@@ -599,7 +599,12 @@ async fn test_a_binding_on_a_provisioned_resource_does_not_replan_forever() -> R
     // Provisioned by Alien first, so it carries controller state and controller outputs.
     let state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
     assert!(
-        state.resources.get("store").unwrap().internal_state.is_some(),
+        state
+            .resources
+            .get("store")
+            .unwrap()
+            .internal_state
+            .is_some(),
         "fixture must own a controller for this to mean anything"
     );
 
@@ -738,7 +743,10 @@ async fn test_external_binding_resource_adopts_config_changes() -> Result<()> {
 #[tokio::test]
 async fn test_a_controllerless_resource_fails_its_update() -> Result<()> {
     let stack = Stack::new("controllerless-update-test".to_owned())
-        .add(test_storage_with_public_read("store", true), ResourceLifecycle::Live)
+        .add(
+            test_storage_with_public_read("store", true),
+            ResourceLifecycle::Live,
+        )
         .build();
 
     // Running, config differs from desired, and no controller state to update from.
@@ -782,8 +790,10 @@ async fn test_pending_deletions_reports_a_deferred_delete() -> Result<()> {
         new_test_state(),
     )
     .await?;
-    state.resources.get_mut("agent").unwrap().dependencies =
-        vec![ResourceRef::new(alien_core::Worker::RESOURCE_TYPE, "dropped")];
+    state.resources.get_mut("agent").unwrap().dependencies = vec![ResourceRef::new(
+        alien_core::Worker::RESOURCE_TYPE,
+        "dropped",
+    )];
 
     // The release drops `dropped` and changes the survivor, which is what a scrubbed link
     // looks like: an update is planned, and it is what releases the deferred delete.

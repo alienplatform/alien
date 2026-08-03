@@ -8,13 +8,14 @@
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings,
-    RemoteStackManagement, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
-    Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    PermissionProfile, PermissionSetReference, RemoteStackManagement, ResourceDefinition,
+    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
@@ -32,6 +33,59 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
 pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
+const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
+
+/// Split IAM statements into documents below AWS's managed-policy size limit.
+pub(crate) fn chunk_managed_policy_statements(
+    statements: Vec<CfExpression>,
+) -> Result<Vec<CfExpression>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+
+    for statement in statements {
+        let mut candidate = current.clone();
+        candidate.push(statement.clone());
+        if managed_policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
+            current = candidate;
+            continue;
+        }
+
+        if current.is_empty()
+            || managed_policy_document_size(std::slice::from_ref(&statement))?
+                > MAX_MANAGED_POLICY_BYTES
+        {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: "AWS IAM statement is too large for a managed policy".to_string(),
+            }));
+        }
+
+        chunks.push(managed_policy_document(current));
+        current = vec![statement];
+    }
+
+    if !current.is_empty() {
+        chunks.push(managed_policy_document(current));
+    }
+
+    Ok(chunks)
+}
+
+fn managed_policy_document(statements: Vec<CfExpression>) -> CfExpression {
+    CfExpression::object([
+        ("Version", CfExpression::from("2012-10-17")),
+        ("Statement", CfExpression::list(statements)),
+    ])
+}
+
+fn managed_policy_document_size(statements: &[CfExpression]) -> Result<usize> {
+    serde_json::to_string(&managed_policy_document(statements.to_vec()))
+        .into_alien_error()
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "Failed to serialize IAM policy for size validation".to_string(),
+        })
+        .map(|policy| policy.len())
+}
 
 /// Downcast `ctx.resource.config` to the typed resource definition or return
 /// a typed `UnexpectedResourceType` error.
@@ -522,6 +576,26 @@ mod tests {
         let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
         assert_eq!(keys, ["Action", "Effect", "Sid"]);
     }
+
+    #[test]
+    fn managed_policy_chunking_rejects_a_later_oversized_statement() {
+        let statements = vec![
+            CfExpression::object([
+                ("Effect", CfExpression::from("Allow")),
+                ("Action", CfExpression::from("s3:GetObject")),
+                ("Resource", CfExpression::from("small-resource")),
+            ]),
+            CfExpression::object([
+                ("Effect", CfExpression::from("Allow")),
+                ("Action", CfExpression::from("s3:PutObject")),
+                ("Resource", CfExpression::from("x".repeat(6_000))),
+            ]),
+        ];
+
+        let error = chunk_managed_policy_statements(statements)
+            .expect_err("a later oversized statement must not become an unchecked chunk");
+        assert!(error.to_string().contains("too large for a managed policy"));
+    }
 }
 
 /// Notification configuration for a storage resource based on the
@@ -619,4 +693,47 @@ fn storage_events(events: &[String]) -> Vec<String> {
             other => format!("s3:{other}"),
         })
         .collect()
+}
+
+/// Service-account roles whose permission profile grants permission sets with
+/// this prefix for the resource — directly by resource id or through a `*`
+/// wildcard grant.
+pub fn resource_permission_owners(
+    ctx: &EmitContext<'_>,
+    permission_set_prefix: &str,
+) -> Vec<(String, Vec<PermissionSetReference>)> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = prefixed_permission_refs(profile, ctx.resource_id, permission_set_prefix);
+        if refs.is_empty() {
+            continue;
+        }
+        if let Some(role_id) = service_account_role_id(ctx, profile_name) {
+            owners.push((role_id, refs));
+        }
+    }
+    owners
+}
+
+fn prefixed_permission_refs(
+    profile: &PermissionProfile,
+    resource_id: &str,
+    permission_set_prefix: &str,
+) -> Vec<PermissionSetReference> {
+    let mut refs = Vec::new();
+    let mut seen_ids = HashSet::new();
+    for key in [resource_id, "*"] {
+        let Some(scoped_refs) = profile.0.get(key) else {
+            continue;
+        };
+        for permission_ref in scoped_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with(permission_set_prefix))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+    refs
 }

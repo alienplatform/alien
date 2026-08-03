@@ -175,8 +175,16 @@ fn azure_compute_management_emits_subscription_scoped_sku_discovery() {
 fn azure_management_assignment_follows_the_gates_of_its_only_contributors() {
     let stack = Stack::new("acme-mgmt-gated".to_string())
         .inputs(vec![
-            gate_input("jobsEnabled", "Enable jobs", "Whether to run the jobs worker."),
-            gate_input("auditEnabled", "Enable audit", "Whether to run the audit worker."),
+            gate_input(
+                "jobsEnabled",
+                "Enable jobs",
+                "Whether to run the jobs worker.",
+            ),
+            gate_input(
+                "auditEnabled",
+                "Enable audit",
+                "Whether to run the audit worker.",
+            ),
         ])
         .management(ManagementPermissions::extend(
             PermissionProfile::new()
@@ -188,8 +196,16 @@ fn azure_management_assignment_follows_the_gates_of_its_only_contributors() {
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_enabled_when(dispatch_worker("jobs"), ResourceLifecycle::Live, "jobsEnabled")
-        .add_enabled_when(dispatch_worker("audit"), ResourceLifecycle::Live, "auditEnabled")
+        .add_enabled_when(
+            dispatch_worker("jobs"),
+            ResourceLifecycle::Live,
+            "jobsEnabled",
+        )
+        .add_enabled_when(
+            dispatch_worker("audit"),
+            ResourceLifecycle::Live,
+            "auditEnabled",
+        )
         .build();
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
@@ -201,7 +217,9 @@ fn azure_management_assignment_follows_the_gates_of_its_only_contributors() {
 
     let assignment = rendered
         .split("resource \"")
-        .find(|block| block.starts_with("azurerm_role_assignment\" \"management_management_uami_assignment"))
+        .find(|block| {
+            block.starts_with("azurerm_role_assignment\" \"management_management_uami_assignment")
+        })
         .unwrap_or_else(|| panic!("a management assignment should render:\n{rendered}"));
     // Gates render in sorted order so reordering resources cannot churn the plan.
     assert!(
@@ -244,7 +262,11 @@ fn azure_management_assignment_stays_ungated_when_a_contributor_is_ungated() {
             RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add_enabled_when(dispatch_worker("jobs"), ResourceLifecycle::Live, "jobsEnabled")
+        .add_enabled_when(
+            dispatch_worker("jobs"),
+            ResourceLifecycle::Live,
+            "jobsEnabled",
+        )
         .add(dispatch_worker("always"), ResourceLifecycle::Live)
         .build();
 
@@ -257,7 +279,9 @@ fn azure_management_assignment_stays_ungated_when_a_contributor_is_ungated() {
 
     let assignment = rendered
         .split("resource \"")
-        .find(|block| block.starts_with("azurerm_role_assignment\" \"management_management_uami_assignment"))
+        .find(|block| {
+            block.starts_with("azurerm_role_assignment\" \"management_management_uami_assignment")
+        })
         .unwrap_or_else(|| panic!("a management assignment should render:\n{rendered}"));
     assert!(
         !assignment.contains("var.input_jobs_enabled"),

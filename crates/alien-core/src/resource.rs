@@ -242,6 +242,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::RemoteStackManagement>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "resource-access" => Box::new(
+                serde_json::from_value::<crate::resources::RemoteBindings>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "azure_resource_group" => Box::new(
                 serde_json::from_value::<crate::resources::AzureResourceGroup>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -284,6 +288,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "artifact-registry",
                         "service_activation",
                         "remote-stack-management",
+                        "resource-access",
                         "azure_resource_group",
                         "azure_storage_account",
                         "azure_container_apps_environment",
@@ -593,6 +598,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::RemoteStackManagementOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "resource-access" => Box::new(
+                serde_json::from_value::<crate::resources::RemoteBindingsOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "kubernetes-cluster" => Box::new(
                 serde_json::from_value::<crate::resources::KubernetesClusterOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -640,6 +649,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "artifact-registry",
                         "service_activation",
                         "remote-stack-management",
+                        "resource-access",
                         "kubernetes-cluster",
                         "azure_resource_group",
                         "azure_storage_account",

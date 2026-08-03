@@ -16,6 +16,8 @@ export const AwsWorkerImportDataSchema = z.object({
 "functionArn": z.string().describe("Lambda function ARN."),
 "functionName": z.string().describe("Lambda function name."),
 "integrationId": z.string().describe("API Gateway integration ID, when public ingress is enabled.").nullish(),
+"restApiId": z.string().describe("API Gateway REST (V1) API ID, when public ingress is enabled for a\nstreaming worker. Mutually exclusive with `api_id`: a worker is exposed\nthrough REST V1 xor the V2 HTTP API, so only one set is ever populated.").nullish(),
+"restStageName": z.string().describe("API Gateway REST (V1) stage name, when public ingress is enabled for a\nstreaming worker. Mutually exclusive with `stage_name` (V1 xor V2).").nullish(),
 "routeId": z.string().describe("API Gateway route ID, when public ingress is enabled.").nullish(),
 "s3PermissionStatementIds": z.array(z.string()).describe("Lambda permission statement IDs granted for S3 storage triggers."),
 "stageName": z.string().describe("API Gateway stage name, when public ingress is enabled.").nullish(),

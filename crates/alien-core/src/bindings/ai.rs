@@ -19,7 +19,11 @@ pub enum AiBinding {
     Vertex(VertexAiBinding),
     /// Azure AI Foundry binding
     Foundry(FoundryAiBinding),
-    /// External provider binding (generic endpoint-based)
+    /// External provider binding (generic endpoint-based). The tag must stay
+    /// unique across every resource type's binding enum — a bare "external"
+    /// collides with the external Postgres binding in the shared
+    /// `ALIEN_*_BINDING` namespace.
+    #[serde(rename = "external-ai")]
     External(ExternalAiBinding),
 }
 
@@ -180,7 +184,7 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({
-                "service": "external",
+                "service": "external-ai",
                 "provider": "openai",
                 "apiKey": "sk-test-key",
             })

@@ -409,7 +409,10 @@ mod tests {
 
         let result = result_for(stack).await;
 
-        assert!(!result.success, "a setup-created link owner must be refused");
+        assert!(
+            !result.success,
+            "a setup-created link owner must be refused"
+        );
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
         assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
         assert!(
@@ -438,7 +441,11 @@ mod tests {
 
         let result = result_for(stack).await;
         assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
-        assert!(result.errors[0].contains("decides at runtime"), "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("decides at runtime"),
+            "{:?}",
+            result.errors
+        );
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
@@ -468,7 +475,11 @@ mod tests {
 
         let result = result_for(stack).await;
         assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
-        assert!(result.errors[0].contains("not a plain link"), "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("not a plain link"),
+            "{:?}",
+            result.errors
+        );
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
@@ -586,10 +597,7 @@ mod tests {
 
         let errors = errors_for(stack).await;
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(
-            errors[0].contains("depends on 'jobs'"),
-            "{errors:?}"
-        );
+        assert!(errors[0].contains("depends on 'jobs'"), "{errors:?}");
     }
 
     #[tokio::test]

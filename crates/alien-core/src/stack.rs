@@ -31,6 +31,35 @@ pub struct ResourceEntry {
     pub enabled_when: Option<String>,
 }
 
+impl ResourceEntry {
+    /// Returns intrinsic and stack-authored dependencies in planner order.
+    pub fn combined_dependencies(&self) -> Vec<ResourceRef> {
+        let mut dependencies = self.config.get_dependencies();
+        dependencies.extend(self.dependencies.clone());
+        dependencies
+    }
+
+    /// Returns whether this resource is published through Remote Bindings.
+    ///
+    /// Provider emitters use this generic signal to create the stack-level
+    /// Remote Bindings identity. Each resource emitter remains responsible for
+    /// granting that identity only the resource's declared data-plane access.
+    pub fn has_remote_bindings(&self) -> bool {
+        crate::remote_bindings::remote_binding_for_entry(self).is_some()
+    }
+
+    /// Whether the controller's non-secret binding locator must be synchronized
+    /// into stack state. The built-in secrets vault is consumed by the manager,
+    /// but is not exposed through the external Remote Bindings API.
+    pub fn publishes_binding_params(&self) -> bool {
+        self.remote_access
+            || self
+                .config
+                .downcast_ref::<crate::Vault>()
+                .is_some_and(|vault| vault.id == "secrets")
+    }
+}
+
 /// A bag of resources, unaware of any cloud.
 #[derive(Builder, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -326,6 +355,53 @@ mod tests {
         Storage, Worker, WorkerCode,
     };
     use insta::assert_json_snapshot;
+
+    fn resource_entry<T: crate::ResourceDefinition>(
+        resource: T,
+        lifecycle: ResourceLifecycle,
+        remote_access: bool,
+    ) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(resource),
+            lifecycle,
+            dependencies: Vec::new(),
+            remote_access,
+            enabled_when: None,
+        }
+    }
+
+    #[test]
+    fn remote_bindings_require_a_registered_frozen_resource_and_opt_in() {
+        assert!(resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            true,
+        )
+        .has_remote_bindings());
+        assert!(!resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            false,
+        )
+        .has_remote_bindings());
+        assert!(!resource_entry(
+            Storage::new("archive".to_string()).build(),
+            ResourceLifecycle::Live,
+            true,
+        )
+        .has_remote_bindings());
+        assert!(!resource_entry(
+            Worker::new("worker".to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/worker:latest".to_string(),
+                })
+                .permissions("worker-execution".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+            true,
+        )
+        .has_remote_bindings());
+    }
 
     #[test]
     fn test_stack_serialization() {

@@ -372,6 +372,56 @@ impl AzureStorageController {
             warn!(resource_id = %config.id(), "Azure Storage does not support per-container lifecycle rules via this controller. 'lifecycle_rules' changes will be ignored.");
         }
 
+        // Permission ownership is part of setup state even when the container configuration did
+        // not change. Reconcile it on every setup update so enabling or disabling Remote Bindings
+        // cannot leave missing or stale role assignments.
+        let azure_config = ctx.get_azure_config()?;
+        let authorization_client = ctx
+            .service_provider
+            .get_azure_authorization_client(azure_config)?;
+        for assignment_id in std::mem::take(&mut self.role_assignment_ids) {
+            match authorization_client
+                .delete_role_assignment_by_id(assignment_id.clone())
+                .await
+            {
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        &error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to replace Azure Storage role assignment '{assignment_id}'"
+                        ),
+                        resource_id: Some(config.id().to_string()),
+                    }));
+                }
+            }
+        }
+        let (resource_scope, permission_context) =
+            azure_permission_scope_and_context(ctx, container_name)?;
+        let assignments = AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
+            ctx,
+            &config.id,
+            "storage",
+            resource_scope.clone(),
+            &permission_context,
+        )
+        .await?;
+        AzurePermissionsHelper::apply_resource_scoped_permissions_from_checkpoint(
+            ctx,
+            &config.id,
+            "storage",
+            resource_scope,
+            &permission_context,
+            &assignments,
+        )
+        .await?;
+        self.role_assignment_ids = assignments;
+        self.role_assignments_planned = true;
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
