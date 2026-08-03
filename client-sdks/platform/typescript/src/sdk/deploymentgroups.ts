@@ -65,7 +65,7 @@ export class DeploymentGroups extends ClientSDK {
    * Get or create a deployment group by project and external ID
    */
   async ensureDeploymentGroupByExternalId(
-    request?: operations.EnsureDeploymentGroupByExternalIdRequest | undefined,
+    request: operations.EnsureDeploymentGroupByExternalIdRequest,
     options?: RequestOptions,
   ): Promise<models.DeploymentGroup> {
     return unwrapAsync(deploymentGroupsEnsureDeploymentGroupByExternalId(
