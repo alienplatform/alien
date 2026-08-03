@@ -1,7 +1,7 @@
 use alien_platform_api::{types, Client};
 
 #[test]
-fn generated_client_exposes_external_id_ensure_and_read() {
+fn generated_client_exposes_external_id_operations() {
     let client = Client::new("https://api.alien.dev");
     let body: types::EnsureDeploymentGroupByExternalIdRequest =
         types::EnsureDeploymentGroupByExternalIdRequest::builder()
@@ -13,11 +13,18 @@ fn generated_client_exposes_external_id_ensure_and_read() {
 
     // Construct both generated request builders. Calling `send` is covered by
     // API integration tests; this test protects the public Rust SDK surface.
-    let _ensure = client
-        .ensure_deployment_group_by_external_id()
-        .body(body);
+    let _ensure = client.ensure_deployment_group_by_external_id().body(body);
     let _read = client
         .get_deployment_group_by_external_id()
         .external_id("customer_123")
         .project("my-project");
+    let update: types::SetDeploymentGroupExternalIdRequest =
+        types::SetDeploymentGroupExternalIdRequest::builder()
+            .external_id(Some("customer_456".to_string()))
+            .try_into()
+            .expect("valid update request");
+    let _update = client
+        .set_deployment_group_external_id()
+        .id("dg_0000000000000000000000000000")
+        .body(update);
 }
