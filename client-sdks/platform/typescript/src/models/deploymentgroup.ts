@@ -17,7 +17,7 @@ export type DeploymentGroup = {
    */
   name: string;
   /**
-   * Case-sensitive identifier from the integrating application.
+   * Case-sensitive, URL- and header-safe identifier from the integrating application.
    */
   externalId: string | null;
   /**

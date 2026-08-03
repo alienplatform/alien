@@ -6,7 +6,7 @@ import * as z from "zod/v4";
 
 export type SetDeploymentGroupExternalIdRequest = {
   /**
-   * Case-sensitive identifier from the integrating application.
+   * Case-sensitive, URL- and header-safe identifier from the integrating application.
    */
   externalId: string | null;
 };
