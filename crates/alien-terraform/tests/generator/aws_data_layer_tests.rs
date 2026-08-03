@@ -7,10 +7,43 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, ResourceLifecycle,
+    Ai, Key, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, ResourceLifecycle,
     ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
+
+#[test]
+fn aws_key_package_is_valid_and_retained() {
+    let mut stack = Stack::new("enterprise-key".to_string())
+        .add_with_remote_access(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack
+        .resources
+        .get_mut("customer-key")
+        .unwrap()
+        .dependencies = vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("prevent_destroy = true"));
+    assert!(rendered.contains("\"kms:Encrypt\""));
+    assert!(rendered.contains("\"kms:Decrypt\""));
+    assert!(rendered.contains("aws_kms_key.customer_key.arn"));
+    assert_terraform_valid(&module, "aws_key_package");
+}
 
 #[test]
 fn aws_storage_minimal_renders_idiomatic_module() {

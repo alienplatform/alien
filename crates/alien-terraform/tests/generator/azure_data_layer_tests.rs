@@ -13,7 +13,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
+    Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
     PermissionProfile, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, ServiceAccount,
     Stack, StackSettings, Storage, Vault,
 };
@@ -29,6 +29,43 @@ fn storage_account() -> AzureStorageAccount {
 
 fn service_bus_namespace() -> AzureServiceBusNamespace {
     AzureServiceBusNamespace::new("default-service-bus-namespace".to_string()).build()
+}
+
+#[test]
+fn azure_key_package_is_valid_and_retained() {
+    let mut stack = Stack::new("enterprise-key".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add_with_remote_access(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack
+        .resources
+        .get_mut("customer-key")
+        .unwrap()
+        .dependencies = vec![
+        ResourceRef::new(AzureResourceGroup::RESOURCE_TYPE, "default-resource-group"),
+        ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access"),
+    ];
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("azurerm_key_vault_key"));
+    assert!(rendered.matches("prevent_destroy = true").count() >= 2);
+    assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/encrypt/action"));
+    assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/decrypt/action"));
+    assert_terraform_valid(&module, "azure_key_package");
 }
 
 #[test]

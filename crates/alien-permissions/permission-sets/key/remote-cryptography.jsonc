@@ -21,10 +21,7 @@
         "label": "encrypt-and-decrypt",
         "description": "Encrypt and decrypt with the selected Cloud KMS key.",
         "grant": {
-          "permissions": [
-            "cloudkms.cryptoKeyVersions.useToEncrypt",
-            "cloudkms.cryptoKeyVersions.useToDecrypt"
-          ]
+          "predefinedRoles": ["roles/cloudkms.cryptoKeyEncrypterDecrypter"]
         },
         "binding": {
           "resource": {

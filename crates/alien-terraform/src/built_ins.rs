@@ -6,9 +6,9 @@
 use crate::registry::TfRegistry;
 use alien_core::{
     Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
-    AzureServiceBusNamespace, AzureStorageAccount, Build, KubernetesCluster, Kv, Network, Platform,
-    Queue, RemoteBindings, RemoteStackManagement, ServiceAccount, ServiceActivation, Storage,
-    Vault, Worker,
+    AzureServiceBusNamespace, AzureStorageAccount, Build, Key, KubernetesCluster, Kv, Network,
+    Platform, Queue, RemoteBindings, RemoteStackManagement, ServiceAccount, ServiceActivation,
+    Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -22,6 +22,7 @@ fn register_aws(registry: &mut TfRegistry) {
     let p = Platform::Aws;
     registry.register(Ai::RESOURCE_TYPE, p, aws::AwsAiEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, aws::AwsStorageEmitter);
+    registry.register(Key::RESOURCE_TYPE, p, aws::AwsKeyEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, aws::AwsKvEmitter);
     registry.register(Queue::RESOURCE_TYPE, p, aws::AwsQueueEmitter);
     registry.register(Vault::RESOURCE_TYPE, p, aws::AwsVaultEmitter);
@@ -60,6 +61,7 @@ fn register_gcp(registry: &mut TfRegistry) {
     let p = Platform::Gcp;
     registry.register(Ai::RESOURCE_TYPE, p, gcp::GcpAiEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, gcp::GcpStorageEmitter);
+    registry.register(Key::RESOURCE_TYPE, p, gcp::GcpKeyEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, gcp::GcpKvEmitter);
     registry.register(Queue::RESOURCE_TYPE, p, gcp::GcpQueueEmitter);
     registry.register(Vault::RESOURCE_TYPE, p, gcp::GcpVaultEmitter);
@@ -105,6 +107,7 @@ fn register_azure(registry: &mut TfRegistry) {
     // Main resources — one emitter per Alien resource type.
     registry.register(Ai::RESOURCE_TYPE, p, azure::AzureAiEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, azure::AzureStorageEmitter);
+    registry.register(Key::RESOURCE_TYPE, p, azure::AzureKeyEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, azure::AzureKvEmitter);
     registry.register(Queue::RESOURCE_TYPE, p, azure::AzureQueueEmitter);
     registry.register(Vault::RESOURCE_TYPE, p, azure::AzureVaultEmitter);
