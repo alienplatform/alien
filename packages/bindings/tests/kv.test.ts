@@ -32,7 +32,8 @@ describe("kv (local turso-backed provider)", () => {
     const value = await k.get("greeting")
 
     expect(value).not.toBeNull()
-    expect((value as Buffer).toString("utf8")).toBe("hello")
+    expect(value?.value.toString("utf8")).toBe("hello")
+    expect(value?.version).toEqual(expect.any(String))
   })
 
   it("get returns null for an absent key", async () => {
@@ -44,23 +45,27 @@ describe("kv (local turso-backed provider)", () => {
     const k = freshKv()
     await k.set("text-key", "plain text value")
 
-    expect(await k.getText("text-key")).toBe("plain text value")
+    expect((await k.getText("text-key"))?.value).toBe("plain text value")
   })
 
   it("setJson/getJson round-trip a JSON value", async () => {
     const k = freshKv()
     await k.setJson("json-key", { hello: "world", n: 1, nested: { a: [1, 2, 3] } })
 
-    expect(await k.getJson("json-key")).toEqual({ hello: "world", n: 1, nested: { a: [1, 2, 3] } })
+    expect((await k.getJson("json-key"))?.value).toEqual({
+      hello: "world",
+      n: 1,
+      nested: { a: [1, 2, 3] },
+    })
   })
 
-  it("ifNotExists: the second set returns false and the value is unchanged", async () => {
+  it("an absent precondition creates exactly once", async () => {
     const k = freshKv()
 
-    expect(await k.set("once", "first", { ifNotExists: true })).toBe(true)
-    expect(await k.set("once", "second", { ifNotExists: true })).toBe(false)
+    expect(await k.set("once", "first", { ifVersion: null })).toBe(true)
+    expect(await k.set("once", "second", { ifVersion: null })).toBe(false)
 
-    expect(await k.getText("once")).toBe("first")
+    expect((await k.getText("once"))?.value).toBe("first")
   })
 
   it("a plain (non-conditional) set always overwrites", async () => {
@@ -68,14 +73,14 @@ describe("kv (local turso-backed provider)", () => {
     await k.set("plain", "first")
     await k.set("plain", "second")
 
-    expect(await k.getText("plain")).toBe("second")
+    expect((await k.getText("plain"))?.value).toBe("second")
   })
 
   it("ttl: a short-lived key expires and reads back absent", async () => {
     const k = freshKv()
     await k.set("short-lived", "value", { ttl: 1 })
 
-    expect(await k.getText("short-lived")).toBe("value")
+    expect((await k.getText("short-lived"))?.value).toBe("value")
     expect(await k.exists("short-lived")).toBe(true)
 
     // Deliberately generous margin over the 1s ttl to avoid CI flakiness; the
@@ -101,6 +106,23 @@ describe("kv (local turso-backed provider)", () => {
 
     expect(await k.exists("to-delete")).toBe(false)
     expect(await k.get("to-delete")).toBeNull()
+  })
+
+  it("conditionally updates and deletes with opaque versions", async () => {
+    const k = freshKv()
+    await k.set("cas", "initial")
+    const initial = await k.getText("cas")
+    if (!initial) throw new Error("initial entry was not stored")
+
+    expect(await k.set("cas", "updated", { ifVersion: initial.version })).toBe(true)
+    expect(await k.set("cas", "stale", { ifVersion: initial.version })).toBe(false)
+
+    const current = await k.getText("cas")
+    if (!current) throw new Error("updated entry is missing")
+    expect(current.value).toBe("updated")
+    expect(current.version).not.toBe(initial.version)
+    expect(await k.delete("cas", { ifVersion: initial.version })).toBe(false)
+    expect(await k.delete("cas", { ifVersion: current.version })).toBe(true)
   })
 
   it("scan paginates by prefix, limit, and cursor with exact page boundaries", async () => {

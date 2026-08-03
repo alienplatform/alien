@@ -42,6 +42,8 @@ export {
 export type {
   Container,
   Kv,
+  KvDeleteOptions,
+  KvEntry,
   KvScanItem,
   KvScanResult,
   KvSetOptions,

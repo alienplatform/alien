@@ -438,7 +438,7 @@ async fn authorized_bootstrap_mints_via_real_manager_and_loads_a_working_binding
     drop(guard);
 
     assert_eq!(
-        value,
+        value.map(|entry| entry.value),
         Some(b"world".to_vec()),
         "a binding loaded through minted credentials must actually read/write, not just construct"
     );
