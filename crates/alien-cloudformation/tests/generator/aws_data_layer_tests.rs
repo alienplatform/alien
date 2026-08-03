@@ -358,7 +358,7 @@ fn aws_queue_resource_permissions_attach_to_service_account_role() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    let policies = policies_for_role(&template, "ExecutionSaRole");
     assert_eq!(policies.len(), 1);
     let policy = policies[0];
     let actions = policy_actions(policy);
@@ -423,7 +423,7 @@ fn aws_kv_resource_permissions_attach_to_service_account_role() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    let policies = policies_for_role(&template, "ExecutionSaRole");
     assert_eq!(policies.len(), 1);
     let policy = policies[0];
     let actions = policy_actions(policy);
@@ -525,7 +525,7 @@ fn aws_vault_permissions_include_every_vault_scope() {
 
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
-    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
+    let policies = policies_for_role(&template, "ExecutionSaRole");
     assert_eq!(policies.len(), 1);
     let policy = serde_json::to_string(policies[0]).expect("policy should serialize");
     assert!(policy.contains("parameter/${AWS::StackName}-secrets-*"));
@@ -533,7 +533,7 @@ fn aws_vault_permissions_include_every_vault_scope() {
 }
 
 #[test]
-fn many_resource_grants_stay_within_the_role_inline_policy_quota() {
+fn many_resource_grants_use_quota_safe_managed_policies() {
     let mut stack = Stack::new("many-resource-grants".to_string())
         .permission(
             "execution",
@@ -564,23 +564,18 @@ fn many_resource_grants_stay_within_the_role_inline_policy_quota() {
     );
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
-    let policies = inline_policies_for_role(&template, "ExecutionSaRole");
-    assert_eq!(policies.len(), 1, "resource grants should share one policy");
-
-    let aggregate_size = role_inline_policy_documents(&template, "ExecutionSaRole")
-        .into_iter()
-        .map(|document| {
-            serde_json::to_string(document)
-                .expect("policy should serialize")
-                .len()
-        })
-        .sum::<usize>();
+    let policies = policies_for_role(&template, "ExecutionSaRole");
+    assert!(!policies.is_empty());
     assert!(
-        aggregate_size < 10_240,
-        "rendered inline policy documents use {aggregate_size} non-whitespace characters"
+        policies.len() <= 10,
+        "AWS allows ten managed policies per role"
     );
+    assert!(policies
+        .iter()
+        .all(|policy| policy["Type"] == "AWS::IAM::ManagedPolicy"));
+    assert!(role_inline_policy_documents(&template, "ExecutionSaRole").is_empty());
 
-    let policy = serde_json::to_string(policies[0]).expect("policy should serialize");
+    let policy = serde_json::to_string(&policies).expect("policies should serialize");
     for index in 0..12 {
         assert!(
             policy.contains(&format!("Data{index}")),
@@ -589,7 +584,7 @@ fn many_resource_grants_stay_within_the_role_inline_policy_quota() {
     }
 }
 
-fn inline_policies_for_role<'a>(
+fn policies_for_role<'a>(
     template: &'a serde_json::Value,
     role_id: &str,
 ) -> Vec<&'a serde_json::Value> {
@@ -598,10 +593,12 @@ fn inline_policies_for_role<'a>(
         .expect("resources should be an object")
         .values()
         .filter(|resource| {
-            resource["Type"] == "AWS::IAM::Policy"
-                && resource["Properties"]["Roles"]
-                    .as_array()
-                    .is_some_and(|roles| roles.contains(&serde_json::json!({ "Ref": role_id })))
+            matches!(
+                resource["Type"].as_str(),
+                Some("AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy")
+            ) && resource["Properties"]["Roles"]
+                .as_array()
+                .is_some_and(|roles| roles.contains(&serde_json::json!({ "Ref": role_id })))
         })
         .collect()
 }
@@ -630,8 +627,9 @@ fn role_inline_policy_documents<'a>(
         .map(|policy| &policy["PolicyDocument"])
         .collect::<Vec<_>>();
     documents.extend(
-        inline_policies_for_role(template, role_id)
+        policies_for_role(template, role_id)
             .into_iter()
+            .filter(|policy| policy["Type"] == "AWS::IAM::Policy")
             .map(|policy| &policy["Properties"]["PolicyDocument"]),
     );
     documents

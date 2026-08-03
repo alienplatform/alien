@@ -499,17 +499,23 @@ fn aws_email_resource_permissions_attach_to_service_account_role() {
         .expect("resources should be an object")
         .values()
         .filter(|resource| {
-            resource["Type"] == "AWS::IAM::Policy"
-                && resource["Properties"]["Roles"][0]["Ref"] == "SenderSaRole"
+            matches!(
+                resource["Type"].as_str(),
+                Some("AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy")
+            ) && resource["Properties"]["Roles"][0]["Ref"] == "SenderSaRole"
         })
         .collect::<Vec<_>>();
-    assert_eq!(policies.len(), 1);
-    let policy = policies[0];
-    let identity_statements = policy["Properties"]["PolicyDocument"]["Statement"]
-        .as_array()
-        .expect("email permission statements");
-    let actions: Vec<String> = identity_statements
+    assert!(!policies.is_empty());
+    let identity_statements = policies
         .iter()
+        .flat_map(|policy| {
+            policy["Properties"]["PolicyDocument"]["Statement"]
+                .as_array()
+                .expect("email permission statements")
+        })
+        .collect::<Vec<_>>();
+    let actions: Vec<String> = identity_statements
+        .into_iter()
         .flat_map(|statement| match statement["Action"].as_array() {
             Some(actions) => actions.clone(),
             None => vec![statement["Action"].clone()],
@@ -519,7 +525,7 @@ fn aws_email_resource_permissions_attach_to_service_account_role() {
     assert!(actions.contains(&"ses:SendEmail".to_string()));
     assert!(actions.contains(&"ses:SendRawEmail".to_string()));
     assert!(actions.contains(&"ses:CreateEmailIdentity".to_string()));
-    let rendered_policy = serde_json::to_string(policy).expect("policy should serialize");
+    let rendered_policy = serde_json::to_string(&policies).expect("policies should serialize");
     assert!(rendered_policy.contains(
         "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-mailer"
     ));
