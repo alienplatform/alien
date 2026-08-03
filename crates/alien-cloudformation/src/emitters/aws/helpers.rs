@@ -50,7 +50,10 @@ pub(crate) fn chunk_managed_policy_statements(
             continue;
         }
 
-        if current.is_empty() {
+        if current.is_empty()
+            || managed_policy_document_size(std::slice::from_ref(&statement))?
+                > MAX_MANAGED_POLICY_BYTES
+        {
             return Err(AlienError::new(ErrorData::GenericError {
                 message: "AWS IAM statement is too large for a managed policy".to_string(),
             }));
@@ -572,6 +575,26 @@ mod tests {
 
         let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
         assert_eq!(keys, ["Action", "Effect", "Sid"]);
+    }
+
+    #[test]
+    fn managed_policy_chunking_rejects_a_later_oversized_statement() {
+        let statements = vec![
+            CfExpression::object([
+                ("Effect", CfExpression::from("Allow")),
+                ("Action", CfExpression::from("s3:GetObject")),
+                ("Resource", CfExpression::from("small-resource")),
+            ]),
+            CfExpression::object([
+                ("Effect", CfExpression::from("Allow")),
+                ("Action", CfExpression::from("s3:PutObject")),
+                ("Resource", CfExpression::from("x".repeat(6_000))),
+            ]),
+        ];
+
+        let error = chunk_managed_policy_statements(statements)
+            .expect_err("a later oversized statement must not become an unchecked chunk");
+        assert!(error.to_string().contains("too large for a managed policy"));
     }
 }
 
