@@ -212,6 +212,9 @@ export type { HorizonWorkloadSchedulingMode } from "./zod/horizon-workload-sched
 export type { HttpMethod } from "./zod/http-method-schema.js";
 export type { ImportSourceKind } from "./zod/import-source-kind-schema.js";
 export type { ImportedResource } from "./zod/imported-resource-schema.js";
+export type { KeyFingerprint } from "./zod/key-fingerprint-schema.js";
+export type { KeyOutputs } from "./zod/key-outputs-schema.js";
+export type { Key } from "./zod/key-schema.js";
 export type { KubernetesBuildHeartbeatData } from "./zod/kubernetes-build-heartbeat-data-schema.js";
 export type { KubernetesCertificateMode } from "./zod/kubernetes-certificate-mode-schema.js";
 export type { KubernetesCloudReference } from "./zod/kubernetes-cloud-reference-schema.js";
@@ -600,6 +603,9 @@ export { HorizonWorkloadSchedulingModeSchema } from "./zod/horizon-workload-sche
 export { HttpMethodSchema } from "./zod/http-method-schema.js";
 export { ImportSourceKindSchema } from "./zod/import-source-kind-schema.js";
 export { ImportedResourceSchema } from "./zod/imported-resource-schema.js";
+export { KeyFingerprintSchema } from "./zod/key-fingerprint-schema.js";
+export { KeyOutputsSchema } from "./zod/key-outputs-schema.js";
+export { KeySchema } from "./zod/key-schema.js";
 export { KubernetesBuildHeartbeatDataSchema } from "./zod/kubernetes-build-heartbeat-data-schema.js";
 export { KubernetesCertificateModeSchema } from "./zod/kubernetes-certificate-mode-schema.js";
 export { KubernetesCloudReferenceSchema } from "./zod/kubernetes-cloud-reference-schema.js";

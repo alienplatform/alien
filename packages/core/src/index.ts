@@ -3,6 +3,7 @@
 export { Resource, ResourceTypeSchema } from "./resource.js"
 export type { ResourceType } from "./resource.js"
 export * from "./storage.js"
+export * from "./key.js"
 export * from "./worker.js"
 export * from "./container.js"
 export * from "./compute-cluster.js"
