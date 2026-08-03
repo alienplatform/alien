@@ -111,6 +111,7 @@ pub async fn handle_running(
         info!("Health check passed for all resources");
 
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
 
         Ok(DeploymentStepResult {
             state: next,

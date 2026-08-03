@@ -1818,9 +1818,10 @@ fn needs_provision_capability(status: DeploymentStatus) -> bool {
 }
 
 fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {
-    error
+    let error = error
         .clone()
-        .and_then(|value| serde_json::from_value::<AlienError>(value).ok())
+        .and_then(|value| serde_json::from_value::<AlienError>(value).ok());
+    alien_deployment::deployment_state_error_from_headline(error)
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.
