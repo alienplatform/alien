@@ -15,18 +15,16 @@ export type SetDeploymentGroupExternalIdRequest = {
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
-  setDeploymentGroupExternalIdRequest?:
-    | models.SetDeploymentGroupExternalIdRequest
-    | undefined;
+  setDeploymentGroupExternalIdRequest:
+    models.SetDeploymentGroupExternalIdRequest;
 };
 
 /** @internal */
 export type SetDeploymentGroupExternalIdRequest$Outbound = {
   id: string;
   workspace?: string | undefined;
-  SetDeploymentGroupExternalIdRequest?:
-    | models.SetDeploymentGroupExternalIdRequest$Outbound
-    | undefined;
+  SetDeploymentGroupExternalIdRequest:
+    models.SetDeploymentGroupExternalIdRequest$Outbound;
 };
 
 /** @internal */
@@ -36,8 +34,8 @@ export const SetDeploymentGroupExternalIdRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
-  setDeploymentGroupExternalIdRequest: models
-    .SetDeploymentGroupExternalIdRequest$outboundSchema.optional(),
+  setDeploymentGroupExternalIdRequest:
+    models.SetDeploymentGroupExternalIdRequest$outboundSchema,
 }).transform((v) => {
   return remap$(v, {
     setDeploymentGroupExternalIdRequest: "SetDeploymentGroupExternalIdRequest",

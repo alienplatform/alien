@@ -31,7 +31,7 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentGroupsEnsureDeploymentGroupByExternalId(
   client: AlienCore,
-  request?: operations.EnsureDeploymentGroupByExternalIdRequest | undefined,
+  request: operations.EnsureDeploymentGroupByExternalIdRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -56,7 +56,7 @@ export function deploymentGroupsEnsureDeploymentGroupByExternalId(
 
 async function $do(
   client: AlienCore,
-  request?: operations.EnsureDeploymentGroupByExternalIdRequest | undefined,
+  request: operations.EnsureDeploymentGroupByExternalIdRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -78,8 +78,9 @@ async function $do(
   const parsed = safeParse(
     request,
     (value) =>
-      operations.EnsureDeploymentGroupByExternalIdRequest$outboundSchema
-        .optional().parse(value),
+      operations.EnsureDeploymentGroupByExternalIdRequest$outboundSchema.parse(
+        value,
+      ),
     "Input validation failed",
   );
   if (!parsed.ok) {
@@ -88,14 +89,14 @@ async function $do(
   const payload = parsed.value;
   const body = encodeJSON(
     "body",
-    payload?.EnsureDeploymentGroupByExternalIdRequest,
+    payload.EnsureDeploymentGroupByExternalIdRequest,
     { explode: true },
   );
 
   const path = pathToFunc("/v1/deployment-groups/by-external-id")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": payload.workspace,
   });
 
   const headers = new Headers(compactMap({
