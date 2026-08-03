@@ -657,17 +657,23 @@ fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
     for line in yaml.lines() {
         let trimmed = line.trim_start();
         let indent = &line[..line.len() - trimmed.len()];
-        let replacement = match trimmed {
-            "Default: on" => Some("Default: \"on\""),
-            "Default: off" => Some("Default: \"off\""),
-            "- on" => Some("- \"on\""),
-            "- off" => Some("- \"off\""),
-            _ => None,
-        };
+        let replacement = trimmed
+            .strip_suffix(": on")
+            .map(|key| format!("{key}: \"on\""))
+            .or_else(|| {
+                trimmed
+                    .strip_suffix(": off")
+                    .map(|key| format!("{key}: \"off\""))
+            })
+            .or_else(|| match trimmed {
+                "- on" => Some("- \"on\"".to_string()),
+                "- off" => Some("- \"off\"".to_string()),
+                _ => None,
+            });
 
         if let Some(replacement) = replacement {
             quoted.push_str(indent);
-            quoted.push_str(replacement);
+            quoted.push_str(&replacement);
         } else {
             quoted.push_str(line);
         }
@@ -2511,6 +2517,16 @@ impl DomainParameterDefaults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quotes_yaml_1_1_boolean_like_strings_in_object_values() {
+        let yaml = "Properties:\n  StackSettings:\n    telemetry: off\n    heartbeats: on\n  AllowedValues:\n  - off\n  - on\n  Label: only-on-request\n";
+
+        assert_eq!(
+            quote_yaml_1_1_mode_scalars(yaml),
+            "Properties:\n  StackSettings:\n    telemetry: \"off\"\n    heartbeats: \"on\"\n  AllowedValues:\n  - \"off\"\n  - \"on\"\n  Label: only-on-request\n"
+        );
+    }
 
     #[test]
     fn merge_replaces_intrinsic_expression_with_structured_overlay() {
