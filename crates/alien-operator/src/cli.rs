@@ -5,7 +5,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::loops::debug_session::DebugSessionLoop;
-use crate::loops::operations_crd::OperationsCrdLoop;
+use crate::loops::access_requests::AccessRequestSyncLoop;
 use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
@@ -154,13 +154,13 @@ pub type InitHook = fn();
 pub type DebugLoopHook = fn() -> Option<std::sync::Arc<dyn DebugSessionLoop>>;
 
 /// Optional third hook that lets downstream binaries inject a real
-/// [`OperationsCrdLoop`] (the operations approval controller). Defaults to
-/// `None`, which leaves the OSS no-op stub in place.
-pub type OperationsCrdLoopHook = fn() -> Option<std::sync::Arc<dyn OperationsCrdLoop>>;
+/// [`AccessRequestSyncLoop`] (the access-request approval controller). Defaults
+/// to `None`, which leaves the OSS no-op stub in place.
+pub type AccessRequestSyncLoopHook = fn() -> Option<std::sync::Arc<dyn AccessRequestSyncLoop>>;
 
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
-const NOOP_OPERATIONS_CRD_LOOP_HOOK: OperationsCrdLoopHook = || None;
+const NOOP_ACCESS_REQUEST_LOOP_HOOK: AccessRequestSyncLoopHook = || None;
 
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeploymentId {
@@ -182,7 +182,7 @@ pub fn cli_main_with_hook(init_hook: InitHook) {
 /// downstream binaries can inject a real [`DebugSessionLoop`]. Injects no
 /// operations approval controller (OSS no-op stub).
 pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) {
-    cli_main_with_all_loops(init_hook, debug_loop_hook, NOOP_OPERATIONS_CRD_LOOP_HOOK);
+    cli_main_with_all_loops(init_hook, debug_loop_hook, NOOP_ACCESS_REQUEST_LOOP_HOOK);
 }
 
 /// Full-control CLI entry point: injects the init hook plus both pluggable
@@ -191,7 +191,7 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
 pub fn cli_main_with_all_loops(
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
-    operations_crd_loop_hook: OperationsCrdLoopHook,
+    access_request_loop_hook: AccessRequestSyncLoopHook,
 ) {
     // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
     // (pulled by other deps) present in the tree can't auto-pick a provider
@@ -213,7 +213,7 @@ pub fn cli_main_with_all_loops(
         .build()
         .expect("failed to build tokio runtime");
 
-    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook, operations_crd_loop_hook)) {
+    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook, access_request_loop_hook)) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -228,7 +228,7 @@ async fn run(
     mut args: Args,
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
-    operations_crd_loop_hook: OperationsCrdLoopHook,
+    access_request_loop_hook: AccessRequestSyncLoopHook,
 ) -> Result<()> {
     let embedded_config: Option<EmbeddedOperatorConfig> = load_embedded_config().ok().flatten();
 
@@ -459,7 +459,7 @@ async fn run(
         operator_config,
         service_provider,
         debug_loop_hook(),
-        operations_crd_loop_hook(),
+        access_request_loop_hook(),
         cancel,
     )
     .await?;
@@ -634,7 +634,7 @@ mod windows_entry {
             args,
             init_hook,
             super::NOOP_DEBUG_LOOP_HOOK,
-            super::NOOP_OPERATIONS_CRD_LOOP_HOOK,
+            super::NOOP_ACCESS_REQUEST_LOOP_HOOK,
         )) {
             Ok(()) => 0,
             Err(e) => {

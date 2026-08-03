@@ -612,12 +612,14 @@ roleRef:
 /// Read-only observe rules, shared by the namespaced `Role` and the cluster-wide
 /// `ClusterRole`. Only `get/list/watch`; never `secrets` or `pods/log`.
 ///
-/// Plus the `AlienOperation` custom resource, which the operator both creates
-/// (materializing a leased operation-command awaiting customer approval) and
-/// executes (once the customer patches `spec.approved: true`). This is the one
-/// resource the operator writes; everything else stays read-only.
-/// Read-only observe rules plus the operations custom resource (get/list/watch
-/// + create/update/patch — the one resource the operator writes; no delete).
+/// Plus the access-request custom resource, which the operator creates
+/// (materializing a control-plane access request the customer must authorize)
+/// and updates the `status` of (recording the approval window read back from
+/// the customer). This is the one resource the operator writes; everything else
+/// stays read-only. The operator never executes commands from the CR — the
+/// customer's approval is reported back to the control plane, which dispatches
+/// the commands through the normal commands queue.
+///
 /// The operations `apiGroups`/`resources` are white-labeled from `names` so a
 /// vendor build grants access to *their* CRD, matching the CRD doc below.
 fn operator_observe_rules(names: &OperationsCrdNames) -> String {
@@ -647,11 +649,18 @@ fn operator_observe_rules(names: &OperationsCrdNames) -> String {
     )
 }
 
-/// The operations `CustomResourceDefinition`, white-labeled from `names`. Each
-/// proposed operation from a remediation plan becomes one of these the customer
-/// can review and approve in their own cluster (`kubectl patch … --type=merge
-/// -p '{"spec":{"approved":true}}'`); the operator executes approved ones and
-/// writes the result to `status`. Printer columns show APPROVED/STATE/AGE/DETAILS.
+/// The access-request `CustomResourceDefinition`, white-labeled from `names`.
+///
+/// One CR is a **time-boxed grant**: a control-plane access request (usually a
+/// remediation plan) proposing a set of commands the customer must authorize.
+/// The customer reviews the commands and approves by patching a duration —
+/// `kubectl patch … --type=merge -p '{"spec":{"approvedForMinutes":360}}'` — to
+/// authorize the grant for that many minutes. The operator records the resulting
+/// window in `status.approvedUntil` and reports the approval back to the control
+/// plane, which then dispatches the commands one by one through the normal
+/// commands queue. The operator does **not** execute commands from the CR.
+///
+/// Printer columns show STATE/COMMANDS/APPROVED-UNTIL/AGE.
 ///
 /// Appended to the operator manifest so `kubectl apply`/Helm registers the kind
 /// before any CR is created.
@@ -676,55 +685,72 @@ spec:
       subresources:
         status: {{}}
       additionalPrinterColumns:
-        - name: Approved
-          type: boolean
-          jsonPath: .spec.approved
         - name: State
           type: string
           jsonPath: .status.state
+        - name: Commands
+          type: integer
+          jsonPath: .status.commandCount
+        - name: Approved-Until
+          type: date
+          jsonPath: .status.approvedUntil
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
-        - name: Details
-          type: string
-          jsonPath: .status.details
       schema:
         openAPIV3Schema:
           type: object
           properties:
             spec:
               type: object
-              required: ["plugin", "operation"]
+              required: ["requestId", "commands"]
               properties:
-                plugin:
+                requestId:
                   type: string
-                  description: Operations plugin name (e.g. kubernetes).
-                operation:
+                  description: Control-plane access-request id this CR mirrors.
+                title:
                   type: string
-                  description: Operation the plugin exposes (e.g. restart-pod).
-                params:
-                  type: object
-                  x-kubernetes-preserve-unknown-fields: true
-                  description: JSON params passed to the operation.
-                approved:
-                  type: boolean
-                  default: false
-                  description: Set to true to authorize execution.
-                commandId:
+                  description: Human-readable title (e.g. the remediation plan title).
+                reason:
                   type: string
-                  description: Correlates this operation to its source command.
+                  description: Why access is being requested.
+                commands:
+                  type: array
+                  description: The commands this grant covers.
+                  items:
+                    type: object
+                    required: ["command"]
+                    properties:
+                      command:
+                        type: string
+                        description: Command name, <plugin>/<operation>.
+                      summary:
+                        type: string
+                        description: One-line human summary for display.
+                approvedForMinutes:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    Set by the customer to approve the grant for this many
+                    minutes. The operator computes status.approvedUntil from it.
             status:
               type: object
               properties:
                 state:
                   type: string
-                  description: REQUIRES_APPROVAL | RUNNING | SUCCESS | FAILED
-                details:
-                  type: string
-                message:
-                  type: string
+                  description: PENDING_APPROVAL | APPROVED | EXPIRED
+                commandCount:
+                  type: integer
+                  description: Number of commands this grant covers.
                 approvedAt:
                   type: string
+                  description: When the customer approved (RFC3339).
+                approvedUntil:
+                  type: string
+                  description: >-
+                    Instant the grant is authorized until (RFC3339), computed as
+                    approvedAt + approvedForMinutes. After this the control plane
+                    must not dispatch the grant's commands.
 "#,
         crd_name = names.crd_name,
         group = names.group,
@@ -4067,7 +4093,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                // The AlienOperation CRD is cluster-scoped and leads the manifest
+                // The access-request CRD is cluster-scoped and leads the manifest
                 // so the kind is registered before any namespaced object.
                 "CustomResourceDefinition",
                 "ServiceAccount",
@@ -4132,26 +4158,27 @@ mod tests {
                 .map(|verb| verb.as_str().expect("verb should be string"))
                 .collect::<Vec<_>>();
 
-            // The AlienOperation CRD is the one resource the operator writes:
-            // it creates operations awaiting approval and executes approved
-            // ones. Every other rule stays strictly read-only.
+            // The access-request CRD is the one resource the operator writes:
+            // it materializes control-plane access requests and records the
+            // customer's approval window in status. It never executes commands.
+            // Every other rule stays strictly read-only.
             if api_groups == vec!["operations.alien.dev"] {
                 assert!(
                     verbs.iter().all(|v| matches!(
                         *v,
                         "get" | "list" | "watch" | "create" | "update" | "patch"
                     )),
-                    "alienoperations rule verbs must stay within the approve/execute set: {verbs:?}"
+                    "access-request rule verbs must stay within the materialize/status set: {verbs:?}"
                 );
                 assert!(
                     !verbs.contains(&"delete") && !verbs.contains(&"deletecollection"),
-                    "operator must not delete AlienOperations"
+                    "operator must not delete access-request CRs"
                 );
             } else {
                 assert_eq!(
                     verbs,
                     vec!["get", "list", "watch"],
-                    "non-AlienOperation rules must be read-only"
+                    "non-access-request rules must be read-only"
                 );
             }
 

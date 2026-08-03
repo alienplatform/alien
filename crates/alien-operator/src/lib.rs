@@ -90,13 +90,14 @@ pub async fn run_operator_with_cancel_and_debug_loop(
 /// back to the corresponding no-op stub.
 ///
 /// - `debug_session_loop` — the `alien debug` tunnel loop.
-/// - `operations_crd_loop` — the operations approval controller (materializes
-///   leased operation-commands as `AlienOperation` CRs and runs approved ones).
+/// - `access_request_loop` — the access-request sync loop (materializes access
+///   requests for customer approval and reports approvals back; execution flows
+///   separately through the commands queue).
 pub async fn run_operator_with_cancel_and_loops(
     config: OperatorConfig,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
-    operations_crd_loop: Option<Arc<dyn loops::operations_crd::OperationsCrdLoop>>,
+    access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
     use tracing::{info, warn};
@@ -221,15 +222,17 @@ pub async fn run_operator_with_cancel_and_loops(
         None
     };
 
-    // Operations approval controller. Materializes leased operation-commands as
-    // `AlienOperation` custom resources for customer approval and runs approved
-    // ones — a Kubernetes-only flow. OSS builds inject no loop and fall through
-    // to the no-op stub, which parks until shutdown.
-    let operations_crd_handle =
+    // Access-request sync loop. Materializes control-plane access requests as
+    // artifacts the customer approves (Kubernetes: a custom resource) and
+    // reports approvals back — a Kubernetes-only flow for now. Execution of the
+    // approved commands happens separately via the commands queue. OSS builds
+    // inject no loop and fall through to the no-op stub, which parks until
+    // shutdown.
+    let access_request_handle =
         if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes) {
-            let loop_impl: Arc<dyn loops::operations_crd::OperationsCrdLoop> = operations_crd_loop
-                .unwrap_or_else(|| {
-                    Arc::new(loops::operations_crd::UnimplementedOperationsCrdLoop)
+            let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> =
+                access_request_loop.unwrap_or_else(|| {
+                    Arc::new(loops::access_requests::UnimplementedAccessRequestSyncLoop)
                 });
             Some(tokio::spawn({
                 let state = state.clone();
@@ -286,13 +289,13 @@ pub async fn run_operator_with_cancel_and_loops(
             warn!("Commands dispatch loop exited unexpectedly");
         },
         _ = async {
-            if let Some(h) = operations_crd_handle {
+            if let Some(h) = access_request_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
         } => {
-            warn!("Operations approval controller exited unexpectedly");
+            warn!("Access-request sync loop exited unexpectedly");
         },
     }
 
