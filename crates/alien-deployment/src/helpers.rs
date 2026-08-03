@@ -5,8 +5,8 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
     EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
     GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
-    Stack, StackState, TestEnvironmentInfo, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS,
-    ENV_ALIEN_SECRETS,
+    Stack, StackState, TestEnvironmentInfo, Vault, ENV_ALIEN_COMMANDS_TOKEN,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -572,6 +572,17 @@ pub async fn sync_secrets_to_vault(
         return Ok(false);
     }
 
+    // A deployment without a secrets vault never stored the legacy command token. Avoid turning
+    // its first empty reconcile into a vault dependency solely for that one-time cleanup.
+    if !has_secrets_vault(stack_state)
+        && desired_secrets.is_empty()
+        && runtime_metadata.last_synced_secret_names.is_empty()
+    {
+        debug!("No secrets vault or deployment-owned secrets to reconcile");
+        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+        return Ok(false);
+    }
+
     // The hash avoids redundant value writes, while the exact owned-key
     // inventory is what makes deletion safe. Old metadata without the
     // inventory deliberately performs one full reconcile to establish it.
@@ -676,6 +687,11 @@ pub async fn delete_deployment_vault_secrets(
         .cloned()
         .chain(desired_vault_secrets(config).into_keys())
         .collect::<Vec<_>>();
+    if !has_secrets_vault(stack_state) && owned_names.is_empty() {
+        runtime_metadata.last_synced_env_vars_hash = None;
+        runtime_metadata.last_synced_secret_names.clear();
+        return Ok(false);
+    }
     owned_names.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
     owned_names.sort();
     owned_names.dedup();
@@ -714,6 +730,13 @@ pub async fn delete_deployment_vault_secrets(
         "Deleted deployment-owned vault secrets"
     );
     Ok(true)
+}
+
+fn has_secrets_vault(stack_state: &StackState) -> bool {
+    stack_state
+        .resources
+        .get("secrets")
+        .is_some_and(|resource| resource.resource_type == Vault::RESOURCE_TYPE.as_ref())
 }
 
 fn desired_vault_secrets(config: &DeploymentConfig) -> BTreeMap<String, String> {
@@ -1443,6 +1466,55 @@ mod tests {
             Some(expected_hash.as_str())
         );
         assert!(runtime_metadata.last_synced_secret_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deployment_without_secrets_vault_skips_empty_reconcile_and_deletion() {
+        let stack_state = StackState::new(Platform::Test);
+        let config = make_config(make_snapshot(&[], &[]));
+        let expected_hash = secrets_sync_hash(&config);
+        let mut runtime_metadata = RuntimeMetadata::default();
+
+        let synced = sync_secrets_to_vault(
+            &stack_state,
+            &ClientConfig::Test,
+            &config,
+            &mut runtime_metadata,
+        )
+        .await
+        .expect("an empty deployment should not require a secrets vault");
+
+        assert!(!synced);
+        assert_eq!(
+            runtime_metadata.last_synced_env_vars_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert!(!delete_deployment_vault_secrets(
+            &stack_state,
+            &ClientConfig::Test,
+            &config,
+            &mut runtime_metadata,
+        )
+        .await
+        .expect("deleting an empty deployment should not require a secrets vault"));
+        assert!(runtime_metadata.last_synced_env_vars_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn deployment_without_secrets_vault_does_not_ignore_desired_secrets() {
+        let config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
+
+        assert!(
+            sync_secrets_to_vault(
+                &StackState::new(Platform::Test),
+                &ClientConfig::Test,
+                &config,
+                &mut RuntimeMetadata::default(),
+            )
+            .await
+            .is_err(),
+            "a missing vault must remain an error when secrets need persistence"
+        );
     }
 
     #[test]
