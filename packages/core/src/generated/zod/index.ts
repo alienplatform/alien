@@ -212,6 +212,9 @@ export type { HorizonWorkloadSchedulingMode } from "./horizon-workload-schedulin
 export type { HttpMethod } from "./http-method-schema.js";
 export type { ImportSourceKind } from "./import-source-kind-schema.js";
 export type { ImportedResource } from "./imported-resource-schema.js";
+export type { KeyFingerprint } from "./key-fingerprint-schema.js";
+export type { KeyOutputs } from "./key-outputs-schema.js";
+export type { Key } from "./key-schema.js";
 export type { KubernetesBuildHeartbeatData } from "./kubernetes-build-heartbeat-data-schema.js";
 export type { KubernetesCertificateMode } from "./kubernetes-certificate-mode-schema.js";
 export type { KubernetesCloudReference } from "./kubernetes-cloud-reference-schema.js";
@@ -600,6 +603,9 @@ export { HorizonWorkloadSchedulingModeSchema } from "./horizon-workload-scheduli
 export { HttpMethodSchema } from "./http-method-schema.js";
 export { ImportSourceKindSchema } from "./import-source-kind-schema.js";
 export { ImportedResourceSchema } from "./imported-resource-schema.js";
+export { KeyFingerprintSchema } from "./key-fingerprint-schema.js";
+export { KeyOutputsSchema } from "./key-outputs-schema.js";
+export { KeySchema } from "./key-schema.js";
 export { KubernetesBuildHeartbeatDataSchema } from "./kubernetes-build-heartbeat-data-schema.js";
 export { KubernetesCertificateModeSchema } from "./kubernetes-certificate-mode-schema.js";
 export { KubernetesCloudReferenceSchema } from "./kubernetes-cloud-reference-schema.js";

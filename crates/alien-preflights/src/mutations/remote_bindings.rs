@@ -2,7 +2,7 @@
 
 use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
-    DeploymentConfig, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
+    DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
     ResourceLifecycle, Stack, StackState,
 };
 use alien_error::AlienError;
@@ -44,6 +44,8 @@ impl StackMutation for RemoteBindingsMutation {
         _stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
+        validate_remote_key_is_the_only_published_resource(&stack, self.description())?;
+
         if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
                 mutation_name: self.description().to_string(),
@@ -87,11 +89,41 @@ impl StackMutation for RemoteBindingsMutation {
     }
 }
 
+fn validate_remote_key_is_the_only_published_resource(
+    stack: &Stack,
+    mutation_name: &str,
+) -> Result<()> {
+    let remote_resources = stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| entry.has_remote_bindings())
+        .collect::<Vec<_>>();
+    let remote_keys = remote_resources
+        .iter()
+        .filter(|(_, entry)| entry.config.resource_type() == Key::RESOURCE_TYPE)
+        .count();
+
+    if remote_keys == 0 || (remote_keys == 1 && remote_resources.len() == 1) {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::StackMutationFailed {
+        mutation_name: mutation_name.to_string(),
+        message: "a remotely published Key must be the deployment's only remoteAccess resource"
+            .to_string(),
+        resource_id: remote_resources
+            .iter()
+            .find(|(_, entry)| entry.config.resource_type() == Key::RESOURCE_TYPE)
+            .map(|(id, _)| (*id).clone()),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::{
-        EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig, StackSettings, Storage,
+        EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, StackSettings,
+        Storage,
     };
 
     fn config() -> DeploymentConfig {
@@ -194,5 +226,57 @@ mod tests {
             &StackState::new(Platform::Test),
             &config()
         ));
+    }
+
+    #[tokio::test]
+    async fn remote_key_must_be_the_only_published_resource() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(
+                Key::new("customer-key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Test);
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &state, &config())
+            .await
+            .expect_err("a remote Key must reject another remotely published resource");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(error.to_string().contains("only remoteAccess resource"));
+    }
+
+    #[tokio::test]
+    async fn remote_key_allows_non_remote_application_resources() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(
+                Key::new("customer-key".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("internal".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = StackState::new(Platform::Test);
+
+        let mutated = RemoteBindingsMutation
+            .mutate(stack, &state, &config())
+            .await
+            .expect("non-remote application resources are allowed beside a remote Key");
+        let bindings = mutated
+            .resources
+            .get(REMOTE_BINDINGS_ID)
+            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
+            .expect("Remote Bindings config");
+
+        assert_eq!(bindings.grants.len(), 1);
+        assert_eq!(bindings.grants[0].resource_id, "customer-key");
+        assert_eq!(bindings.grants[0].permission_set, "key/remote-cryptography");
     }
 }

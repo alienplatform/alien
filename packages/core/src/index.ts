@@ -1,7 +1,7 @@
 // ResourceBuilder is internal glue shared by the builders, not an extension
 // point. Exporting it would commit us to its shape at the next publish.
-
 export * from "./ai.js"
+export * from "./key.js"
 export * from "./artifact-registry.js"
 export * from "./build.js"
 export * from "./common-errors.js"
