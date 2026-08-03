@@ -20,6 +20,10 @@ pub struct Key {
 
 impl Key {
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("key");
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// Stable identity of a provider key family.

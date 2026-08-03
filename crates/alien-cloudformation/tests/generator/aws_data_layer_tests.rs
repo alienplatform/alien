@@ -3,10 +3,48 @@
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, RemoteStackManagement,
+    Key, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, RemoteStackManagement,
     ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
     WorkerCode, WorkerTrigger,
 };
+
+#[test]
+fn aws_key_template_is_valid_and_retained() {
+    let mut stack = Stack::new("enterprise-key".to_string())
+        .add_with_remote_access(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack
+        .resources
+        .get_mut("customer-key")
+        .unwrap()
+        .dependencies = vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "aws key",
+    );
+    let key = template
+        .resources
+        .values()
+        .find(|resource| resource.resource_type == "AWS::KMS::Key")
+        .expect("KMS key should render");
+
+    assert_eq!(key.deletion_policy.as_deref(), Some("Retain"));
+    assert_eq!(key.update_replace_policy.as_deref(), Some("Retain"));
+    assert!(yaml.contains("kms:Encrypt"));
+    assert!(yaml.contains("kms:Decrypt"));
+}
 
 #[test]
 fn aws_data_layer_renders_idiomatic_template() {
