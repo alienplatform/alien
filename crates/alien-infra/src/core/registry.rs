@@ -16,7 +16,7 @@ use alien_core::Daemon;
 use alien_core::Postgres;
 use alien_core::{
     Ai, ArtifactRegistry, AwsOpenSearch, AzureContainerAppsEnvironment, AzureResourceGroup,
-    AzureServiceBusNamespace, AzureStorageAccount, Build, Email, Kv, Network, RemoteBindings,
+    AzureServiceBusNamespace, AzureStorageAccount, Build, Email, Key, Kv, Network, RemoteBindings,
     RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
@@ -245,6 +245,28 @@ impl ResourceRegistry {
             Email::RESOURCE_TYPE,
             Platform::Aws,
             Box::new(DefaultControllerFactory::<crate::email::AwsEmailController>::new()),
+        );
+
+        // Key resources are setup-owned and enter deployments through stack import.
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            Key::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<crate::key::AwsKeyController>::new()),
+        );
+
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            Key::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<crate::key::GcpKeyController>::new()),
+        );
+
+        #[cfg(feature = "azure")]
+        registry.register_controller_factory(
+            Key::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<crate::key::AzureKeyController>::new()),
         );
 
         // Register built-in AWS OpenSearch controller (AWS only; the

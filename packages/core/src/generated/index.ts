@@ -28,6 +28,7 @@ export type { AwsEmailDomainImportData } from "./zod/aws-email-domain-import-dat
 export type { AwsEmailImportData } from "./zod/aws-email-import-data-schema.js";
 export type { AwsFailureDomainSubnets } from "./zod/aws-failure-domain-subnets-schema.js";
 export type { AwsIamRoleServiceAccountHeartbeatData } from "./zod/aws-iam-role-service-account-heartbeat-data-schema.js";
+export type { AwsKeyImportData } from "./zod/aws-key-import-data-schema.js";
 export type { AwsKvImportData } from "./zod/aws-kv-import-data-schema.js";
 export type { AwsLambdaWorkerHeartbeatData } from "./zod/aws-lambda-worker-heartbeat-data-schema.js";
 export type { AwsManagementConfig } from "./zod/aws-management-config-schema.js";
@@ -70,6 +71,7 @@ export type { AzureDaemonHeartbeatData } from "./zod/azure-daemon-heartbeat-data
 export type { AzureFlexibleServerPostgresHeartbeatData } from "./zod/azure-flexible-server-postgres-heartbeat-data-schema.js";
 export type { AzureFlexibleServerPostgresImportData } from "./zod/azure-flexible-server-postgres-import-data-schema.js";
 export type { AzureFoundryAiHeartbeatData } from "./zod/azure-foundry-ai-heartbeat-data-schema.js";
+export type { AzureKeyImportData } from "./zod/azure-key-import-data-schema.js";
 export type { AzureKeyVaultHeartbeatData } from "./zod/azure-key-vault-heartbeat-data-schema.js";
 export type { AzureKvImportData } from "./zod/azure-kv-import-data-schema.js";
 export type { AzureManagedIdentityServiceAccountHeartbeatData } from "./zod/azure-managed-identity-service-account-heartbeat-data-schema.js";
@@ -180,6 +182,7 @@ export type { GcpCondition } from "./zod/gcp-condition-schema.js";
 export type { GcpCustomCertificateConfig } from "./zod/gcp-custom-certificate-config-schema.js";
 export type { GcpDaemonHeartbeatData } from "./zod/gcp-daemon-heartbeat-data-schema.js";
 export type { GcpFirestoreKvHeartbeatData } from "./zod/gcp-firestore-kv-heartbeat-data-schema.js";
+export type { GcpKeyImportData } from "./zod/gcp-key-import-data-schema.js";
 export type { GcpKvImportData } from "./zod/gcp-kv-import-data-schema.js";
 export type { GcpManagementConfig } from "./zod/gcp-management-config-schema.js";
 export type { GcpNetworkImportData } from "./zod/gcp-network-import-data-schema.js";
@@ -419,6 +422,7 @@ export { AwsEmailDomainImportDataSchema } from "./zod/aws-email-domain-import-da
 export { AwsEmailImportDataSchema } from "./zod/aws-email-import-data-schema.js";
 export { AwsFailureDomainSubnetsSchema } from "./zod/aws-failure-domain-subnets-schema.js";
 export { AwsIamRoleServiceAccountHeartbeatDataSchema } from "./zod/aws-iam-role-service-account-heartbeat-data-schema.js";
+export { AwsKeyImportDataSchema } from "./zod/aws-key-import-data-schema.js";
 export { AwsKvImportDataSchema } from "./zod/aws-kv-import-data-schema.js";
 export { AwsLambdaWorkerHeartbeatDataSchema } from "./zod/aws-lambda-worker-heartbeat-data-schema.js";
 export { AwsManagementConfigSchema } from "./zod/aws-management-config-schema.js";
@@ -461,6 +465,7 @@ export { AzureDaemonHeartbeatDataSchema } from "./zod/azure-daemon-heartbeat-dat
 export { AzureFlexibleServerPostgresHeartbeatDataSchema } from "./zod/azure-flexible-server-postgres-heartbeat-data-schema.js";
 export { AzureFlexibleServerPostgresImportDataSchema } from "./zod/azure-flexible-server-postgres-import-data-schema.js";
 export { AzureFoundryAiHeartbeatDataSchema } from "./zod/azure-foundry-ai-heartbeat-data-schema.js";
+export { AzureKeyImportDataSchema } from "./zod/azure-key-import-data-schema.js";
 export { AzureKeyVaultHeartbeatDataSchema } from "./zod/azure-key-vault-heartbeat-data-schema.js";
 export { AzureKvImportDataSchema } from "./zod/azure-kv-import-data-schema.js";
 export { AzureManagedIdentityServiceAccountHeartbeatDataSchema } from "./zod/azure-managed-identity-service-account-heartbeat-data-schema.js";
@@ -571,6 +576,7 @@ export { GcpConditionSchema } from "./zod/gcp-condition-schema.js";
 export { GcpCustomCertificateConfigSchema } from "./zod/gcp-custom-certificate-config-schema.js";
 export { GcpDaemonHeartbeatDataSchema } from "./zod/gcp-daemon-heartbeat-data-schema.js";
 export { GcpFirestoreKvHeartbeatDataSchema } from "./zod/gcp-firestore-kv-heartbeat-data-schema.js";
+export { GcpKeyImportDataSchema } from "./zod/gcp-key-import-data-schema.js";
 export { GcpKvImportDataSchema } from "./zod/gcp-kv-import-data-schema.js";
 export { GcpManagementConfigSchema } from "./zod/gcp-management-config-schema.js";
 export { GcpNetworkImportDataSchema } from "./zod/gcp-network-import-data-schema.js";

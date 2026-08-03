@@ -303,6 +303,21 @@ expression: schemas
     "title": "AwsKvImportData",
     "type": "object"
   },
+  "aws_key": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "AWS KMS key created by the customer-installed setup stack.",
+    "properties": {
+      "keyArn": {
+        "description": "Immutable KMS key ARN. Alias ARNs are not accepted.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "keyArn"
+    ],
+    "title": "AwsKeyImportData",
+    "type": "object"
+  },
   "aws_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "definitions": {
@@ -546,6 +561,13 @@ expression: schemas
       "managementPermissionsApplied": {
         "description": "Whether the management inline policy was attached by the generated stack.",
         "type": "boolean"
+      },
+      "remoteBindingsRoleArn": {
+        "description": "Setup-owned role used only for opted-in remote binding data access.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "roleArn": {
         "description": "Cross-account management role ARN.",
@@ -881,6 +903,36 @@ expression: schemas
     "title": "AzureKvImportData",
     "type": "object"
   },
+  "azure_key": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "Azure Key Vault key created by the customer-installed setup stack.",
+    "properties": {
+      "keyId": {
+        "description": "Full versioned Key Vault key ID used for new wrapping operations.",
+        "type": "string"
+      },
+      "keyName": {
+        "description": "Key name within the vault.",
+        "type": "string"
+      },
+      "lineageVersionId": {
+        "description": "Version ID that identifies the original key lineage.",
+        "type": "string"
+      },
+      "vaultResourceId": {
+        "description": "ARM resource ID of the dedicated Key Vault.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "keyId",
+      "keyName",
+      "lineageVersionId",
+      "vaultResourceId"
+    ],
+    "title": "AzureKeyImportData",
+    "type": "object"
+  },
   "azure_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "Azure Network ImportData — VNet + subnets + NAT topology.",
@@ -1077,6 +1129,20 @@ expression: schemas
       "principalId": {
         "description": "Management UAMI principal id.",
         "type": "string"
+      },
+      "remoteBindingsClientId": {
+        "description": "Remote Bindings UAMI client id used for workload identity exchange.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "remoteBindingsIdentityId": {
+        "description": "Setup-owned UAMI resource id used only for opted-in remote bindings.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "resourceGroup": {
         "description": "Resource group containing the management identity.",
@@ -1561,6 +1627,26 @@ expression: schemas
     "title": "GcpKvImportData",
     "type": "object"
   },
+  "gcp_key": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "GCP Cloud KMS key created by the customer-installed setup stack.",
+    "properties": {
+      "cryptoKeyName": {
+        "description": "Full CryptoKey resource name, without a CryptoKeyVersion.",
+        "type": "string"
+      },
+      "primaryVersion": {
+        "description": "Full primary CryptoKeyVersion resource name used for new wrapping operations.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "cryptoKeyName",
+      "primaryVersion"
+    ],
+    "title": "GcpKeyImportData",
+    "type": "object"
+  },
   "gcp_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.",
@@ -1728,6 +1814,13 @@ expression: schemas
       },
       "projectNumber": {
         "description": "Numeric project number containing the management service account.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "remoteBindingsServiceAccountEmail": {
+        "description": "Setup-owned service account used only for opted-in remote bindings.",
         "type": [
           "string",
           "null"

@@ -28,6 +28,7 @@ export type { AwsEmailDomainImportData } from "./aws-email-domain-import-data-sc
 export type { AwsEmailImportData } from "./aws-email-import-data-schema.js";
 export type { AwsFailureDomainSubnets } from "./aws-failure-domain-subnets-schema.js";
 export type { AwsIamRoleServiceAccountHeartbeatData } from "./aws-iam-role-service-account-heartbeat-data-schema.js";
+export type { AwsKeyImportData } from "./aws-key-import-data-schema.js";
 export type { AwsKvImportData } from "./aws-kv-import-data-schema.js";
 export type { AwsLambdaWorkerHeartbeatData } from "./aws-lambda-worker-heartbeat-data-schema.js";
 export type { AwsManagementConfig } from "./aws-management-config-schema.js";
@@ -70,6 +71,7 @@ export type { AzureDaemonHeartbeatData } from "./azure-daemon-heartbeat-data-sch
 export type { AzureFlexibleServerPostgresHeartbeatData } from "./azure-flexible-server-postgres-heartbeat-data-schema.js";
 export type { AzureFlexibleServerPostgresImportData } from "./azure-flexible-server-postgres-import-data-schema.js";
 export type { AzureFoundryAiHeartbeatData } from "./azure-foundry-ai-heartbeat-data-schema.js";
+export type { AzureKeyImportData } from "./azure-key-import-data-schema.js";
 export type { AzureKeyVaultHeartbeatData } from "./azure-key-vault-heartbeat-data-schema.js";
 export type { AzureKvImportData } from "./azure-kv-import-data-schema.js";
 export type { AzureManagedIdentityServiceAccountHeartbeatData } from "./azure-managed-identity-service-account-heartbeat-data-schema.js";
@@ -180,6 +182,7 @@ export type { GcpCondition } from "./gcp-condition-schema.js";
 export type { GcpCustomCertificateConfig } from "./gcp-custom-certificate-config-schema.js";
 export type { GcpDaemonHeartbeatData } from "./gcp-daemon-heartbeat-data-schema.js";
 export type { GcpFirestoreKvHeartbeatData } from "./gcp-firestore-kv-heartbeat-data-schema.js";
+export type { GcpKeyImportData } from "./gcp-key-import-data-schema.js";
 export type { GcpKvImportData } from "./gcp-kv-import-data-schema.js";
 export type { GcpManagementConfig } from "./gcp-management-config-schema.js";
 export type { GcpNetworkImportData } from "./gcp-network-import-data-schema.js";
@@ -419,6 +422,7 @@ export { AwsEmailDomainImportDataSchema } from "./aws-email-domain-import-data-s
 export { AwsEmailImportDataSchema } from "./aws-email-import-data-schema.js";
 export { AwsFailureDomainSubnetsSchema } from "./aws-failure-domain-subnets-schema.js";
 export { AwsIamRoleServiceAccountHeartbeatDataSchema } from "./aws-iam-role-service-account-heartbeat-data-schema.js";
+export { AwsKeyImportDataSchema } from "./aws-key-import-data-schema.js";
 export { AwsKvImportDataSchema } from "./aws-kv-import-data-schema.js";
 export { AwsLambdaWorkerHeartbeatDataSchema } from "./aws-lambda-worker-heartbeat-data-schema.js";
 export { AwsManagementConfigSchema } from "./aws-management-config-schema.js";
@@ -461,6 +465,7 @@ export { AzureDaemonHeartbeatDataSchema } from "./azure-daemon-heartbeat-data-sc
 export { AzureFlexibleServerPostgresHeartbeatDataSchema } from "./azure-flexible-server-postgres-heartbeat-data-schema.js";
 export { AzureFlexibleServerPostgresImportDataSchema } from "./azure-flexible-server-postgres-import-data-schema.js";
 export { AzureFoundryAiHeartbeatDataSchema } from "./azure-foundry-ai-heartbeat-data-schema.js";
+export { AzureKeyImportDataSchema } from "./azure-key-import-data-schema.js";
 export { AzureKeyVaultHeartbeatDataSchema } from "./azure-key-vault-heartbeat-data-schema.js";
 export { AzureKvImportDataSchema } from "./azure-kv-import-data-schema.js";
 export { AzureManagedIdentityServiceAccountHeartbeatDataSchema } from "./azure-managed-identity-service-account-heartbeat-data-schema.js";
@@ -571,6 +576,7 @@ export { GcpConditionSchema } from "./gcp-condition-schema.js";
 export { GcpCustomCertificateConfigSchema } from "./gcp-custom-certificate-config-schema.js";
 export { GcpDaemonHeartbeatDataSchema } from "./gcp-daemon-heartbeat-data-schema.js";
 export { GcpFirestoreKvHeartbeatDataSchema } from "./gcp-firestore-kv-heartbeat-data-schema.js";
+export { GcpKeyImportDataSchema } from "./gcp-key-import-data-schema.js";
 export { GcpKvImportDataSchema } from "./gcp-kv-import-data-schema.js";
 export { GcpManagementConfigSchema } from "./gcp-management-config-schema.js";
 export { GcpNetworkImportDataSchema } from "./gcp-network-import-data-schema.js";
