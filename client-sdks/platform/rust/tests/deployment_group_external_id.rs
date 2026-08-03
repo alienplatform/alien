@@ -20,7 +20,11 @@ fn generated_client_exposes_external_id_operations() {
         .project("my-project");
     let update: types::SetDeploymentGroupExternalIdRequest =
         types::SetDeploymentGroupExternalIdRequest::builder()
-            .external_id(Some("customer_456".to_string()))
+            .external_id(Some(
+                "customer_456"
+                    .parse::<types::SetDeploymentGroupExternalIdRequestExternalId>()
+                    .expect("valid external ID"),
+            ))
             .try_into()
             .expect("valid update request");
     let _update = client
