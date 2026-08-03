@@ -182,8 +182,8 @@ Outputs:
       Fn::ToJsonString:
         deploymentModel: push
         updates: approval-required
-        telemetry: off
-        heartbeats: on
+        telemetry: "off"
+        heartbeats: "on"
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
