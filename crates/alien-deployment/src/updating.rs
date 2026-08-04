@@ -281,6 +281,7 @@ pub async fn handle_updating(
     // This checks the hash and only syncs if needed
     info!("Syncing secrets to vault before updating live resources");
     let synced = crate::helpers::sync_secrets_to_vault(
+        &target_stack,
         &stack_state,
         &client_config,
         &config,

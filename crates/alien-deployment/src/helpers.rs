@@ -5,7 +5,7 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
     EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
     GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
-    Stack, StackState, TestEnvironmentInfo, Vault, ENV_ALIEN_COMMANDS_TOKEN,
+    Stack, StackState, TestEnvironmentInfo, Vault, Worker, ENV_ALIEN_COMMANDS_TOKEN,
     ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
@@ -26,7 +26,7 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 // no-migration option and keep the wire keys stable.
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
-const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:no-app-command-token:v2\0";
+const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v3\0";
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(
@@ -556,13 +556,14 @@ fn matches_resource_pattern(resource_name: &str, target_resources: &Option<Vec<S
 ///
 /// Returns true if sync was performed, false if skipped (already synced).
 pub async fn sync_secrets_to_vault(
+    stack: &Stack,
     stack_state: &StackState,
     client_config: &ClientConfig,
     config: &DeploymentConfig,
     runtime_metadata: &mut alien_core::RuntimeMetadata,
 ) -> Result<bool> {
-    let sync_hash = secrets_sync_hash(config);
-    let desired_secrets = desired_vault_secrets(config);
+    let desired_secrets = desired_vault_secrets(stack, client_config.platform(), config);
+    let sync_hash = secrets_sync_hash(&desired_secrets);
     let desired_secret_names = desired_secrets.keys().cloned().collect::<Vec<_>>();
 
     if client_config.platform() == Platform::Machines {
@@ -672,6 +673,7 @@ pub async fn sync_secrets_to_vault(
 /// Ownership comes from the persisted sync inventory plus the current config, which also lets
 /// deployments created before the inventory field was introduced clean up their active keys.
 pub async fn delete_deployment_vault_secrets(
+    stack: &Stack,
     stack_state: &StackState,
     client_config: &ClientConfig,
     config: &DeploymentConfig,
@@ -685,7 +687,7 @@ pub async fn delete_deployment_vault_secrets(
         .last_synced_secret_names
         .iter()
         .cloned()
-        .chain(desired_vault_secrets(config).into_keys())
+        .chain(desired_vault_secrets(stack, client_config.platform(), config).into_keys())
         .collect::<Vec<_>>();
     if !has_secrets_vault(stack_state) && owned_names.is_empty() {
         runtime_metadata.last_synced_env_vars_hash = None;
@@ -739,17 +741,38 @@ fn has_secrets_vault(stack_state: &StackState) -> bool {
         .is_some_and(|resource| resource.resource_type == Vault::RESOURCE_TYPE.as_ref())
 }
 
-fn desired_vault_secrets(config: &DeploymentConfig) -> BTreeMap<String, String> {
+fn desired_vault_secrets(
+    stack: &Stack,
+    platform: Platform,
+    config: &DeploymentConfig,
+) -> BTreeMap<String, String> {
+    let vault_backed_workers = stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| entry.config.resource_type() == Worker::RESOURCE_TYPE)
+        .filter(|_| !SecretDelivery::resolve(platform, ComputeKind::Worker).is_native_projection())
+        .map(|(resource_id, _)| resource_id.as_str())
+        .collect::<Vec<_>>();
+
     let mut desired = config
         .environment_variables
         .variables
         .iter()
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
         .filter(|var| var.name != ENV_ALIEN_COMMANDS_TOKEN)
+        .filter(|var| {
+            vault_backed_workers
+                .iter()
+                .any(|resource_id| matches_resource_pattern(resource_id, &var.target_resources))
+        })
         .map(|var| (var.name.clone(), var.value.clone()))
         .collect::<BTreeMap<_, _>>();
 
-    if let Some(monitoring) = &config.monitoring {
+    if let Some(monitoring) = config
+        .monitoring
+        .as_ref()
+        .filter(|_| !vault_backed_workers.is_empty())
+    {
         desired.insert(
             RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
             monitoring.logs_auth_header.clone(),
@@ -799,13 +822,14 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn secrets_sync_hash(config: &DeploymentConfig) -> String {
+fn secrets_sync_hash(desired_secrets: &BTreeMap<String, String>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(SECRETS_SYNC_SCHEMA_VERSION);
-    hasher.update(config.environment_variables.hash.as_bytes());
-    if let Some(monitoring) = &config.monitoring {
-        hasher.update(b"\0runtime-monitoring\0");
-        hasher.update(runtime_monitoring_secrets_hash(monitoring).as_bytes());
+    for (name, value) in desired_secrets {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(value.as_bytes());
+        hasher.update(b"\0");
     }
     format!("{:x}", hasher.finalize())
 }
@@ -1557,10 +1581,11 @@ mod tests {
     async fn machines_skips_stack_vault_secret_sync() {
         let mut config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
         config.monitoring = Some(make_monitoring_with_metrics());
-        let expected_hash = secrets_sync_hash(&config);
+        let expected_hash = secrets_sync_hash(&BTreeMap::new());
         let mut runtime_metadata = RuntimeMetadata::default();
 
         let synced = sync_secrets_to_vault(
+            &make_single_function_stack("worker"),
             &StackState::new(Platform::Machines),
             &ClientConfig::Machines,
             &config,
@@ -1581,10 +1606,11 @@ mod tests {
     async fn deployment_without_secrets_vault_skips_empty_reconcile_and_deletion() {
         let stack_state = StackState::new(Platform::Test);
         let config = make_config(make_snapshot(&[], &[]));
-        let expected_hash = secrets_sync_hash(&config);
+        let expected_hash = secrets_sync_hash(&BTreeMap::new());
         let mut runtime_metadata = RuntimeMetadata::default();
 
         let synced = sync_secrets_to_vault(
+            &Stack::new("empty".to_string()).build(),
             &stack_state,
             &ClientConfig::Test,
             &config,
@@ -1599,6 +1625,7 @@ mod tests {
             Some(expected_hash.as_str())
         );
         assert!(!delete_deployment_vault_secrets(
+            &Stack::new("empty".to_string()).build(),
             &stack_state,
             &ClientConfig::Test,
             &config,
@@ -1615,6 +1642,7 @@ mod tests {
 
         assert!(
             sync_secrets_to_vault(
+                &make_single_function_stack("worker"),
                 &StackState::new(Platform::Test),
                 &ClientConfig::Test,
                 &config,
@@ -1623,6 +1651,61 @@ mod tests {
             .await
             .is_err(),
             "a missing vault must remain an error when secrets need persistence"
+        );
+    }
+
+    #[tokio::test]
+    async fn container_only_secret_does_not_require_stack_vault() {
+        let mut stack = make_compute_stack();
+        stack.resources.shift_remove("worker");
+        let config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
+        let mut metadata = RuntimeMetadata::default();
+
+        let synced = sync_secrets_to_vault(
+            &stack,
+            &StackState::new(Platform::Aws),
+            &ClientConfig::Test,
+            &config,
+            &mut metadata,
+        )
+        .await
+        .expect("Container secrets use native projection without the stack vault");
+
+        assert!(!synced);
+        assert!(metadata.last_synced_secret_names.is_empty());
+    }
+
+    #[test]
+    fn vault_contains_only_secrets_targeted_to_vault_backed_workers() {
+        let mut config = make_config(EnvironmentVariablesSnapshot {
+            variables: vec![
+                EnvironmentVariable {
+                    name: "WORKER_TOKEN".to_string(),
+                    value: "worker-secret".to_string(),
+                    var_type: EnvironmentVariableType::Secret,
+                    target_resources: Some(vec!["worker".to_string()]),
+                },
+                EnvironmentVariable {
+                    name: "CONTAINER_TOKEN".to_string(),
+                    value: "container-secret".to_string(),
+                    var_type: EnvironmentVariableType::Secret,
+                    target_resources: Some(vec!["web".to_string()]),
+                },
+            ],
+            hash: "targeted".to_string(),
+            created_at: "now".to_string(),
+        });
+        config.monitoring = Some(make_monitoring_with_metrics());
+
+        let desired = desired_vault_secrets(&make_compute_stack(), Platform::Aws, &config);
+
+        assert_eq!(
+            desired.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "WORKER_TOKEN".to_string(),
+                RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
+                RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string(),
+            ]
         );
     }
 
@@ -1636,7 +1719,11 @@ mod tests {
             metrics_auth_header: None,
             resource_attributes: HashMap::new(),
         });
-        let desired = desired_vault_secrets(&config);
+        let desired = desired_vault_secrets(
+            &make_single_function_stack("worker"),
+            Platform::Aws,
+            &config,
+        );
         let previously_owned = vec![
             "KEEP".to_string(),
             "REMOVED".to_string(),
@@ -1675,7 +1762,11 @@ mod tests {
             ],
         ));
 
-        let desired = desired_vault_secrets(&config);
+        let desired = desired_vault_secrets(
+            &make_single_function_stack("worker"),
+            Platform::Aws,
+            &config,
+        );
 
         assert_eq!(desired.get("APP_SECRET"), Some(&"app-value".to_string()));
         assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
@@ -1728,12 +1819,13 @@ mod tests {
         first.environment_variables.hash = "first".to_string();
         first.monitoring = Some(make_monitoring_with_metrics());
         let mut metadata = RuntimeMetadata::default();
+        let stack = make_single_function_stack("worker");
         // This is the real pre-inventory upgrade case: the old hash exists, but there is no list
         // of owned names. The reserved token still has to be deleted from the shared vault.
         metadata.last_synced_env_vars_hash = Some("legacy".to_string());
         metadata.last_synced_secret_names.clear();
         assert!(
-            sync_secrets_to_vault(&stack_state, &client_config, &first, &mut metadata)
+            sync_secrets_to_vault(&stack, &stack_state, &client_config, &first, &mut metadata)
                 .await
                 .expect("first sync")
         );
@@ -1758,11 +1850,15 @@ mod tests {
             metrics_auth_header: None,
             resource_attributes: HashMap::new(),
         });
-        assert!(
-            sync_secrets_to_vault(&stack_state, &client_config, &second, &mut metadata)
-                .await
-                .expect("second sync")
-        );
+        assert!(sync_secrets_to_vault(
+            &stack,
+            &stack_state,
+            &client_config,
+            &second,
+            &mut metadata
+        )
+        .await
+        .expect("second sync"));
 
         assert_eq!(vault.get_secret("KEEP").await.expect("kept value"), "v2");
         assert_eq!(
@@ -1788,7 +1884,7 @@ mod tests {
         let mut third = make_config(make_snapshot(&[], &[]));
         third.environment_variables.hash = "third".to_string();
         assert!(
-            sync_secrets_to_vault(&stack_state, &client_config, &third, &mut metadata)
+            sync_secrets_to_vault(&stack, &stack_state, &client_config, &third, &mut metadata)
                 .await
                 .expect("delete-only sync")
         );
@@ -1819,12 +1915,13 @@ mod tests {
         ));
         token_only.environment_variables.hash = "token-only".to_string();
         let old_hash = pre_v2_snapshot_only_sync_hash(&token_only);
-        let policy_hash = secrets_sync_hash(&token_only);
+        let policy_hash = secrets_sync_hash(&BTreeMap::new());
         assert_ne!(old_hash, policy_hash);
         let mut legacy_metadata = RuntimeMetadata::default();
         legacy_metadata.last_synced_env_vars_hash = Some(old_hash);
 
         assert!(sync_secrets_to_vault(
+            &stack,
             &stack_state,
             &client_config,
             &token_only,
@@ -1839,6 +1936,7 @@ mod tests {
             Some(policy_hash.as_str())
         );
         assert!(!sync_secrets_to_vault(
+            &stack,
             &stack_state,
             &client_config,
             &token_only,
@@ -1903,6 +2001,7 @@ mod tests {
         };
 
         assert!(delete_deployment_vault_secrets(
+            &make_single_function_stack("worker"),
             &stack_state,
             &client_config,
             &config,
