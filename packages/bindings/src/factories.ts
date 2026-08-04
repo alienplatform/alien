@@ -363,3 +363,16 @@ export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
     return storage
   }
 }
+
+/** Build the remote Key factory around one native bindings handle. */
+export function createRemoteKeyFactory(bindings: RawRemoteBindingsHandle) {
+  const keys = new Map<string, Key>()
+  return (name: string): Key => {
+    let key = keys.get(name)
+    if (!key) {
+      key = makeKey(lazyHandle(() => bindings.key(name)))
+      keys.set(name, key)
+    }
+    return key
+  }
+}

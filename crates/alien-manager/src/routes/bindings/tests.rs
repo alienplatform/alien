@@ -196,11 +196,42 @@ fn external_storage_binding_is_rejected_even_with_synchronized_params() {
         ..StackSettings::default()
     });
 
-    let error = require_setup_owned_remote_storage(&deployment, "files")
+    let error = require_setup_owned_remote_binding(&deployment, "files")
         .expect_err("existing buckets are outside the Remote Bindings v0 contract");
     assert_eq!(error.code, "BAD_REQUEST");
     assert!(error.message.contains("cannot use an external binding"));
     assert!(error.message.contains("created by setup"));
+}
+
+#[test]
+fn remote_key_validation_returns_only_concrete_provider_topology() {
+    let cases = [
+        (
+            Platform::Aws,
+            KeyBinding::aws_kms("arn:aws:kms:us-east-1:123:key/abc", Some("us-east-1")),
+        ),
+        (
+            Platform::Gcp,
+            KeyBinding::gcp_cloud_kms(
+                "projects/example/locations/us/keyRings/data/cryptoKeys/customer",
+            ),
+        ),
+        (
+            Platform::Azure,
+            KeyBinding::azure_key_vault("https://example.vault.azure.net/keys/customer/version"),
+        ),
+    ];
+
+    for (platform, binding) in cases {
+        let mut state = stack_state_with_resource(
+            Key::RESOURCE_TYPE.as_ref(),
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            Some(serde_json::to_value(binding).unwrap()),
+        );
+        state.platform = platform;
+        assert!(remote_key_binding(&deployment_on_platform(state, platform), "files").is_ok());
+    }
 }
 
 #[tokio::test]
@@ -229,6 +260,32 @@ async fn remote_access_uses_the_current_release_not_the_desired_release() {
     require_current_release_remote_access(&store, &deployment, "files")
         .await
         .expect("the current release explicitly enables remote access");
+}
+
+#[tokio::test]
+async fn key_resolution_rechecks_that_no_sibling_is_remotely_published() {
+    let stack = Stack::new("stack".to_string())
+        .add_with_remote_access(
+            Key {
+                id: "customer-key".to_string(),
+            },
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(storage(), ResourceLifecycle::Frozen)
+        .build();
+    let mut deployment = deployment(StackState::new(Platform::Aws));
+    deployment.current_release_id = Some("current".to_string());
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, stack),
+        )]),
+    };
+
+    let error = require_current_release_remote_access(&store, &deployment, "customer-key")
+        .await
+        .expect_err("resolver must repeat the one-remote-resource rule");
+    assert!(error.message.contains("only remoteAccess resource"));
 }
 
 #[tokio::test]

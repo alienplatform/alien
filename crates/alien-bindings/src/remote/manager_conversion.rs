@@ -90,6 +90,78 @@ impl ResolvedRemoteBinding {
                     expires_at: parse_manager_expiry(expires_at, resource_id)?,
                 }
             }
+            manager_types::ResolveBindingResponse::Kms {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAwsCredentials::SessionCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                    expires_at: credential_expires_at,
+                } = client_config.credentials;
+                Self::Kms {
+                    binding: alien_core::AwsKmsKeyBinding {
+                        key_arn: binding.key_arn.into(),
+                        region: binding.region.map(Into::into),
+                    },
+                    client_config: Box::new(alien_core::AwsClientConfig {
+                        account_id: client_config.account_id,
+                        region: client_config.region,
+                        credentials: alien_core::AwsCredentials::SessionCredentials {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                            expires_at: credential_expires_at,
+                        },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::CloudKms {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteGcpCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::CloudKms {
+                    binding: alien_core::GcpCloudKmsKeyBinding {
+                        crypto_key_name: binding.crypto_key_name.into(),
+                    },
+                    client_config: Box::new(alien_core::GcpClientConfig {
+                        project_id: client_config.project_id,
+                        region: client_config.region,
+                        credentials: alien_core::GcpCredentials::AccessToken { token },
+                        service_overrides: None,
+                        project_number: client_config.project_number,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::KeyVaultKey {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAzureCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::KeyVaultKey {
+                    binding: alien_core::AzureKeyVaultKeyBinding {
+                        key_id: binding.key_id.into(),
+                    },
+                    client_config: Box::new(alien_core::AzureClientConfig {
+                        subscription_id: client_config.subscription_id,
+                        tenant_id: client_config.tenant_id,
+                        region: client_config.region,
+                        credentials: alien_core::AzureCredentials::AccessToken { token },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
         };
         Ok(lease)
     }
@@ -107,7 +179,7 @@ fn parse_manager_timestamp(
     DateTime::parse_from_rfc3339(timestamp)
         .into_alien_error()
         .context(ErrorData::RemoteAccessFailed {
-            operation: format!("parse {field} for remote Storage binding '{resource_id}'"),
+            operation: format!("parse {field} for remote binding '{resource_id}'"),
         })
         .map(|expires_at| expires_at.with_timezone(&Utc))
 }

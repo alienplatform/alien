@@ -10,8 +10,8 @@
 
 mod container;
 mod error;
-mod kv;
 mod key;
+mod kv;
 mod postgres;
 mod queue;
 #[cfg(feature = "platform-sdk")]
@@ -27,8 +27,8 @@ use napi_derive::napi;
 use std::sync::Arc;
 
 pub use container::ContainerHandle;
-pub use kv::KvHandle;
 pub use key::KeyHandle;
+pub use kv::KvHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
 #[cfg(feature = "platform-sdk")]
@@ -122,7 +122,7 @@ impl BindingsHandle {
     }
 }
 
-/// The JS-facing remote entry point. Its narrow surface makes unsupported
+/// The JS-facing remote entry point. Its typed surface makes unsupported
 /// binding kinds impossible to request through the native addon.
 #[cfg(feature = "platform-sdk")]
 #[napi]
@@ -154,5 +154,12 @@ impl RemoteBindingsHandle {
     pub async fn storage(&self, name: String) -> napi::Result<RemoteStorageHandle> {
         let storage = self.inner.storage(&name).await.map_err(map_alien_error)?;
         Ok(RemoteStorageHandle::new(storage, name))
+    }
+
+    /// Resolve the key binding named `name`.
+    #[napi]
+    pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {
+        let key = self.inner.key(&name).await.map_err(map_alien_error)?;
+        Ok(KeyHandle::new(key))
     }
 }
