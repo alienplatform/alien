@@ -78,6 +78,26 @@ impl RemoteBindingsProvider {
         Self::discover(deployment_id, token, api_base_url, Arc::new(SystemClock)).await
     }
 
+    fn from_manager_access(
+        deployment_id: &str,
+        manager_url: &str,
+        manager_token: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Self> {
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        Ok(Self {
+            source: Arc::new(RemoteBindingSource::from_manager_access(
+                deployment_id,
+                manager_url,
+                manager_token,
+                expires_at,
+                clock.clone(),
+            )?),
+            resolvers: RwLock::new(HashMap::new()),
+            clock,
+        })
+    }
+
     async fn discover(
         deployment_id: &str,
         token: &str,
@@ -226,6 +246,28 @@ impl RemoteBindings {
                 RemoteBindingsProvider::for_remote_deployment(deployment_id, token, api_base_url)
                     .await?,
             ),
+        })
+    }
+
+    /// Uses an already-issued, deployment-scoped Manager capability.
+    ///
+    /// This path does not contact Platform and cannot refresh the capability.
+    /// Construct a new instance after `expires_at`; callers should load the
+    /// required binding immediately and discard it with the returned cloud
+    /// credentials.
+    pub fn from_manager_access(
+        deployment_id: &str,
+        manager_url: &str,
+        manager_token: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Self> {
+        Ok(Self {
+            provider: Arc::new(RemoteBindingsProvider::from_manager_access(
+                deployment_id,
+                manager_url,
+                manager_token,
+                expires_at,
+            )?),
         })
     }
 
