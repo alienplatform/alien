@@ -10,7 +10,7 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, operations_crd::OperationsCrdNames, AzureResourceGroupOutputs, Container,
+    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs, Container,
     ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster, KubernetesClusterOutputs,
     KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
     ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
@@ -118,7 +118,7 @@ pub struct OperatorManifestOptions<'a> {
     /// In `Namespace` scope this is also the namespace observed.
     pub install_namespace: Option<&'a str>,
     /// The vendor's branded DNS domain (e.g. `acme.dev`), used to white-label
-    /// the operations CRD (group/kind/plural). `None` → the Alien defaults.
+    /// the access-request CRD (group/kind/plural). `None` → the Alien defaults.
     /// Same value the operator carries at runtime, so both agree on the CRD.
     pub label_domain: Option<&'a str>,
     pub scope: OperatorScope,
@@ -283,21 +283,21 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     let labels = operator_labels(&base_name);
     let cluster_wide = options.scope.is_cluster_wide();
 
-    // White-labeled operations CRD names, derived from the branded domain.
+    // White-labeled access-request CRD names, derived from the branded domain.
     // The operator carries the same domain at runtime, so both agree on the CRD.
-    let crd_names = alien_core::operations_crd::operations_crd_names(options.label_domain);
+    let crd_names = alien_core::access_request_crd::access_request_crd_names(options.label_domain);
 
     let mut docs = Vec::new();
-    // The operations CRD is cluster-scoped and must exist before any CR is
+    // The access-request CRD is cluster-scoped and must exist before any CR is
     // created. Register it up front, regardless of namespace/cluster scope.
-    docs.push(operations_crd_doc(&crd_names));
+    docs.push(access_request_crd_doc(&crd_names));
     docs.push(operator_service_account_doc(
         namespace,
         &operator_name,
         &labels,
     ));
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
-    // stays a namespaced Role. Both grant read-only + the operations CRD.
+    // stays a namespaced Role. Both grant read-only + the access-request CRD.
     if cluster_wide {
         docs.push(operator_clusterrole_doc(&operator_name, &labels, &crd_names));
         docs.push(operator_clusterrolebinding_doc(
@@ -567,7 +567,7 @@ fn operator_role_doc(
     namespace: &str,
     operator_name: &str,
     labels: &BTreeMap<String, String>,
-    crd_names: &OperationsCrdNames,
+    crd_names: &AccessRequestCrdNames,
 ) -> String {
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -622,7 +622,7 @@ roleRef:
 ///
 /// The operations `apiGroups`/`resources` are white-labeled from `names` so a
 /// vendor build grants access to *their* CRD, matching the CRD doc below.
-fn operator_observe_rules(names: &OperationsCrdNames) -> String {
+fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
     format!(
         r#"rules:
   - apiGroups: [""]
@@ -664,7 +664,7 @@ fn operator_observe_rules(names: &OperationsCrdNames) -> String {
 ///
 /// Appended to the operator manifest so `kubectl apply`/Helm registers the kind
 /// before any CR is created.
-fn operations_crd_doc(names: &OperationsCrdNames) -> String {
+fn access_request_crd_doc(names: &AccessRequestCrdNames) -> String {
     format!(
         r#"apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -758,7 +758,7 @@ spec:
         singular = names.singular,
         kind = names.kind,
         short_name = names.short_name,
-        version = alien_core::operations_crd::OPERATIONS_CRD_VERSION,
+        version = alien_core::access_request_crd::ACCESS_REQUEST_CRD_VERSION,
     )
 }
 
@@ -782,7 +782,7 @@ fn operator_cluster_metadata_doc(
 fn operator_clusterrole_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
-    crd_names: &OperationsCrdNames,
+    crd_names: &AccessRequestCrdNames,
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
     yaml.push_str(&operator_observe_rules(crd_names));
@@ -4162,7 +4162,7 @@ mod tests {
             // it materializes control-plane access requests and records the
             // customer's approval window in status. It never executes commands.
             // Every other rule stays strictly read-only.
-            if api_groups == vec!["operations.alien.dev"] {
+            if api_groups == vec!["accessrequests.alien.dev"] {
                 assert!(
                     verbs.iter().all(|v| matches!(
                         *v,
@@ -4201,10 +4201,10 @@ mod tests {
     }
 
     #[test]
-    fn operations_crd_is_white_labeled_from_the_brand_domain() {
-        // A vendor whose branded domain is acme.dev gets AcmeOperation, not
-        // AlienOperation — the CRD, RBAC, and (elsewhere) the operator runtime
-        // all derive from the same domain.
+    fn access_request_crd_is_white_labeled_from_the_brand_domain() {
+        // A vendor whose branded domain is acme.dev gets AcmeAccessRequest, not
+        // AlienAccessRequest — the CRD, RBAC, and (elsewhere) the operator
+        // runtime all derive from the same domain.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
@@ -4226,27 +4226,33 @@ mod tests {
         let crd = docs_by_kind(&docs, "CustomResourceDefinition")
             .into_iter()
             .next()
-            .expect("manifest should include the operations CRD");
+            .expect("manifest should include the access-request CRD");
         assert_eq!(
             yaml_path(&crd, &["metadata", "name"]).and_then(YamlValue::as_str),
-            Some("acmeoperations.operations.acme.dev")
+            Some("acmeaccessrequests.accessrequests.acme.dev")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "group"]).and_then(YamlValue::as_str),
-            Some("operations.acme.dev")
+            Some("accessrequests.acme.dev")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "names", "kind"]).and_then(YamlValue::as_str),
-            Some("AcmeOperation")
+            Some("AcmeAccessRequest")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "names", "plural"]).and_then(YamlValue::as_str),
-            Some("acmeoperations")
+            Some("acmeaccessrequests")
         );
         // Not the Alien defaults.
         let text = &manifest;
-        assert!(!text.contains("alienoperations"), "no alien-named resource in a branded build");
-        assert!(!text.contains("operations.alien.dev"), "no alien group in a branded build");
+        assert!(
+            !text.contains("alienaccessrequests"),
+            "no alien-named resource in a branded build"
+        );
+        assert!(
+            !text.contains("accessrequests.alien.dev"),
+            "no alien group in a branded build"
+        );
 
         // RBAC targets the branded group/resource.
         let role = docs_by_kind(&docs, "Role").into_iter().next().unwrap();
@@ -4258,10 +4264,10 @@ mod tests {
             .any(|r| {
                 r.get("apiGroups")
                     .and_then(YamlValue::as_sequence)
-                    .map(|g| g.iter().any(|x| x.as_str() == Some("operations.acme.dev")))
+                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme.dev")))
                     .unwrap_or(false)
             });
-        assert!(has_branded_rule, "RBAC must grant the branded operations group");
+        assert!(has_branded_rule, "RBAC must grant the branded access-request group");
     }
 
     #[test]
