@@ -167,7 +167,7 @@ async fn list_platform_releases_task(
     let client = http.sdk_client();
     let mut request = client.list_releases().project(&project_link.project_id);
     if all_channels {
-        request = request.all_channels(true);
+        request = request.all_channels("true");
     } else {
         request = request.channel(channel.unwrap_or("production"));
     }
