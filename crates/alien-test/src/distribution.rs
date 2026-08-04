@@ -3358,6 +3358,8 @@ fn terraform_tfvars(
                 &mut vars,
                 azure_target,
                 prepared.config.azure_mgmt.as_ref(),
+                &std::env::var("AZURE_TARGET_RESOURCE_GROUP")
+                    .context("AZURE_TARGET_RESOURCE_GROUP is required")?,
                 target,
             );
         }
@@ -3443,6 +3445,7 @@ fn insert_azure_tfvars(
     vars: &mut serde_json::Map<String, Value>,
     azure_target: &AzureConfig,
     azure_mgmt: Option<&AzureConfig>,
+    resource_group: &str,
     target: alien_terraform::TerraformTarget,
 ) {
     vars.insert(
@@ -3461,10 +3464,7 @@ fn insert_azure_tfvars(
     );
     vars.insert(
         "azure_resource_group_name".to_string(),
-        Value::String(format!(
-            "alien-e2e-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        )),
+        Value::String(resource_group.to_string()),
     );
     if let Some(mgmt) = azure_mgmt {
         vars.insert(
@@ -4431,6 +4431,7 @@ mod tests {
             &mut vars,
             &azure_target,
             Some(&azure_mgmt),
+            "target-rg",
             alien_terraform::TerraformTarget::Azure,
         );
 
@@ -4463,6 +4464,7 @@ mod tests {
             &mut vars,
             &azure_target,
             None,
+            "target-rg",
             alien_terraform::TerraformTarget::Aks,
         );
 
@@ -4481,6 +4483,7 @@ mod tests {
             &mut vars,
             &azure_target,
             None,
+            "target-rg",
             alien_terraform::TerraformTarget::Azure,
         );
 
