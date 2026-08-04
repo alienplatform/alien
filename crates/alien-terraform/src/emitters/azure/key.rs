@@ -99,10 +99,62 @@ impl TfEmitter for AzureKeyEmitter {
                         Expression::String("wrapKey".to_string()),
                     ]),
                 ),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal([
+                        "time_sleep",
+                        &format!("{label}_installer_rbac"),
+                    ])]),
+                ),
                 nested(crate::block::block(
                     "lifecycle",
                     [attr("prevent_destroy", Expression::Bool(true))],
                 )),
+            ],
+        ));
+
+        let installer_assignment_label = format!("{label}_installer_key_admin");
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &installer_assignment_label,
+            [
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "uuidv5(\"oid\", \"deployment:azure:key-installer:${{local.resource_prefix}}:{label}\")"
+                    )),
+                ),
+                attr(
+                    "scope",
+                    expr::traversal(["azurerm_key_vault", label, "id"]),
+                ),
+                attr(
+                    "role_definition_id",
+                    expr::template("/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/14b46e9e-c2b7-41b4-b07b-48a6ebf60603".to_string()),
+                ),
+                attr(
+                    "principal_id",
+                    expr::traversal([
+                        "data",
+                        "azurerm_client_config",
+                        client_label.as_str(),
+                        "object_id",
+                    ]),
+                ),
+            ],
+        ));
+        fragment.resource_blocks.push(resource_block(
+            "time_sleep",
+            &format!("{label}_installer_rbac"),
+            [
+                attr("create_duration", Expression::String("60s".to_string())),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![expr::traversal([
+                        "azurerm_role_assignment",
+                        installer_assignment_label.as_str(),
+                    ])]),
+                ),
             ],
         ));
 

@@ -63,6 +63,10 @@ fn azure_key_package_is_valid_and_retained() {
 
     assert!(rendered.contains("azurerm_key_vault_key"));
     assert!(rendered.matches("prevent_destroy = true").count() >= 2);
+    assert!(rendered.contains("azurerm_role_assignment\" \"customer_key_installer_key_admin"));
+    assert!(rendered.contains("14b46e9e-c2b7-41b4-b07b-48a6ebf60603"));
+    assert!(rendered.contains("time_sleep\" \"customer_key_installer_rbac"));
+    assert!(rendered.contains("create_duration = \"60s\""));
     assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/encrypt/action"));
     assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/decrypt/action"));
     let detach = module
