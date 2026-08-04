@@ -529,6 +529,7 @@ fn mint_test_stack(platform: Platform) -> Stack {
                 versioning: false,
                 lifecycle_rules: Vec::new(),
                 cors_allowed_origins: Vec::new(),
+                encryption_key: None,
             },
             ResourceLifecycle::Frozen,
         )
