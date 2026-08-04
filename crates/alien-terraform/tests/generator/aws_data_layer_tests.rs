@@ -59,6 +59,43 @@ fn aws_storage_minimal_renders_idiomatic_module() {
 }
 
 #[test]
+fn aws_storage_uses_customer_managed_key() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("data", ["storage/data-write"]),
+        ))
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("sse_algorithm     = \"aws:kms\""));
+    assert!(rendered.contains("kms_master_key_id = aws_kms_key.customer_key.arn"));
+    assert!(rendered.contains("kms:GenerateDataKey"));
+    assert!(rendered.contains("kms:Decrypt"));
+    assert_terraform_valid(&module, "aws_encrypted_storage");
+}
+
+#[test]
 fn aws_storage_with_versioning_and_lifecycle() {
     let stack = Stack::new("acme-audit".to_string())
         .add(
