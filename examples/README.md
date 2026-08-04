@@ -12,6 +12,8 @@ Each example is a self-contained template you can initialize with `alien init`.
 | [event-pipeline-ts](./event-pipeline-ts) | Process events from queues, storage changes, and cron schedules. | TypeScript |
 | [webhook-api-ts](./webhook-api-ts) | Receive webhooks and expose an API inside the customer's cloud. | TypeScript |
 | [nextjs-app](./nextjs-app) | Deploy a Next.js app as a single container in the customer's cloud. | TypeScript |
+| [ai-quickstart-ts](./ai-quickstart-ts) | The smallest AI setup: one worker calling cloud LLMs, no API keys, no database. | TypeScript |
+| [ai-chatbot-ts](./ai-chatbot-ts) | A streaming AI chatbot that answers questions about a private Postgres. | TypeScript |
 
 ## Getting started
 
