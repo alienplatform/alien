@@ -16,6 +16,7 @@ Each example is a self-contained template you can initialize with `alien init`.
 | [customer-models-ts](./customer-models-ts) | Let each customer connect models from their cloud account. | TypeScript |
 | [byob-storage-ts](./byob-storage-ts) | Provision customer-owned object storage and access it from an external SaaS backend. | TypeScript |
 | [customer-keys-ts](./customer-keys-ts) | Encrypt data with a key controlled by each customer. | TypeScript |
+| [ai-chatbot-ts](./ai-chatbot-ts) | Answer questions about a private Postgres with ambient cloud models. | TypeScript |
 
 Some repository directories are supporting projects or advanced source examples. `alien init`
 only lists directories with a valid `template.toml`, so every option it shows can be scaffolded.
