@@ -972,7 +972,14 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>>;
 
     /// Given a binding identifier, builds a Key implementation.
-    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>>;
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::OperationNotSupported {
+                operation: "load_key".to_string(),
+                reason: format!("Key resource '{binding_name}' is not supported by this provider"),
+            },
+        ))
+    }
 
     /// Given a binding identifier, builds a Build implementation.
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>>;

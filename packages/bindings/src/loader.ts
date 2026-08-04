@@ -178,9 +178,10 @@ export interface RawBindingsHandle {
   postgres(name: string): Promise<RawPostgresHandle>
 }
 
-/** Raw napi remote bindings entry point. Storage is the entire v0 surface. */
+/** Raw napi remote bindings entry point. */
 export interface RawRemoteBindingsHandle {
   storage(name: string): Promise<RawRemoteStorageHandle>
+  key(name: string): Promise<RawKeyHandle>
 }
 
 /** Native environment-backed bindings class. */

@@ -50,6 +50,22 @@ pub(super) trait StorageProviderApi: Send + Sync + fmt::Debug {
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>>;
 }
 
+/// The smallest provider surface needed by a refreshable Key handle.
+#[async_trait]
+pub(super) trait KeyProviderApi: Send + Sync + fmt::Debug {
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>>;
+}
+
+#[async_trait]
+impl<T> KeyProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        BindingsProviderApi::load_key(self, binding_name).await
+    }
+}
+
 #[async_trait]
 impl<T> StorageProviderApi for T
 where
@@ -76,10 +92,6 @@ impl Resolver {
 
     async fn kv(&self) -> Result<Arc<dyn Kv>> {
         self.provider.load_kv(&self.binding_name).await
-    }
-
-    async fn key(&self) -> Result<Arc<dyn Key>> {
-        self.provider.load_key(&self.binding_name).await
     }
 
     async fn queue(&self) -> Result<Arc<dyn Queue>> {
@@ -448,13 +460,15 @@ impl Queue for RefreshingQueue {
 /// Key handle that resolves a fresh-enough provider for every operation.
 #[derive(Debug)]
 pub(super) struct RefreshingKey {
-    resolver: Resolver,
+    provider: Arc<dyn KeyProviderApi>,
+    binding_name: String,
 }
 
 impl RefreshingKey {
-    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn KeyProviderApi>, binding_name: String) -> Self {
         Self {
-            resolver: Resolver::new(provider, binding_name),
+            provider,
+            binding_name,
         }
     }
 }
@@ -468,7 +482,11 @@ impl Key for RefreshingKey {
         plaintext: &[u8],
         context: Option<&std::collections::BTreeMap<String, String>>,
     ) -> Result<Vec<u8>> {
-        self.resolver.key().await?.encrypt(plaintext, context).await
+        self.provider
+            .load_key(&self.binding_name)
+            .await?
+            .encrypt(plaintext, context)
+            .await
     }
 
     async fn decrypt(
@@ -476,8 +494,8 @@ impl Key for RefreshingKey {
         ciphertext: &[u8],
         context: Option<&std::collections::BTreeMap<String, String>>,
     ) -> Result<Vec<u8>> {
-        self.resolver
-            .key()
+        self.provider
+            .load_key(&self.binding_name)
             .await?
             .decrypt(ciphertext, context)
             .await
