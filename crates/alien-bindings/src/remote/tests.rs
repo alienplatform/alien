@@ -304,6 +304,7 @@ async fn deployment_handler(
         "platform": "local",
         "deploymentProtocolVersion": 1,
         "deploymentGroupId": DEPLOYMENT_GROUP_ID,
+        "releaseChannel": "production",
         "stackSettings": {},
         "retryRequested": false,
         "createdAt": "2026-01-01T00:00:00Z",
