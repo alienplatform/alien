@@ -14,9 +14,9 @@ use alien_azure_clients::{
 use alien_core::{
     import::{
         data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
-        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
-        GcpKeyImportData, GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource,
-        StackImportRequest, StackImportResponse,
+        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData, GcpKeyImportData,
+        GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
+        StackImportResponse,
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
@@ -1849,6 +1849,7 @@ async fn apply_terraform_and_import(
         )
         .await?;
         run_terraform_cmd(&workdir_path, &env, ["validate"]).await?;
+        adopt_retained_gcp_key_fixture(prepared, target, &workdir_path, &env).await?;
         run_terraform_cmd(
             &workdir_path,
             &env,
@@ -1898,6 +1899,84 @@ async fn apply_terraform_and_import(
         }),
         Err(error) => Err(cleanup_after_setup_error(cleanup, error).await),
     }
+}
+
+async fn adopt_retained_gcp_key_fixture(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    workdir: &Path,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    if target != alien_terraform::TerraformTarget::Gcp || prepared.app != TestApp::ByoEncryptionKey
+    {
+        return Ok(());
+    }
+
+    let gcp = prepared
+        .config
+        .gcp_target
+        .as_ref()
+        .context("GCP target missing")?;
+    let prefix = crate::config::e2e_resource_prefix()?;
+    let key_ring = format!(
+        "projects/{}/locations/{}/keyRings/{prefix}-enterprise-key",
+        gcp.project_id, gcp.region
+    );
+    let crypto_key = format!("{key_ring}/cryptoKeys/key");
+
+    // GCP KeyRings cannot be deleted. The serialized Enterprise Key fixture
+    // deliberately detaches its retained ring and key during cleanup, then
+    // adopts those exact resources on the next run. A missing ring is the
+    // first-run bootstrap case and is created by the following apply.
+    if !terraform_import_if_present(
+        workdir,
+        env,
+        "google_kms_key_ring.enterprise_key_ring",
+        &key_ring,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
+    terraform_import_if_present(
+        workdir,
+        env,
+        "google_kms_crypto_key.enterprise_key",
+        &crypto_key,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn terraform_import_if_present(
+    workdir: &Path,
+    env: &[(String, String)],
+    address: &str,
+    resource_id: &str,
+) -> anyhow::Result<bool> {
+    let mut cmd = Command::new("terraform");
+    cmd.current_dir(workdir)
+        .args(["import", "-input=false", address, resource_id]);
+    apply_env(&mut cmd, env);
+    let output = cmd
+        .output()
+        .await
+        .context("failed to start terraform import")?;
+    if output.status.success() {
+        info!(%address, "adopted retained GCP Enterprise Key fixture resource");
+        return Ok(true);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stdout.contains("Cannot import non-existent remote object")
+        || stderr.contains("Cannot import non-existent remote object")
+    {
+        return Ok(false);
+    }
+
+    anyhow::bail!("terraform import failed for {address}\nstdout:\n{stdout}\nstderr:\n{stderr}")
 }
 
 async fn terraform_stack_for_target(
@@ -2922,22 +3001,18 @@ async fn wait_for_gcp_management_permissions(
         // Probe the narrowest concrete permission this package requested.
         // A Key-only management identity intentionally has no project-wide
         // Resource Manager read access.
-        let result = if let Some(key) = optional_terraform_import_data::<GcpKeyImportData>(
-            &resources,
-            "key",
-        )? {
+        let result = if let Some(key) =
+            optional_terraform_import_data::<GcpKeyImportData>(&resources, "key")?
+        {
             alien_gcp_clients::CloudKmsClient::new(http.clone(), impersonated_config.clone())
                 .get_crypto_key(&key.crypto_key_name)
                 .await
                 .map(|_| ())
         } else {
-            alien_gcp_clients::ResourceManagerClient::new(
-                http.clone(),
-                impersonated_config.clone(),
-            )
-            .get_project_metadata(target.project_id.clone())
-            .await
-            .map(|_| ())
+            alien_gcp_clients::ResourceManagerClient::new(http.clone(), impersonated_config.clone())
+                .get_project_metadata(target.project_id.clone())
+                .await
+                .map(|_| ())
         };
 
         match result {
