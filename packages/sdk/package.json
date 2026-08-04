@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/sdk",
-  "version": "3.3.9",
+  "version": "3.3.10",
   "type": "module",
   "files": ["dist"],
   "exports": {
