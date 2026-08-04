@@ -2,7 +2,7 @@
 
 {
   "name": "@alienplatform/platform-api",
-  "version": "3.3.10",
+  "version": "3.3.11",
   "exports": {
     ".": "./src/index.ts",    
     "./models/errors": "./src/models/errors/index.ts",    
