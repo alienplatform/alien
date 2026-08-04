@@ -408,6 +408,13 @@ async fn promote_release_task(
 ) -> Result<()> {
     use alien_platform_api::SdkResultExt as _;
 
+    let channel_name: alien_platform_api::types::ReleaseChannelName =
+        channel.try_into().map_err(|_| {
+            alien_error::AlienError::new(ErrorData::ValidationError {
+                field: "channel".to_string(),
+                message: "Channel names must start with a letter and contain only lowercase letters, numbers, and hyphens.".to_string(),
+            })
+        })?;
     let (_, project_link) = ctx.resolve_project(project, !json).await?;
     let workspace = ctx.resolve_workspace_query_with_bootstrap(!json).await?;
     let http = ctx.auth_http().await?;
@@ -458,7 +465,7 @@ async fn promote_release_task(
     };
     let mut request = client
         .promote_release()
-        .name(channel)
+        .name(channel_name)
         .project(&project_link.project_id);
     if let Some(workspace) = workspace.as_deref() {
         request = request.workspace(workspace);
