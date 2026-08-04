@@ -11,7 +11,7 @@ use super::helpers::{
 };
 use alien_cloudformation::{CfRegistry, CloudFormationTarget};
 use alien_core::{
-    ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Kv,
+    ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Key, Kv,
     PermissionProfile, Platform, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
     StackSettings, Storage, Vault, Worker, WorkerCode,
 };
@@ -33,6 +33,11 @@ fn gated_fixture(resource_type: &str) -> Option<Stack> {
         ),
         "storage" => base().add_enabled_when(
             Storage::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "fixtureEnabled",
+        ),
+        "key" => base().add_enabled_when(
+            Key::new("fixture".to_string()).build(),
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
