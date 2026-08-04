@@ -107,6 +107,38 @@ fn azure_storage_minimal_renders_idiomatic_module() {
 }
 
 #[test]
+fn azure_storage_account_uses_customer_managed_key() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(storage_account(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("customer_managed_key"));
+    assert!(rendered.contains("resource_versionless_id"));
+    assert!(rendered.contains("Key Vault Crypto Service Encryption User"));
+    assert!(rendered.contains("\"unwrapKey\""));
+    assert!(rendered.contains("\"wrapKey\""));
+    assert_terraform_valid(&module, "azure_encrypted_storage");
+}
+
+#[test]
 fn azure_storage_profile_permissions_emit_container_role_assignment() {
     let stack = Stack::new("acme-storage-permissions".to_string())
         .permissions(alien_core::PermissionsConfig::new().with_profile(

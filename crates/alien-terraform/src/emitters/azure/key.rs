@@ -93,6 +93,8 @@ impl TfEmitter for AzureKeyEmitter {
                     Expression::Array(vec![
                         Expression::String("decrypt".to_string()),
                         Expression::String("encrypt".to_string()),
+                        Expression::String("unwrapKey".to_string()),
+                        Expression::String("wrapKey".to_string()),
                     ]),
                 ),
                 nested(crate::block::block(

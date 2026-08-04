@@ -83,6 +83,20 @@ export class Storage extends ResourceBuilder {
   }
 
   /**
+   * Uses an Alien Key for provider-native encryption of objects in this Storage resource.
+   * The Key and Storage must both be added to the same stack.
+   */
+  public encryptionKey(key: Resource): this {
+    if (key.config.type !== "key") {
+      throw new Error(
+        `Storage.encryptionKey() requires an alien.Key, received '${key.config.type}'`,
+      )
+    }
+    this._config.encryptionKey = key.ref()
+    return this
+  }
+
+  /**
    * Builds and validates the storage configuration.
    * @returns An immutable Resource representing the configured storage bucket.
    * @throws Error if the storage configuration is invalid.

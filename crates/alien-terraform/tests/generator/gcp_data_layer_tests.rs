@@ -46,6 +46,34 @@ fn gcp_key_package_is_valid_and_retained() {
 }
 
 #[test]
+fn gcp_storage_uses_customer_managed_key() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("default_kms_key_name = google_kms_crypto_key.customer_key.id"));
+    assert!(rendered.contains("google_storage_project_service_account"));
+    assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
+    assert_terraform_valid(&module, "gcp_encrypted_storage");
+}
+
+#[test]
 fn gcp_storage_minimal_renders_idiomatic_module() {
     let stack = Stack::new("acme-prod".to_string())
         .add(

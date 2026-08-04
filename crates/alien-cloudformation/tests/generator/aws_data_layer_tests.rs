@@ -47,6 +47,42 @@ fn aws_key_template_is_valid_and_retained() {
 }
 
 #[test]
+fn aws_storage_uses_customer_managed_key() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("data", ["storage/data-write"]),
+        ))
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws encrypted storage",
+    );
+    assert!(yaml.contains("SSEAlgorithm: aws:kms"));
+    assert!(yaml.contains("KMSMasterKeyID:"));
+    assert!(yaml.contains("Fn::GetAtt:"));
+    assert!(yaml.contains("kms:GenerateDataKey"));
+    assert!(yaml.contains("kms:Decrypt"));
+}
+
+#[test]
 fn aws_data_layer_renders_idiomatic_template() {
     let stack = Stack::new("data-layer".to_string())
         .add(

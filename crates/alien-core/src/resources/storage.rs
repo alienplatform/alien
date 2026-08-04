@@ -57,6 +57,10 @@ pub struct Storage {
     #[serde(default)]
     #[builder(default)]
     pub cors_allowed_origins: Vec<String>,
+
+    /// Customer-managed Key used by the provider's native storage encryption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<ResourceRef>,
 }
 
 impl Storage {
@@ -112,7 +116,7 @@ impl ResourceDefinition for Storage {
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        Vec::new()
+        self.encryption_key.iter().cloned().collect()
     }
 
     fn validate_update(&self, new_config: &dyn ResourceDefinition) -> Result<()> {
@@ -156,5 +160,20 @@ impl ResourceDefinition for Storage {
 
     fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
         serde_json::to_value(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encryption_key_is_an_implicit_dependency() {
+        let key = ResourceRef::new(crate::Key::RESOURCE_TYPE, "customer-key");
+        let storage = Storage::new("customer-data".to_string())
+            .encryption_key(key.clone())
+            .build();
+
+        assert_eq!(storage.get_dependencies(), vec![key]);
     }
 }

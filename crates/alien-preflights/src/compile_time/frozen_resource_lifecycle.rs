@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{ownership_policy_for_resource_type, Platform, Stack};
+use alien_core::{ownership_policy_for_resource_type, Platform, ResourceLifecycle, Stack, Storage};
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
 ///
@@ -18,8 +18,28 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
         stack.resources().next().is_some()
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
+        let encrypted_azure_storage_count = stack
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<Storage>())
+            .filter(|storage| storage.encryption_key.is_some())
+            .count();
+        let azure_storage_count = stack
+            .resources()
+            .filter(|(_, entry)| entry.config.downcast_ref::<Storage>().is_some())
+            .count();
+
+        if platform == Platform::Azure
+            && encrypted_azure_storage_count > 0
+            && (encrypted_azure_storage_count != 1 || azure_storage_count != 1)
+        {
+            errors.push(
+                "Azure Storage customer-managed encryption is account-wide; a stack using \
+                 Storage.encryptionKey() must contain exactly one Storage resource"
+                    .to_string(),
+            );
+        }
 
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
@@ -35,6 +55,34 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     policy.allowed_lifecycles()
                 ));
             }
+
+            let Some(storage) = resource_entry.config.downcast_ref::<Storage>() else {
+                continue;
+            };
+            let Some(key_ref) = &storage.encryption_key else {
+                continue;
+            };
+            if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+                errors.push(format!(
+                    "Storage '{}' uses encryptionKey, which is not supported on platform '{}'",
+                    resource_id,
+                    platform.as_str()
+                ));
+            }
+            if resource_entry.lifecycle != ResourceLifecycle::Frozen {
+                errors.push(format!(
+                    "Storage '{}' uses encryptionKey and must use the Frozen lifecycle",
+                    resource_id
+                ));
+            }
+            if let Some(key_entry) = stack.resources.get(&key_ref.id) {
+                if key_entry.lifecycle != ResourceLifecycle::Frozen {
+                    errors.push(format!(
+                        "Storage '{}' encryption Key '{}' must use the Frozen lifecycle",
+                        resource_id, key_ref.id
+                    ));
+                }
+            }
         }
 
         if errors.is_empty() {
@@ -49,8 +97,8 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode,
-        ResourceEntry, ResourceLifecycle, ResourceSpec, Storage, Worker, WorkerCode,
+        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode, Key,
+        ResourceEntry, ResourceLifecycle, ResourceRef, ResourceSpec, Storage, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -275,5 +323,100 @@ mod tests {
             let result = check.check(&stack, Platform::Aws).await.unwrap();
             assert!(result.success);
         }
+    }
+
+    fn stack_with_encrypted_storage(storage_lifecycle: ResourceLifecycle) -> Stack {
+        let key = Key::new("customer-key".to_string()).build();
+        let storage = Storage::new("customer-data".to_string())
+            .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+            .build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "customer-key".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(key),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        resources.insert(
+            "customer-data".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(storage),
+                lifecycle: storage_lifecycle,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn encrypted_storage_must_be_frozen() {
+        let result = FrozenResourceLifecycleCheck
+            .check(
+                &stack_with_encrypted_storage(ResourceLifecycle::Live),
+                Platform::Aws,
+            )
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("uses encryptionKey and must use the Frozen lifecycle")));
+    }
+
+    #[tokio::test]
+    async fn encrypted_storage_rejects_unsupported_platforms() {
+        let result = FrozenResourceLifecycleCheck
+            .check(
+                &stack_with_encrypted_storage(ResourceLifecycle::Frozen),
+                Platform::Kubernetes,
+            )
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("not supported on platform 'kubernetes'")));
+    }
+
+    #[tokio::test]
+    async fn azure_encrypted_storage_rejects_a_shared_storage_account() {
+        let mut stack = stack_with_encrypted_storage(ResourceLifecycle::Frozen);
+        stack.resources.insert(
+            "other-data".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(Storage::new("other-data".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let result = FrozenResourceLifecycleCheck
+            .check(&stack, Platform::Azure)
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("must contain exactly one Storage resource")));
     }
 }
