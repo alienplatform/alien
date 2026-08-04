@@ -1,0 +1,48 @@
+{
+  "id": "key/management",
+  "description": "Allows the Manager to read key metadata for heartbeat and drift detection",
+  "platforms": {
+    "aws": [
+      {
+        "label": "read-key-metadata",
+        "description": "Read the selected KMS key's state and immutable metadata.",
+        "grant": {
+          "actions": ["kms:DescribeKey"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "read-key-metadata",
+        "description": "Read the selected Cloud KMS key and version metadata.",
+        "grant": {
+          "predefinedRoles": ["roles/cloudkms.viewer"]
+        },
+        "binding": {
+          "resource": {
+            "scope": "${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "read-key-metadata",
+        "description": "Read the selected Key Vault key's properties and public metadata.",
+        "grant": {
+          "predefinedRoles": ["Key Vault Reader"]
+        },
+        "binding": {
+          "resource": {
+            "scope": "${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

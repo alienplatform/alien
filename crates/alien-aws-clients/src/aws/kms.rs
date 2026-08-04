@@ -17,6 +17,7 @@ use mockall::automock;
 pub trait KmsApi: Send + Sync + std::fmt::Debug {
     async fn encrypt(&self, request: EncryptRequest) -> Result<EncryptResponse>;
     async fn decrypt(&self, request: DecryptRequest) -> Result<DecryptResponse>;
+    async fn describe_key(&self, key_id: &str) -> Result<DescribeKeyResponse>;
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,40 @@ impl KmsApi for KmsClient {
         )?;
         self.send("Decrypt", body, &key_id).await
     }
+
+    async fn describe_key(&self, key_id: &str) -> Result<DescribeKeyResponse> {
+        let body = serde_json::to_string(&DescribeKeyRequest { key_id })
+            .into_alien_error()
+            .context(alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS DescribeKey request".to_string(),
+            })?;
+        self.send("DescribeKey", body, key_id).await
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct DescribeKeyRequest<'a> {
+    key_id: &'a str,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeKeyResponse {
+    pub key_metadata: KeyMetadata,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct KeyMetadata {
+    pub arn: String,
+    pub key_id: String,
+    pub enabled: bool,
+    pub key_state: String,
+    pub key_usage: String,
+    pub key_spec: String,
+    #[serde(default)]
+    pub deletion_date: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Builder)]

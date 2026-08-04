@@ -3,10 +3,13 @@ use std::time::Duration;
 use alien_core::{
     bindings::KeyBinding,
     import::{data::AzureKeyImportData, ImportContext},
-    Key, KeyFingerprint, KeyOutputs, ResourceOutputs, ResourceStatus, StackResourceState,
+    AzureKeyVaultKeyHeartbeatData, HeartbeatBackend, Key, KeyFingerprint, KeyHeartbeatData,
+    KeyHeartbeatStatus, KeyOutputs, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, StackResourceState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 use crate::{
     core::ResourceControllerContext,
@@ -37,7 +40,67 @@ impl AzureKeyController {
     }
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Key>()?;
+        let versioned_key_id = self.key_id.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceStateSerializationFailed {
+                resource_id: config.id.clone(),
+                message: "Imported Azure key is missing its data-plane key ID".to_string(),
+            })
+        })?;
+        let current_key_id = versioned_key_id
+            .rsplit_once('/')
+            .map(|(id, _)| id)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceStateSerializationFailed {
+                    resource_id: config.id.clone(),
+                    message: "Imported Azure key ID does not contain a version".to_string(),
+                })
+            })?;
+        let key = ctx
+            .service_provider
+            .get_azure_key_vault_keys_client(ctx.get_azure_config()?)?
+            .get_key(current_key_id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read Azure Key Vault key metadata".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        if !key.key.kid.starts_with(&format!("{current_key_id}/")) {
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: config.id.clone(),
+                message: "Azure Key Vault returned metadata for a different key".to_string(),
+            }));
+        }
+        self.key_id = Some(key.key.kid.clone());
+        let (health, lifecycle) = match key.attributes.enabled {
+            Some(true) => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
+            Some(false) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
+            None => (ObservedHealth::Degraded, ProviderLifecycleState::Unknown),
+        };
+        ctx.emit_heartbeat(ResourceHeartbeat {
+            deployment_id: None,
+            resource_id: config.id.clone(),
+            resource_type: Key::RESOURCE_TYPE,
+            controller_platform: Platform::Azure,
+            backend: HeartbeatBackend::Azure,
+            observed_at: Utc::now(),
+            data: ResourceHeartbeatData::Key(KeyHeartbeatData::AzureKeyVault(
+                AzureKeyVaultKeyHeartbeatData {
+                    status: KeyHeartbeatStatus {
+                        health,
+                        lifecycle,
+                        message: None,
+                    },
+                    key_id: key.key.kid,
+                    enabled: key.attributes.enabled,
+                    key_type: key.key.kty,
+                    key_operations: key.key.key_ops,
+                    recovery_level: key.attributes.recovery_level,
+                },
+            )),
+            raw: vec![],
+        });
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(300)),

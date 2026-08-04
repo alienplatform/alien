@@ -3,10 +3,13 @@ use std::time::Duration;
 use alien_core::{
     bindings::KeyBinding,
     import::{data::AwsKeyImportData, ImportContext},
-    Key, KeyFingerprint, KeyOutputs, ResourceOutputs, ResourceStatus, StackResourceState,
+    AwsKmsKeyHeartbeatData, HeartbeatBackend, Key, KeyFingerprint, KeyHeartbeatData,
+    KeyHeartbeatStatus, KeyOutputs, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, StackResourceState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 use crate::{
     core::ResourceControllerContext,
@@ -35,7 +38,62 @@ impl AwsKeyController {
     }
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Key>()?;
+        let key_arn = self.key_arn.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceStateSerializationFailed {
+                resource_id: config.id.clone(),
+                message: "Imported AWS key is missing its ARN".to_string(),
+            })
+        })?;
+        let metadata = ctx
+            .service_provider
+            .get_aws_kms_client(ctx.get_aws_config()?)
+            .await?
+            .describe_key(key_arn)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read AWS KMS key metadata".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?
+            .key_metadata;
+        if metadata.arn != key_arn {
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: config.id.clone(),
+                message: "AWS KMS returned metadata for a different key".to_string(),
+            }));
+        }
+        let (health, lifecycle) = match metadata.key_state.as_str() {
+            "Enabled" if metadata.enabled => {
+                (ObservedHealth::Healthy, ProviderLifecycleState::Running)
+            }
+            "Disabled" => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
+            "PendingDeletion" | "PendingReplicaDeletion" => {
+                (ObservedHealth::Unhealthy, ProviderLifecycleState::Deleting)
+            }
+            _ => (ObservedHealth::Degraded, ProviderLifecycleState::Unknown),
+        };
+        ctx.emit_heartbeat(ResourceHeartbeat {
+            deployment_id: None,
+            resource_id: config.id.clone(),
+            resource_type: Key::RESOURCE_TYPE,
+            controller_platform: Platform::Aws,
+            backend: HeartbeatBackend::Aws,
+            observed_at: Utc::now(),
+            data: ResourceHeartbeatData::Key(KeyHeartbeatData::AwsKms(AwsKmsKeyHeartbeatData {
+                status: KeyHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message: None,
+                },
+                key_arn: metadata.arn,
+                key_state: metadata.key_state,
+                enabled: metadata.enabled,
+                key_spec: metadata.key_spec,
+                key_usage: metadata.key_usage,
+            })),
+            raw: vec![],
+        });
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(300)),
