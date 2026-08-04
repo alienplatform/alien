@@ -13,7 +13,9 @@ use alien_azure_clients::{
 };
 use alien_core::{
     import::{
-        data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
+        data::{
+            AwsArtifactRegistryImportData, AwsKeyImportData, AwsKvImportData, AwsStorageImportData,
+        },
         AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData, GcpKeyImportData,
         GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
         StackImportResponse,
@@ -1849,6 +1851,7 @@ async fn apply_terraform_and_import(
         )
         .await?;
         run_terraform_cmd(&workdir_path, &env, ["validate"]).await?;
+        adopt_retained_aws_key_fixture(prepared, target, &workdir_path, &env).await?;
         adopt_retained_gcp_key_fixture(prepared, target, &workdir_path, &env).await?;
         run_terraform_cmd(
             &workdir_path,
@@ -1858,6 +1861,7 @@ async fn apply_terraform_and_import(
         .await?;
 
         let outputs = terraform_output_json(&workdir_path, &env).await?;
+        ensure_aws_key_fixture_alias(prepared, target, &outputs, &env).await?;
         if target.cloud_platform() == Platform::Azure && has_remote_management {
             grant_terraform_shared_env_join_permission(&prepared.config, &outputs).await?;
         }
@@ -1899,6 +1903,133 @@ async fn apply_terraform_and_import(
         }),
         Err(error) => Err(cleanup_after_setup_error(cleanup, error).await),
     }
+}
+
+fn aws_key_fixture_alias() -> anyhow::Result<String> {
+    Ok(format!(
+        "alias/alien-{}-enterprise-key",
+        crate::config::e2e_resource_prefix()?
+    ))
+}
+
+async fn adopt_retained_aws_key_fixture(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    workdir: &Path,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    if target != alien_terraform::TerraformTarget::Aws || prepared.app != TestApp::ByoEncryptionKey
+    {
+        return Ok(());
+    }
+
+    let alias = aws_key_fixture_alias()?;
+    let mut describe = Command::new("aws");
+    describe.args([
+        "kms",
+        "describe-key",
+        "--key-id",
+        &alias,
+        "--query",
+        "KeyMetadata.KeyId",
+        "--output",
+        "text",
+    ]);
+    apply_env(&mut describe, env);
+    let output = describe
+        .output()
+        .await
+        .context("failed to start aws kms describe-key")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("NotFoundException") {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "aws kms describe-key failed for the reusable Enterprise Key alias\nstderr:\n{stderr}"
+        );
+    }
+    let key_id = String::from_utf8(output.stdout)
+        .context("AWS KMS returned a non-UTF-8 key ID")?
+        .trim()
+        .to_string();
+    if key_id.is_empty() {
+        anyhow::bail!("AWS KMS returned an empty key ID for the reusable Enterprise Key alias");
+    }
+
+    let mut import = Command::new("terraform");
+    import.current_dir(workdir).args([
+        "import",
+        "-input=false",
+        "aws_kms_key.enterprise_key",
+        &key_id,
+    ]);
+    apply_env(&mut import, env);
+    run_command(import, "terraform import retained AWS Enterprise Key").await?;
+    info!(%alias, "adopted retained AWS Enterprise Key fixture");
+    Ok(())
+}
+
+async fn ensure_aws_key_fixture_alias(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    outputs: &Value,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    if target != alien_terraform::TerraformTarget::Aws || prepared.app != TestApp::ByoEncryptionKey
+    {
+        return Ok(());
+    }
+
+    let resources: Vec<ImportedResource> =
+        serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
+    let key = terraform_import_data::<AwsKeyImportData>(&resources, "key")?;
+    let alias = aws_key_fixture_alias()?;
+
+    let mut describe = Command::new("aws");
+    describe.args([
+        "kms",
+        "describe-key",
+        "--key-id",
+        &alias,
+        "--query",
+        "KeyMetadata.Arn",
+        "--output",
+        "text",
+    ]);
+    apply_env(&mut describe, env);
+    let output = describe
+        .output()
+        .await
+        .context("failed to start aws kms describe-key")?;
+    if output.status.success() {
+        let aliased_arn =
+            String::from_utf8(output.stdout).context("AWS KMS returned a non-UTF-8 key ARN")?;
+        if aliased_arn.trim() != key.key_arn {
+            anyhow::bail!("the reusable Enterprise Key alias points at a different KMS key");
+        }
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.contains("NotFoundException") {
+        anyhow::bail!(
+            "aws kms describe-key failed for the reusable Enterprise Key alias\nstderr:\n{stderr}"
+        );
+    }
+
+    let mut create = Command::new("aws");
+    create.args([
+        "kms",
+        "create-alias",
+        "--alias-name",
+        &alias,
+        "--target-key-id",
+        &key.key_arn,
+    ]);
+    apply_env(&mut create, env);
+    run_command(create, "aws kms create reusable Enterprise Key alias").await?;
+    info!(%alias, "created reusable AWS Enterprise Key fixture alias");
+    Ok(())
 }
 
 async fn adopt_retained_gcp_key_fixture(
