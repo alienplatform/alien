@@ -8,8 +8,8 @@ use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::azure::resource_graph::ResourceGraphQueryRequest;
 use alien_azure_clients::{
-    AzureResourceGraphClient, AzureServiceBusManagementClient, AzureTokenCache, ResourceGraphApi,
-    ServiceBusManagementApi,
+    AzureKeyVaultKeysClient, AzureResourceGraphClient, AzureServiceBusManagementClient,
+    AzureTokenCache, KeyVaultKeysApi, ResourceGraphApi, ServiceBusManagementApi,
 };
 use alien_core::{
     import::{
@@ -32,6 +32,7 @@ use alien_core::{
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
 use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::{fs, process::Command};
@@ -1853,6 +1854,7 @@ async fn apply_terraform_and_import(
         run_terraform_cmd(&workdir_path, &env, ["validate"]).await?;
         adopt_retained_aws_key_fixture(prepared, target, &workdir_path, &env).await?;
         adopt_retained_gcp_key_fixture(prepared, target, &workdir_path, &env).await?;
+        adopt_retained_azure_key_fixture(prepared, target, &workdir_path, &env).await?;
         run_terraform_cmd(
             &workdir_path,
             &env,
@@ -2078,6 +2080,130 @@ async fn adopt_retained_gcp_key_fixture(
     )
     .await?;
     Ok(())
+}
+
+async fn adopt_retained_azure_key_fixture(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    workdir: &Path,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    if target != alien_terraform::TerraformTarget::Azure
+        || prepared.app != TestApp::ByoEncryptionKey
+    {
+        return Ok(());
+    }
+
+    let azure = prepared
+        .config
+        .azure_target
+        .as_ref()
+        .context("Azure target missing")?;
+    let prefix = crate::config::e2e_resource_prefix()?;
+    let expected_name_prefix = format!("{prefix}-enterprise-");
+    let azure_config = AzureClientConfig {
+        subscription_id: azure.subscription_id.clone(),
+        tenant_id: azure.tenant_id.clone(),
+        region: Some(azure.region.clone()),
+        credentials: AzureCredentials::ServicePrincipal {
+            client_id: azure.client_id.clone(),
+            client_secret: azure.client_secret.clone(),
+        },
+        service_overrides: None,
+    };
+    let resource_graph = AzureResourceGraphClient::new(
+        reqwest::Client::new(),
+        AzureTokenCache::new(azure_config.clone()),
+    );
+    let escaped_prefix = prefix.replace('\'', "''");
+    let query = format!(
+        "Resources | where type =~ 'microsoft.keyvault/vaults' | where tags['resource'] == 'enterprise-key' and tags['deployment'] == '{escaped_prefix}' | project id, name | order by name asc"
+    );
+    let response = resource_graph
+        .resources(ResourceGraphQueryRequest::for_subscription(
+            azure.subscription_id.clone(),
+            query,
+        ))
+        .await
+        .context("failed to discover retained Azure Enterprise Key vaults")?;
+    let Some(vault) = response.data.into_iter().next() else {
+        return Ok(());
+    };
+    let vault_id = vault
+        .id
+        .context("retained Azure Key Vault has no resource ID")?;
+    let vault_name = vault.name.context("retained Azure Key Vault has no name")?;
+    let suffix = vault_name
+        .strip_prefix(&expected_name_prefix)
+        .with_context(|| format!("retained Azure Key Vault {vault_name} has an unexpected name"))?;
+    if suffix.len() != 6 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("retained Azure Key Vault {vault_name} has an invalid random suffix");
+    }
+    let suffix_bytes = (0..suffix.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&suffix[index..index + 2], 16))
+        .collect::<Result<Vec<_>, _>>()
+        .context("failed to decode retained Azure Key Vault suffix")?;
+    let random_id = URL_SAFE_NO_PAD.encode(suffix_bytes);
+
+    terraform_import_required(
+        workdir,
+        env,
+        "random_id.enterprise_key_vault_suffix",
+        &random_id,
+    )
+    .await?;
+    terraform_import_required(workdir, env, "azurerm_key_vault.enterprise_key", &vault_id).await?;
+
+    // Cleanup removes the short-lived installer role assignment while retaining
+    // the purge-protected vault and key. Recreate only that assignment first so
+    // the normal installer identity can resolve the retained key version. The
+    // complete apply below still owns and later removes this temporary access.
+    run_terraform_cmd(
+        workdir,
+        env,
+        [
+            "apply",
+            "-auto-approve",
+            "-input=false",
+            "-target=azurerm_role_assignment.enterprise_key_installer_key_admin",
+            "-target=time_sleep.enterprise_key_installer_rbac",
+        ],
+    )
+    .await?;
+
+    let versionless_key_id = format!("https://{vault_name}.vault.azure.net/keys/key");
+    let key =
+        AzureKeyVaultKeysClient::new(reqwest::Client::new(), AzureTokenCache::new(azure_config))
+            .get_key(&versionless_key_id)
+            .await
+            .context("failed to resolve the retained Azure Enterprise Key version")?;
+    terraform_import_required(
+        workdir,
+        env,
+        "azurerm_key_vault_key.enterprise_key",
+        &key.key.kid,
+    )
+    .await?;
+    info!(%vault_name, "adopted retained Azure Enterprise Key fixture");
+    Ok(())
+}
+
+async fn terraform_import_required(
+    workdir: &Path,
+    env: &[(String, String)],
+    address: &str,
+    resource_id: &str,
+) -> anyhow::Result<()> {
+    let mut cmd = Command::new("terraform");
+    cmd.current_dir(workdir)
+        .args(["import", "-input=false", address, resource_id]);
+    apply_env(&mut cmd, env);
+    run_command(
+        cmd,
+        &format!("terraform import retained resource {address}"),
+    )
+    .await
 }
 
 async fn terraform_import_if_present(
