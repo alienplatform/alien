@@ -200,17 +200,18 @@ async fn list_platform_releases_task(
                 .to_string()
         };
         table.add_row(vec![
-            release.id.to_string().into(),
-            release.created_at.to_string().into(),
-            text("/gitMetadata/commitSha").into(),
-            text("/gitMetadata/commitRef").into(),
-            release
-                .current_channels
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-                .into(),
+            comfy_table::Cell::new(release.id.to_string()),
+            comfy_table::Cell::new(release.created_at.to_string()),
+            comfy_table::Cell::new(text("/gitMetadata/commitSha")),
+            comfy_table::Cell::new(text("/gitMetadata/commitRef")),
+            comfy_table::Cell::new(
+                release
+                    .current_channels
+                    .iter()
+                    .map(|channel| channel.as_str().to_owned())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
         ]);
     }
     print_table(table);
