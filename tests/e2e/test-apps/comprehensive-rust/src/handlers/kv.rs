@@ -10,7 +10,7 @@ use crate::{
     ErrorData, Result,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_sdk::traits::PutOptions;
+use alien_sdk::traits::{PutCondition, PutOptions};
 
 /// Test KV operations with a full E2E flow
 #[utoipa::path(
@@ -75,35 +75,35 @@ pub async fn test_kv(
         }));
     }
 
-    // 2. Put the second key-value pair with if_not_exists option
-    info!(%test_key2, "Putting second key-value pair with if_not_exists");
+    // 2. Put the second key-value pair only when absent
+    info!(%test_key2, "Putting second key-value pair with an absent precondition");
     let put_options = PutOptions {
         ttl: None,
-        if_not_exists: true,
+        condition: PutCondition::Absent,
     };
     let put2_result = kv_instance
         .put(&test_key2, test_value2.clone(), Some(put_options))
         .await
         .into_alien_error()
         .context(ErrorData::KvOperationFailed {
-            operation: "put_if_not_exists".to_string(),
+            operation: "put_when_absent".to_string(),
             key: test_key2.clone(),
-            reason: "Failed to put second key-value pair with if_not_exists".to_string(),
+            reason: "Failed to put second key-value pair with an absent precondition".to_string(),
         })?;
 
     if !put2_result {
         return Err(AlienError::new(ErrorData::KvOperationFailed {
-            operation: "put_if_not_exists".to_string(),
+            operation: "put_when_absent".to_string(),
             key: test_key2.clone(),
-            reason: "Put with if_not_exists returned false unexpectedly".to_string(),
+            reason: "Put with an absent precondition returned false unexpectedly".to_string(),
         }));
     }
 
-    // 3. Try to put the second key again with if_not_exists (should return false)
-    info!(%test_key2, "Attempting to put existing key with if_not_exists (should fail)");
+    // 3. Try to put the second key again with an absent precondition
+    info!(%test_key2, "Attempting to put existing key with an absent precondition");
     let put_options_duplicate = PutOptions {
         ttl: None,
-        if_not_exists: true,
+        condition: PutCondition::Absent,
     };
     let put_duplicate_result = kv_instance
         .put(
@@ -114,17 +114,18 @@ pub async fn test_kv(
         .await
         .into_alien_error()
         .context(ErrorData::KvOperationFailed {
-            operation: "put_if_not_exists_duplicate".to_string(),
+            operation: "put_when_absent_duplicate".to_string(),
             key: test_key2.clone(),
-            reason: "Failed to test duplicate put with if_not_exists".to_string(),
+            reason: "Failed to test duplicate put with an absent precondition".to_string(),
         })?;
 
     if put_duplicate_result {
         return Err(AlienError::new(ErrorData::KvOperationFailed {
-            operation: "put_if_not_exists_duplicate".to_string(),
+            operation: "put_when_absent_duplicate".to_string(),
             key: test_key2.clone(),
-            reason: "Put with if_not_exists should have returned false for existing key"
-                .to_string(),
+            reason:
+                "Put with an absent precondition should have returned false for an existing key"
+                    .to_string(),
         }));
     }
 
@@ -141,16 +142,16 @@ pub async fn test_kv(
         })?;
 
     match retrieved_value1 {
-        Some(value) if value == test_value1 => {
+        Some(entry) if entry.value == test_value1 => {
             info!(%test_key1, "First value retrieved and verified successfully");
         }
-        Some(value) => {
+        Some(entry) => {
             return Err(AlienError::new(ErrorData::KvOperationFailed {
                 operation: "get_verification".to_string(),
                 key: test_key1.clone(),
                 reason: format!(
                     "Retrieved value doesn't match expected. Got: {:?}, Expected: {:?}",
-                    value, test_value1
+                    entry.value, test_value1
                 ),
             }));
         }
@@ -207,7 +208,11 @@ pub async fn test_kv(
     }
 
     // Verify the scanned items contain our keys
-    let scanned_keys: Vec<String> = scan_result.items.iter().map(|(k, _)| k.clone()).collect();
+    let scanned_keys: Vec<String> = scan_result
+        .items
+        .iter()
+        .map(|entry| entry.key.clone())
+        .collect();
     if !scanned_keys.contains(&test_key1) || !scanned_keys.contains(&test_key2) {
         return Err(AlienError::new(ErrorData::KvOperationFailed {
             operation: "scan_prefix_verification".to_string(),
@@ -224,7 +229,7 @@ pub async fn test_kv(
     tokio::spawn(async move {
         for cleanup_key in cleanup_keys {
             info!(test_key = %cleanup_key, "Deleting KV test key");
-            if let Err(error) = cleanup_kv.delete(&cleanup_key).await {
+            if let Err(error) = cleanup_kv.delete(&cleanup_key, None).await {
                 warn!(
                     test_key = %cleanup_key,
                     error = ?error,

@@ -50,8 +50,8 @@ pub async fn get_storage_event(
     let sanitized_key = crate::sanitize_kv_key_part(&key);
     let kv_key = format!("storage_event:{}", sanitized_key);
     match kv.get(&kv_key).await {
-        Ok(Some(data)) => {
-            let event: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
+        Ok(Some(entry)) => {
+            let event: serde_json::Value = serde_json::from_slice(&entry.value).unwrap_or_default();
             Ok(Json(EventResponse {
                 found: true,
                 event: Some(event),
@@ -84,8 +84,8 @@ pub async fn get_cron_event(
     let sanitized_schedule = crate::sanitize_kv_key_part(&schedule);
     let kv_key = format!("cron_event:{}", sanitized_schedule);
     match kv.get(&kv_key).await {
-        Ok(Some(data)) => {
-            let event: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
+        Ok(Some(entry)) => {
+            let event: serde_json::Value = serde_json::from_slice(&entry.value).unwrap_or_default();
             Ok(Json(EventResponse {
                 found: true,
                 event: Some(event),
@@ -118,8 +118,8 @@ pub async fn get_queue_message(
     let sanitized_id = crate::sanitize_kv_key_part(&message_id);
     let kv_key = format!("queue_message:{}", sanitized_id);
     match kv.get(&kv_key).await {
-        Ok(Some(data)) => {
-            let event: serde_json::Value = serde_json::from_slice(&data).unwrap_or_default();
+        Ok(Some(entry)) => {
+            let event: serde_json::Value = serde_json::from_slice(&entry.value).unwrap_or_default();
             Ok(Json(EventResponse {
                 found: true,
                 event: Some(event),
@@ -151,8 +151,8 @@ pub async fn list_events(State(app_state): State<AppState>) -> Result<Json<Event
 
     // Scan for storage events
     if let Ok(result) = kv.scan_prefix("storage_event:", Some(100), None).await {
-        for (_, value) in result.items {
-            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&value) {
+        for entry in result.items {
+            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&entry.value) {
                 storage_events.push(event);
             }
         }
@@ -160,8 +160,8 @@ pub async fn list_events(State(app_state): State<AppState>) -> Result<Json<Event
 
     // Scan for cron events
     if let Ok(result) = kv.scan_prefix("cron_event:", Some(100), None).await {
-        for (_, value) in result.items {
-            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&value) {
+        for entry in result.items {
+            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&entry.value) {
                 cron_events.push(event);
             }
         }
@@ -169,8 +169,8 @@ pub async fn list_events(State(app_state): State<AppState>) -> Result<Json<Event
 
     // Scan for queue messages
     if let Ok(result) = kv.scan_prefix("queue_message:", Some(100), None).await {
-        for (_, value) in result.items {
-            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&value) {
+        for entry in result.items {
+            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(&entry.value) {
                 queue_messages.push(event);
             }
         }

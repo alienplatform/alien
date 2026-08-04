@@ -16,6 +16,6 @@ describe("process environment", () => {
     if (!isBun) localKvBindingEnv(name)
     const k = kv(name)
     await k.set("k", "v")
-    expect(await k.getText("k")).toBe("v")
+    expect((await k.getText("k"))?.value).toBe("v")
   })
 })

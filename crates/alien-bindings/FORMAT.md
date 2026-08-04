@@ -25,7 +25,7 @@ modules are the gate that the mode actually delivers the semantics pinned
 below. Alongside the database file turso maintains WAL sidecar files (e.g.
 `-wal`); treat every `<file>.sqlite*` sibling as part of the store.
 
-## `localkv.v1` — `LocalKv`
+## `localkv.v2` — `LocalKv`
 
 Backed by a single database file at `<dataDir>/localkv.sqlite`, where
 `<dataDir>` is the directory passed to `LocalKv::new`. The directory is created
@@ -60,12 +60,13 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta (key, value) VALUES ('format', 'localkv.v1');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('format', 'localkv.v2');
 
 CREATE TABLE IF NOT EXISTS kv (
     key        TEXT PRIMARY KEY,
     value      BLOB NOT NULL,
-    expires_at INTEGER          -- unix epoch MILLISECONDS, NULL = no expiry
+    expires_at INTEGER,         -- unix epoch MILLISECONDS, NULL = no expiry
+    version    TEXT NOT NULL    -- changes on every applied put
 );
 ```
 
@@ -75,12 +76,12 @@ a 5s `busy_timeout` (on every connection, via the turso API).
 ### Versioning rule
 
 The `meta` table carries the format identifier in the row
-`('format', 'localkv.v1')`. Any future incompatible change to the `kv` schema
-MUST bump this string (e.g. `localkv.v2`) and add explicit migration/rejection
+`('format', 'localkv.v2')`. Any future incompatible change to the `kv` schema
+MUST bump this string and add explicit migration/rejection
 logic. Readers MUST reject a format they do not understand — and this
 implementation does: `LocalKv::new` checks the marker before creating any
 provider tables and fails fast (`BINDING_SETUP_FAILED`, naming both the found
-and the supported format) unless it equals `localkv.v1`, so a rejected foreign
+and the supported format) unless it equals `localkv.v2`, so a rejected foreign
 store is left untouched. The `meta` row is written with `INSERT OR
 IGNORE`, so re-opening an existing store never overwrites it.
 
@@ -96,22 +97,28 @@ IGNORE`, so re-opening an existing store never overwrites it.
   expired rows out of its results but does not delete them. Physical deletion is
   therefore eventual, matching the `Kv` trait's soft-hint TTL contract.
 
+- **Versions.** Every applied put writes a fresh random version. Reads wrap that
+  backend version in an opaque, key-bound token. Callers may pass the token to
+  a conditional put or delete; tokens must never be parsed or modified.
+
 - **Unconditional put.** Upsert in one statement:
 
   ```sql
-  INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3)
-  ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3;
+  INSERT INTO kv (key, value, expires_at, version) VALUES (?1, ?2, ?3, ?4)
+  ON CONFLICT(key) DO UPDATE
+  SET value = ?2, expires_at = ?3, version = ?4;
   ```
 
   Always returns `true`.
 
-- **Conditional put (`if_not_exists`).** One atomic statement; the winner is
+- **Conditional put (absent).** One atomic statement; the winner is
   detected via the changed-row count returned by `execute`:
 
   ```sql
-  INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3)
-  ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3
-  WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?4;   -- ?4 = now
+  INSERT INTO kv (key, value, expires_at, version) VALUES (?1, ?2, ?3, ?4)
+  ON CONFLICT(key) DO UPDATE
+  SET value = ?2, expires_at = ?3, version = ?4
+  WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?5;   -- ?5 = now
   ```
 
   - Key absent → `INSERT` runs → changed count `== 1` → **win** (returns
@@ -125,19 +132,29 @@ IGNORE`, so re-opening an existing store never overwrites it.
   handles/processes) race this statement on the same key, exactly one observes
   a changed count of 1.
 
+- **Conditional put (version).** A single `UPDATE` matches the key, stored
+  version, and live TTL. It writes the new value, TTL, and a fresh version.
+  The changed-row count is `1` only for the winner.
+
+- **Conditional delete.** A single `DELETE` matches the key, stored version,
+  and live TTL. A mismatch, missing row, or logically expired row returns
+  `false`; a matching delete returns `true`.
+
 - **Scan.** `scan_prefix` selects `WHERE key >= ?prefix ORDER BY key`, stops at
   the first key that no longer starts with the prefix, filters expired rows, and
-  paginates with a simple 0-based integer offset cursor. Results are ordered by
-  key. An unparseable cursor returns `INVALID_INPUT`.
+  returns each entry's opaque version. Pagination resumes strictly after the
+  last returned key using a prefix-bound opaque cursor. Results are ordered by
+  key. An invalid or cross-prefix cursor returns `INVALID_INPUT`.
 
 ### Single implementation
 
 `LocalKv` (`src/providers/kv/local.rs`) is the **only** reader/writer of
-`localkv.v1`. There is no separate migration binary or alternate accessor; the
-schema, settings, and the statements above are defined once in that file (the
-shared open/init handshake lives in `src/providers/local_store.rs`). Any
-change to the on-disk contract must update both this document and that file
-together (and bump the `meta` format string if incompatible).
+`localkv.v2`. There is no separate migration binary or alternate accessor;
+the schema, settings, and the statements above are defined once in that file
+(the shared open/init handshake lives in `src/providers/local_store.rs`).
+Existing stores with another format marker, including `localkv.v1`, are
+rejected. Any change to the on-disk contract must update both this document
+and that file together (and bump the `meta` format string if incompatible).
 
 ## `localqueue.v1` — `LocalQueue`
 
@@ -148,7 +165,7 @@ created if missing; the database file (plus its WAL siblings) lives inside it.
 
 ### Connection strategy
 
-Identical to `localkv.v1`: `LocalQueue` holds one `turso::Database` handle;
+Identical to `localkv.v2`: `LocalQueue` holds one `turso::Database` handle;
 every operation opens its own short-lived connection from it, which is dropped
 when the operation completes, and every statement is driven to completion. No
 connection crosses operations and there is no `Mutex<Connection>` anywhere.

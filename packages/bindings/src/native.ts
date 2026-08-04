@@ -66,6 +66,8 @@ export type {
   Key,
   KeyOptions,
   Kv,
+  KvDeleteOptions,
+  KvEntry,
   KvScanItem,
   KvScanResult,
   KvSetOptions,

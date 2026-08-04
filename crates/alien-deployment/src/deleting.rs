@@ -30,7 +30,13 @@ pub async fn handle_delete_pending(
 
     if stack_state.resources.contains_key("secrets") {
         let runtime_metadata = next.runtime_metadata.get_or_insert_default();
+        let prepared_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Prepared stack required for vault secret deletion".to_string(),
+            })
+        })?;
         crate::helpers::delete_deployment_vault_secrets(
+            &prepared_stack,
             &stack_state,
             &client_config,
             &config,
