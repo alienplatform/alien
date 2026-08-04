@@ -746,13 +746,18 @@ fn desired_vault_secrets(
     platform: Platform,
     config: &DeploymentConfig,
 ) -> BTreeMap<String, String> {
-    let vault_backed_workers = stack
+    let workers = stack
         .resources
         .iter()
         .filter(|(_, entry)| entry.config.resource_type() == Worker::RESOURCE_TYPE)
-        .filter(|_| !SecretDelivery::resolve(platform, ComputeKind::Worker).is_native_projection())
         .map(|(resource_id, _)| resource_id.as_str())
         .collect::<Vec<_>>();
+    let vault_backed_workers =
+        if SecretDelivery::resolve(platform, ComputeKind::Worker).is_native_projection() {
+            Vec::new()
+        } else {
+            workers.clone()
+        };
 
     let mut desired = config
         .environment_variables
@@ -771,7 +776,7 @@ fn desired_vault_secrets(
     if let Some(monitoring) = config
         .monitoring
         .as_ref()
-        .filter(|_| !vault_backed_workers.is_empty())
+        .filter(|_| platform != Platform::Machines && !workers.is_empty())
     {
         desired.insert(
             RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
@@ -1703,6 +1708,26 @@ mod tests {
             desired.keys().cloned().collect::<Vec<_>>(),
             vec![
                 "WORKER_TOKEN".to_string(),
+                RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
+                RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn kubernetes_worker_keeps_runtime_monitoring_secrets_in_vault() {
+        let mut config = make_config(make_snapshot(&[], &[("APP_TOKEN", "app-secret")]));
+        config.monitoring = Some(make_monitoring_with_metrics());
+
+        let desired = desired_vault_secrets(
+            &make_single_function_stack("worker"),
+            Platform::Kubernetes,
+            &config,
+        );
+
+        assert_eq!(
+            desired.keys().cloned().collect::<Vec<_>>(),
+            vec![
                 RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
                 RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string(),
             ]
