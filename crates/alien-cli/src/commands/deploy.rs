@@ -1125,6 +1125,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 operator_permission: None,
                                 operator_scope: None,
                                 pinned_release_id: None,
+                                release_channel: "production".try_into().expect("production is a valid channel"),
                                 environment_variables: None,
                                 deployment_group_id: None,
                                 environment_info: None,
