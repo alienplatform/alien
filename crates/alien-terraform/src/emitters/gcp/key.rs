@@ -1,10 +1,7 @@
 use crate::{
     block::{attr, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::gcp::helpers::{
-        downcast, labels, required_label, resource_prefix_template,
-        service_account_member_for_label,
-    },
+    emitters::gcp::helpers::{downcast, labels, required_label, service_account_member_for_label},
     expr,
 };
 use alien_core::{
@@ -21,13 +18,28 @@ impl TfEmitter for GcpKeyEmitter {
         let key = downcast::<Key>(ctx, Key::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let ring_label = format!("{label}_ring");
+        let ring_suffix_label = format!("{label}_ring_suffix");
         let mut fragment = TfFragment::default()
+            .with_resource(resource_block(
+                "random_id",
+                &ring_suffix_label,
+                [attr(
+                    "byte_length",
+                    Expression::Number(hcl::Number::from(3i64)),
+                )],
+            ))
             .with_resource(resource_block(
                 "google_kms_key_ring",
                 &ring_label,
                 [
                     attr("project", expr::raw("var.gcp_project")),
-                    attr("name", resource_prefix_template(key.id())),
+                    attr(
+                        "name",
+                        expr::raw(format!(
+                            "format(\"%s-%s\", trim(substr(replace(lower(format(\"%s-{}\", local.resource_prefix)), \"_\", \"-\"), 0, 56), \"-\"), random_id.{ring_suffix_label}.hex)",
+                            key.id()
+                        )),
+                    ),
                     attr("location", expr::raw("var.gcp_region")),
                 ],
             ))

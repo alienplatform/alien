@@ -40,6 +40,7 @@ fn gcp_key_package_is_valid_and_retained() {
         .join("\n");
 
     assert!(rendered.contains("google_kms_key_ring"));
+    assert!(rendered.contains("random_id.customer_key_ring_suffix.hex"));
     assert!(rendered.contains("prevent_destroy = true"));
     assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
     let detach = module
