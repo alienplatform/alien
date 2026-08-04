@@ -71,6 +71,10 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
             {
                 panic!("remote Enterprise Key checks failed: {error:#}");
             }
+            if let Err(error) = common::remote_bindings::check_native_storage_encryption(ctx).await
+            {
+                panic!("native Storage encryption checks failed: {error:#}");
+            }
         }
     }
 }

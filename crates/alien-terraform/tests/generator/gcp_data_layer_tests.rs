@@ -76,6 +76,8 @@ fn gcp_storage_uses_customer_managed_key() {
     assert!(rendered.contains("default_kms_key_name = google_kms_crypto_key.customer_key.id"));
     assert!(rendered.contains("google_storage_project_service_account"));
     assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
+    assert!(rendered.contains("depends_on"));
+    assert!(rendered.contains("google_kms_crypto_key_iam_member.data_storage_encryption"));
     assert_terraform_valid(&module, "gcp_encrypted_storage");
 }
 

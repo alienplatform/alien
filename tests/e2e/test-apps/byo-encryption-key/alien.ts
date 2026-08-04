@@ -1,7 +1,9 @@
 import * as alien from "@alienplatform/core"
 
-const key = new alien.Key("enterprise-key").build()
+const enterpriseKey = new alien.Key("enterprise-key").build()
+const storage = new alien.Storage("encrypted-storage").encryptionKey(enterpriseKey).build()
 
 export default new alien.Stack("byo-encryption-key")
-  .add(key, "frozen", { remoteAccess: true })
+  .add(enterpriseKey, "frozen", { remoteAccess: true })
+  .add(storage, "frozen")
   .build()
