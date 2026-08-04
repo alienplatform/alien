@@ -155,6 +155,13 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
                 expr::traversal(["google_kms_crypto_key", key_label, "id"]),
             )],
         )));
+        body.push(attr(
+            "depends_on",
+            Expression::Array(vec![expr::traversal([
+                "google_kms_crypto_key_iam_member",
+                &format!("{label}_storage_encryption"),
+            ])]),
+        ));
     }
 
     for rule in &storage.lifecycle_rules {

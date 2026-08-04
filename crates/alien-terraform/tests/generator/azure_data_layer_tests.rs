@@ -140,7 +140,10 @@ fn azure_storage_account_uses_customer_managed_key() {
         .join("\n");
 
     assert!(rendered.contains("customer_managed_key"));
-    assert!(rendered.contains("resource_versionless_id"));
+    assert!(rendered.contains("key_vault_key_id"));
+    assert!(rendered.contains(".versionless_id"));
+    assert!(rendered.contains("scope"));
+    assert!(rendered.contains(".resource_versionless_id"));
     assert!(rendered.contains("Key Vault Crypto Service Encryption User"));
     assert!(rendered.contains("\"unwrapKey\""));
     assert!(rendered.contains("\"wrapKey\""));

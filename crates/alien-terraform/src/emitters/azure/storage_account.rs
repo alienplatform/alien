@@ -129,11 +129,7 @@ impl TfEmitter for AzureStorageAccountEmitter {
                 [
                     attr(
                         "key_vault_key_id",
-                        expr::traversal([
-                            "azurerm_key_vault_key",
-                            key_label,
-                            "resource_versionless_id",
-                        ]),
+                        expr::traversal(["azurerm_key_vault_key", key_label, "versionless_id"]),
                     ),
                     attr(
                         "user_assigned_identity_id",
