@@ -242,10 +242,36 @@ pub fn check_remote_key<'a>(
             ("purpose".to_string(), "application-root".to_string()),
             ("test".to_string(), deployment.id.clone()),
         ]);
-        let ciphertext = key
-            .encrypt(&plaintext, Some(&context))
-            .await
-            .context("encrypt through real remote Enterprise Key")?;
+        // Setup can finish before a newly attached cloud IAM policy is visible
+        // to the provider data plane. Keep the production client's short retry
+        // behavior, then give this setup qualification a bounded readiness
+        // window before declaring the generated access identity unusable.
+        let ciphertext = {
+            let max_attempts = 15;
+            let mut result = None;
+            for attempt in 1..=max_attempts {
+                match key.encrypt(&plaintext, Some(&context)).await {
+                    Ok(ciphertext) => {
+                        result = Some(ciphertext);
+                        break;
+                    }
+                    Err(error) if attempt < max_attempts => {
+                        info!(
+                            attempt,
+                            max_attempts,
+                            platform = %platform.as_str(),
+                            error = %error,
+                            "Remote Key is not ready after setup; waiting for cloud IAM propagation"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                    Err(error) => return Err(error).context(
+                        "encrypt through real remote Enterprise Key after setup readiness window",
+                    ),
+                }
+            }
+            result.context("remote Enterprise Key readiness loop returned no ciphertext")?
+        };
         let decrypted = key
             .decrypt(&ciphertext, Some(&context))
             .await
