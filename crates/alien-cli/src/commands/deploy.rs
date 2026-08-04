@@ -112,6 +112,10 @@ pub struct DeployArgs {
     #[arg(long)]
     pub manager: Option<String>,
 
+    /// Release channel followed by a newly created deployment.
+    #[arg(long, default_value = "production")]
+    pub channel: String,
+
     #[command(flatten)]
     pub network: NetworkArgs,
 }
@@ -936,6 +940,13 @@ async fn parse_empty_api_response(response: reqwest::Response, message: &str) ->
 
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
+    #[cfg(not(feature = "platform"))]
+    if args.channel != "production" {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Named release channels require platform mode.".to_string(),
+        }));
+    }
+
     let resolved_args = resolve_deploy_args(&args)?;
 
     if let ExecutionMode::Dev { port } = ctx {
@@ -1125,7 +1136,12 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 operator_permission: None,
                                 operator_scope: None,
                                 pinned_release_id: None,
-                                release_channel: "production".try_into().expect("production is a valid channel"),
+                                release_channel: args.channel.clone().try_into().into_alien_error().context(
+                                    ErrorData::ValidationError {
+                                        field: "channel".to_string(),
+                                        message: "Channel names must start with a letter and contain only lowercase letters, numbers, and hyphens.".to_string(),
+                                    },
+                                )?,
                                 environment_variables: None,
                                 deployment_group_id: None,
                                 environment_info: None,

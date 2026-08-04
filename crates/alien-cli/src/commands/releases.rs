@@ -25,6 +25,12 @@ pub enum ReleasesCmd {
         /// Project to list releases for (optional, uses linked project by default)
         #[arg(long)]
         project: Option<String>,
+        /// Only show releases selected by this channel (defaults to production in platform mode)
+        #[arg(long, conflicts_with = "all_channels")]
+        channel: Option<String>,
+        /// Include releases that are not currently selected by any channel
+        #[arg(long)]
+        all_channels: bool,
         /// Emit the manager API response as machine-readable JSON
         #[arg(long)]
         json: bool,
@@ -72,15 +78,41 @@ pub enum ReleasesCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Delete a non-production release channel
+    DeleteChannel {
+        name: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
 }
 
 pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()> {
     ctx.ensure_ready().await?;
 
     match args.cmd {
-        ReleasesCmd::Ls { project, json } => {
-            // Releases are a core feature, so they go through the manager, not
-            // the platform API directly.
+        ReleasesCmd::Ls {
+            project,
+            channel,
+            all_channels,
+            json,
+        } => {
+            if ctx.is_platform() {
+                return list_platform_releases_task(
+                    &ctx,
+                    project.as_deref(),
+                    channel.as_deref(),
+                    all_channels,
+                    json,
+                )
+                .await;
+            }
+            if channel.is_some() || all_channels {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ConfigurationError {
+                        message: "Release channel filters require platform mode.".to_string(),
+                    },
+                ));
+            }
             let manager = crate::commands::deployments::resolve_manager_client(
                 &ctx,
                 project.as_deref(),
@@ -113,7 +145,91 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             release,
             json,
         } => create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await,
+        ReleasesCmd::DeleteChannel { name, project } => {
+            delete_channel_task(&ctx, &name, project.as_deref()).await
+        }
     }
+}
+
+#[cfg(feature = "platform")]
+async fn list_platform_releases_task(
+    ctx: &ExecutionMode,
+    project: Option<&str>,
+    channel: Option<&str>,
+    all_channels: bool,
+    json: bool,
+) -> Result<()> {
+    use alien_platform_api::SdkResultExt as _;
+
+    let (_, project_link) = ctx.resolve_project(project, !json).await?;
+    let workspace = ctx.resolve_workspace_query_with_bootstrap(!json).await?;
+    let http = ctx.auth_http().await?;
+    let client = http.sdk_client();
+    let mut request = client.list_releases().project(&project_link.project_id);
+    if all_channels {
+        request = request.all_channels(true);
+    } else {
+        request = request.channel(channel.unwrap_or("production"));
+    }
+    if let Some(workspace) = workspace.as_deref() {
+        request = request.workspace(workspace);
+    }
+    let response = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "listing releases".to_string(),
+            url: None,
+        })?;
+    if json {
+        return print_json(&response.items);
+    }
+    if response.items.is_empty() {
+        println!("(no releases)");
+        return Ok(());
+    }
+    let mut table = make_table(&["ID", "Created", "Commit", "Ref", "Channels"]);
+    for release in &response.items {
+        let value = serde_json::to_value(release).unwrap_or_default();
+        let text = |pointer: &str| {
+            value
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("—")
+                .to_string()
+        };
+        table.add_row(vec![
+            release.id.to_string().into(),
+            release.created_at.to_string().into(),
+            text("/gitMetadata/commitSha").into(),
+            text("/gitMetadata/commitRef").into(),
+            release
+                .current_channels
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+                .into(),
+        ]);
+    }
+    print_table(table);
+    Ok(())
+}
+
+#[cfg(not(feature = "platform"))]
+async fn list_platform_releases_task(
+    _ctx: &ExecutionMode,
+    _project: Option<&str>,
+    _channel: Option<&str>,
+    _all_channels: bool,
+    _json: bool,
+) -> Result<()> {
+    Err(alien_error::AlienError::new(
+        ErrorData::ConfigurationError {
+            message: "Release channels require platform mode.".to_string(),
+        },
+    ))
 }
 
 #[cfg(feature = "platform")]
@@ -242,6 +358,46 @@ async fn create_channel_task(
 }
 
 #[cfg(feature = "platform")]
+async fn delete_channel_task(ctx: &ExecutionMode, name: &str, project: Option<&str>) -> Result<()> {
+    use alien_platform_api::SdkResultExt as _;
+
+    let (_, project_link) = ctx.resolve_project(project, true).await?;
+    let workspace = ctx.resolve_workspace_query_with_bootstrap(true).await?;
+    let http = ctx.auth_http().await?;
+    let client = http.sdk_client();
+    let mut request = client
+        .delete_release_channel()
+        .name(name)
+        .project(&project_link.project_id);
+    if let Some(workspace) = workspace.as_deref() {
+        request = request.workspace(workspace);
+    }
+    request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("deleting release channel '{name}'"),
+            url: None,
+        })?;
+    println!("Deleted channel {name}.");
+    Ok(())
+}
+
+#[cfg(not(feature = "platform"))]
+async fn delete_channel_task(
+    _ctx: &ExecutionMode,
+    _name: &str,
+    _project: Option<&str>,
+) -> Result<()> {
+    Err(alien_error::AlienError::new(
+        ErrorData::ConfigurationError {
+            message: "Release channels require platform mode.".to_string(),
+        },
+    ))
+}
+
+#[cfg(feature = "platform")]
 async fn promote_release_task(
     ctx: &ExecutionMode,
     release_id: &str,
@@ -261,14 +417,15 @@ async fn promote_release_task(
     if let Some(workspace) = workspace.as_deref() {
         channels_request = channels_request.workspace(workspace);
     }
-    let channels = channels_request
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("reading channel '{channel}' before promotion"),
-            url: None,
-        })?;
+    let channels =
+        channels_request
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("reading channel '{channel}' before promotion"),
+                url: None,
+            })?;
     let expected_release_id = channels
         .items
         .iter()
