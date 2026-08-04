@@ -7,6 +7,7 @@ use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -207,6 +208,34 @@ pub trait KeyVaultSecretsApi: Send + Sync + std::fmt::Debug {
         vault_base_url: String,
         secret_name: String,
     ) -> Result<SecretBundle>;
+}
+
+#[cfg_attr(feature = "test-utils", automock)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait KeyVaultKeysApi: Send + Sync + std::fmt::Debug {
+    async fn encrypt(
+        &self,
+        key_id: &str,
+        request: KeyOperationRequest,
+    ) -> Result<KeyOperationResponse>;
+    async fn decrypt(
+        &self,
+        key_id: &str,
+        request: KeyOperationRequest,
+    ) -> Result<KeyOperationResponse>;
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyOperationRequest {
+    pub alg: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyOperationResponse {
+    pub kid: String,
+    pub value: String,
 }
 
 #[cfg_attr(feature = "test-utils", automock)]
@@ -740,6 +769,84 @@ impl KeyVaultSecretsApi for AzureKeyVaultSecretsClient {
             .context(key_vault_parse_error("DeleteSecret", &url))?;
 
         Ok(secret)
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Key Vault Keys client
+// -----------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct AzureKeyVaultKeysClient {
+    client: Client,
+    token_cache: AzureTokenCache,
+}
+
+impl AzureKeyVaultKeysClient {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
+        Self {
+            client,
+            token_cache,
+        }
+    }
+
+    async fn operation(
+        &self,
+        key_id: &str,
+        operation: &str,
+        request: KeyOperationRequest,
+    ) -> Result<KeyOperationResponse> {
+        let mut url = url::Url::parse(&format!(
+            "{}/{}",
+            key_id.trim_end_matches('/'),
+            operation.to_ascii_lowercase()
+        ))
+        .into_alien_error()
+        .context(ErrorData::InvalidInput {
+            message: "Azure Key Vault key ID is not a valid URL".to_string(),
+            field_name: Some("keyId".to_string()),
+        })?;
+        url.query_pairs_mut().append_pair("api-version", "7.4");
+        let response = send_key_vault_request(
+            &self.token_cache,
+            self.client.post(url.clone()).json(&request),
+            operation,
+        )
+        .await?;
+        if !response.status().is_success() {
+            return Err(key_vault_response_error(
+                response.status(),
+                operation,
+                "Azure Key Vault Key",
+                key_id,
+                &url,
+            ));
+        }
+        response
+            .json::<KeyOperationResponse>()
+            .await
+            .into_alien_error()
+            .context(key_vault_parse_error(operation, &url))
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl KeyVaultKeysApi for AzureKeyVaultKeysClient {
+    async fn encrypt(
+        &self,
+        key_id: &str,
+        request: KeyOperationRequest,
+    ) -> Result<KeyOperationResponse> {
+        self.operation(key_id, "Encrypt", request).await
+    }
+
+    async fn decrypt(
+        &self,
+        key_id: &str,
+        request: KeyOperationRequest,
+    ) -> Result<KeyOperationResponse> {
+        self.operation(key_id, "Decrypt", request).await
     }
 }
 

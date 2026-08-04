@@ -90,6 +90,11 @@ export interface RawStorageHandle {
   signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>
 }
 
+export interface RawKeyHandle {
+  encrypt(plaintext: Buffer, context?: Record<string, string> | null): Promise<Buffer>
+  decrypt(ciphertext: Buffer, context?: Record<string, string> | null): Promise<Buffer>
+}
+
 /** Raw napi remote Storage v0 handle. */
 export interface RawRemoteStorageHandle {
   get(path: string): Promise<StorageGetResult>
@@ -163,6 +168,7 @@ export interface RawVaultHandle {
 /** Raw napi bindings entry point. Construction validates the environment. */
 export interface RawBindingsHandle {
   storage(name: string): Promise<RawStorageHandle>
+  key(name: string): Promise<RawKeyHandle>
   kv(name: string): Promise<RawKvHandle>
   queue(name: string): Promise<RawQueueHandle>
   vault(name: string): Promise<RawVaultHandle>

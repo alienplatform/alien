@@ -218,6 +218,7 @@ dependencies = [
  "container-registry 0.3.1 (git+https://github.com/alienplatform/container_registry-rs.git?rev=f0d0fe6)",
  "dotenvy",
  "futures",
+ "hex",
  "k8s-openapi",
  "object_store",
  "oci-client",

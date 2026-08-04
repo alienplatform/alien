@@ -19,6 +19,8 @@ const factories = createFactories(loadAddon)
 
 /** Resolve the storage binding named `name`. */
 export const storage = factories.storage
+/** Resolve the provider-backed key binding named `name`. */
+export const key = factories.key
 /** Resolve the key-value binding named `name`. */
 export const kv = factories.kv
 /** Resolve the queue binding named `name`. */
@@ -41,6 +43,8 @@ export {
 
 export type {
   Container,
+  Key,
+  KeyOptions,
   Kv,
   KvScanItem,
   KvScanResult,

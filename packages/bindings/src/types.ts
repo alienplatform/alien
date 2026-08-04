@@ -122,6 +122,17 @@ export interface Storage {
   signedUrl(options: SignedUrlOptions): Promise<PresignedRequest>
 }
 
+/** Optional authenticated metadata for a Key operation. */
+export interface KeyOptions {
+  context?: Record<string, string>
+}
+
+/** A provider-backed key for encrypting and decrypting values up to 128 bytes. */
+export interface Key {
+  encrypt(plaintext: Buffer | Uint8Array, options?: KeyOptions): Promise<Buffer>
+  decrypt(ciphertext: Buffer | Uint8Array, options?: KeyOptions): Promise<Buffer>
+}
+
 /** Storage operations available from an external deployment binding. */
 export type RemoteStorage = Pick<Storage, "get" | "put" | "delete" | "list" | "head">
 

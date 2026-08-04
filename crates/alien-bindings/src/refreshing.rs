@@ -33,7 +33,7 @@ use crate::presigned::PresignedRequest;
 #[cfg(feature = "platform-sdk")]
 use crate::remote::RemoteStorage;
 use crate::traits::{
-    Binding, BindingsProviderApi, Kv, MessagePayload, PutOptions as KvPutOptions, Queue,
+    Binding, BindingsProviderApi, Key, Kv, MessagePayload, PutOptions as KvPutOptions, Queue,
     QueueMessage, ScanResult, Storage, Vault,
 };
 
@@ -75,6 +75,10 @@ impl Resolver {
 
     async fn kv(&self) -> Result<Arc<dyn Kv>> {
         self.provider.load_kv(&self.binding_name).await
+    }
+
+    async fn key(&self) -> Result<Arc<dyn Key>> {
+        self.provider.load_key(&self.binding_name).await
     }
 
     async fn queue(&self) -> Result<Arc<dyn Queue>> {
@@ -437,6 +441,45 @@ impl Queue for RefreshingQueue {
 
     async fn purge(&self, queue: &str) -> Result<()> {
         self.resolver.queue().await?.purge(queue).await
+    }
+}
+
+/// Key handle that resolves a fresh-enough provider for every operation.
+#[derive(Debug)]
+pub(super) struct RefreshingKey {
+    resolver: Resolver,
+}
+
+impl RefreshingKey {
+    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+        Self {
+            resolver: Resolver::new(provider, binding_name),
+        }
+    }
+}
+
+impl Binding for RefreshingKey {}
+
+#[async_trait]
+impl Key for RefreshingKey {
+    async fn encrypt(
+        &self,
+        plaintext: &[u8],
+        context: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<Vec<u8>> {
+        self.resolver.key().await?.encrypt(plaintext, context).await
+    }
+
+    async fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        context: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<Vec<u8>> {
+        self.resolver
+            .key()
+            .await?
+            .decrypt(ciphertext, context)
+            .await
     }
 }
 

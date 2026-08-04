@@ -7,9 +7,11 @@
 
 use crate::error::Result;
 use crate::provider::{BindingsProvider, LazyEnvBindingsProvider};
-use crate::refreshing::{RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault};
+use crate::refreshing::{
+    RefreshingKey, RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault,
+};
 use crate::traits::{
-    BindingsProviderApi, Container, Kv, MessagePayload, Postgres, Queue, QueueMessage, Storage,
+    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage, Storage,
     Vault,
 };
 use std::collections::HashMap;
@@ -130,6 +132,15 @@ impl Bindings {
             self.provider.clone(),
             binding_name.to_string(),
             initial,
+        )))
+    }
+
+    /// Loads a provider-backed key binding that refreshes minted credentials before use.
+    pub async fn key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        self.provider.load_key(binding_name).await?;
+        Ok(Arc::new(RefreshingKey::new(
+            self.provider.clone(),
+            binding_name.to_string(),
         )))
     }
 

@@ -5,6 +5,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawContainerHandle,
+  RawKeyHandle,
   RawKvHandle,
   RawPostgresConnection,
   RawPostgresHandle,
@@ -90,6 +91,10 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     exists: async () => false,
     scan: async () => ({ items: [] }),
   }
+  const keyHandle: RawKeyHandle = {
+    encrypt: async plaintext => plaintext,
+    decrypt: async ciphertext => ciphertext,
+  }
   const queueHandle: RawQueueHandle = {
     sendJson: async () => {},
     sendText: async () => {},
@@ -114,6 +119,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
 
   const bindings: RawBindingsHandle = {
     storage: async () => storageHandle,
+    key: async () => keyHandle,
     kv: async () => kvHandle,
     queue: async () => queueHandle,
     vault: async () => vaultHandle,
@@ -126,6 +132,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       constructions.push(undefined)
     }
     storage = bindings.storage
+    key = bindings.key
     kv = bindings.kv
     queue = bindings.queue
     vault = bindings.vault
@@ -174,6 +181,19 @@ function addonForStorage(storageHandle: RawStorageHandle): NativeAddon {
   class FakeBindingsHandle {
     async storage(): Promise<RawStorageHandle> {
       return storageHandle
+    }
+  }
+  return {
+    BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    RemoteBindingsHandle: unusedRemoteBindingsHandle(),
+    version: () => "test",
+  }
+}
+
+function addonForKey(keyHandle: RawKeyHandle): NativeAddon {
+  class FakeBindingsHandle {
+    async key(): Promise<RawKeyHandle> {
+      return keyHandle
     }
   }
   return {
@@ -300,6 +320,22 @@ describe("createFactories kv surface", () => {
     expect(page.nextCursor).toBe("next")
     expect(page.items.map(item => item.key)).toEqual(["a", "b"])
     expect(page.items.map(item => item.value.toString("utf8"))).toEqual(["one", "two"])
+  })
+})
+
+describe("createFactories key surface", () => {
+  it("forwards bytes and authenticated context without changing either", async () => {
+    const encrypt = vi.fn<RawKeyHandle["encrypt"]>(async plaintext => plaintext)
+    const decrypt = vi.fn<RawKeyHandle["decrypt"]>(async ciphertext => ciphertext)
+    const { key } = createFactories(() => addonForKey({ encrypt, decrypt }))
+    const plaintext = new Uint8Array([0, 1, 2, 255])
+    const context = { project: "example", purpose: "root" }
+
+    const ciphertext = await key("customer-key").encrypt(plaintext, { context })
+    await key("customer-key").decrypt(ciphertext, { context })
+
+    expect(encrypt).toHaveBeenCalledWith(Buffer.from(plaintext), context)
+    expect(decrypt).toHaveBeenCalledWith(Buffer.from(plaintext), context)
   })
 })
 

@@ -4,7 +4,7 @@ use crate::{
     error::{binding_env_var, ErrorData, Result},
     providers::postgres::runtime::PostgresRuntime,
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Postgres, Queue,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Key, Kv, Postgres, Queue,
         ServiceAccount, Storage, Vault, Worker,
     },
 };
@@ -441,6 +441,11 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
         self.provider().await?.load_storage(binding_name).await
     }
 
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        self.ensure_binding_present(binding_name)?;
+        self.provider().await?.load_key(binding_name).await
+    }
+
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>> {
         self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_build(binding_name).await
@@ -642,6 +647,129 @@ impl BindingsProviderApi for BindingsProvider {
         self.put_cache("storage", binding_name, result.clone())
             .await;
         Ok(result)
+    }
+
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        if let Some(cached) = self.get_cached::<Arc<dyn Key>>("key", binding_name).await {
+            return Ok(cached);
+        }
+
+        use alien_core::bindings::KeyBinding;
+        let binding: KeyBinding = self.parse_binding(binding_name, "key")?;
+        let key: Arc<dyn Key> = match binding {
+            #[cfg(feature = "aws")]
+            KeyBinding::AwsKms(config) => {
+                use crate::providers::key::aws::AwsKmsKey;
+                use alien_aws_clients::kms::KmsClient;
+                let mut aws_config = self.client_config.aws_config().cloned().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Aws,
+                        message: "AWS config not available".to_string(),
+                    })
+                })?;
+                if let Some(region) = config.region {
+                    aws_config.region = region
+                        .into_value(binding_name, "region")
+                        .context(ErrorData::config_invalid(
+                            binding_name,
+                            "Failed to extract region from KMS binding",
+                        ))?;
+                }
+                let credentials =
+                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config)
+                        .await
+                        .context(ErrorData::BindingSetupFailed {
+                            binding_type: "AWS KMS key".to_string(),
+                            reason: "Failed to create credential provider".to_string(),
+                        })?;
+                let key_arn = config
+                    .key_arn
+                    .into_value(binding_name, "key_arn")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract key_arn from KMS binding",
+                    ))?;
+                Arc::new(AwsKmsKey::new(
+                    Arc::new(KmsClient::new(
+                        crate::http_client::create_http_client(),
+                        credentials,
+                    )),
+                    key_arn,
+                ))
+            }
+            #[cfg(not(feature = "aws"))]
+            KeyBinding::AwsKms(_) => {
+                return Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                    feature: "aws".to_string(),
+                }))
+            }
+            #[cfg(feature = "gcp")]
+            KeyBinding::GcpCloudKms(config) => {
+                use crate::providers::key::gcp::GcpCloudKmsKey;
+                use alien_gcp_clients::cloud_kms::CloudKmsClient;
+                let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Gcp,
+                        message: "GCP config not available".to_string(),
+                    })
+                })?;
+                let crypto_key_name = config
+                    .crypto_key_name
+                    .into_value(binding_name, "crypto_key_name")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract crypto_key_name from Cloud KMS binding",
+                    ))?;
+                Arc::new(GcpCloudKmsKey::new(
+                    Arc::new(CloudKmsClient::new(
+                        crate::http_client::create_http_client(),
+                        gcp_config.clone(),
+                    )),
+                    crypto_key_name,
+                ))
+            }
+            #[cfg(not(feature = "gcp"))]
+            KeyBinding::GcpCloudKms(_) => {
+                return Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                    feature: "gcp".to_string(),
+                }))
+            }
+            #[cfg(feature = "azure")]
+            KeyBinding::AzureKeyVault(config) => {
+                use crate::providers::key::azure::AzureKeyVaultKey;
+                use alien_azure_clients::keyvault::AzureKeyVaultKeysClient;
+                use alien_azure_clients::AzureTokenCache;
+                let azure_config = self.client_config.azure_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Azure,
+                        message: "Azure config not available".to_string(),
+                    })
+                })?;
+                let key_id = config
+                    .key_id
+                    .into_value(binding_name, "key_id")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to extract key_id from Key Vault binding",
+                    ))?;
+                Arc::new(AzureKeyVaultKey::new(
+                    Arc::new(AzureKeyVaultKeysClient::new(
+                        crate::http_client::create_http_client(),
+                        AzureTokenCache::new(azure_config.clone()),
+                    )),
+                    key_id,
+                ))
+            }
+            #[cfg(not(feature = "azure"))]
+            KeyBinding::AzureKeyVault(_) => {
+                return Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                    feature: "azure".to_string(),
+                }))
+            }
+        };
+
+        self.put_cache("key", binding_name, key.clone()).await;
+        Ok(key)
     }
 
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>> {
