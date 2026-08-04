@@ -21,8 +21,8 @@ pub use azure::disks::{AzureManagedDisksClient, ManagedDisksApi};
 pub use azure::event_grid::{AzureEventGridClient, EventGridApi};
 pub use azure::flexible_server::{AzureFlexibleServerClient, FlexibleServerApi};
 pub use azure::keyvault::{
-    AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient, KeyVaultManagementApi,
-    KeyVaultSecretsApi,
+    AzureKeyVaultKeysClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
+    KeyVaultKeysApi, KeyVaultManagementApi, KeyVaultSecretsApi,
 };
 pub use azure::load_balancers::{AzureLoadBalancerClient, LoadBalancerApi};
 pub use azure::long_running_operation::{LongRunningOperationApi, LongRunningOperationClient};

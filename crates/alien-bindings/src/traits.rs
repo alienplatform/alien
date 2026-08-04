@@ -38,6 +38,22 @@ pub trait Storage: Binding + ObjectStore {
         -> Result<PresignedRequest>;
 }
 
+/// A provider-backed key for small wrap and unwrap operations.
+#[async_trait]
+pub trait Key: Binding {
+    async fn encrypt(
+        &self,
+        plaintext: &[u8],
+        context: Option<&BTreeMap<String, String>>,
+    ) -> Result<Vec<u8>>;
+
+    async fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        context: Option<&BTreeMap<String, String>>,
+    ) -> Result<Vec<u8>>;
+}
+
 /// A build binding that provides build execution capabilities.
 #[async_trait]
 pub trait Build: Binding {
@@ -954,6 +970,9 @@ pub trait Container: Binding {
 pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// Given a binding identifier, builds a Storage implementation.
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>>;
+
+    /// Given a binding identifier, builds a Key implementation.
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>>;
 
     /// Given a binding identifier, builds a Build implementation.
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>>;

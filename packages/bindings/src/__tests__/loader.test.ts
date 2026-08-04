@@ -4,6 +4,9 @@ import { assertAddonVersion, platformTriple } from "../loader.js"
 
 function addonReporting(version: string): NativeAddon {
   class BindingsHandle {
+    key(): never {
+      throw new Error("not used by version validation")
+    }
     storage(): never {
       throw new Error("not used by version validation")
     }

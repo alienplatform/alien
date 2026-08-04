@@ -4,6 +4,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawContainerHandle,
+  RawKeyHandle,
   RawKvHandle,
   RawPostgresHandle,
   RawQueueHandle,
@@ -48,6 +49,10 @@ function fakeRemoteAddon() {
   }
 
   class FakeBindingsHandle implements RawBindingsHandle {
+    async key(): Promise<RawKeyHandle> {
+      throw new Error("unused")
+    }
+
     async storage(): Promise<RawStorageHandle> {
       return localStorage
     }

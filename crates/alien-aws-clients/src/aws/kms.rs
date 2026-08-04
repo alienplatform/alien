@@ -1,0 +1,132 @@
+use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
+use crate::aws::credential_provider::AwsCredentialProvider;
+use alien_client_core::Result;
+use alien_error::{Context, IntoAlienError};
+use async_trait::async_trait;
+use bon::Builder;
+use reqwest::{Client, Method};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[cfg(feature = "test-utils")]
+use mockall::automock;
+
+#[cfg_attr(feature = "test-utils", automock)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait KmsApi: Send + Sync + std::fmt::Debug {
+    async fn encrypt(&self, request: EncryptRequest) -> Result<EncryptResponse>;
+    async fn decrypt(&self, request: DecryptRequest) -> Result<DecryptResponse>;
+}
+
+#[derive(Debug, Clone)]
+pub struct KmsClient {
+    client: Client,
+    credentials: AwsCredentialProvider,
+}
+
+impl KmsClient {
+    pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self {
+            client,
+            credentials,
+        }
+    }
+
+    async fn send<T: DeserializeOwned + Send + 'static>(
+        &self,
+        target: &str,
+        body: String,
+        key_id: &str,
+    ) -> Result<T> {
+        self.credentials.ensure_fresh().await?;
+        let region = self.credentials.region();
+        let endpoint = self
+            .credentials
+            .get_service_endpoint_option("kms")
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("https://kms.{region}.amazonaws.com"));
+        let host = format!("kms.{region}.amazonaws.com");
+        let request = self
+            .client
+            .request(Method::POST, endpoint)
+            .host(&host)
+            .header("X-Amz-Target", format!("TrentService.{target}"))
+            .header("Content-Type", "application/x-amz-json-1.1")
+            .content_sha256(&body)
+            .body(body);
+        crate::aws::aws_request_utils::sign_send_json(
+            request,
+            &AwsSignConfig {
+                service_name: "kms".to_string(),
+                region: region.to_string(),
+                credentials: self.credentials.get_credentials(),
+                signing_region: None,
+            },
+        )
+        .await
+        .context(alien_client_core::ErrorData::GenericError {
+            message: format!("AWS KMS {target} failed for key '{key_id}'"),
+        })
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl KmsApi for KmsClient {
+    async fn encrypt(&self, request: EncryptRequest) -> Result<EncryptResponse> {
+        let key_id = request.key_id.clone();
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS Encrypt request".to_string(),
+            },
+        )?;
+        self.send("Encrypt", body, &key_id).await
+    }
+
+    async fn decrypt(&self, request: DecryptRequest) -> Result<DecryptResponse> {
+        let key_id = request.key_id.clone();
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            alien_client_core::ErrorData::SerializationError {
+                message: "Failed to serialize AWS KMS Decrypt request".to_string(),
+            },
+        )?;
+        self.send("Decrypt", body, &key_id).await
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct EncryptRequest {
+    #[builder(start_fn)]
+    pub key_id: String,
+    #[builder(start_fn)]
+    pub plaintext: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_context: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct EncryptResponse {
+    pub ciphertext_blob: String,
+    pub key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct DecryptRequest {
+    #[builder(start_fn)]
+    pub key_id: String,
+    #[builder(start_fn)]
+    pub ciphertext_blob: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption_context: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DecryptResponse {
+    pub plaintext: String,
+    pub key_id: String,
+}

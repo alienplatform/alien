@@ -11,6 +11,7 @@
 mod container;
 mod error;
 mod kv;
+mod key;
 mod postgres;
 mod queue;
 #[cfg(feature = "platform-sdk")]
@@ -27,6 +28,7 @@ use std::sync::Arc;
 
 pub use container::ContainerHandle;
 pub use kv::KvHandle;
+pub use key::KeyHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
 #[cfg(feature = "platform-sdk")]
@@ -66,6 +68,14 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let storage = inner.storage(&name).await.map_err(map_alien_error)?;
         Ok(StorageHandle::new(storage, name))
+    }
+
+    /// Resolve the provider-backed key binding named `name`.
+    #[napi]
+    pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {
+        let inner = self.inner.clone();
+        let key = inner.key(&name).await.map_err(map_alien_error)?;
+        Ok(KeyHandle::new(key))
     }
 
     /// Resolve the key-value binding named `name`.

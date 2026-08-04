@@ -3,6 +3,7 @@ pub mod artifact_registry;
 pub mod build;
 pub mod container;
 pub mod kv;
+pub mod key;
 #[cfg(feature = "local")]
 pub(crate) mod local_store;
 pub mod postgres;
