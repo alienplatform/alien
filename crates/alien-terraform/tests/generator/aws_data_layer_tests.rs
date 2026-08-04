@@ -42,7 +42,72 @@ fn aws_key_package_is_valid_and_retained() {
     assert!(rendered.contains("\"kms:Encrypt\""));
     assert!(rendered.contains("\"kms:Decrypt\""));
     assert!(rendered.contains("aws_kms_key.customer_key.arn"));
+    let detach = module
+        .get("detach-retained-keys.sh")
+        .expect("retained Key detach operation");
+    assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key'"));
+    assert!(module
+        .get("README.md")
+        .unwrap()
+        .contains("terraform destroy"));
     assert_terraform_valid(&module, "aws_key_package");
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_key_detach_operation_is_idempotent_and_narrow() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let stack = Stack::new("enterprise-key".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let temp = tempfile::tempdir().unwrap();
+    let detach_path = temp.path().join("detach-retained-keys.sh");
+    fs::write(&detach_path, module.get("detach-retained-keys.sh").unwrap()).unwrap();
+    fs::write(
+        temp.path().join("state"),
+        "aws_kms_key.customer_key\naws_iam_role.unrelated\n",
+    )
+    .unwrap();
+    let terraform_path = temp.path().join("terraform");
+    fs::write(
+        &terraform_path,
+        "#!/bin/sh\nset -eu\nif [ \"$1 $2\" = \"state list\" ]; then cat \"$TEST_STATE\"; exit 0; fi\nif [ \"$1 $2\" = \"state rm\" ]; then\n  grep -F -x -v \"$3\" \"$TEST_STATE\" > \"$TEST_STATE.next\"\n  mv \"$TEST_STATE.next\" \"$TEST_STATE\"\n  echo \"$3\" >> \"$TEST_LOG\"\n  exit 0\nfi\nexit 2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&terraform_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+    for _ in 0..2 {
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let status = Command::new("sh")
+            .arg(&detach_path)
+            .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes")
+            .env("PATH", path)
+            .env("TEST_STATE", temp.path().join("state"))
+            .env("TEST_LOG", temp.path().join("log"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join("state")).unwrap(),
+        "aws_iam_role.unrelated\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("log")).unwrap(),
+        "aws_kms_key.customer_key\n"
+    );
 }
 
 #[test]

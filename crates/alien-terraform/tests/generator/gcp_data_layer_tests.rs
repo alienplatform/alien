@@ -42,6 +42,11 @@ fn gcp_key_package_is_valid_and_retained() {
     assert!(rendered.contains("google_kms_key_ring"));
     assert!(rendered.contains("prevent_destroy = true"));
     assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
+    let detach = module
+        .get("detach-retained-keys.sh")
+        .expect("retained Key detach operation");
+    assert!(detach.contains("google_kms_crypto_key.customer_key"));
+    assert!(detach.contains("google_kms_key_ring.customer_key_ring"));
     assert_terraform_valid(&module, "gcp_key_package");
 }
 

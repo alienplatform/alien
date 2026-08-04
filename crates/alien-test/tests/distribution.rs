@@ -65,6 +65,13 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("enabled-demo gate checks failed: {error:#}");
             }
         }
+        TestApp::ByoEncryptionKey => {
+            if let Err(error) =
+                common::remote_bindings::check_remote_key(&ctx.deployment, ctx.platform).await
+            {
+                panic!("remote Enterprise Key checks failed: {error:#}");
+            }
+        }
     }
 }
 
@@ -158,7 +165,12 @@ async fn check_enabled_demo(ctx: &mut alien_test::TestContext) -> anyhow::Result
     // is the IAM policy carrying its id, which also proves the grant follows the gate.
     assert_cloud_gate_pair(
         &env,
-        &["iam", "get-account-authorization-details", "--output", "json"],
+        &[
+            "iam",
+            "get-account-authorization-details",
+            "--output",
+            "json",
+        ],
         "optional-vault-on",
         "optional-vault-off",
     )
@@ -902,6 +914,18 @@ async fn terraform_aws_push_enabled_demo(ctx: &mut TerraformAwsPushEnabledDemo) 
 }
 
 distribution_test_context!(
+    TerraformAwsPushByoEncryptionKey,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformAwsPushByoEncryptionKey)]
+#[tokio::test]
+async fn terraform_aws_push_byo_encryption_key(ctx: &mut TerraformAwsPushByoEncryptionKey) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     TerraformGcpPushRust,
     DistributionFlow::TerraformGcpPush,
     TestApp::ComprehensiveRust
@@ -914,6 +938,18 @@ async fn terraform_gcp_push_comprehensive_rust(ctx: &mut TerraformGcpPushRust) {
 }
 
 distribution_test_context!(
+    TerraformGcpPushByoEncryptionKey,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformGcpPushByoEncryptionKey)]
+#[tokio::test]
+async fn terraform_gcp_push_byo_encryption_key(ctx: &mut TerraformGcpPushByoEncryptionKey) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     TerraformAzurePushRust,
     DistributionFlow::TerraformAzurePush,
     TestApp::ComprehensiveRust
@@ -922,6 +958,18 @@ distribution_test_context!(
 #[test_context(TerraformAzurePushRust)]
 #[tokio::test]
 async fn terraform_azure_push_comprehensive_rust(ctx: &mut TerraformAzurePushRust) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzurePushByoEncryptionKey,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformAzurePushByoEncryptionKey)]
+#[tokio::test]
+async fn terraform_azure_push_byo_encryption_key(ctx: &mut TerraformAzurePushByoEncryptionKey) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

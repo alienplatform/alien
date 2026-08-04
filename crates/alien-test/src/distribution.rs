@@ -231,6 +231,16 @@ impl DistributionArtifactCleanup {
                     workdir = %workdir.path().display(),
                     "destroying Terraform setup artifacts"
                 );
+                let detach_script = workdir.path().join("detach-retained-keys.sh");
+                if detach_script.exists() {
+                    let mut detach = Command::new("sh");
+                    detach
+                        .current_dir(workdir.path())
+                        .arg("./detach-retained-keys.sh")
+                        .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
+                    apply_env(&mut detach, &env);
+                    run_command(detach, "detach retained Terraform keys").await?;
+                }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
                     cmd.current_dir(workdir.path()).args([
@@ -2425,6 +2435,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
             anyhow::anyhow!("Deployment failed to reach running within {timeout:?}: {error}")
         })?;
     if ctx.model == DeploymentModel::Push
+        && ctx.app != TestApp::ByoEncryptionKey
         && matches!(
             ctx.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
