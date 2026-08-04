@@ -253,6 +253,42 @@ async fn promote_release_task(
 
     let (_, project_link) = ctx.resolve_project(project, !json).await?;
     let workspace = ctx.resolve_workspace_query_with_bootstrap(!json).await?;
+    let http = ctx.auth_http().await?;
+    let client = http.sdk_client();
+    let mut channels_request = client
+        .list_release_channels()
+        .project(&project_link.project_id);
+    if let Some(workspace) = workspace.as_deref() {
+        channels_request = channels_request.workspace(workspace);
+    }
+    let channels = channels_request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("reading channel '{channel}' before promotion"),
+            url: None,
+        })?;
+    let expected_release_id = channels
+        .items
+        .iter()
+        .find(|item| item.name.to_string() == channel)
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::ValidationError {
+                field: "channel".to_string(),
+                message: format!("Release channel '{channel}' does not exist."),
+            })
+        })?
+        .current_release_id
+        .as_ref()
+        .map(|release_id| release_id.to_string().try_into())
+        .transpose()
+        .map_err(|_| {
+            alien_error::AlienError::new(ErrorData::ValidationError {
+                field: "channel".to_string(),
+                message: format!("Channel '{channel}' contains an invalid release ID."),
+            })
+        })?;
     let body = alien_platform_api::types::PromoteReleaseBody {
         release_id: release_id.try_into().map_err(|_| {
             alien_error::AlienError::new(ErrorData::ValidationError {
@@ -260,10 +296,8 @@ async fn promote_release_task(
                 message: "Expected a release ID in the form rel_….".to_string(),
             })
         })?,
-        expected_release_id: None,
+        expected_release_id,
     };
-    let http = ctx.auth_http().await?;
-    let client = http.sdk_client();
     let mut request = client
         .promote_release()
         .name(channel)
