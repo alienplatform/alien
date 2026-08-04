@@ -65,6 +65,11 @@ fn azure_key_package_is_valid_and_retained() {
     assert!(rendered.matches("prevent_destroy = true").count() >= 2);
     assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/encrypt/action"));
     assert!(rendered.contains("Microsoft.KeyVault/vaults/keys/decrypt/action"));
+    let detach = module
+        .get("detach-retained-keys.sh")
+        .expect("retained Key detach operation");
+    assert!(detach.contains("azurerm_key_vault_key.customer_key"));
+    assert!(detach.contains("azurerm_key_vault.customer_key"));
     assert_terraform_valid(&module, "azure_key_package");
 }
 

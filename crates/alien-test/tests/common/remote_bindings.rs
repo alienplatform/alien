@@ -5,6 +5,7 @@
 //! manager authorization, credential attenuation, and object operations all
 //! run through their production paths.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -31,6 +32,7 @@ const PROJECT_ID: &str = "prj_cccccccccccccccccccccccccccc";
 const DEPLOYMENT_GROUP_ID: &str = "dg_dddddddddddddddddddddddddddd";
 const WORKSPACE_ID: &str = "ws_eeeeeeeeeeeeeeeeeeeeeeee";
 const PAYLOAD: &[u8] = b"alien remote storage live-cloud e2e";
+const ENTERPRISE_KEY_BINDING: &str = "enterprise-key";
 
 #[derive(Clone)]
 struct DiscoveryState {
@@ -209,6 +211,62 @@ pub fn check_remote_storage<'a>(
             platform = %platform.as_str(),
             "Remote Storage put/head/get/list/delete check passed"
         );
+        Ok(())
+    })
+}
+
+/// Resolve the deployment's real cloud Key through the same public remote API
+/// used by the hosted Encryption Gateway, then prove provider cryptography and
+/// portable context behavior rather than merely inspecting generated setup.
+pub fn check_remote_key<'a>(
+    deployment: &'a TestDeployment,
+    platform: Platform,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        info!(
+            platform = %platform.as_str(),
+            "Checking remote Enterprise Key through assigned-manager discovery"
+        );
+        let discovery = DiscoveryServer::start(deployment, platform).await?;
+        let bindings =
+            RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+                .await
+                .context("discover assigned manager for remote Key binding")?;
+        let key = bindings
+            .key(ENTERPRISE_KEY_BINDING)
+            .await
+            .context("resolve real remote Key binding")?;
+
+        let plaintext = [0x5au8; 128];
+        let context = BTreeMap::from([
+            ("purpose".to_string(), "application-root".to_string()),
+            ("test".to_string(), deployment.id.clone()),
+        ]);
+        let ciphertext = key
+            .encrypt(&plaintext, Some(&context))
+            .await
+            .context("encrypt through real remote Enterprise Key")?;
+        let decrypted = key
+            .decrypt(&ciphertext, Some(&context))
+            .await
+            .context("decrypt through real remote Enterprise Key")?;
+        anyhow::ensure!(decrypted == plaintext, "remote Key plaintext changed");
+
+        let wrong_context = BTreeMap::from([
+            ("purpose".to_string(), "different-purpose".to_string()),
+            ("test".to_string(), deployment.id.clone()),
+        ]);
+        anyhow::ensure!(
+            key.decrypt(&ciphertext, Some(&wrong_context))
+                .await
+                .is_err(),
+            "remote Key must reject the wrong portable context"
+        );
+        anyhow::ensure!(
+            key.encrypt(&[0u8; 129], Some(&context)).await.is_err(),
+            "remote Key must reject values above the portable 128-byte limit"
+        );
+        info!(platform = %platform.as_str(), "Remote Enterprise Key check passed");
         Ok(())
     })
 }

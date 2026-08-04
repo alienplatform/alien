@@ -7,7 +7,9 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Key, RemoteBindings, Result};
+use alien_core::{
+    import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
+};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
@@ -105,6 +107,7 @@ impl TfEmitter for AzureKeyEmitter {
         ));
 
         emit_remote_access(ctx, label, &mut fragment)?;
+        emit_management_access(ctx, label, &mut fragment)?;
         Ok(fragment)
     }
 
@@ -140,6 +143,66 @@ impl TfEmitter for AzureKeyEmitter {
             ),
         ])))
     }
+}
+
+fn emit_management_access(
+    ctx: &EmitContext<'_>,
+    label: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    let Some(management_label) = management_label(ctx) else {
+        return Ok(());
+    };
+    let permission_set =
+        alien_permissions::get_permission_set("key/management").ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "key/management permission set is not registered".to_string(),
+            })
+        })?;
+    let context = permission_context(label).with_resource_name(format!(
+        "${{azurerm_key_vault_key.{label}.resource_versionless_id}}"
+    ));
+    let plan = AzureRuntimePermissionsGenerator::new()
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "failed to generate Azure Key management permissions".to_string(),
+        })?;
+
+    for (index, binding) in plan.bindings.iter().enumerate() {
+        let AzureRoleDefinitionRef::Predefined { role_definition_id } = &binding.role_definition
+        else {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: "key/management must use an Azure predefined role".to_string(),
+            }));
+        };
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_management_{index}"),
+            [
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "uuidv5(\"oid\", \"deployment:azure:key-management:${{local.resource_prefix}}:{label}:{index}\")"
+                    )),
+                ),
+                attr("scope", expr::template(binding.scope.clone())),
+                attr(
+                    "role_definition_id",
+                    expr::template(role_definition_id.clone()),
+                ),
+                attr(
+                    "principal_id",
+                    expr::traversal([
+                        "azurerm_user_assigned_identity",
+                        management_label,
+                        "principal_id",
+                    ]),
+                ),
+            ],
+        ));
+    }
+
+    Ok(())
 }
 
 fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) -> Result<()> {
@@ -223,4 +286,23 @@ fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
             .then(|| ctx.name_for(id))
             .flatten()
     })
+}
+
+fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    let has_permission = ctx
+        .stack
+        .management()
+        .profile()
+        .and_then(|profile| profile.0.get(ctx.resource_id))
+        .is_some_and(|refs| {
+            refs.iter()
+                .any(|reference| reference.id() == "key/management")
+        });
+    has_permission.then(|| {
+        ctx.stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        })
+    })?
 }

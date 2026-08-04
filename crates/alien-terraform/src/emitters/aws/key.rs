@@ -7,7 +7,9 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, Key, PermissionSetReference, RemoteBindings, Result};
+use alien_core::{
+    import::EmitContext, Key, PermissionSetReference, RemoteBindings, RemoteStackManagement, Result,
+};
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
@@ -38,6 +40,25 @@ impl TfEmitter for AwsKeyEmitter {
                 )),
             ],
         ));
+
+        if let Some(management_label) = management_label(ctx) {
+            let permission = PermissionSetReference::from_name("key/management");
+            if let Some(permission_set) =
+                permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            {
+                let context = aws_terraform_permission_context()
+                    .with_resource_name(format!("${{aws_kms_key.{label}.arn}}"));
+                emit_iam_role_policy_for_target_with_label(
+                    &mut fragment,
+                    management_label,
+                    &permission_set,
+                    &format!("{management_label}_{label}_management"),
+                    &format!("management-{}-key-metadata", ctx.resource_id),
+                    &context,
+                    BindingTarget::Resource,
+                )?;
+            }
+        }
 
         if let (Some(definition), Some(access_label)) = (
             alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
@@ -92,4 +113,23 @@ fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
             .then(|| ctx.name_for(id))
             .flatten()
     })
+}
+
+fn management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    let has_permission = ctx
+        .stack
+        .management()
+        .profile()
+        .and_then(|profile| profile.0.get(ctx.resource_id))
+        .is_some_and(|refs| {
+            refs.iter()
+                .any(|reference| reference.id() == "key/management")
+        });
+    has_permission.then(|| {
+        ctx.stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        })
+    })?
 }
