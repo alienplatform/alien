@@ -187,6 +187,16 @@ fn test_openai_user_role_id_resolves() {
 }
 
 #[test]
+fn test_key_vault_reader_role_id_resolves() {
+    use alien_permissions::generators::azure_runtime::azure_predefined_role_id;
+    assert_eq!(
+        azure_predefined_role_id("Key Vault Reader"),
+        Some("21090545-7ca7-4776-b22c-e363652d74d2"),
+        "the metadata-only Key Vault Reader role GUID must be registered"
+    );
+}
+
+#[test]
 fn test_ai_permission_sets_have_all_platforms() {
     for id in ["ai/provision", "ai/management", "ai/heartbeat", "ai/invoke"] {
         let perm_set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));

@@ -3,10 +3,13 @@ use std::time::Duration;
 use alien_core::{
     bindings::KeyBinding,
     import::{data::GcpKeyImportData, ImportContext},
-    Key, KeyFingerprint, KeyOutputs, ResourceOutputs, ResourceStatus, StackResourceState,
+    GcpCloudKmsKeyHeartbeatData, HeartbeatBackend, Key, KeyFingerprint, KeyHeartbeatData,
+    KeyHeartbeatStatus, KeyOutputs, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, StackResourceState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 use crate::{
     core::ResourceControllerContext,
@@ -35,7 +38,62 @@ impl GcpKeyController {
     }
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Key>()?;
+        let crypto_key_name = self.crypto_key_name.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceStateSerializationFailed {
+                resource_id: config.id.clone(),
+                message: "Imported GCP key is missing its CryptoKey name".to_string(),
+            })
+        })?;
+        let key = ctx
+            .service_provider
+            .get_gcp_cloud_kms_client(ctx.get_gcp_config()?)?
+            .get_crypto_key(crypto_key_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read GCP Cloud KMS key metadata".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+        if key.name != crypto_key_name {
+            return Err(AlienError::new(ErrorData::ResourceDrift {
+                resource_id: config.id.clone(),
+                message: "GCP Cloud KMS returned metadata for a different key".to_string(),
+            }));
+        }
+        let primary_state = key.primary.as_ref().map(|version| version.state.as_str());
+        let (health, lifecycle) = match primary_state {
+            Some("ENABLED") => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
+            Some("DISABLED") => (ObservedHealth::Unhealthy, ProviderLifecycleState::Stopped),
+            Some("DESTROY_SCHEDULED") | Some("DESTROYED") => {
+                (ObservedHealth::Unhealthy, ProviderLifecycleState::Deleting)
+            }
+            _ => (ObservedHealth::Degraded, ProviderLifecycleState::Unknown),
+        };
+        self.primary_version = key.primary.as_ref().map(|version| version.name.clone());
+        ctx.emit_heartbeat(ResourceHeartbeat {
+            deployment_id: None,
+            resource_id: config.id.clone(),
+            resource_type: Key::RESOURCE_TYPE,
+            controller_platform: Platform::Gcp,
+            backend: HeartbeatBackend::Gcp,
+            observed_at: Utc::now(),
+            data: ResourceHeartbeatData::Key(KeyHeartbeatData::GcpCloudKms(
+                GcpCloudKmsKeyHeartbeatData {
+                    status: KeyHeartbeatStatus {
+                        health,
+                        lifecycle,
+                        message: None,
+                    },
+                    crypto_key_name: key.name,
+                    purpose: key.purpose,
+                    primary_version: key.primary.as_ref().map(|version| version.name.clone()),
+                    primary_state: key.primary.as_ref().map(|version| version.state.clone()),
+                    algorithm: key.primary.map(|version| version.algorithm),
+                },
+            )),
+            raw: vec![],
+        });
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(300)),

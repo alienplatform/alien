@@ -33,6 +33,7 @@ impl GcpServiceConfig for CloudKmsServiceConfig {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait CloudKmsApi: Send + Sync + std::fmt::Debug {
+    async fn get_crypto_key(&self, crypto_key_name: &str) -> Result<CryptoKey>;
     async fn encrypt(
         &self,
         crypto_key_name: &str,
@@ -61,6 +62,18 @@ impl CloudKmsClient {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl CloudKmsApi for CloudKmsClient {
+    async fn get_crypto_key(&self, crypto_key_name: &str) -> Result<CryptoKey> {
+        self.base
+            .execute_request::<CryptoKey, ()>(
+                Method::GET,
+                crypto_key_name,
+                None,
+                None,
+                crypto_key_name,
+            )
+            .await
+    }
+
     async fn encrypt(
         &self,
         crypto_key_name: &str,
@@ -92,6 +105,22 @@ impl CloudKmsApi for CloudKmsClient {
             )
             .await
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoKey {
+    pub name: String,
+    pub purpose: String,
+    pub primary: Option<CryptoKeyVersion>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoKeyVersion {
+    pub name: String,
+    pub state: String,
+    pub algorithm: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

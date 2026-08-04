@@ -13,6 +13,7 @@ use alien_aws_clients::{
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
+    kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
@@ -34,8 +35,9 @@ use alien_azure_clients::{
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
     keyvault::{
-        AzureKeyVaultCertificatesClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
-        KeyVaultCertificatesApi, KeyVaultManagementApi, KeyVaultSecretsApi,
+        AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
+        AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
+        KeyVaultManagementApi, KeyVaultSecretsApi,
     },
     load_balancers::{AzureLoadBalancerClient, LoadBalancerApi},
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
@@ -56,6 +58,7 @@ use alien_azure_clients::{
 use alien_error::Context;
 use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
+    cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
@@ -136,6 +139,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
+    async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
@@ -171,6 +175,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>>;
+    fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>>;
 
     // Azure clients
     fn get_azure_application_gateway_client(
@@ -245,6 +250,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn KeyVaultSecretsApi>>;
+    fn get_azure_key_vault_keys_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn KeyVaultKeysApi>>;
     fn get_azure_key_vault_certificates_client(
         &self,
         config: &AzureClientConfig,
@@ -471,6 +480,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(S3Client::new(reqwest::Client::new(), credentials)))
+    }
+
+    async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(KmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
     }
 
     async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>> {
@@ -790,6 +812,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>> {
+        Ok(Arc::new(CloudKmsClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn FirestoreApi>> {
         Ok(Arc::new(FirestoreClient::new(
             reqwest::Client::new(),
@@ -1014,6 +1043,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn KeyVaultSecretsApi>> {
         Ok(Arc::new(AzureKeyVaultSecretsClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_key_vault_keys_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn KeyVaultKeysApi>> {
+        Ok(Arc::new(AzureKeyVaultKeysClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

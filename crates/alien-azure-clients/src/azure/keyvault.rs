@@ -214,6 +214,7 @@ pub trait KeyVaultSecretsApi: Send + Sync + std::fmt::Debug {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait KeyVaultKeysApi: Send + Sync + std::fmt::Debug {
+    async fn get_key(&self, key_id: &str) -> Result<KeyBundle>;
     async fn encrypt(
         &self,
         key_id: &str,
@@ -236,6 +237,27 @@ pub struct KeyOperationRequest {
 pub struct KeyOperationResponse {
     pub kid: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyBundle {
+    pub key: JsonWebKey,
+    pub attributes: KeyAttributes,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonWebKey {
+    pub kid: String,
+    pub kty: String,
+    #[serde(default)]
+    pub key_ops: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyAttributes {
+    pub enabled: Option<bool>,
+    #[serde(rename = "recoveryLevel")]
+    pub recovery_level: Option<String>,
 }
 
 #[cfg_attr(feature = "test-utils", automock)]
@@ -833,6 +855,34 @@ impl AzureKeyVaultKeysClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl KeyVaultKeysApi for AzureKeyVaultKeysClient {
+    async fn get_key(&self, key_id: &str) -> Result<KeyBundle> {
+        let mut url =
+            url::Url::parse(key_id)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    message: "Azure Key Vault key ID is not a valid URL".to_string(),
+                    field_name: Some("keyId".to_string()),
+                })?;
+        url.query_pairs_mut().append_pair("api-version", "7.4");
+        let response =
+            send_key_vault_request(&self.token_cache, self.client.get(url.clone()), "GetKey")
+                .await?;
+        if !response.status().is_success() {
+            return Err(key_vault_response_error(
+                response.status(),
+                "GetKey",
+                "Azure Key Vault Key",
+                key_id,
+                &url,
+            ));
+        }
+        response
+            .json::<KeyBundle>()
+            .await
+            .into_alien_error()
+            .context(key_vault_parse_error("GetKey", &url))
+    }
+
     async fn encrypt(
         &self,
         key_id: &str,
