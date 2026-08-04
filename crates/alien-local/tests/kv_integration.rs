@@ -2,7 +2,7 @@
 //!
 //! These tests verify that:
 //! 1. Manager creates KV databases usable by LocalKv binding
-//! 2. Health checks read the localkv.v1 format marker
+//! 2. Health checks read the localkv.v2 format marker
 //! 3. Data persists across sessions
 
 use alien_bindings::providers::kv::local::LocalKv;
@@ -29,10 +29,10 @@ async fn test_manager_creates_usable_kv() {
         .await
         .unwrap();
     let value = kv.get("key1").await.unwrap();
-    assert_eq!(value, Some(b"value1".to_vec()));
+    assert_eq!(value.map(|entry| entry.value), Some(b"value1".to_vec()));
 }
 
-/// Health check reads the localkv.v1 format marker
+/// Health check reads the localkv.v2 format marker
 #[tokio::test]
 async fn test_health_check_opens_database() {
     let temp_dir = TempDir::new().unwrap();
@@ -46,7 +46,7 @@ async fn test_health_check_opens_database() {
     let kv_path = manager.create_kv("healthy-kv").await.unwrap();
     manager.check_health("healthy-kv").await.unwrap();
 
-    // Open the store so localkv.sqlite exists with the localkv.v1 marker.
+    // Open the store so localkv.sqlite exists with the localkv.v2 marker.
     {
         let _kv = LocalKv::new(kv_path).await.unwrap();
     }
@@ -87,7 +87,10 @@ async fn test_kv_data_persists_across_sessions() {
         let kv_path = manager.get_kv_path("persist-kv").unwrap();
         let kv = LocalKv::new(kv_path).await.unwrap();
         let value = kv.get("persistent-key").await.unwrap();
-        assert_eq!(value, Some(b"persistent-value".to_vec()));
+        assert_eq!(
+            value.map(|entry| entry.value),
+            Some(b"persistent-value".to_vec())
+        );
     }
 }
 
@@ -149,8 +152,14 @@ async fn test_multiple_kvs_coexist() {
         .unwrap();
 
     // Verify data is isolated
-    assert_eq!(kv_a.get("key").await.unwrap(), Some(b"value-a".to_vec()));
-    assert_eq!(kv_b.get("key").await.unwrap(), Some(b"value-b".to_vec()));
+    assert_eq!(
+        kv_a.get("key").await.unwrap().map(|entry| entry.value),
+        Some(b"value-a".to_vec())
+    );
+    assert_eq!(
+        kv_b.get("key").await.unwrap().map(|entry| entry.value),
+        Some(b"value-b".to_vec())
+    );
 }
 
 /// KV TTL functionality works
@@ -208,7 +217,10 @@ async fn test_kv_scan_prefix() {
     // Scan user prefix
     let result = kv.scan_prefix("user:", None, None).await.unwrap();
     assert_eq!(result.items.len(), 2);
-    assert!(result.items.iter().all(|(k, _)| k.starts_with("user:")));
+    assert!(result
+        .items
+        .iter()
+        .all(|entry| entry.key.starts_with("user:")));
 
     // Scan config prefix
     let result = kv.scan_prefix("config:", None, None).await.unwrap();

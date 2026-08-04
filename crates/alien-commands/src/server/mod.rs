@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::presigned::PresignedRequest;
-use alien_bindings::traits::{Kv, PutOptions, Storage};
+use alien_bindings::traits::{Kv, PutCondition, PutOptions, Storage};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use chrono::{DateTime, Utc};
 use hex;
@@ -733,7 +733,8 @@ impl CommandServer {
                 message: "Failed to scan for pending commands".to_string(),
             })?;
 
-        for (index_key, _) in scan_result.items {
+        for entry in scan_result.items {
+            let index_key = entry.key;
             if leases.len() >= lease_request.max_leases {
                 break;
             }
@@ -763,7 +764,7 @@ impl CommandServer {
 
             let options = Some(PutOptions {
                 ttl: Some(lease_duration),
-                if_not_exists: true,
+                condition: PutCondition::Absent,
             });
 
             let success = self
@@ -792,7 +793,7 @@ impl CommandServer {
                     command_id.as_bytes().to_vec(),
                     Some(PutOptions {
                         ttl: Some(lease_duration),
-                        if_not_exists: false,
+                        condition: PutCondition::None,
                     }),
                 )
                 .await
@@ -812,7 +813,7 @@ impl CommandServer {
                 None => {
                     // Command doesn't exist in registry, clean up
                     self.delete_lease(&command_id).await?;
-                    let _ = self.kv.delete(&index_key).await;
+                    let _ = self.kv.delete(&index_key, None).await;
                     continue;
                 }
             };
@@ -851,7 +852,7 @@ impl CommandServer {
             if metadata.state.is_terminal() {
                 // Clean up stale data
                 self.delete_lease(&command_id).await?;
-                let _ = self.kv.delete(&index_key).await;
+                let _ = self.kv.delete(&index_key, None).await;
                 continue;
             }
 
@@ -870,7 +871,7 @@ impl CommandServer {
                         )
                         .await?;
                     self.delete_lease(&command_id).await?;
-                    let _ = self.kv.delete(&index_key).await;
+                    let _ = self.kv.delete(&index_key, None).await;
                     continue;
                 }
             }
@@ -899,7 +900,7 @@ impl CommandServer {
                     "Command turned terminal while leasing; releasing the lease"
                 );
                 self.delete_lease(&command_id).await?;
-                let _ = self.kv.delete(&index_key).await;
+                let _ = self.kv.delete(&index_key, None).await;
                 continue;
             }
 
@@ -986,7 +987,7 @@ impl CommandServer {
 
         // 1. Verify lease ownership
         if let Ok(Some(lease_data)) = self.kv.get(&lease_key).await {
-            let lease: LeaseData = serde_json::from_slice(&lease_data)
+            let lease: LeaseData = serde_json::from_slice(&lease_data.value)
                 .into_alien_error()
                 .context(ErrorData::SerializationFailed {
                     message: "Failed to deserialize lease data".to_string(),
@@ -1001,7 +1002,7 @@ impl CommandServer {
 
             // 2. Delete lease from KV (and its reverse index)
             self.delete_lease(command_id).await?;
-            let _ = self.kv.delete(&format!("lease:{}", lease_id)).await;
+            let _ = self.kv.delete(&format!("lease:{}", lease_id), None).await;
 
             // 3. Return the command to Pending only while it is still
             // non-terminal. A racing response/deadline completion wins.
@@ -1065,7 +1066,7 @@ impl CommandServer {
         else {
             return Ok(None);
         };
-        let command_id = String::from_utf8(command_id_bytes).map_err(|_| {
+        let command_id = String::from_utf8(command_id_bytes.value).map_err(|_| {
             AlienError::new(ErrorData::Other {
                 message: format!("Lease reverse index '{}' is not valid UTF-8", reverse_key),
             })
@@ -1084,7 +1085,7 @@ impl CommandServer {
         else {
             return Ok(None);
         };
-        let lease: LeaseData = serde_json::from_slice(&lease_data)
+        let lease: LeaseData = serde_json::from_slice(&lease_data.value)
             .into_alien_error()
             .context(ErrorData::SerializationFailed {
                 message: "Failed to deserialize lease data".to_string(),
@@ -1188,7 +1189,7 @@ impl CommandServer {
                 message: "Failed to check idempotency".to_string(),
             })?
         {
-            let command_id = String::from_utf8(data).into_alien_error().context(
+            let command_id = String::from_utf8(data.value).into_alien_error().context(
                 ErrorData::SerializationFailed {
                     message: "Invalid idempotency data".to_string(),
                     data_type: Some("String".to_string()),
@@ -1216,7 +1217,7 @@ impl CommandServer {
                 command_id.as_bytes().to_vec(),
                 Some(PutOptions {
                     ttl: Some(ttl),
-                    if_not_exists: true,
+                    condition: PutCondition::Absent,
                 }),
             )
             .await
@@ -1347,12 +1348,12 @@ impl CommandServer {
                 message: "Failed to get params".to_string(),
             })?
         {
-            let data: CommandParamsData = serde_json::from_slice(&value)
+            let data: CommandParamsData = serde_json::from_slice(&value.value)
                 .into_alien_error()
                 .context(ErrorData::SerializationFailed {
-                    message: "Failed to deserialize params".to_string(),
-                    data_type: Some("CommandParamsData".to_string()),
-                })?;
+                message: "Failed to deserialize params".to_string(),
+                data_type: Some("CommandParamsData".to_string()),
+            })?;
             return Ok(Some(data.params));
         }
         Ok(None)
@@ -1472,7 +1473,7 @@ impl CommandServer {
                 message: "Failed to get response".to_string(),
             })?
         {
-            let data: CommandResponseData = serde_json::from_slice(&value)
+            let data: CommandResponseData = serde_json::from_slice(&value.value)
                 .into_alien_error()
                 .context(ErrorData::SerializationFailed {
                     message: "Failed to deserialize response".to_string(),
@@ -1535,9 +1536,9 @@ impl CommandServer {
                 message: "Failed to scan pending index".to_string(),
             })?;
 
-        for (key, _) in scan_result.items {
-            if key.ends_with(&format!(":{}", command_id)) {
-                let _ = self.kv.delete(&key).await;
+        for entry in scan_result.items {
+            if entry.key.ends_with(&format!(":{}", command_id)) {
+                let _ = self.kv.delete(&entry.key, None).await;
                 break;
             }
         }
@@ -1548,7 +1549,7 @@ impl CommandServer {
 
     async fn delete_lease(&self, command_id: &str) -> Result<()> {
         let key = format!("cmd:{}:lease", command_id);
-        let _ = self.kv.delete(&key).await;
+        let _ = self.kv.delete(&key, None).await;
         Ok(())
     }
 
@@ -1583,10 +1584,10 @@ impl CommandServer {
                     message: "Failed to scan the deadline index".to_string(),
                 })?;
             let next_cursor = scan.next_cursor.clone();
-            for (key, value) in scan.items {
-                let Ok(data) = serde_json::from_slice::<DeadlineIndexData>(&value) else {
-                    warn!(key = %key, "Unparseable deadline index entry; deleting");
-                    let _ = self.kv.delete(&key).await;
+            for entry in scan.items {
+                let Ok(data) = serde_json::from_slice::<DeadlineIndexData>(&entry.value) else {
+                    warn!(key = %entry.key, "Unparseable deadline index entry; deleting");
+                    let _ = self.kv.delete(&entry.key, None).await;
                     continue;
                 };
                 if data.deadline > now {
@@ -1601,10 +1602,10 @@ impl CommandServer {
                     .await?;
                 match status {
                     None => {
-                        let _ = self.kv.delete(&key).await;
+                        let _ = self.kv.delete(&entry.key, None).await;
                     }
                     Some(status) if status.state.is_terminal() => {
-                        let _ = self.kv.delete(&key).await;
+                        let _ = self.kv.delete(&entry.key, None).await;
                     }
                     Some(status) => {
                         let won = self
@@ -1632,7 +1633,7 @@ impl CommandServer {
                                 )
                                 .await;
                         }
-                        let _ = self.kv.delete(&key).await;
+                        let _ = self.kv.delete(&entry.key, None).await;
                     }
                 }
             }
@@ -1677,7 +1678,7 @@ impl CommandServer {
             .unwrap_or(DEADLINE_INDEX_GRACE);
         let options = (ttl.num_seconds() > 0).then(|| PutOptions {
             ttl: Some(Duration::from_secs(ttl.num_seconds() as u64)),
-            if_not_exists: false,
+            condition: PutCondition::None,
         });
 
         self.kv

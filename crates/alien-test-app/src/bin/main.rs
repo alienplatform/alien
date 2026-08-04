@@ -386,8 +386,8 @@ async fn get_storage_event(
     let kv_key = format!("storage_event:{}", sanitized_key);
 
     match kv.get(&kv_key).await {
-        Ok(Some(data)) => {
-            let event: serde_json::Value = serde_json::from_slice(&data)
+        Ok(Some(entry)) => {
+            let event: serde_json::Value = serde_json::from_slice(&entry.value)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             Ok(Json(event))
         }
@@ -415,8 +415,8 @@ async fn get_cron_event(
     let kv_key = format!("cron_event:{}", sanitized_name);
 
     match kv.get(&kv_key).await {
-        Ok(Some(data)) => {
-            let event: serde_json::Value = serde_json::from_slice(&data)
+        Ok(Some(entry)) => {
+            let event: serde_json::Value = serde_json::from_slice(&entry.value)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             Ok(Json(event))
         }
@@ -444,8 +444,8 @@ async fn get_queue_message(
     let kv_key = format!("queue_message:{}", sanitized_id);
 
     match kv.get(&kv_key).await {
-        Ok(Some(data)) => {
-            let message: serde_json::Value = serde_json::from_slice(&data)
+        Ok(Some(entry)) => {
+            let message: serde_json::Value = serde_json::from_slice(&entry.value)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             Ok(Json(message))
         }

@@ -22,7 +22,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # Database
-# Format probe for the localkv.v1 store in KV health checks. Needs
+# Format probe for the localkv.v2 store in KV health checks. Needs
 # `experimental_multiprocess_wal` (0.7-pre only) to probe a store other
 # processes hold open; the exact pin and rationale live in the workspace
 # Cargo.toml.

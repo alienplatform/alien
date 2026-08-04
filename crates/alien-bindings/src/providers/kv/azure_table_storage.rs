@@ -1,5 +1,5 @@
 use crate::error::{ErrorData, Result};
-use crate::traits::{Binding, Kv, PutOptions, ScanResult};
+use crate::traits::{Binding, Kv, KvEntry, PutCondition, PutOptions, ScanResult};
 use alien_azure_clients::tables::{
     AzureTableStorageClient, EntityQueryContinuation, EntityQueryOptions, TableEntity,
     TableStorageApi,
@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
-use super::{validate_key, validate_value};
+use super::{decode_version, encode_version, validate_key, validate_value};
 
 /// Convert a KV operation to a Table Storage entity
 /// This only base64 encodes the raw bytes when creating the properties map, not in memory
@@ -83,6 +83,23 @@ fn is_entity_expired(entity: &TableEntity) -> bool {
         }
     }
     false
+}
+
+fn entity_expiration_millis(entity: &TableEntity) -> Option<i64> {
+    entity
+        .properties
+        .get("ExpiresAt")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_millis())
+}
+
+fn entity_etag(entity: &TableEntity) -> Option<String> {
+    entity
+        .properties
+        .get("odata.etag")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 /// Cursor state for pagination across partitions
@@ -298,7 +315,7 @@ impl Binding for AzureTableStorageKv {}
 
 #[async_trait]
 impl Kv for AzureTableStorageKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         validate_key(key)?;
 
         let (partition_key, row_key) = self.split_key(key);
@@ -322,7 +339,19 @@ impl Kv for AzureTableStorageKv {
                 }
 
                 let value = extract_value_from_entity(&entity)?;
-                Ok(Some(value))
+                let etag = entity_etag(&entity).ok_or_else(|| {
+                    AlienError::new(ErrorData::UnexpectedResponseFormat {
+                        provider: "azure".to_string(),
+                        binding_name: "table-storage".to_string(),
+                        field: "odata.etag".to_string(),
+                        response_json: serde_json::to_string(&entity).unwrap_or_default(),
+                    })
+                })?;
+                Ok(Some(KvEntry {
+                    key: key.to_string(),
+                    value,
+                    version: encode_version(key, etag, entity_expiration_millis(&entity))?,
+                }))
             }
             Err(e) => {
                 use alien_client_core::ErrorData as CloudErrorData;
@@ -349,7 +378,7 @@ impl Kv for AzureTableStorageKv {
         let entity =
             create_table_entity(partition_key.clone(), row_key.clone(), &value, expires_at);
 
-        if options.if_not_exists {
+        if matches!(options.condition, PutCondition::Absent) {
             match self
                 .client
                 .insert_entity(
@@ -383,6 +412,42 @@ impl Kv for AzureTableStorageKv {
                     }
                 }
             }
+        } else if let PutCondition::Version(ref version) = options.condition {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            match self
+                .client
+                .update_entity(
+                    &self.resource_group_name,
+                    &self.account_name,
+                    &self.table_name,
+                    &partition_key,
+                    &row_key,
+                    &entity,
+                    Some(alien_azure_clients::azure::tables::ETag::from(
+                        expected.backend_version,
+                    )),
+                )
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(error)
+                    if matches!(
+                        error.error.as_ref(),
+                        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                            | Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    Ok(false)
+                }
+                Err(error) => Err(crate::error::map_cloud_client_error(
+                    error,
+                    format!("Failed to conditionally update entity for key '{}'", key),
+                    Some(key.to_string()),
+                )),
+            }
         } else {
             // Insert Or Replace (upsert) - matches Azure REST API terminology
             self.client
@@ -406,12 +471,23 @@ impl Kv for AzureTableStorageKv {
         }
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
         validate_key(key)?;
 
         let (partition_key, row_key) = self.split_key(key);
 
-        // Delete entity, ignore if not found
+        let etag = if let Some(version) = if_version {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            Some(alien_azure_clients::azure::tables::ETag::from(
+                expected.backend_version,
+            ))
+        } else {
+            None
+        };
+
         match self
             .client
             .delete_entity(
@@ -420,15 +496,18 @@ impl Kv for AzureTableStorageKv {
                 &self.table_name,
                 &partition_key,
                 &row_key,
-                None, // No specific ETag constraint
+                etag,
             )
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(true),
             Err(e) => {
                 use alien_client_core::ErrorData as CloudErrorData;
                 match e.error.as_ref() {
-                    Some(CloudErrorData::RemoteResourceNotFound { .. }) => Ok(()), // No error if key doesn't exist
+                    Some(CloudErrorData::RemoteResourceNotFound { .. }) => Ok(if_version.is_none()),
+                    Some(CloudErrorData::RemoteResourceConflict { .. }) if if_version.is_some() => {
+                        Ok(false)
+                    }
                     _ => Err(crate::error::map_cloud_client_error(
                         e,
                         format!("Failed to delete entity for key '{}'", key),
@@ -549,7 +628,15 @@ impl Kv for AzureTableStorageKv {
                 let key = self.combine_key(&entity.partition_key, &entity.row_key);
                 let value = extract_value_from_entity(&entity)?;
 
-                items.push((key, value));
+                if let Some(etag) = entity_etag(&entity) {
+                    items.push(KvEntry {
+                        version: encode_version(&key, etag, entity_expiration_millis(&entity))?,
+                        key,
+                        value,
+                    });
+                } else if let Some(entry) = self.get(&key).await? {
+                    items.push(entry);
+                }
             }
 
             if items.len() == limit {

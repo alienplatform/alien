@@ -16,12 +16,12 @@ app.post("/kv-test/:bindingName", async c => {
     // 1. Put
     await k.setJson(key1, testValue)
 
-    // 2. Put with ifNotExists — second set should return false
-    const firstSet = await k.setJson(key2, testValue, { ifNotExists: true })
-    const secondSet = await k.setJson(key2, { message: "duplicate" }, { ifNotExists: true })
+    // 2. Put only when absent — second set should return false
+    const firstSet = await k.setJson(key2, testValue, { ifVersion: null })
+    const secondSet = await k.setJson(key2, { message: "duplicate" }, { ifVersion: null })
     if (secondSet !== false) {
       return c.json(
-        { success: false, error: "ifNotExists: duplicate set should return false" },
+        { success: false, error: "absent precondition: duplicate set should return false" },
         500,
       )
     }
@@ -31,7 +31,7 @@ app.post("/kv-test/:bindingName", async c => {
     if (!retrieved) {
       return c.json({ success: false, error: "Get returned undefined for existing key" }, 500)
     }
-    const value = JSON.parse(new TextDecoder().decode(retrieved))
+    const value = JSON.parse(new TextDecoder().decode(retrieved.value))
     if (value.message !== testValue.message) {
       return c.json({ success: false, error: "Value mismatch" }, 500)
     }
