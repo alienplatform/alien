@@ -1,4 +1,5 @@
-use crate::traits::credential_resolver::CredentialResolver;
+use crate::error::ErrorData;
+use crate::traits::credential_resolver::{CredentialResolver, RemoteStorageCredentialSource};
 use crate::traits::deployment_store::DeploymentRecord;
 use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, GenericError};
@@ -64,6 +65,35 @@ impl EnvironmentCredentialResolver {
                 message: "Failed to resolve remote access from stack state".to_string(),
             })
     }
+
+    async fn resolve_remote_storage_source_from_env(
+        &self,
+        deployment: &DeploymentRecord,
+        resource_id: &str,
+        env: HashMap<String, String>,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        let outputs = super::impersonation_credentials::remote_bindings_outputs(deployment)?;
+        let base = self.resolve_from_env(deployment, env.clone()).await?;
+        let resolved = alien_infra::RemoteAccessResolver::new(env)
+            .resolve_remote_bindings(
+                base,
+                outputs,
+                deployment.environment_info.as_ref(),
+                Some(
+                    super::impersonation_credentials::remote_bindings_session_name(
+                        &deployment.id,
+                        resource_id,
+                    ),
+                ),
+            )
+            .await
+            .context(ErrorData::RemoteCredentialHandoffFailed {
+                deployment_id: deployment.id.clone(),
+                platform: deployment.platform,
+            })
+            .map_err(AlienError::into_generic)?;
+        Ok(RemoteStorageCredentialSource::Direct(resolved))
+    }
 }
 
 #[async_trait]
@@ -78,15 +108,28 @@ impl CredentialResolver for EnvironmentCredentialResolver {
         self.resolve_from_env(deployment, std::env::vars().collect())
             .await
     }
+
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        resource_id: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        self.resolve_remote_storage_source_from_env(
+            deployment,
+            resource_id,
+            std::env::vars().collect(),
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
     use alien_core::{
-        AzureCredentials, AzureEnvironmentInfo, EnvironmentInfo, Platform, RemoteStackManagement,
-        RemoteStackManagementOutputs, Resource, ResourceOutputs, ResourceStatus,
-        StackResourceState, StackState,
+        AzureCredentials, AzureEnvironmentInfo, EnvironmentInfo, Platform, RemoteBindings,
+        RemoteBindingsOutputs, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
+        ResourceOutputs, ResourceStatus, StackResourceState, StackState,
     };
     use chrono::Utc;
 
@@ -178,6 +221,35 @@ pub(super) mod tests {
         }
     }
 
+    fn azure_deployment_with_remote_bindings(status: &str) -> DeploymentRecord {
+        let mut deployment = azure_deployment(status);
+        let remote_bindings = RemoteBindings::new("remote-bindings".to_string()).build();
+        let remote_bindings_state = StackResourceState::new_pending(
+            RemoteBindings::RESOURCE_TYPE.to_string(),
+            Resource::new(remote_bindings),
+            None,
+            Vec::new(),
+        )
+        .with_updates(|state| {
+            state.status = ResourceStatus::Running;
+            state.outputs = Some(ResourceOutputs::new(RemoteBindingsOutputs {
+                resource_id: "access-uami-resource-id".to_string(),
+                access_configuration: serde_json::json!({
+                    "uamiClientId": "access-uami-client",
+                    "tenantId": "target-tenant"
+                })
+                .to_string(),
+            }));
+        });
+        deployment
+            .stack_state
+            .as_mut()
+            .expect("test stack state")
+            .resources
+            .insert("remote-bindings".to_string(), remote_bindings_state);
+        deployment
+    }
+
     #[tokio::test]
     async fn azure_initial_setup_keeps_real_management_workload_identity() {
         let resolved = EnvironmentCredentialResolver::new()
@@ -249,12 +321,22 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
-    async fn direct_environment_credentials_cannot_resolve_remote_bindings() {
-        let error = EnvironmentCredentialResolver::new()
-            .resolve_remote_storage_source(&azure_deployment("provisioning"), "enterprise-key")
+    async fn direct_environment_resolver_selects_the_setup_owned_access_identity() {
+        let source = EnvironmentCredentialResolver::new()
+            .resolve_remote_storage_source_from_env(
+                &azure_deployment_with_remote_bindings("provisioning"),
+                "enterprise-key",
+                azure_env(),
+            )
             .await
-            .expect_err("management credentials must not stand in for the Access identity");
+            .expect("Remote Bindings credentials should resolve");
+        let RemoteStorageCredentialSource::Direct(config) = source;
+        let azure = config.azure_config().expect("Azure config should resolve");
 
-        assert!(error.message.contains("setup-owned Access identity"));
+        assert!(matches!(
+            &azure.credentials,
+            AzureCredentials::WorkloadIdentity { client_id, .. }
+                if client_id == "access-uami-client"
+        ));
     }
 }

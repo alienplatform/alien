@@ -184,39 +184,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             }));
         }
 
-        let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
-            AlienError::new(GenericError {
-                message: format!(
-                    "Remote stack state is required to resolve Remote Bindings credentials for deployment {}",
-                    deployment.id
-                ),
-            })
-        })?;
-        let first_class_outputs = stack_state
-            .resources
-            .values()
-            .find(|resource| {
-                resource.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
-            })
-            .and_then(|state| state.outputs.as_ref())
-            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>());
-        let legacy_outputs = stack_state
-            .resources
-            .values()
-            .find(|resource| {
-                resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
-            })
-            .and_then(|state| state.outputs.as_ref())
-            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
-            .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
-        let outputs = first_class_outputs.or(legacy_outputs).ok_or_else(|| {
-            AlienError::new(GenericError {
-                message: format!(
-                    "Remote Bindings identity state is required for deployment {}; rerun setup",
-                    deployment.id
-                ),
-            })
-        })?;
+        let outputs = remote_bindings_outputs(deployment)?;
 
         let provider = self.provider_for_target(deployment.platform);
         let base = impersonate_management_sa(&**provider, deployment.platform).await?;
@@ -454,7 +422,45 @@ fn uses_direct_impersonation_credentials(deployment: &DeploymentRecord) -> bool 
     }
 }
 
-fn remote_bindings_session_name(deployment_id: &str, resource_id: &str) -> String {
+pub(crate) fn remote_bindings_outputs(
+    deployment: &DeploymentRecord,
+) -> Result<&alien_core::RemoteBindingsOutputs, AlienError> {
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        AlienError::new(GenericError {
+            message: format!(
+                "Remote stack state is required to resolve Remote Bindings credentials for deployment {}",
+                deployment.id
+            ),
+        })
+    })?;
+    let first_class_outputs = stack_state
+        .resources
+        .values()
+        .find(|resource| {
+            resource.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
+        })
+        .and_then(|state| state.outputs.as_ref())
+        .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>());
+    let legacy_outputs = stack_state
+        .resources
+        .values()
+        .find(|resource| {
+            resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+        })
+        .and_then(|state| state.outputs.as_ref())
+        .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
+        .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
+    first_class_outputs.or(legacy_outputs).ok_or_else(|| {
+        AlienError::new(GenericError {
+            message: format!(
+                "Remote Bindings identity state is required for deployment {}; rerun setup",
+                deployment.id
+            ),
+        })
+    })
+}
+
+pub(crate) fn remote_bindings_session_name(deployment_id: &str, resource_id: &str) -> String {
     format!("alien-{deployment_id}-{resource_id}")
         .chars()
         .map(|character| {
