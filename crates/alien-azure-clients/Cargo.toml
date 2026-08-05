@@ -60,8 +60,8 @@ default = []
 test-utils = ["dep:mockall"]
 
 [build-dependencies]
-prettyplease = "0.3.0"
-progenitor = { version = "0.14.0", default-features = false }
+prettyplease = "0.2.22"
+progenitor = { version = "0.11.0", default-features = false }
 serde_json = "1.0"
 syn = "2.0"
 openapiv3 = "2.2.0"

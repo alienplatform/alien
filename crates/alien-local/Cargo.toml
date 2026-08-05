@@ -52,7 +52,7 @@ chrono = { workspace = true, features = ["serde"] }
 cron = "0.17"
 notify = "7"
 uuid = { workspace = true, features = ["v4"] }
-prost-types = "0.14"
+prost-types = "0.13"
 
 # Port allocation
 port_check = { workspace = true }

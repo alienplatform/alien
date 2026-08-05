@@ -154,7 +154,7 @@ postgresql_embedded = { version = "0.20", default-features = false, features = [
 # gating the dependency behind that feature; we never use the steampipe namespace at runtime.
 postgresql_extensions = { version = "0.20", default-features = false, features = ["tokio", "rustls", "portal-corp", "steampipe"] }
 prost = "0.14"
-prost-types = "0.14"
+prost-types = "0.13"
 rand = "0.10"
 rand_distr = "0.6"
 regex = "1"
