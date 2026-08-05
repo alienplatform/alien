@@ -4,6 +4,7 @@ use alien_aws_clients::{
     apigateway::{ApiGatewayApi, ApiGatewayClient},
     apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
     autoscaling::{AutoScalingApi, AutoScalingClient},
+    bedrock::{BedrockApi, BedrockClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
@@ -67,6 +68,7 @@ use alien_gcp_clients::{
     firestore::{FirestoreApi, FirestoreClient},
     gcs::{GcsApi, GcsClient},
     iam::{IamApi as GcpIamApi, IamClient as GcpIamClient},
+    model_garden::{ModelGardenApi, ModelGardenClient},
     pubsub::{PubSubApi, PubSubClient},
     resource_manager::{ResourceManagerApi, ResourceManagerClient},
     secret_manager::{SecretManagerApi, SecretManagerClient},
@@ -95,6 +97,8 @@ use mockall::automock;
 pub trait PlatformServiceProvider: Send + Sync {
     // AWS clients
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>>;
+    async fn get_aws_bedrock_client(&self, config: &AwsClientConfig)
+        -> Result<Arc<dyn BedrockApi>>;
     async fn get_aws_lambda_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn LambdaApi>>;
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
     async fn get_aws_cloudformation_client(
@@ -152,6 +156,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ServiceUsageApi>>;
+    fn get_gcp_model_garden_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ModelGardenApi>>;
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>>;
     fn get_gcp_artifact_registry_client(
         &self,
@@ -444,6 +452,22 @@ impl DefaultPlatformServiceProvider {
 #[async_trait::async_trait]
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     // AWS implementations
+    async fn get_aws_bedrock_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn BedrockApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(BedrockClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>> {
         let credentials = AwsCredentialProvider::from_config(config.clone())
             .await
@@ -765,6 +789,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ServiceUsageApi>> {
         Ok(Arc::new(ServiceUsageClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_model_garden_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ModelGardenApi>> {
+        Ok(Arc::new(ModelGardenClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))

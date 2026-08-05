@@ -499,10 +499,9 @@ impl BearerTokenCred {
     /// Cache-then-fetch the workload's projected-identity token from the instance metadata
     /// service. `source` must be `Gcp` or `Azure`.
     async fn metadata_token(&self, source: &BearerSource) -> Result<String> {
-        // Hold the cache lock across the refresh so a burst of concurrent probes (the
-        // `/v1/models` fan-out authorizes every model at once) collapses to a single
-        // metadata fetch instead of stampeding the metadata service. `tokio::sync::Mutex`
-        // may be held across `.await`.
+        // Hold the cache lock across the refresh so concurrent cold requests collapse
+        // to a single metadata fetch instead of stampeding the metadata service.
+        // `tokio::sync::Mutex` may be held across `.await`.
         let mut cache = self.cache.lock().await;
         if let Some((tok, exp)) = cache.as_ref() {
             if Instant::now() < *exp {
@@ -694,10 +693,9 @@ mod tests {
             metadata_base: Some(server.base_url()),
         });
 
-        // Fire many token fetches at once, exactly like the `/v1/models` probe fan-out that
-        // authorizes every catalog model concurrently. Single-flight must collapse them to
-        // one upstream fetch; without holding the lock across the refresh, each caller misses
-        // the cold cache and stampedes the metadata service.
+        // Fire many token fetches at once. Single-flight must collapse them to one
+        // upstream fetch; without holding the lock across the refresh, each caller
+        // misses the cold cache and stampedes the metadata service.
         let calls = (0..16).map(|_| {
             let cred = cred.clone();
             tokio::spawn(async move { cred.token().await })

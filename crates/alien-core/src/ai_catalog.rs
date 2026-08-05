@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 /// A public API accepted from an application client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ClientApi {
     OpenAiChatCompletions,
@@ -26,6 +27,7 @@ pub enum ClientApi {
 /// separate from [`ClientApi`]: an adapter may expose one client API over a
 /// different provider API, but only after that exact combination is qualified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderApi {
     /// OpenAI Chat Completions (`/v1/chat/completions`).
@@ -39,8 +41,8 @@ pub enum ProviderApi {
 
 /// The one-time action, if any, a customer must take in the cloud provider before
 /// the gateway can invoke a model. Static per (provider, cloud), surfaced in docs
-/// and the example README. Distinct from runtime availability, which
-/// `getAvailableModels` probes live per deployment.
+/// and the example README. Distinct from the read-only availability observation
+/// reported by the resource heartbeat for a particular deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
     /// Enabled by default; nothing for the customer to do (quota still applies).
@@ -189,8 +191,7 @@ static CATALOG: &[CatalogModel] = &[
     // not the `us.*` cross-region inference profile — that endpoint rejects it.
     // Invoke/Converse-only models (older Llama/Mistral-v0/Nova) can't be served here.
     // The GPT-5 family is Responses-only: chat completions, converse and invoke are
-    // all unavailable, so `upstream_id` here is the mantle id and the chat probe
-    // would reject them.
+    // all unavailable, so `upstream_id` here is the mantle id.
     CatalogModel {
         public_id: "gpt-5.6-sol",
         cloud: Platform::Aws,
@@ -680,9 +681,8 @@ static CATALOG: &[CatalogModel] = &[
     // these are not in AZURE_DEPLOYMENTS: a first Claude deployment requires
     // accepting Azure Marketplace terms, a portal step the controller cannot
     // perform, so Claude deployments are created in the Foundry portal. These stay
-    // in the catalog as the deployment-name contract, but the gateway's /v1/models
-    // availability probe drops any that the portal step has not created, so the
-    // list omits any Claude that Foundry would 404.
+    // in the catalog as the deployment-name mapping. The resource heartbeat lists
+    // actual deployments, so the gateway omits Claude until that deployment exists.
     CatalogModel {
         public_id: "claude-sonnet-5",
         cloud: Platform::Azure,
@@ -747,6 +747,11 @@ static CATALOG: &[CatalogModel] = &[
         provider_api: ProviderApi::Anthropic,
     },
 ];
+
+/// Changes whenever public model ids or their supported client APIs change.
+/// Heartbeat consumers use this to distinguish an old observation from a
+/// current catalog without duplicating the catalog in durable state.
+pub const AI_CATALOG_REVISION: &str = "2026-08-05.1";
 
 /// Azure deployments to create at provision time: (deployment name, model name,
 /// model version). The deployment name is the catalog `upstream_id`. The version

@@ -55,6 +55,7 @@ test-context = { workspace = true }
 regex = { workspace = true }
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
+httpmock = { workspace = true }
 rcgen = "0.13.2"
 
 [features]

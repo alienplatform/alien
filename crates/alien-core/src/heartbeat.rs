@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{Platform, ResourceType};
+use crate::{ai_catalog::ClientApi, Platform, ResourceType};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -1609,15 +1609,112 @@ pub struct AiHeartbeatStatus {
 
 impl Default for AiHeartbeatStatus {
     fn default() -> Self {
-        // No per-stack resource to poll, so unobserved = healthy/running;
-        // errors surface at inference time via the SDK.
+        // A configured AI binding is not proof that its models are usable.
         Self {
-            health: ObservedHealth::Healthy,
-            lifecycle: ProviderLifecycleState::Running,
+            health: ObservedHealth::Unknown,
+            lifecycle: ProviderLifecycleState::Unknown,
             message: None,
             stale: false,
             partial: false,
             collection_issues: vec![],
+        }
+    }
+}
+
+/// Provider control plane used to observe model availability without invoking
+/// a model, spending customer quota, or accepting provider terms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAvailabilitySource {
+    AwsBedrock,
+    GcpVertex,
+    AzureFoundry,
+    Anthropic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AiModelAvailability {
+    Available,
+    Blocked,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAvailabilityBlocker {
+    AgreementRequired,
+    EntitlementRequired,
+    ModelActivationRequired,
+    DeploymentRequired,
+    QuotaConfigurationRequired,
+    RegionUnavailable,
+    AccessDenied,
+    ObservationFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAccessTest {
+    Verified,
+    Failed,
+    NotChecked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelAvailabilityObservation {
+    pub public_model_id: String,
+    pub client_apis: Vec<ClientApi>,
+    pub availability: AiModelAvailability,
+    pub blockers: Vec<AiAvailabilityBlocker>,
+    pub access_test: AiAccessTest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tested_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AiAvailabilityObservation {
+    pub source: AiAvailabilitySource,
+    pub catalog_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    pub models: Vec<AiModelAvailabilityObservation>,
+}
+
+impl AiAvailabilityObservation {
+    /// Conservative observation used until a provider control-plane read has
+    /// completed. It never claims that a configured model is usable.
+    pub fn unobserved(
+        source: AiAvailabilitySource,
+        platform: Platform,
+        location: Option<String>,
+    ) -> Self {
+        Self {
+            source,
+            catalog_revision: crate::ai_catalog::AI_CATALOG_REVISION.to_string(),
+            location,
+            models: crate::ai_catalog::models_for(platform)
+                .into_iter()
+                .map(|model| AiModelAvailabilityObservation {
+                    public_model_id: model.public_id.to_string(),
+                    client_apis: model.client_apis.to_vec(),
+                    availability: AiModelAvailability::Unknown,
+                    blockers: vec![AiAvailabilityBlocker::ObservationFailed],
+                    access_test: AiAccessTest::NotChecked,
+                    tested_at: None,
+                    error_code: None,
+                })
+                .collect(),
         }
     }
 }
@@ -1681,6 +1778,7 @@ pub struct AzureFlexibleServerPostgresHeartbeatData {
 pub struct AwsBedrockAiHeartbeatData {
     pub status: AiHeartbeatStatus,
     pub region: String,
+    pub availability: AiAvailabilityObservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1690,6 +1788,7 @@ pub struct GcpVertexAiHeartbeatData {
     pub status: AiHeartbeatStatus,
     pub project: String,
     pub location: String,
+    pub availability: AiAvailabilityObservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1701,6 +1800,7 @@ pub struct AzureFoundryAiHeartbeatData {
     pub endpoint: Option<String>,
     pub resource_group: Option<String>,
     pub location: Option<String>,
+    pub availability: AiAvailabilityObservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1711,6 +1811,8 @@ pub struct ExternalAiHeartbeatData {
     /// The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
     /// platform, where the app brings its own provider key instead of an ambient cloud.
     pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<AiAvailabilityObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2866,6 +2968,11 @@ mod tests {
             AwsBedrockAiHeartbeatData {
                 status: AiHeartbeatStatus::default(),
                 region: "us-east-1".to_string(),
+                availability: AiAvailabilityObservation::unobserved(
+                    AiAvailabilitySource::AwsBedrock,
+                    Platform::Aws,
+                    Some("us-east-1".to_string()),
+                ),
             },
         )))
         .unwrap();
@@ -2874,6 +2981,11 @@ mod tests {
                 status: AiHeartbeatStatus::default(),
                 project: "my-project".to_string(),
                 location: "us-central1".to_string(),
+                availability: AiAvailabilityObservation::unobserved(
+                    AiAvailabilitySource::GcpVertex,
+                    Platform::Gcp,
+                    Some("us-central1".to_string()),
+                ),
             },
         )))
         .unwrap();
@@ -2884,6 +2996,11 @@ mod tests {
                 endpoint: Some("https://my-ai-account.openai.azure.com/".to_string()),
                 resource_group: Some("my-rg".to_string()),
                 location: Some("eastus".to_string()),
+                availability: AiAvailabilityObservation::unobserved(
+                    AiAvailabilitySource::AzureFoundry,
+                    Platform::Azure,
+                    Some("eastus".to_string()),
+                ),
             },
         )))
         .unwrap();

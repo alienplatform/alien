@@ -3,7 +3,7 @@
 //! the body. The only edit to the request body is rewriting the public model id to
 //! the catalog's upstream id; the response (JSON or SSE) is passed through byte-for-byte.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alien_core::ai_catalog::{self, ClientApi, ProviderApi};
@@ -34,12 +34,10 @@ use vertex::proxy_vertex_anthropic;
 // Re-exported so availability.rs and the test module below can resolve these per-provider
 // items. `vertex_host` is also used by `upstream_target` here; `ensure_block_content` and
 // `EventStreamToSse` are test-only.
-pub(crate) use bedrock::bedrock_geo;
 #[cfg(test)]
-pub(crate) use bedrock::ensure_block_content;
+pub(crate) use bedrock::{bedrock_geo, ensure_block_content};
 #[cfg(test)]
 pub(crate) use eventstream::EventStreamToSse;
-pub(crate) use foundry::FOUNDRY_ANTHROPIC_VERSION;
 pub(crate) use vertex::vertex_host;
 
 /// Clears the largest upstream request limit we serve (Bedrock `InvokeModel`, 25 MB) so the
@@ -96,27 +94,40 @@ pub struct GatewayRoute {
 struct AppState {
     routes: HashMap<String, GatewayRoute>,
     client: reqwest::Client,
-    /// Per-binding availability cache: the enabled model subset, probed lazily on
-    /// the first `/v1/models` and reused for the process lifetime. Access grants
-    /// change only across a redeploy (which restarts us), so there is no TTL.
-    models_cache:
-        HashMap<String, tokio::sync::OnceCell<Arc<Vec<&'static ai_catalog::CatalogModel>>>>,
+    /// Account-specific, read-only control-plane observations supplied by the
+    /// hosted route resolver. `None` keeps embedded gateways catalog-only.
+    available_models: Option<AvailableModels>,
 }
+
+/// Available public model IDs keyed by binding name.
+pub type AvailableModels = HashMap<String, HashSet<String>>;
 
 /// Build the axum router serving every binding under `/<name>/...`:
 /// `POST /<name>/v1/chat/completions` (OpenAI), `POST /<name>/v1/messages`
 /// (Anthropic), and `GET /<name>/v1/models`.
 pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
+    build_router_inner(routes, None)
+}
+
+/// Build a router whose model listing and inference paths are restricted by a
+/// bounded availability observation supplied by the control plane.
+pub fn build_router_with_availability(
+    routes: Vec<GatewayRoute>,
+    available_models: AvailableModels,
+) -> Router {
+    build_router_inner(routes, Some(available_models))
+}
+
+fn build_router_inner(
+    routes: Vec<GatewayRoute>,
+    available_models: Option<AvailableModels>,
+) -> Router {
     let routes: HashMap<String, GatewayRoute> =
         routes.into_iter().map(|r| (r.name.clone(), r)).collect();
-    let models_cache = routes
-        .keys()
-        .map(|name| (name.clone(), tokio::sync::OnceCell::new()))
-        .collect();
     let state = Arc::new(AppState {
         routes,
         client: reqwest::Client::new(),
-        models_cache,
+        available_models,
     });
     Router::new()
         .route(
@@ -259,6 +270,7 @@ async fn proxy(
             binding: binding.clone(),
         })
     })?;
+    ensure_model_available(&state, &binding, &model)?;
 
     if !cm.client_apis.contains(&client_api) {
         let expected_path = match cm.client_apis.first() {
@@ -347,6 +359,7 @@ async fn proxy_responses(
                 binding: binding.clone(),
             })
         })?;
+    ensure_model_available(&state, &binding, &model)?;
     let target = ai_catalog::responses_target(catalog_model.public_id).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
             model: model.clone(),
@@ -385,10 +398,8 @@ async fn proxy_responses(
     forward_response(upstream)
 }
 
-/// `GET /<name>/v1/models`: the models the binding's cloud actually has enabled,
-/// in OpenAI list shape. The catalog is the superset; a per-cloud availability probe
-/// (see `availability`) filters it to what this deployment can invoke, lazily on the
-/// first call and cached thereafter.
+/// `GET /<name>/v1/models`: the qualified catalog, intersected with the bounded
+/// account observation when the hosted control plane supplied one.
 async fn list_models(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
@@ -398,33 +409,17 @@ async fn list_models(
             binding: binding.clone(),
         })
     })?;
-    let cell = state.models_cache.get(&binding).ok_or_else(|| {
-        AlienError::new(ErrorData::UnknownBinding {
-            binding: binding.clone(),
-        })
-    })?;
+    let allowed = state
+        .available_models
+        .as_ref()
+        .map(|by_binding| by_binding.get(&binding));
 
-    // Cache only a fully-resolved probe: if any model came back Indeterminate (a
-    // transient error), serve the current best but leave it uncached so the next
-    // call re-probes rather than sticking a diminished list until redeploy.
-    let models = match cell
-        .get_or_try_init(|| async {
-            let probed = crate::availability::available_models(route, &state.client).await;
-            let models = Arc::new(probed.models);
-            if probed.fully_resolved {
-                Ok(models)
-            } else {
-                Err(models)
-            }
+    let data: Vec<Value> = ai_catalog::models_for(route.cloud)
+        .into_iter()
+        .filter(|model| {
+            allowed
+                .is_none_or(|models| models.is_some_and(|models| models.contains(model.public_id)))
         })
-        .await
-    {
-        Ok(cached) => Arc::clone(cached),
-        Err(fresh) => fresh,
-    };
-
-    let data: Vec<Value> = models
-        .iter()
         .map(|m| {
             json!({
                 "id": m.public_id,
@@ -435,6 +430,20 @@ async fn list_models(
         })
         .collect();
     Ok(Json(json!({ "object": "list", "data": data })).into_response())
+}
+
+fn ensure_model_available(state: &AppState, binding: &str, model: &str) -> Result<()> {
+    if state.available_models.as_ref().is_some_and(|by_binding| {
+        !by_binding
+            .get(binding)
+            .is_some_and(|models| models.contains(model))
+    }) {
+        return Err(AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.to_string(),
+            binding: binding.to_string(),
+        }));
+    }
+    Ok(())
 }
 
 /// The error for a binding missing a field a handler needs.
@@ -1799,10 +1808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_only_models_are_listed_when_their_endpoint_answers() {
-        // The GPT-5 family serves no chat endpoint, so the chat probe would reject it.
-        // It must be probed on its own mantle Responses path instead, or it would
-        // never appear in /v1/models despite being usable.
+    async fn embedded_model_listing_is_catalog_only_and_never_invokes_a_model() {
         let server = MockServer::start_async().await;
         let responses = server
             .mock_async(|when, then| {
@@ -1812,16 +1818,6 @@ mod tests {
                     .body("{}");
             })
             .await;
-        // Everything else on this account is denied, so a pass can only come from
-        // the Responses probe above.
-        server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .matches(|req: &HttpMockRequest| !req.path.contains("/openai/v1/responses"));
-                then.status(403).body("access denied");
-            })
-            .await;
-
         let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
         let body: Value = reqwest::get(format!("{url}/llm/v1/models"))
             .await
@@ -1840,9 +1836,10 @@ mod tests {
             ids.contains(&"gpt-5.6-sol"),
             "gpt-5.6-sol must be listed: {ids:?}"
         );
-        assert!(
-            responses.hits_async().await > 0,
-            "the Responses path must be probed"
+        assert_eq!(
+            responses.hits_async().await,
+            0,
+            "listing must not spend quota"
         );
         let sol = body["data"]
             .as_array()
@@ -1854,11 +1851,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn availability_filters_by_probe() {
-        // The gateway probes each catalog model and lists only the enabled ones.
-        // Mock upstream: the OpenAI chat endpoint answers 200 (those models are
-        // available), the Bedrock InvokeModel path answers 403 (Claude is not granted
-        // on this account), so /v1/models keeps the OpenAI models and drops Claude.
+    async fn supplied_availability_gates_listing_and_inference_without_probing() {
         let server = MockServer::start_async().await;
         let openai = server
             .mock_async(|when, then| {
@@ -1868,15 +1861,15 @@ mod tests {
                     .body(r#"{"choices":[]}"#);
             })
             .await;
-        let claude = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .matches(|req: &HttpMockRequest| req.path.contains("/model/"));
-                then.status(403).body("access denied");
-            })
-            .await;
-
-        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let availability = HashMap::from([(
+            "llm".to_string(),
+            HashSet::from(["gpt-oss-20b".to_string()]),
+        )]);
+        let url = serve(build_router_with_availability(
+            vec![aws_route(&server.base_url())],
+            availability,
+        ))
+        .await;
 
         let resp = reqwest::get(format!("{url}/llm/v1/models")).await.unwrap();
         assert_eq!(resp.status(), 200);
@@ -1885,79 +1878,30 @@ mod tests {
         let data = body["data"].as_array().unwrap();
         let ids: Vec<&str> = data.iter().map(|m| m["id"].as_str().unwrap()).collect();
 
-        // An enabled OpenAI model is kept, enriched with provider + displayName.
-        assert!(
-            ids.contains(&"gpt-oss-20b"),
-            "gpt-oss-20b must be listed: {ids:?}"
-        );
+        assert_eq!(ids, vec!["gpt-oss-20b"]);
         let gpt = data
             .iter()
             .find(|m| m["id"] == "gpt-oss-20b")
             .expect("gpt-oss-20b entry");
         assert_eq!(gpt["provider"], "openai");
         assert_eq!(gpt["displayName"], "GPT-OSS 20B");
-        // Un-granted Claude (403) is filtered out.
-        assert!(
-            !ids.iter().any(|id| id.starts_with("claude")),
-            "Claude (403) must be filtered out: {ids:?}"
-        );
-        assert!(
-            claude.hits_async().await > 0,
-            "the Claude InvokeModel path must be probed"
-        );
-
-        // A second call is served from cache: no new upstream probes.
-        let hits = openai.hits_async().await;
-        let _ = reqwest::get(format!("{url}/llm/v1/models")).await.unwrap();
         assert_eq!(
             openai.hits_async().await,
-            hits,
-            "a cached /v1/models must not re-probe upstream"
-        );
-    }
-
-    #[tokio::test]
-    async fn indeterminate_probe_keeps_model_and_is_not_cached() {
-        // A 500 from the upstream cannot prove a model is off, so the model stays
-        // listed, and the result must not be cached: the next call re-probes so a
-        // transient outage never sticks a diminished list until redeploy.
-        let server = MockServer::start_async().await;
-        let openai = server
-            .mock_async(|when, then| {
-                when.method(POST).path("/openai/v1/chat/completions");
-                then.status(500).body("upstream blew up");
-            })
-            .await;
-        let claude = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .matches(|req: &HttpMockRequest| req.path.contains("/model/"));
-                then.status(500).body("upstream blew up");
-            })
-            .await;
-
-        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
-
-        let resp = reqwest::get(format!("{url}/llm/v1/models")).await.unwrap();
-        assert_eq!(resp.status(), 200);
-        let body: Value = resp.json().await.unwrap();
-        let ids: Vec<&str> = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["id"].as_str().unwrap())
-            .collect();
-        assert!(
-            ids.contains(&"gpt-oss-20b") && ids.iter().any(|id| id.starts_with("claude")),
-            "an indeterminate probe must keep the model listed: {ids:?}"
+            0,
+            "listing must not probe upstream"
         );
 
-        // Not cached: the second call probes again.
-        let hits = openai.hits_async().await + claude.hits_async().await;
-        let _ = reqwest::get(format!("{url}/llm/v1/models")).await.unwrap();
-        assert!(
-            openai.hits_async().await + claude.hits_async().await > hits,
-            "an indeterminate result must be re-probed on the next call, not cached"
+        let denied = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-oss-120b", "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            openai.hits_async().await,
+            0,
+            "blocked inference must stay local"
         );
     }
 }

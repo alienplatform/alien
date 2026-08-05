@@ -5,14 +5,19 @@
     "aws": [
       {
         "grant": {
-          "actions": ["bedrock:ListFoundationModels"]
+          "actions": [
+            "bedrock:ListFoundationModels",
+            "bedrock:GetFoundationModelAvailability"
+          ]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+            // AWS does not support resource-level permissions for either action.
+            // This grant exposes only provider catalog and availability metadata.
+            "resources": ["*"]
           },
           "resource": {
-            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+            "resources": ["*"]
           }
         }
       }
@@ -20,7 +25,11 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["aiplatform.models.list", "aiplatform.endpoints.list"]
+          "permissions": [
+            "aiplatform.models.list",
+            "aiplatform.endpoints.list",
+            "aiplatform.endpoints.get"
+          ]
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
@@ -33,7 +42,10 @@
         "grant": {
           // Read-only management: inspect the account configuration. Deploying the
           // predefined model set is a provision-time action (ai/provision), not management.
-          "actions": ["Microsoft.CognitiveServices/accounts/read"]
+          "actions": [
+            "Microsoft.CognitiveServices/accounts/read",
+            "Microsoft.CognitiveServices/accounts/deployments/read"
+          ]
         },
         "binding": {
           "stack": {

@@ -9,6 +9,7 @@ pub use aws::{AwsClientConfig, AwsClientConfigExt, AwsImpersonationConfig};
 pub use aws::acm::{AcmApi, AcmClient};
 pub use aws::apigateway::{ApiGatewayApi, ApiGatewayClient};
 pub use aws::apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client};
+pub use aws::bedrock::{BedrockApi, BedrockClient};
 pub use aws::cloudformation::{CloudFormationApi, CloudFormationClient};
 pub use aws::cloudwatch::{CloudWatchApi, CloudWatchClient};
 pub use aws::codebuild::{CodeBuildApi, CodeBuildClient};

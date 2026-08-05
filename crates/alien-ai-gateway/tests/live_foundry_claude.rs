@@ -11,7 +11,7 @@
 //! Host and audience are settled: production bindings carry the AIServices
 //! account's `properties.endpoint` (the `cognitiveservices.azure.com` shape), and
 //! Foundry accepts that host with an `ai.azure.com`-audience token on the first
-//! probe, with no host derivation or audience swap needed.
+//! request, with no host derivation or audience swap needed.
 
 use std::net::Ipv4Addr;
 
