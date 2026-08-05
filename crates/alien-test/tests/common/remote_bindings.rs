@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::time::Duration;
 
 use alien_bindings::RemoteBindings;
 use alien_core::Platform;
@@ -350,6 +351,81 @@ where
         "Remote Enterprise Key rotation check passed"
     );
     Ok(())
+}
+
+/// Wait until a fresh remote client can still resolve the published Key but
+/// the provider rejects its data operation. This distinguishes revoking the
+/// exact cryptographic grant from deleting discovery or the access identity.
+pub async fn wait_for_remote_key_data_denied(
+    deployment: &TestDeployment,
+    platform: Platform,
+    timeout: Duration,
+) -> anyhow::Result<Duration> {
+    let discovery = DiscoveryServer::start(deployment, platform).await?;
+    let started_at = tokio::time::Instant::now();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let bindings =
+            RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+                .await
+                .context("discovery must remain available while Key data access is revoked")?;
+        let key = bindings
+            .key(ENTERPRISE_KEY_BINDING)
+            .await
+            .context("the published Key must remain resolvable while its data grant is revoked")?;
+        let context = BTreeMap::from([("purpose".to_string(), "revocation-probe".to_string())]);
+        match key.encrypt(b"revocation probe", Some(&context)).await {
+            Err(error) if error.code == "REMOTE_ACCESS_DENIED" => {
+                return Ok(started_at.elapsed());
+            }
+            Err(error) if tokio::time::Instant::now() >= deadline => {
+                return Err(error).context(
+                    "remote Key failed for a reason other than the expected provider access denial",
+                );
+            }
+            Err(_) => {}
+            Ok(_) if tokio::time::Instant::now() >= deadline => {
+                anyhow::bail!("remote Key data access still succeeded after {timeout:?}");
+            }
+            Ok(_) => {}
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// Wait for the exact restored provider grant to become usable through a new
+/// discovery and credential exchange.
+pub async fn wait_for_remote_key_data_recovered(
+    deployment: &TestDeployment,
+    platform: Platform,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let discovery = DiscoveryServer::start(deployment, platform).await?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let attempt = async {
+            let bindings = RemoteBindings::for_deployment(
+                &deployment.id,
+                &deployment.token,
+                Some(&discovery.url),
+            )
+            .await?;
+            let key = bindings.key(ENTERPRISE_KEY_BINDING).await?;
+            let context = BTreeMap::from([("purpose".to_string(), "recovery-probe".to_string())]);
+            let ciphertext = key.encrypt(b"recovery probe", Some(&context)).await?;
+            let plaintext = key.decrypt(&ciphertext, Some(&context)).await?;
+            anyhow::ensure!(plaintext == b"recovery probe");
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if attempt.is_ok() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return attempt.context("remote Key data access did not recover before the deadline");
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
 }
 
 async fn verify_before_delete(

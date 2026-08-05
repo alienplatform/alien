@@ -4,7 +4,7 @@
 //! path: CloudFormation for AWS and Terraform for cloud/K8s targets. They use
 //! the same application-specific assertions as push/pull E2E.
 
-use alien_core::{KeyFingerprint, KeyOutputs, Platform, StorageOutputs};
+use alien_core::{KeyFingerprint, KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs};
 use alien_test::{DistributionFlow, TestApp};
 use anyhow::{anyhow, Context};
 use reqwest::{Client, Response};
@@ -174,6 +174,348 @@ async fn check_byo_key_rotation(ctx: &alien_test::TestContext) -> anyhow::Result
         rotate_provider_key(&key, &env)
     })
     .await
+}
+
+enum RevokedRemoteKeyGrant {
+    Aws {
+        role_name: String,
+        policy_name: String,
+        policy_document: String,
+    },
+    Gcp {
+        project: String,
+        location: String,
+        key_ring: String,
+        key_name: String,
+        member: String,
+    },
+    Azure {
+        assignment_id: String,
+        principal_id: String,
+        role_definition_id: String,
+        scope: String,
+    },
+}
+
+async fn check_byo_key_revocation(ctx: &alien_test::TestContext) -> anyhow::Result<()> {
+    let response = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow!("get_deployment failed: {error}"))?;
+    let state_value = response
+        .into_inner()
+        .stack_state
+        .context("deployment is missing stack_state")?;
+    let stack_state: alien_core::StackState =
+        serde_json::from_value(state_value).context("failed to parse stack_state")?;
+    let key = stack_state
+        .resources
+        .get("enterprise-key")
+        .and_then(|state| state.outputs.as_ref())
+        .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        .context("enterprise-key is missing Key outputs")?;
+    let access = stack_state
+        .resources
+        .values()
+        .filter_map(|state| state.outputs.as_ref())
+        .filter_map(|outputs| outputs.downcast_ref::<RemoteBindingsOutputs>())
+        .next()
+        .context("deployment is missing its Remote Bindings identity")?;
+    let env = ctx
+        .distribution_cleanups
+        .first()
+        .context("distribution test is missing artifact credentials")?
+        .command_env();
+
+    let revoked = revoke_remote_key_grant(key, access, env).await?;
+    // Azure Key Vault can continue authorizing fresh data-plane requests well
+    // after the exact RBAC assignment is gone. Alien does not publish a bound
+    // for that provider cache, so only AWS/GCP assert eventual data denial.
+    let revocation_timeout = match ctx.platform {
+        Platform::Azure => Duration::from_secs(12 * 60),
+        Platform::Aws | Platform::Gcp => Duration::from_secs(5 * 60),
+        platform => anyhow::bail!("unsupported Enterprise Key platform: {platform}"),
+    };
+    let denied = match ctx.platform {
+        Platform::Azure => Ok(None),
+        Platform::Aws | Platform::Gcp => common::remote_bindings::wait_for_remote_key_data_denied(
+            &ctx.deployment,
+            ctx.platform,
+            revocation_timeout,
+        )
+        .await
+        .map(Some),
+        _ => unreachable!("platform was validated above"),
+    };
+    let restored = restore_remote_key_grant(&revoked, env).await;
+    match (denied, restored) {
+        (Err(error), Err(restore_error)) => anyhow::bail!(
+            "revocation check failed: {error:#}; restoring the provider grant also failed: {restore_error:#}"
+        ),
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error.context("restore remote Key provider grant")),
+        (Ok(Some(elapsed)), Ok(())) => {
+            tracing::info!(
+                platform = %ctx.platform,
+                elapsed_seconds = elapsed.as_secs_f64(),
+                "provider rejected the revoked Enterprise Key grant"
+            );
+        }
+        (Ok(None), Ok(())) => {
+            tracing::info!(
+                platform = %ctx.platform,
+                "removed and restored the exact Enterprise Key grant; provider data-plane propagation is not time-bounded by Alien"
+            );
+        }
+    }
+    common::remote_bindings::wait_for_remote_key_data_recovered(
+        &ctx.deployment,
+        ctx.platform,
+        revocation_timeout,
+    )
+    .await
+}
+
+async fn revoke_remote_key_grant(
+    key: &KeyOutputs,
+    access: &RemoteBindingsOutputs,
+    env: &[(String, String)],
+) -> anyhow::Result<RevokedRemoteKeyGrant> {
+    match &key.fingerprint {
+        KeyFingerprint::Aws { .. } => {
+            let role_name = access
+                .resource_id
+                .rsplit('/')
+                .next()
+                .context("AWS Remote Bindings output is not a role ARN")?
+                .to_string();
+            let policy_name = "access-enterprise-key-key-remote-cryptography".to_string();
+            let mut get = Command::new("aws");
+            get.args([
+                "iam",
+                "get-role-policy",
+                "--role-name",
+                &role_name,
+                "--policy-name",
+                &policy_name,
+                "--query",
+                "PolicyDocument",
+                "--output",
+                "json",
+            ]);
+            apply_test_env(&mut get, env);
+            let policy_document =
+                String::from_utf8(run_test_command(get, "read AWS remote Key policy").await?)?;
+            let mut delete = Command::new("aws");
+            delete.args([
+                "iam",
+                "delete-role-policy",
+                "--role-name",
+                &role_name,
+                "--policy-name",
+                &policy_name,
+            ]);
+            apply_test_env(&mut delete, env);
+            run_test_command(delete, "revoke AWS remote Key policy").await?;
+            Ok(RevokedRemoteKeyGrant::Aws {
+                role_name,
+                policy_name,
+                policy_document,
+            })
+        }
+        KeyFingerprint::Gcp { crypto_key_name } => {
+            let segments = crypto_key_name.split('/').collect::<Vec<_>>();
+            anyhow::ensure!(segments.len() == 8, "invalid GCP CryptoKey name");
+            let project = segments[1].to_string();
+            let location = segments[3].to_string();
+            let key_ring = segments[5].to_string();
+            let key_name = segments[7].to_string();
+            let member = format!("serviceAccount:{}", access.resource_id);
+            let mut remove = Command::new("gcloud");
+            remove.args([
+                "kms",
+                "keys",
+                "remove-iam-policy-binding",
+                &key_name,
+                "--project",
+                &project,
+                "--location",
+                &location,
+                "--keyring",
+                &key_ring,
+                "--member",
+                &member,
+                "--role",
+                "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+                "--quiet",
+            ]);
+            apply_test_env(&mut remove, env);
+            run_test_command(remove, "revoke GCP remote Key binding").await?;
+            Ok(RevokedRemoteKeyGrant::Gcp {
+                project,
+                location,
+                key_ring,
+                key_name,
+                member,
+            })
+        }
+        KeyFingerprint::Azure {
+            vault_resource_id,
+            key_name,
+            ..
+        } => {
+            let principal_id = {
+                let mut show = Command::new("az");
+                show.args([
+                    "identity",
+                    "show",
+                    "--ids",
+                    &access.resource_id,
+                    "--query",
+                    "principalId",
+                    "--output",
+                    "tsv",
+                ]);
+                apply_test_env(&mut show, env);
+                String::from_utf8(run_test_command(show, "read Azure access identity").await?)?
+                    .trim()
+                    .to_string()
+            };
+            let scope = format!("{vault_resource_id}/keys/{key_name}");
+            let mut list = Command::new("az");
+            list.args([
+                "role",
+                "assignment",
+                "list",
+                "--assignee",
+                &principal_id,
+                "--scope",
+                &scope,
+                "--output",
+                "json",
+            ]);
+            apply_test_env(&mut list, env);
+            let assignments: Vec<Value> = serde_json::from_slice(
+                &run_test_command(list, "read Azure remote Key assignment").await?,
+            )?;
+            let assignment = assignments
+                .iter()
+                .find(|assignment| {
+                    json_string_field(assignment, "scope") == Some(scope.as_str())
+                        && json_string_field(assignment, "roleDefinitionName")
+                            .is_some_and(|name| name.ends_with("[application-access]"))
+                })
+                .context("Azure remote Key role assignment was not found at the exact key scope")?;
+            let assignment_id = json_string_field(assignment, "id")
+                .context("Azure role assignment has no id")?
+                .to_string();
+            let role_definition_id = json_string_field(assignment, "roleDefinitionId")
+                .context("Azure role assignment has no roleDefinitionId")?
+                .to_string();
+            let mut delete = Command::new("az");
+            delete.args(["role", "assignment", "delete", "--ids", &assignment_id]);
+            apply_test_env(&mut delete, env);
+            run_test_command(delete, "revoke Azure remote Key assignment").await?;
+            Ok(RevokedRemoteKeyGrant::Azure {
+                assignment_id,
+                principal_id,
+                role_definition_id,
+                scope,
+            })
+        }
+    }
+}
+
+async fn restore_remote_key_grant(
+    grant: &RevokedRemoteKeyGrant,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    match grant {
+        RevokedRemoteKeyGrant::Aws {
+            role_name,
+            policy_name,
+            policy_document,
+        } => {
+            let mut put = Command::new("aws");
+            put.args([
+                "iam",
+                "put-role-policy",
+                "--role-name",
+                role_name,
+                "--policy-name",
+                policy_name,
+                "--policy-document",
+                policy_document.trim(),
+            ]);
+            apply_test_env(&mut put, env);
+            run_test_command(put, "restore AWS remote Key policy").await?;
+        }
+        RevokedRemoteKeyGrant::Gcp {
+            project,
+            location,
+            key_ring,
+            key_name,
+            member,
+        } => {
+            let mut add = Command::new("gcloud");
+            add.args([
+                "kms",
+                "keys",
+                "add-iam-policy-binding",
+                key_name,
+                "--project",
+                project,
+                "--location",
+                location,
+                "--keyring",
+                key_ring,
+                "--member",
+                member,
+                "--role",
+                "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+                "--quiet",
+            ]);
+            apply_test_env(&mut add, env);
+            run_test_command(add, "restore GCP remote Key binding").await?;
+        }
+        RevokedRemoteKeyGrant::Azure {
+            assignment_id,
+            principal_id,
+            role_definition_id,
+            scope,
+        } => {
+            let assignment_name = assignment_id
+                .rsplit('/')
+                .next()
+                .context("Azure role assignment ID has no name")?;
+            let mut create = Command::new("az");
+            create.args([
+                "role",
+                "assignment",
+                "create",
+                "--name",
+                assignment_name,
+                "--assignee-object-id",
+                principal_id,
+                "--assignee-principal-type",
+                "ServicePrincipal",
+                "--role",
+                role_definition_id,
+                "--scope",
+                scope,
+                "--output",
+                "none",
+            ]);
+            apply_test_env(&mut create, env);
+            run_test_command(create, "restore Azure remote Key assignment").await?;
+        }
+    }
+    Ok(())
 }
 
 async fn rotate_provider_key(key: &KeyOutputs, env: &[(String, String)]) -> anyhow::Result<()> {
@@ -1515,6 +1857,9 @@ async fn terraform_aws_push_byo_encryption_key_rotation(
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("AWS Enterprise Key rotation checks failed: {error:#}");
     }
+    if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
+        panic!("AWS Enterprise Key revocation checks failed: {error:#}");
+    }
 }
 
 distribution_test_context!(
@@ -1532,6 +1877,9 @@ async fn terraform_gcp_push_byo_encryption_key_rotation(
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("GCP Enterprise Key rotation checks failed: {error:#}");
     }
+    if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
+        panic!("GCP Enterprise Key revocation checks failed: {error:#}");
+    }
 }
 
 distribution_test_context!(
@@ -1548,6 +1896,9 @@ async fn terraform_azure_push_byo_encryption_key_rotation(
 ) {
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("Azure Enterprise Key rotation checks failed: {error:#}");
+    }
+    if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
+        panic!("Azure Enterprise Key revocation checks failed: {error:#}");
     }
 }
 
