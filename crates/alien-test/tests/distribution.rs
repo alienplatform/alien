@@ -563,25 +563,19 @@ async fn check_byo_key_revocation(ctx: &alien_test::TestContext) -> anyhow::Resu
         .command_env();
 
     let revoked = revoke_remote_key_grant(key, access, env).await?;
-    // Azure Key Vault can continue authorizing fresh data-plane requests well
-    // after the exact RBAC assignment is gone. Alien does not publish a bound
-    // for that provider cache, so only AWS/GCP assert eventual data denial.
+    // This measures provider IAM propagation; it is deliberately separate
+    // from Alien's five-minute authorization and plaintext-root cache bound.
     let revocation_timeout = match ctx.platform {
         Platform::Azure => Duration::from_secs(12 * 60),
         Platform::Aws | Platform::Gcp => Duration::from_secs(5 * 60),
         platform => anyhow::bail!("unsupported Enterprise Key platform: {platform}"),
     };
-    let denied = match ctx.platform {
-        Platform::Azure => Ok(None),
-        Platform::Aws | Platform::Gcp => common::remote_bindings::wait_for_remote_key_data_denied(
-            &ctx.deployment,
-            ctx.platform,
-            revocation_timeout,
-        )
-        .await
-        .map(Some),
-        _ => unreachable!("platform was validated above"),
-    };
+    let denied = common::remote_bindings::wait_for_remote_key_data_denied(
+        &ctx.deployment,
+        ctx.platform,
+        revocation_timeout,
+    )
+    .await;
     let restored = restore_remote_key_grant(&revoked, env).await;
     match (denied, restored) {
         (Err(error), Err(restore_error)) => anyhow::bail!(
@@ -589,17 +583,11 @@ async fn check_byo_key_revocation(ctx: &alien_test::TestContext) -> anyhow::Resu
         ),
         (Err(error), Ok(())) => return Err(error),
         (Ok(_), Err(error)) => return Err(error.context("restore remote Key provider grant")),
-        (Ok(Some(elapsed)), Ok(())) => {
+        (Ok(elapsed), Ok(())) => {
             tracing::info!(
                 platform = %ctx.platform,
                 elapsed_seconds = elapsed.as_secs_f64(),
                 "provider rejected the revoked Enterprise Key grant"
-            );
-        }
-        (Ok(None), Ok(())) => {
-            tracing::info!(
-                platform = %ctx.platform,
-                "removed and restored the exact Enterprise Key grant; provider data-plane propagation is not time-bounded by Alien"
             );
         }
     }
