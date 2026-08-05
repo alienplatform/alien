@@ -50,7 +50,7 @@ const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// minutes, but potentially taking seven minutes or longer. Keep the first
 /// target-side token exchange retryable for a bounded window after setup hands
 /// the deployment to Provisioning.
-const GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
+const CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -467,12 +467,8 @@ impl DeploymentLoop {
         {
             Ok(resolved) => resolved,
             Err(e) => {
-                let handoff_retry_remaining = gcp_credential_handoff_retry_remaining(
-                    status,
-                    &deployment,
-                    &e,
-                    chrono::Utc::now(),
-                );
+                let handoff_retry_remaining =
+                    credential_handoff_retry_remaining(status, &deployment, &e, chrono::Utc::now());
                 if should_wait_for_credential_handoff(status, &deployment)
                     || handoff_retry_remaining.is_some()
                 {
@@ -1010,15 +1006,19 @@ fn has_remote_stack_management_outputs(stack_state: &alien_core::StackState) -> 
     })
 }
 
-fn gcp_credential_handoff_retry_remaining(
+fn credential_handoff_retry_remaining(
     status: DeploymentStatus,
     deployment: &DeploymentRecord,
     error: &AlienError,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<Duration> {
-    if status != DeploymentStatus::Provisioning
-        || deployment.platform != alien_core::Platform::Gcp
-        || error.code != REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE
+    if !matches!(
+        status,
+        DeploymentStatus::InitialSetup | DeploymentStatus::Provisioning
+    ) || !matches!(
+        deployment.platform,
+        alien_core::Platform::Aws | alien_core::Platform::Gcp | alien_core::Platform::Azure
+    ) || error.code != REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE
         || !deployment
             .stack_state
             .as_ref()
@@ -1027,16 +1027,16 @@ fn gcp_credential_handoff_retry_remaining(
         return None;
     }
 
-    // Provisioning is persisted by the setup-to-runtime transition, so
-    // updated_at is the durable start of this handoff window. created_at keeps
-    // older/imported records bounded if they lack an update timestamp.
+    // The setup registration or setup-to-runtime transition persists the
+    // deployment before Manager attempts the new target identity. Use that
+    // durable update as the start of a bounded provider propagation window.
     let handoff_started_at = deployment.updated_at.unwrap_or(deployment.created_at);
     let elapsed = now
         .signed_duration_since(handoff_started_at)
         .to_std()
         .unwrap_or(Duration::ZERO);
 
-    GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD
+    CREDENTIAL_HANDOFF_GRACE_PERIOD
         .checked_sub(elapsed)
         .filter(|remaining| !remaining.is_zero())
 }
@@ -1084,11 +1084,11 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, commands_receiver_env_vars, gcp_credential_handoff_retry_remaining,
+        active_work_statuses, commands_receiver_env_vars, credential_handoff_retry_remaining,
         get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
         manager_candidate_statuses, needs_provision_capability, parse_status,
         retryable_failed_statuses, should_wait_for_credential_handoff, with_environment_snapshot,
-        worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        worker_commands_push_env_vars, CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1328,7 +1328,7 @@ mod tests {
         })
         .into_generic();
 
-        let remaining = gcp_credential_handoff_retry_remaining(
+        let remaining = credential_handoff_retry_remaining(
             DeploymentStatus::Provisioning,
             &deployment,
             &error,
@@ -1338,8 +1338,32 @@ mod tests {
 
         assert_eq!(
             remaining,
-            GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD - Duration::from_secs(2 * 60)
+            CREDENTIAL_HANDOFF_GRACE_PERIOD - Duration::from_secs(2 * 60)
         );
+    }
+
+    #[test]
+    fn aws_initial_setup_retries_target_credential_handoff_during_grace_period() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::InitialSetup,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Aws;
+        deployment.updated_at = Some(now);
+        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: Platform::Aws,
+        })
+        .into_generic();
+
+        assert!(credential_handoff_retry_remaining(
+            DeploymentStatus::InitialSetup,
+            &deployment,
+            &error,
+            now,
+        )
+        .is_some());
     }
 
     #[test]
@@ -1351,7 +1375,7 @@ mod tests {
         );
         deployment.platform = Platform::Gcp;
         deployment.updated_at = Some(
-            now - chrono::Duration::from_std(GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD)
+            now - chrono::Duration::from_std(CREDENTIAL_HANDOFF_GRACE_PERIOD)
                 .expect("grace period should fit chrono duration"),
         );
         let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
@@ -1361,7 +1385,7 @@ mod tests {
         .into_generic();
 
         assert_eq!(
-            gcp_credential_handoff_retry_remaining(
+            credential_handoff_retry_remaining(
                 DeploymentStatus::Provisioning,
                 &deployment,
                 &error,
@@ -1399,7 +1423,7 @@ mod tests {
         });
 
         assert_eq!(
-            gcp_credential_handoff_retry_remaining(
+            credential_handoff_retry_remaining(
                 DeploymentStatus::Provisioning,
                 &deployment,
                 &error,
