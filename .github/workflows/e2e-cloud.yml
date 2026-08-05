@@ -748,7 +748,7 @@ jobs:
           fi
           echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -864,7 +864,7 @@ jobs:
           fi
           echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1480,7 +1480,7 @@ jobs:
           ) &
           echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: needs.compute-matrix.outputs.build_operator_image == 'true'
         with:
           registry: ghcr.io
