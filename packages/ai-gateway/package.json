@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "openai": "^4",
     "tsdown": "^0.13.0",
