@@ -7,8 +7,8 @@
 
 import { randomUUID } from "node:crypto"
 import { afterAll, describe, expect, it } from "vitest"
-import { kv } from "../src/index.js"
 import type { Kv } from "../src/index.js"
+import { kv } from "../src/index.js"
 import { cleanupTempDirs, localKvBindingEnv } from "./helpers/local-binding-env.js"
 
 let bunFixtureIndex = 0

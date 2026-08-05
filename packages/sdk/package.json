@@ -2,7 +2,9 @@
   "name": "@alienplatform/sdk",
   "version": "3.3.11",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -30,7 +32,12 @@
     "format-and-lint:fix": "biome check . --write"
   },
   "sideEffects": false,
-  "keywords": ["alien", "sdk", "worker", "bindings"],
+  "keywords": [
+    "alien",
+    "sdk",
+    "worker",
+    "bindings"
+  ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "homepage": "https://alien.dev",

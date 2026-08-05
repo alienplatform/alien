@@ -17,7 +17,7 @@ app.post("/kv-test/:bindingName", async c => {
     await k.setJson(key1, testValue)
 
     // 2. Put only when absent — second set should return false
-    const firstSet = await k.setJson(key2, testValue, { ifVersion: null })
+    const _firstSet = await k.setJson(key2, testValue, { ifVersion: null })
     const secondSet = await k.setJson(key2, { message: "duplicate" }, { ifVersion: null })
     if (secondSet !== false) {
       return c.json(

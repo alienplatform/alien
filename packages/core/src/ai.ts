@@ -1,7 +1,7 @@
 import { type Ai as AiConfig, AiSchema, type ResourceType } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { AiOutputs, Ai as AiConfig } from "./generated/index.js"
+export type { Ai as AiConfig, AiOutputs } from "./generated/index.js"
 export { AiSchema as AiConfigSchema } from "./generated/index.js"
 
 /**

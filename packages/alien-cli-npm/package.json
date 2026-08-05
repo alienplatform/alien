@@ -12,7 +12,10 @@
   "engines": {
     "node": ">=18"
   },
-  "files": ["bin", "vendor"],
+  "files": [
+    "bin",
+    "vendor"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/alienplatform/alien.git",

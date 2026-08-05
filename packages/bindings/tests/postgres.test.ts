@@ -12,10 +12,10 @@
 import { afterAll, describe, expect, it } from "vitest"
 import { AlienError, postgres } from "../src/index.js"
 import {
-  POSTGRES_FIXTURE,
   cleanupTempDirs,
   externalPostgresBindingEnv,
   localPostgresBindingEnv,
+  POSTGRES_FIXTURE,
 } from "./helpers/local-binding-env.js"
 
 const isBun = process.env.BUN_EXPECTED === "1"

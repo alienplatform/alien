@@ -8,7 +8,7 @@
 
 import { readFileSync } from "node:fs"
 import { join, relative } from "node:path"
-import { type CheckResult, type Ctx, HARD_DENYLIST_PATTERNS, escapeRegExp, run } from "./shared.ts"
+import { type CheckResult, type Ctx, escapeRegExp, HARD_DENYLIST_PATTERNS, run } from "./shared.ts"
 
 /** List the entries of a packed tarball (paths, `package/`-prefixed). */
 export function tarEntries(tarball: string, cwd: string): string[] {

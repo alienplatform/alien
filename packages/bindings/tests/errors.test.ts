@@ -11,10 +11,10 @@ import { randomUUID } from "node:crypto"
 import { afterEach, describe, expect, it } from "vitest"
 import { AlienError, BindingNotConfiguredError, kv, storage } from "../src/index.js"
 import {
-  LOCAL_DEPLOYMENT_ENV,
   bindingEnvVarName,
   cleanupTempDirs,
   installBindingEnv,
+  LOCAL_DEPLOYMENT_ENV,
 } from "./helpers/local-binding-env.js"
 
 afterEach(cleanupTempDirs)

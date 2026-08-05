@@ -65,9 +65,9 @@ import {
   AlienErrorSchema as AlienErrorOptionsSchema,
 } from "./generated/index.js"
 
+export type { AlienErrorOptions }
 // Re-export the schema for external use
 export { AlienErrorOptionsSchema }
-export type { AlienErrorOptions }
 
 /**
  * Base interface that all error type definitions must implement.
@@ -660,6 +660,5 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
 }
 
 // Utility type to extract context type from error definition
-export type ExtractContext<T> = T extends AlienErrorDefinition<infer TContext>
-  ? z.infer<TContext>
-  : never
+export type ExtractContext<T> =
+  T extends AlienErrorDefinition<infer TContext> ? z.infer<TContext> : never

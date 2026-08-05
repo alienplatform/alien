@@ -1,7 +1,7 @@
 import { type ResourceType, type Vault as VaultConfig, VaultSchema } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { VaultOutputs, Vault as VaultConfig } from "./generated/index.js"
+export type { Vault as VaultConfig, VaultOutputs } from "./generated/index.js"
 export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
 
 /**
