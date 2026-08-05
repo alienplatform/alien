@@ -1357,7 +1357,7 @@ jobs:
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/x86_64-unknown-linux-musl/release/alien
@@ -1412,7 +1412,7 @@ jobs:
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/aarch64-unknown-linux-musl/release/alien
@@ -1469,7 +1469,7 @@ jobs:
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/aarch64-apple-darwin/release/alien
@@ -1539,7 +1539,7 @@ jobs:
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/x86_64-pc-windows-msvc/release/alien.exe
