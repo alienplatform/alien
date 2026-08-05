@@ -247,4 +247,14 @@ pub(super) mod tests {
                 && federated_token_file == "/tmp/federated-token"
         ));
     }
+
+    #[tokio::test]
+    async fn direct_environment_credentials_cannot_resolve_remote_bindings() {
+        let error = EnvironmentCredentialResolver::new()
+            .resolve_remote_storage_source(&azure_deployment("provisioning"), "enterprise-key")
+            .await
+            .expect_err("management credentials must not stand in for the Access identity");
+
+        assert!(error.message.contains("setup-owned Access identity"));
+    }
 }

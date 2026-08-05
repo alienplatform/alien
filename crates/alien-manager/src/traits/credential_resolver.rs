@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use alien_core::{ClientConfig, ManagementConfig, Platform};
-use alien_error::AlienError;
+use alien_error::{AlienError, GenericError};
 
 use super::deployment_store::DeploymentRecord;
 
@@ -66,16 +66,17 @@ pub trait CredentialResolver: Send + Sync {
 
     /// Resolve authority for a purpose-specific remote Storage lease.
     ///
-    /// Custom resolvers default to their direct config. Provider materializers
-    /// still fail closed when that form cannot be attenuated cryptographically.
+    /// There is deliberately no direct-credential fallback. Deployment,
+    /// installer, and management credentials are not substitutes for the
+    /// setup-owned Remote Bindings identity.
     async fn resolve_remote_storage_source(
         &self,
-        deployment: &DeploymentRecord,
+        _deployment: &DeploymentRecord,
         _resource_id: &str,
     ) -> Result<RemoteStorageCredentialSource, AlienError> {
-        Ok(RemoteStorageCredentialSource::Direct(
-            self.resolve(deployment).await?,
-        ))
+        Err(AlienError::new(GenericError {
+            message: "Remote Bindings require a credential resolver that selects the setup-owned Access identity".to_string(),
+        }))
     }
 
     /// Resolve the management identity for a target platform.

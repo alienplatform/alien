@@ -243,67 +243,12 @@ async fn get_impersonated_token(
             message: "Cannot mint an impersonated access token from VM managed identity. Return a managed identity credential source instead.".to_string(),
             field_name: Some("credentials".to_string()),
         })),
-        AzureCredentials::ServicePrincipal {
-            client_id,
-            client_secret,
-        } => {
-            // Use service principal to get token for the target identity
-            let client = Client::new();
-            let tenant_id = impersonation_config
-                .tenant_id
-                .as_ref()
-                .unwrap_or(&config.tenant_id);
-
-            let mut form_data = HashMap::new();
-            form_data.insert("grant_type", "client_credentials");
-            form_data.insert("client_id", client_id);
-            form_data.insert("client_secret", client_secret);
-            form_data.insert("scope", &impersonation_config.scope);
-
-            // In a real implementation, you might use different grant types
-            // like "urn:ietf:params:oauth:grant-type:jwt-bearer" for impersonation
-
-            let token_url = format!(
-                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-                tenant_id
-            );
-
-            let response = client
-                .post(&token_url)
-                .form(&form_data)
-                .send()
-                .await
-                .into_alien_error()
-                .context(ErrorData::HttpRequestFailed {
-                    message: "Failed to request Azure access token for impersonation".to_string(),
-                })?;
-
-            if !response.status().is_success() {
-                let error_text = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(AlienError::new(ErrorData::AuthenticationError {
-                    message: format!("Failed to get impersonated access token: {}", error_text),
-                }));
-            }
-
-            #[derive(Deserialize)]
-            struct TokenResponse {
-                access_token: String,
-            }
-
-            let token_response: TokenResponse =
-                response
-                    .json()
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
-                        message: "Failed to parse Azure token response".to_string(),
-                    })?;
-
-            Ok(token_response.access_token)
-        }
+        AzureCredentials::ServicePrincipal { .. } => Err(AlienError::new(
+            ErrorData::InvalidInput {
+                message: "Azure service-principal credentials cannot impersonate a different managed identity; use workload identity federation or run as the requested managed identity".to_string(),
+                field_name: Some("credentials".to_string()),
+            },
+        )),
     }
 }
 
@@ -865,5 +810,33 @@ mod tests {
             .await
             .expect_err("a token for another audience must not be reused");
         assert_eq!(error.code, "AUTHENTICATION_ERROR");
+    }
+
+    #[tokio::test]
+    async fn service_principal_cannot_impersonate_a_managed_identity() {
+        let config = AzureClientConfig {
+            subscription_id: "subscription".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::ServicePrincipal {
+                client_id: "installer-client".to_string(),
+                client_secret: "installer-secret".to_string(),
+            },
+            service_overrides: None,
+        };
+        let requested = AzureImpersonationConfig {
+            client_id: "access-identity-client".to_string(),
+            scope: "https://vault.azure.net/.default".to_string(),
+            tenant_id: Some("tenant".to_string()),
+            target_subscription_id: Some("subscription".to_string()),
+            target_region: Some("eastus".to_string()),
+        };
+
+        let error = get_impersonated_token(&config, &requested)
+            .await
+            .expect_err("a service principal must not be returned as another identity");
+
+        assert_eq!(error.code, "INVALID_INPUT");
+        assert!(error.message.contains("cannot impersonate"));
     }
 }

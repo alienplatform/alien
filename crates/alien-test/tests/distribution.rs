@@ -4,12 +4,16 @@
 //! path: CloudFormation for AWS and Terraform for cloud/K8s targets. They use
 //! the same application-specific assertions as push/pull E2E.
 
-use alien_core::{KeyFingerprint, KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs};
+use alien_bindings::{BindingsProvider, BindingsProviderApi};
+use alien_core::{
+    bindings::KeyBinding, AzureClientConfig, AzureCredentials, ClientConfig, KeyFingerprint,
+    KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs,
+};
 use alien_test::{DistributionFlow, TestApp};
 use anyhow::{anyhow, Context};
 use reqwest::{Client, Response};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use test_context::test_context;
 use tokio::process::Command;
 use tokio::time::{sleep, Duration};
@@ -174,6 +178,331 @@ async fn check_byo_key_rotation(ctx: &alien_test::TestContext) -> anyhow::Result
         rotate_provider_key(&key, &env)
     })
     .await
+}
+
+async fn check_byo_key_disable_restore(ctx: &alien_test::TestContext) -> anyhow::Result<()> {
+    let response = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow!("get_deployment failed: {error}"))?;
+    let state_value = response
+        .into_inner()
+        .stack_state
+        .context("deployment is missing stack_state")?;
+    let stack_state: alien_core::StackState =
+        serde_json::from_value(state_value).context("failed to parse stack_state")?;
+    let key = stack_state
+        .resources
+        .get("enterprise-key")
+        .and_then(|state| state.outputs.as_ref())
+        .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        .context("enterprise-key is missing Key outputs")?
+        .clone();
+    let env = ctx
+        .distribution_cleanups
+        .first()
+        .context("distribution test is missing artifact credentials")?
+        .command_env()
+        .to_vec();
+    let disable_key = key.clone();
+    let disable_env = env.clone();
+    let restore_key = key.clone();
+    let restore_env = env.clone();
+
+    let elapsed = if ctx.platform == Platform::Azure
+        && std::env::var("AZURE_FEDERATED_TOKEN_FILE").is_err()
+    {
+        check_azure_target_static_key_disable_restore(ctx, &key, &env).await?
+    } else {
+        common::remote_bindings::check_remote_key_disable_restore(
+            &ctx.deployment,
+            ctx.platform,
+            move || async move {
+                set_provider_key_enabled(&disable_key, false, &disable_env).await
+            },
+            move || async move {
+                set_provider_key_enabled(&restore_key, true, &restore_env).await
+            },
+            Duration::from_secs(5 * 60),
+        )
+        .await?
+    };
+    tracing::info!(
+        platform = %ctx.platform,
+        elapsed_seconds = elapsed.as_secs_f64(),
+        "disabled provider Key rejected fresh Enterprise Key operations"
+    );
+    Ok(())
+}
+
+async fn check_azure_target_static_key_disable_restore(
+    ctx: &alien_test::TestContext,
+    key: &KeyOutputs,
+    env: &[(String, String)],
+) -> anyhow::Result<Duration> {
+    let target = ctx
+        .manager
+        .test_config()
+        .and_then(|config| config.azure_target.as_ref())
+        .context("Azure target-static Key test requires target credentials")?;
+    let client_config = ClientConfig::Azure(Box::new(AzureClientConfig {
+        subscription_id: target.subscription_id.clone(),
+        tenant_id: target.tenant_id.clone(),
+        region: Some(target.region.clone()),
+        credentials: AzureCredentials::ServicePrincipal {
+            client_id: target.client_id.clone(),
+            client_secret: target.client_secret.clone(),
+        },
+        service_overrides: None,
+    }));
+    let key_binding = KeyBinding::azure_key_vault(key.wrapping_key_id.clone());
+    let bindings = HashMap::from([(
+        "enterprise-key".to_string(),
+        serde_json::to_value(key_binding)?,
+    )]);
+    let load_key = || async {
+        let provider = BindingsProvider::new(client_config.clone(), bindings.clone())?;
+        provider
+            .load_key("enterprise-key")
+            .await
+            .map_err(anyhow::Error::from)
+    };
+    let context = BTreeMap::from([(
+        "purpose".to_string(),
+        "provider-disable-qualification".to_string(),
+    )]);
+    let plaintext = [0x3cu8; 32];
+    let ciphertext = load_key()
+        .await?
+        .encrypt(&plaintext, Some(&context))
+        .await?;
+
+    set_provider_key_enabled(key, false, env).await?;
+    let started = tokio::time::Instant::now();
+    let deadline = started + Duration::from_secs(5 * 60);
+    let denied = loop {
+        let key = load_key().await?;
+        let encrypt_result = key.encrypt(b"disabled-key-probe", Some(&context)).await;
+        let decrypt_result = key.decrypt(&ciphertext, Some(&context)).await;
+        match (encrypt_result.is_err(), decrypt_result.is_err()) {
+            (true, true) => break Ok(started.elapsed()),
+            _ if tokio::time::Instant::now() >= deadline => {
+                break Err(anyhow!(
+                    "disabled Azure Key still accepted fresh operations: encrypt_succeeded={}, decrypt_succeeded={}",
+                    encrypt_result.is_ok(),
+                    decrypt_result.is_ok(),
+                ));
+            }
+            _ => sleep(Duration::from_secs(5)).await,
+        }
+    };
+    let restored = set_provider_key_enabled(key, true, env).await;
+    let elapsed = match (denied, restored) {
+        (Err(error), Err(restore_error)) => anyhow::bail!(
+            "Azure Key disable check failed: {error:#}; restoring the Key also failed: {restore_error:#}"
+        ),
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error.context("restore disabled Azure Key")),
+        (Ok(elapsed), Ok(())) => elapsed,
+    };
+
+    let recovery_deadline = tokio::time::Instant::now() + Duration::from_secs(5 * 60);
+    loop {
+        let attempt = async {
+            let decrypted = load_key()
+                .await?
+                .decrypt(&ciphertext, Some(&context))
+                .await?;
+            anyhow::ensure!(
+                decrypted == plaintext,
+                "restored Azure Key changed plaintext"
+            );
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if attempt.is_ok() {
+            return Ok(elapsed);
+        }
+        if tokio::time::Instant::now() >= recovery_deadline {
+            return Err(attempt
+                .expect_err("failed recovery attempt")
+                .context("Azure Key did not recover before the deadline"));
+        }
+        sleep(Duration::from_secs(5)).await;
+    }
+}
+
+async fn set_provider_key_enabled(
+    key: &KeyOutputs,
+    enabled: bool,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    let enabled_text = if enabled { "true" } else { "false" };
+    match &key.fingerprint {
+        KeyFingerprint::Aws { key_arn } => {
+            let mut command = Command::new("aws");
+            command.args([
+                "kms",
+                if enabled { "enable-key" } else { "disable-key" },
+                "--key-id",
+                key_arn,
+            ]);
+            apply_test_env(&mut command, env);
+            run_test_command(command, "change AWS KMS Key enabled state").await?;
+
+            let expected = if enabled { "Enabled" } else { "Disabled" };
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2 * 60);
+            loop {
+                let mut describe = Command::new("aws");
+                describe.args([
+                    "kms",
+                    "describe-key",
+                    "--key-id",
+                    key_arn,
+                    "--query",
+                    "KeyMetadata.KeyState",
+                    "--output",
+                    "text",
+                ]);
+                apply_test_env(&mut describe, env);
+                let state = String::from_utf8(
+                    run_test_command(describe, "read AWS KMS Key enabled state").await?,
+                )?;
+                if state.trim() == expected {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    anyhow::bail!(
+                        "AWS KMS Key did not reach {expected}; last state was {}",
+                        state.trim()
+                    );
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+        KeyFingerprint::Gcp { crypto_key_name } => {
+            let segments = crypto_key_name.split('/').collect::<Vec<_>>();
+            anyhow::ensure!(segments.len() == 8, "invalid GCP CryptoKey name");
+            let mut describe_key = Command::new("gcloud");
+            describe_key.args([
+                "kms",
+                "keys",
+                "describe",
+                segments[7],
+                "--project",
+                segments[1],
+                "--location",
+                segments[3],
+                "--keyring",
+                segments[5],
+                "--format=value(primary.name)",
+            ]);
+            apply_test_env(&mut describe_key, env);
+            let primary_name = String::from_utf8(
+                run_test_command(describe_key, "read GCP KMS primary Key version").await?,
+            )?;
+            let version = primary_name
+                .trim()
+                .rsplit('/')
+                .next()
+                .filter(|value| !value.is_empty())
+                .context("GCP CryptoKey has no primary version")?;
+            let mut command = Command::new("gcloud");
+            command.args([
+                "kms",
+                "keys",
+                "versions",
+                if enabled { "enable" } else { "disable" },
+                version,
+                "--project",
+                segments[1],
+                "--location",
+                segments[3],
+                "--keyring",
+                segments[5],
+                "--key",
+                segments[7],
+                "--quiet",
+            ]);
+            apply_test_env(&mut command, env);
+            run_test_command(command, "change GCP KMS Key version enabled state").await?;
+
+            let expected = if enabled { "ENABLED" } else { "DISABLED" };
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2 * 60);
+            loop {
+                let mut describe_version = Command::new("gcloud");
+                describe_version.args([
+                    "kms",
+                    "keys",
+                    "versions",
+                    "describe",
+                    version,
+                    "--project",
+                    segments[1],
+                    "--location",
+                    segments[3],
+                    "--keyring",
+                    segments[5],
+                    "--key",
+                    segments[7],
+                    "--format=value(state)",
+                ]);
+                apply_test_env(&mut describe_version, env);
+                let state = String::from_utf8(
+                    run_test_command(describe_version, "read GCP KMS Key version state").await?,
+                )?;
+                if state.trim() == expected {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    anyhow::bail!(
+                        "GCP KMS Key version did not reach {expected}; last state was {}",
+                        state.trim()
+                    );
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+        KeyFingerprint::Azure {
+            vault_resource_id,
+            key_name,
+            ..
+        } => {
+            let vault_name = vault_resource_id
+                .rsplit('/')
+                .next()
+                .context("Azure Key fingerprint has an invalid vault resource ID")?;
+            let version = key
+                .wrapping_key_id
+                .rsplit('/')
+                .next()
+                .context("Azure wrapping key ID is not versioned")?;
+            let mut command = Command::new("az");
+            command.args([
+                "keyvault",
+                "key",
+                "set-attributes",
+                "--vault-name",
+                vault_name,
+                "--name",
+                key_name,
+                "--version",
+                version,
+                "--enabled",
+                enabled_text,
+                "--output",
+                "none",
+            ]);
+            apply_test_env(&mut command, env);
+            run_test_command(command, "change Azure Key Vault Key enabled state").await?;
+        }
+    }
+    Ok(())
 }
 
 enum RevokedRemoteKeyGrant {
@@ -1857,6 +2186,9 @@ async fn terraform_aws_push_byo_encryption_key_rotation(
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("AWS Enterprise Key rotation checks failed: {error:#}");
     }
+    if let Err(error) = check_byo_key_disable_restore(&ctx.ctx).await {
+        panic!("AWS Enterprise Key disable/restore checks failed: {error:#}");
+    }
     if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
         panic!("AWS Enterprise Key revocation checks failed: {error:#}");
     }
@@ -1877,6 +2209,9 @@ async fn terraform_gcp_push_byo_encryption_key_rotation(
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("GCP Enterprise Key rotation checks failed: {error:#}");
     }
+    if let Err(error) = check_byo_key_disable_restore(&ctx.ctx).await {
+        panic!("GCP Enterprise Key disable/restore checks failed: {error:#}");
+    }
     if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
         panic!("GCP Enterprise Key revocation checks failed: {error:#}");
     }
@@ -1894,11 +2229,31 @@ distribution_test_context!(
 async fn terraform_azure_push_byo_encryption_key_rotation(
     ctx: &mut TerraformAzurePushByoEncryptionKeyRotation,
 ) {
+    if std::env::var("AZURE_FEDERATED_TOKEN_FILE").is_err() {
+        panic!("Azure Remote Bindings rotation/revocation qualification requires a real federated token; target-static is insufficient");
+    }
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("Azure Enterprise Key rotation checks failed: {error:#}");
     }
     if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
         panic!("Azure Enterprise Key revocation checks failed: {error:#}");
+    }
+}
+
+distribution_test_context!(
+    TerraformAzurePushByoEncryptionKeyDisable,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformAzurePushByoEncryptionKeyDisable)]
+#[tokio::test]
+#[ignore = "serialized real-cloud Key disable/restore"]
+async fn terraform_azure_push_byo_encryption_key_disable(
+    ctx: &mut TerraformAzurePushByoEncryptionKeyDisable,
+) {
+    if let Err(error) = check_byo_key_disable_restore(&ctx.ctx).await {
+        panic!("Azure Enterprise Key disable/restore checks failed: {error:#}");
     }
 }
 

@@ -1,10 +1,10 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::Result;
-use alien_error::{Context, IntoAlienError};
+use alien_client_core::{ErrorData, Result};
+use alien_error::{Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
 use bon::Builder;
-use reqwest::{Client, Method};
+use reqwest::{Client, Method, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -56,7 +56,7 @@ impl KmsClient {
             .header("Content-Type", "application/x-amz-json-1.1")
             .content_sha256(&body)
             .body(body);
-        crate::aws::aws_request_utils::sign_send_json(
+        let result = crate::aws::aws_request_utils::sign_send_json(
             request,
             &AwsSignConfig {
                 service_name: "kms".to_string(),
@@ -65,11 +65,63 @@ impl KmsClient {
                 signing_region: None,
             },
         )
-        .await
-        .context(alien_client_core::ErrorData::GenericError {
-            message: format!("AWS KMS {target} failed for key '{key_id}'"),
-        })
+        .await;
+        Self::map_result(result, target, key_id)
     }
+
+    fn map_result<T>(result: Result<T>, operation: &str, key_id: &str) -> Result<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let Some(ErrorData::HttpResponseError {
+                    http_status,
+                    http_response_text: Some(body),
+                    ..
+                }) = &error.error
+                else {
+                    return Err(error.context(ErrorData::GenericError {
+                        message: format!("AWS KMS {operation} failed for key '{key_id}'"),
+                    }));
+                };
+                let status =
+                    StatusCode::from_u16(*http_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let mapped = map_kms_error(status, body, key_id).unwrap_or_else(|| {
+                    ErrorData::GenericError {
+                        message: format!("AWS KMS {operation} failed for key '{key_id}'"),
+                    }
+                });
+                Err(error.context(mapped))
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct KmsErrorResponse {
+    #[serde(rename = "__type")]
+    type_field: Option<String>,
+}
+
+fn map_kms_error(status: StatusCode, body: &str, key_id: &str) -> Option<ErrorData> {
+    let parsed: KmsErrorResponse = serde_json::from_str(body).ok()?;
+    let raw_code = parsed.type_field?;
+    let code = raw_code.rsplit('#').next().unwrap_or(&raw_code);
+    Some(match code {
+        "AccessDeniedException"
+        | "NotAuthorizedException"
+        | "UnrecognizedClientException"
+        | "ExpiredTokenException" => ErrorData::RemoteAccessDenied {
+            resource_type: "KMS Key".to_string(),
+            resource_name: key_id.to_string(),
+        },
+        _ if status == StatusCode::FORBIDDEN || status == StatusCode::UNAUTHORIZED => {
+            ErrorData::RemoteAccessDenied {
+                resource_type: "KMS Key".to_string(),
+                resource_name: key_id.to_string(),
+            }
+        }
+        _ => return None,
+    })
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -164,4 +216,31 @@ pub struct DecryptRequest {
 pub struct DecryptResponse {
     pub plaintext: String,
     pub key_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_kms_access_denied_from_json_rpc_error() {
+        let mapped = map_kms_error(
+            StatusCode::BAD_REQUEST,
+            r#"{"__type":"AccessDeniedException","message":"denied"}"#,
+            "arn:aws:kms:us-east-1:123:key/example",
+        )
+        .expect("KMS access denial should be recognized");
+
+        assert!(matches!(mapped, ErrorData::RemoteAccessDenied { .. }));
+    }
+
+    #[test]
+    fn leaves_disabled_key_distinct_from_iam_denial() {
+        assert!(map_kms_error(
+            StatusCode::BAD_REQUEST,
+            r#"{"__type":"DisabledException","message":"disabled"}"#,
+            "arn:aws:kms:us-east-1:123:key/example",
+        )
+        .is_none());
+    }
 }

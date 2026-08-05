@@ -353,6 +353,126 @@ where
     Ok(())
 }
 
+/// Disable the provider Key itself and prove that fresh remote operations stop,
+/// then restore it and decrypt ciphertext created before the interruption.
+/// Unlike an IAM-grant test, this kill switch applies to every provider
+/// identity and is therefore valid in Azure local `target-static` mode.
+pub async fn check_remote_key_disable_restore<D, DFut, R, RFut>(
+    deployment: &TestDeployment,
+    platform: Platform,
+    disable: D,
+    restore: R,
+    timeout: Duration,
+) -> anyhow::Result<Duration>
+where
+    D: FnOnce() -> DFut,
+    DFut: Future<Output = anyhow::Result<()>>,
+    R: FnOnce() -> RFut,
+    RFut: Future<Output = anyhow::Result<()>>,
+{
+    let discovery = DiscoveryServer::start(deployment, platform).await?;
+    let before =
+        RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+            .await
+            .context("discover assigned manager before disabling the provider Key")?;
+    let before_key = before
+        .key(ENTERPRISE_KEY_BINDING)
+        .await
+        .context("resolve Enterprise Key before disabling it")?;
+    let context = BTreeMap::from([
+        (
+            "purpose".to_string(),
+            "provider-disable-qualification".to_string(),
+        ),
+        ("test".to_string(), deployment.id.clone()),
+    ]);
+    let plaintext = [0x3cu8; 32];
+    let ciphertext = before_key
+        .encrypt(&plaintext, Some(&context))
+        .await
+        .context("encrypt before disabling the provider Key")?;
+    drop(before_key);
+    drop(before);
+
+    disable().await?;
+    let denied = wait_for_remote_key_data_unavailable(deployment, platform, timeout).await;
+    let restored = restore().await;
+    let elapsed = match (denied, restored) {
+        (Err(error), Err(restore_error)) => bail!(
+            "provider Key disable check failed: {error:#}; restoring the Key also failed: {restore_error:#}"
+        ),
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error.context("restore disabled provider Key")),
+        (Ok(elapsed), Ok(())) => elapsed,
+    };
+
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let attempt = async {
+            let bindings = RemoteBindings::for_deployment(
+                &deployment.id,
+                &deployment.token,
+                Some(&discovery.url),
+            )
+            .await?;
+            let key = bindings.key(ENTERPRISE_KEY_BINDING).await?;
+            let decrypted = key.decrypt(&ciphertext, Some(&context)).await?;
+            anyhow::ensure!(decrypted == plaintext, "restored Key changed the plaintext");
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if attempt.is_ok() {
+            return Ok(elapsed);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(attempt
+                .expect_err("failed recovery attempt")
+                .context("provider Key did not recover before the deadline"));
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// Wait for a provider-disabled Key to reject a fresh data operation. Key
+/// disablement is distinct from IAM denial: providers use different structured
+/// errors for those states. The caller separately verifies and owns the
+/// provider state transition, and successful restoration must decrypt the
+/// pre-disable ciphertext before this qualification passes.
+async fn wait_for_remote_key_data_unavailable(
+    deployment: &TestDeployment,
+    platform: Platform,
+    timeout: Duration,
+) -> anyhow::Result<Duration> {
+    let discovery = DiscoveryServer::start(deployment, platform).await?;
+    let started_at = tokio::time::Instant::now();
+    let deadline = started_at + timeout;
+    loop {
+        let attempt = async {
+            let bindings = RemoteBindings::for_deployment(
+                &deployment.id,
+                &deployment.token,
+                Some(&discovery.url),
+            )
+            .await?;
+            let key = bindings.key(ENTERPRISE_KEY_BINDING).await?;
+            let context =
+                BTreeMap::from([("purpose".to_string(), "disabled-key-probe".to_string())]);
+            key.encrypt(b"disabled key probe", Some(&context)).await?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if attempt.is_err() {
+            return Ok(started_at.elapsed());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "disabled provider Key still accepted fresh operations after {timeout:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
 /// Wait until a fresh remote client can still resolve the published Key but
 /// the provider rejects its data operation. This distinguishes revoking the
 /// exact cryptographic grant from deleting discovery or the access identity.
@@ -375,7 +495,7 @@ pub async fn wait_for_remote_key_data_denied(
             .context("the published Key must remain resolvable while its data grant is revoked")?;
         let context = BTreeMap::from([("purpose".to_string(), "revocation-probe".to_string())]);
         match key.encrypt(b"revocation probe", Some(&context)).await {
-            Err(error) if error.code == "REMOTE_ACCESS_DENIED" => {
+            Err(error) if error_chain_has_code(&error, "REMOTE_ACCESS_DENIED") => {
                 return Ok(started_at.elapsed());
             }
             Err(error) if tokio::time::Instant::now() >= deadline => {
@@ -391,6 +511,24 @@ pub async fn wait_for_remote_key_data_denied(
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
+}
+
+fn error_chain_has_code<T>(error: &alien_error::AlienError<T>, expected: &str) -> bool
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    if error.code == expected {
+        return true;
+    }
+
+    let mut source = error.source.as_deref();
+    while let Some(cause) = source {
+        if cause.code == expected {
+            return true;
+        }
+        source = cause.source.as_deref();
+    }
+    false
 }
 
 /// Wait for the exact restored provider grant to become usable through a new
