@@ -59,7 +59,7 @@
     "zod": "4.3.2"
   },
   "peerDependencies": {
-    "openai": "^4"
+    "openai": "^4 || ^7.0.0"
   },
   "peerDependenciesMeta": {
     "openai": {
