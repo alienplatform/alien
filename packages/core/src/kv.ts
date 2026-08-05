@@ -1,7 +1,7 @@
 import { type Kv as KvConfig, KvSchema, type ResourceType } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { KvOutputs, Kv as KvConfig } from "./generated/index.js"
+export type { Kv as KvConfig, KvOutputs } from "./generated/index.js"
 export { KvSchema as KvConfigSchema } from "./generated/index.js"
 
 /**

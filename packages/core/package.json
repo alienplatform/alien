@@ -2,7 +2,9 @@
   "name": "@alienplatform/core",
   "version": "3.3.11",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -17,7 +19,12 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "deployment", "cloud", "infrastructure"],
+  "keywords": [
+    "alien",
+    "deployment",
+    "cloud",
+    "infrastructure"
+  ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "description": "Core types and schemas for the Alien platform",
@@ -32,7 +39,7 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.0.0",
     "@kubb/cli": "^4.35.1",
     "@kubb/core": "^4.35.1",
     "@kubb/oas": "^4.35.1",

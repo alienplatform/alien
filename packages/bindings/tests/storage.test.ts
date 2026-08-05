@@ -6,8 +6,8 @@
 
 import { randomUUID } from "node:crypto"
 import { afterAll, describe, expect, it } from "vitest"
-import { storage } from "../src/index.js"
 import type { Storage } from "../src/index.js"
+import { storage } from "../src/index.js"
 import { cleanupTempDirs, localStorageBindingEnv } from "./helpers/local-binding-env.js"
 
 let bunFixtureIndex = 0

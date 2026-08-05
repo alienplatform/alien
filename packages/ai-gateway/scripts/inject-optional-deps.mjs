@@ -8,7 +8,7 @@
  * pin is deterministic and reviewable.
  */
 
-import { readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 const TRIPLES = [

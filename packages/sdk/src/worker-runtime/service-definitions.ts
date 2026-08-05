@@ -1,4 +1,4 @@
-import { type WorkerProtocolGeneration, getGrpcEndpointConfig } from "./channel.js"
+import { getGrpcEndpointConfig, type WorkerProtocolGeneration } from "./channel.js"
 import { ControlServiceDefinition } from "./generated/control.js"
 import { WaitUntilServiceDefinition } from "./generated/wait_until.js"
 

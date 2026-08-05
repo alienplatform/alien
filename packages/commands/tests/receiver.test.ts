@@ -12,8 +12,8 @@ import { join } from "node:path"
 import { AlienError } from "@alienplatform/core"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { CommandResponse, Envelope, LeaseInfo } from "../src/protocol.js"
-import { commandBudget, createCommandReceiver } from "../src/receiver.js"
 import type { CommandContext } from "../src/receiver.js"
+import { commandBudget, createCommandReceiver } from "../src/receiver.js"
 import type {
   CapturedRequest,
   RouteHandler,
