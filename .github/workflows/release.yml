@@ -632,7 +632,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -721,7 +721,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -907,7 +907,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1014,7 +1014,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1079,7 +1079,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1139,7 +1139,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -1216,7 +1216,7 @@ jobs:
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -1290,7 +1290,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -2395,7 +2395,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -2433,7 +2433,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
