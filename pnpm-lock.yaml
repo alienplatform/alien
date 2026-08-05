@@ -44,8 +44,8 @@ importers:
         specifier: ^9.19.0
         version: 9.39.2(jiti@2.6.1)
       globals:
-        specifier: ^15.14.0
-        version: 15.15.0
+        specifier: ^17.0.0
+        version: 17.9.0
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -66,8 +66,8 @@ importers:
         specifier: ^9.19.0
         version: 9.39.2(jiti@2.6.1)
       globals:
-        specifier: ^15.14.0
-        version: 15.15.0
+        specifier: ^17.0.0
+        version: 17.9.0
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -2933,8 +2933,8 @@ packages:
     resolution: {integrity: sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==}
     engines: {node: '>=18'}
 
-  globals@15.15.0:
-    resolution: {integrity: sha512-7ACyT3wmyp3I61S4fG682L0VA2RGD9otkqGJIwNUMF1SWUombIIk+af1unuDYgMm082aHYwD+mzJvv9Iu8dsgg==}
+  globals@17.9.0:
+    resolution: {integrity: sha512-m/MvAW61QVU5VDNF1Vj8axt016h8w7L5TU1e9zlab7XIttAT2YAlCwl75K1fOqvMM9apmD7lbCIRhpfkhmxhCg==}
     engines: {node: '>=18'}
 
   globby@11.1.0:
@@ -7256,7 +7256,7 @@ snapshots:
 
   globals@14.0.0: {}
 
-  globals@15.15.0: {}
+  globals@17.9.0: {}
 
   globby@11.1.0:
     dependencies:
