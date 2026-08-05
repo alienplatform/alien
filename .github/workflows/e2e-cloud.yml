@@ -1247,7 +1247,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
@@ -1346,7 +1346,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
@@ -1495,7 +1495,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
@@ -1661,7 +1661,7 @@ jobs:
       - uses: depot/setup-action@v1
         if: runner.os != 'Windows'
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: runner.os == 'Linux'
         with:
           platforms: arm64
