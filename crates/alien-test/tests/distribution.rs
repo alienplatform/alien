@@ -2328,9 +2328,13 @@ async fn refresh_github_azure_oidc_token() -> anyhow::Result<()> {
         .get("value")
         .and_then(Value::as_str)
         .context("GitHub OIDC assertion response has no value")?;
-    tokio::fs::write(token_file, assertion)
+    let refreshed_file = format!("{token_file}.refresh-{}", uuid::Uuid::new_v4().simple());
+    tokio::fs::write(&refreshed_file, assertion)
         .await
         .context("write the refreshed Azure federated token")?;
+    tokio::fs::rename(&refreshed_file, &token_file)
+        .await
+        .context("atomically install the refreshed Azure federated token")?;
     Ok(())
 }
 
