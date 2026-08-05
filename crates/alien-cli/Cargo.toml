@@ -84,7 +84,7 @@ axum = { workspace = true, features = ["tokio", "http2", "query"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 sha2 = { workspace = true }
 hex = { workspace = true }
-git-url-parse = { version = "0.6.0" }
+git-url-parse = { version = "0.4.4" }
 flate2 = "1"
 tar = "0.4"
 toml = "0.9"

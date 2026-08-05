@@ -94,7 +94,7 @@ dotenvy = { workspace = true }
 anyhow = { workspace = true }
 test-context = { workspace = true }
 regex = { workspace = true }
-httpmock = { version = "0.8" }
+httpmock = { version = "0.7" }
 rstest = { workspace = true }
 axum = { workspace = true }
 mockall = { workspace = true }

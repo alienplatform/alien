@@ -25,7 +25,7 @@ http = { workspace = true }
 base64 = { workspace = true }
 urlencoding = { workspace = true }
 sha2 = { workspace = true }
-hmac = "0.13"
+hmac = "0.12"
 backon = { workspace = true }
 url = { workspace = true }
 serde-aux = "4"
@@ -48,7 +48,7 @@ regex = { workspace = true }
 anyhow = { workspace = true }
 httpmock = { workspace = true }
 base64 = { workspace = true }
-rcgen = { version = "0.14", features = ["pem"] }
+rcgen = { version = "0.13", features = ["pem"] }
 p12 = "0.6"
 pem = "3.0"
 
