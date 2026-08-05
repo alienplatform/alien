@@ -153,7 +153,7 @@ postgresql_embedded = { version = "0.20", default-features = false, features = [
 # `steampipe` is enabled only because the crate uses `serde_json` unconditionally while
 # gating the dependency behind that feature; we never use the steampipe namespace at runtime.
 postgresql_extensions = { version = "0.20", default-features = false, features = ["tokio", "rustls", "portal-corp", "steampipe"] }
-prost = "0.14"
+prost = "0.13"
 prost-types = "0.13"
 rand = "0.10"
 rand_distr = "0.6"
@@ -178,9 +178,9 @@ tokio = { version = "1.48", features = ["sync", "macros", "io-util", "rt", "time
 tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
-tonic = "0.14"
-tonic-build = "0.14"
-tonic-reflection = "0.14.0"
+tonic = "0.13"
+tonic-build = "0.13"
+tonic-reflection = "0.13.1"
 tracing = "0.1.41"
 tracing-appender = "0.2"
 tracing-web = "0.1"
