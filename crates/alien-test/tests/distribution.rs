@@ -4,10 +4,11 @@
 //! path: CloudFormation for AWS and Terraform for cloud/K8s targets. They use
 //! the same application-specific assertions as push/pull E2E.
 
+use alien_azure_clients::{extract_oid_from_token, AzureClientConfigExt};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
-    bindings::KeyBinding, AzureClientConfig, AzureCredentials, ClientConfig, KeyFingerprint,
-    KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs,
+    bindings::KeyBinding, AzureClientConfig, AzureCredentials, AzureImpersonationConfig,
+    ClientConfig, KeyFingerprint, KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs,
 };
 use alien_test::{DistributionFlow, TestApp};
 use anyhow::{anyhow, Context};
@@ -715,6 +716,41 @@ async fn revoke_remote_key_grant(
                     .trim()
                     .to_string()
             };
+            let impersonation: AzureImpersonationConfig =
+                serde_json::from_str(&access.access_configuration)
+                    .context("parse Azure Access identity configuration")?;
+            let token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+                .context("Azure Access identity qualification requires workload identity")?;
+            let tenant_id = impersonation
+                .tenant_id
+                .clone()
+                .context("Azure Access identity configuration has no tenant")?;
+            let access_config = AzureClientConfig {
+                subscription_id: impersonation
+                    .target_subscription_id
+                    .clone()
+                    .context("Azure Access identity configuration has no subscription")?,
+                tenant_id: tenant_id.clone(),
+                region: impersonation.target_region.clone(),
+                credentials: AzureCredentials::WorkloadIdentity {
+                    client_id: impersonation.client_id,
+                    tenant_id,
+                    federated_token_file: token_file,
+                    authority_host: std::env::var("AZURE_AUTHORITY_HOST")
+                        .unwrap_or_else(|_| "https://login.microsoftonline.com/".to_string()),
+                },
+                service_overrides: None,
+            };
+            let access_token = access_config
+                .get_bearer_token_with_scope("https://vault.azure.net/.default")
+                .await
+                .context("exchange the GitHub assertion for an Azure Access identity token")?;
+            let token_principal = extract_oid_from_token(&access_token)
+                .context("read the Azure Access identity token principal")?;
+            anyhow::ensure!(
+                token_principal.eq_ignore_ascii_case(&principal_id),
+                "Azure Key operations must use the generated Access identity"
+            );
             let scope = format!("{vault_resource_id}/keys/{key_name}");
             let mut list = Command::new("az");
             list.args([
