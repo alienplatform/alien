@@ -768,13 +768,13 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .value(Deployments::UpdatedAt, now.to_rfc3339())
                 .and_where(Expr::col(Deployments::Id).eq(deployment_id));
 
-            if let Some(release_id) = current_release_id {
-                update.value(Deployments::CurrentReleaseId, release_id);
-            }
             if schedule_reconciliation {
                 update
                     .value(Deployments::Status, "update-pending")
+                    .value(Deployments::DesiredReleaseId, current_release_id)
                     .value(Deployments::NextStepAfter, Option::<String>::None);
+            } else if let Some(release_id) = current_release_id {
+                update.value(Deployments::CurrentReleaseId, release_id);
             }
 
             update.to_string(SqliteQueryBuilder)

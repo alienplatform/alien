@@ -41,6 +41,9 @@ pub struct DeploymentRecord {
     pub stack_state: Option<StackState>,
     pub environment_info: Option<EnvironmentInfo>,
     pub runtime_metadata: Option<RuntimeMetadata>,
+    /// Release represented by the setup artifact. When reconciliation is
+    /// scheduled this becomes the desired release; the currently running
+    /// release must remain unchanged until reconciliation succeeds.
     pub current_release_id: Option<String>,
     pub desired_release_id: Option<String>,
     /// Setup source that created this deployment, if it was imported.

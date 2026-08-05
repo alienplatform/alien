@@ -321,6 +321,29 @@ async fn input_values_survive_create_import_and_reimport() {
         .await
         .unwrap();
     assert_eq!(updated.input_values, edited);
+
+    let scheduled = store
+        .update_imported_stack_state(
+            &test_subject(),
+            &imported.id,
+            UpdateImportedDeploymentParams {
+                stack_state: StackState::new(Platform::Aws),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                setup_metadata: None,
+                current_release_id: Some("release-v2".to_string()),
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test-v2".to_string(),
+                setup_fingerprint_version: 1,
+                schedule_reconciliation: true,
+                input_values: edited,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(scheduled.status, "update-pending");
+    assert_eq!(scheduled.current_release_id, None);
+    assert_eq!(scheduled.desired_release_id.as_deref(), Some("release-v2"));
 }
 
 #[tokio::test]
