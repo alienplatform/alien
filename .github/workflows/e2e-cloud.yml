@@ -500,7 +500,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: oven-sh/setup-bun@v2
@@ -598,7 +598,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: oven-sh/setup-bun@v2
@@ -1278,7 +1278,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install JS dependencies and build packages
@@ -1377,7 +1377,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1526,7 +1526,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1705,7 +1705,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install JS dependencies and build packages
