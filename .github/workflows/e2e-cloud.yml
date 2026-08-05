@@ -2095,6 +2095,7 @@ jobs:
             --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
             --query "[].[name,properties.location]" \
             -o tsv 2>/dev/null || true)
+          PURGE_PIDS=()
           while IFS=$'\t' read -r vault_name vault_location; do
             [ -n "$vault_name" ] || continue
             if [[ ! "$vault_name" =~ ^[a-z][0-9a-f]{7}- ]] \
@@ -2103,11 +2104,21 @@ jobs:
               continue
             fi
             echo "Purging soft-deleted Key Vault: $vault_name"
-            timeout 60 az keyvault purge \
-              --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
-              --name "$vault_name" \
-              --location "$vault_location" || true
+            (
+              timeout 60 az keyvault purge \
+                --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" \
+                --name "$vault_name" \
+                --location "$vault_location" || true
+            ) &
+            PURGE_PIDS+=("$!")
+            if [ "${#PURGE_PIDS[@]}" -ge 6 ]; then
+              wait "${PURGE_PIDS[0]}" || true
+              PURGE_PIDS=("${PURGE_PIDS[@]:1}")
+            fi
           done <<< "$DELETED_VAULTS"
+          for purge_pid in "${PURGE_PIDS[@]}"; do
+            wait "$purge_pid" || true
+          done
 
           echo "Deleting E2E subscription-scope management role assignments..."
           SUBSCRIPTION_SCOPE="/subscriptions/$AZURE_TARGET_SUBSCRIPTION_ID"
