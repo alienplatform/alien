@@ -59,7 +59,7 @@ hostname = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Debug-session tunnel (kubectl forwarding for pull-mode K8s `alien debug`)
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 futures = { workspace = true }
 base64 = { workspace = true }
 
@@ -80,7 +80,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-service = "0.7"
+windows-service = "0.8"
 fs2 = "0.4"
 
 [dev-dependencies]

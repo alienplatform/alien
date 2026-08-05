@@ -49,7 +49,7 @@ tracing = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 
 # Trigger service
-cron = "0.15"
+cron = "0.17"
 notify = "7"
 uuid = { workspace = true, features = ["v4"] }
 prost-types = "0.13"

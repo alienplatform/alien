@@ -19,7 +19,7 @@ progenitor-client = { version = "0.11.0" }
 reqwest = { version = "0.12", features = ["json", "stream"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-regress = "0.10"
+regress = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 
 [build-dependencies]
