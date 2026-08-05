@@ -235,7 +235,7 @@ hex = "0.4"
 httpmock = { version = "0.7" }
 mockall = { version = "0.13.1" }
 hcl-rs = "0.19"
-ratatui = { git = "https://github.com/ratatui/ratatui", rev = "fd8e0f024847af467129e0a166390d7e291c1b2e" }
+ratatui = { git = "https://github.com/ratatui/ratatui", rev = "681d9ae8e8fe98cb83028121c9d0b52f9a7acaa5" }
 crossterm = "0.29"
 
 # --- Local development overrides ---
