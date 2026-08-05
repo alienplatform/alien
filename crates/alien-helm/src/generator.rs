@@ -609,19 +609,28 @@ roleRef:
     yaml
 }
 
-/// Read-only observe rules, shared by the namespaced `Role` and the cluster-wide
-/// `ClusterRole`. Only `get/list/watch`; never `secrets` or `pods/log`.
+/// Observe rules plus the writes the shipped operations builtins need, shared by
+/// the namespaced `Role` and the cluster-wide `ClusterRole`.
+///
+/// Base access is read-only (`get/list/watch`; never `secrets`). On top of that
+/// the operator grants exactly what its `kubernetes` operations builtin needs to
+/// run the mutating operations it exposes — otherwise a customer-approved
+/// remediation (e.g. `restart-pod`) is dispatched to the operator only to be
+/// rejected by the apiserver with a 403:
+///   - `pods` `delete`   — `restart-pod` (the controller reschedules the pod)
+///   - `pods/log` `get`  — `logs`
+///   - workload `scale` `patch` — `scale` (the `scale` subresource)
+/// These are the operations the operator ships; nothing beyond them is granted.
 ///
 /// Plus the access-request custom resource, which the operator creates
 /// (materializing a control-plane access request the customer must authorize)
 /// and updates the `status` of (recording the approval window read back from
-/// the customer). This is the one resource the operator writes; everything else
-/// stays read-only. The operator never executes commands from the CR — the
+/// the customer). The operator never executes commands from the CR — the
 /// customer's approval is reported back to the control plane, which dispatches
 /// the commands through the normal commands queue.
 ///
-/// The operations `apiGroups`/`resources` are white-labeled from `names` so a
-/// vendor build grants access to *their* CRD, matching the CRD doc below.
+/// The access-request `apiGroups`/`resources` are white-labeled from `names` so
+/// a vendor build grants access to *their* CRD, matching the CRD doc below.
 fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
     format!(
         r#"rules:
@@ -637,6 +646,15 @@ fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["patch"]
   - apiGroups: ["{group}"]
     resources: ["{plural}"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
@@ -4158,10 +4176,23 @@ mod tests {
                 .map(|verb| verb.as_str().expect("verb should be string"))
                 .collect::<Vec<_>>();
 
-            // The access-request CRD is the one resource the operator writes:
-            // it materializes control-plane access requests and records the
-            // customer's approval window in status. It never executes commands.
-            // Every other rule stays strictly read-only.
+            let resources = rule
+                .get("resources")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include resources")
+                .iter()
+                .map(|resource| resource.as_str().expect("resource should be string"))
+                .collect::<Vec<_>>();
+
+            // Secrets are never accessible, on any rule.
+            assert!(
+                !resources.contains(&"secrets"),
+                "operator must not access customer Secrets"
+            );
+
+            // The access-request CRD is the operator's own control resource: it
+            // materializes access requests and records the approval window in
+            // status, but never deletes them.
             if api_groups == vec!["accessrequests.alien.dev"] {
                 assert!(
                     verbs.iter().all(|v| matches!(
@@ -4174,29 +4205,36 @@ mod tests {
                     !verbs.contains(&"delete") && !verbs.contains(&"deletecollection"),
                     "operator must not delete access-request CRs"
                 );
-            } else {
-                assert_eq!(
-                    verbs,
-                    vec!["get", "list", "watch"],
-                    "non-access-request rules must be read-only"
-                );
+                continue;
             }
 
-            let resources = rule
-                .get("resources")
-                .and_then(YamlValue::as_sequence)
-                .expect("rule should include resources")
-                .iter()
-                .map(|resource| resource.as_str().expect("resource should be string"))
-                .collect::<Vec<_>>();
-            assert!(
-                !resources.contains(&"secrets"),
-                "observe Operator must not read customer Secrets"
-            );
-            assert!(
-                !resources.contains(&"pods/log"),
-                "logs must flow through the log collector, not Kubernetes API tailing"
-            );
+            // Everything else is either read-only observation or one of the
+            // narrow writes the shipped operations builtins need. Verbs beyond
+            // this set would mean the operator was granted more than its
+            // operations require.
+            let allowed = ["get", "list", "watch", "delete", "patch"];
+            for v in &verbs {
+                assert!(
+                    allowed.contains(v),
+                    "unexpected verb '{v}' on rule for {resources:?}; \
+                     operator RBAC must stay within observe + the operations writes"
+                );
+            }
+            // The only mutating verbs are the exact ones the operations need:
+            // pods:delete (restart-pod), pods/log:get (logs), scale:patch (scale).
+            if verbs.contains(&"delete") {
+                assert_eq!(
+                    resources,
+                    vec!["pods"],
+                    "delete is only for restart-pod (pods)"
+                );
+            }
+            if verbs.contains(&"patch") {
+                assert!(
+                    resources.iter().all(|r| r.ends_with("/scale")),
+                    "patch outside the access-request CRD is only the scale subresource: {resources:?}"
+                );
+            }
         }
     }
 
@@ -4363,7 +4401,10 @@ mod tests {
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
         assert!(manifest.contains("fluent/fluent-bit:3.2"));
-        assert!(!manifest.contains("pods/log"));
+        // The log collector tails pod log FILES on the node, not the API — but
+        // the operator's own RBAC does grant `pods/log` for the on-demand `logs`
+        // operation, so `pods/log` legitimately appears in the operator Role.
+        assert!(manifest.contains("pods/log"));
         assert!(!manifest.contains("void"));
 
         let collector_role = docs_by_kind(&docs, "Role")
@@ -4681,7 +4722,8 @@ logCollector:
         assert!(rendered
             .stdout
             .contains("verbs: [\"get\", \"list\", \"watch\"]"));
-        assert!(!rendered.stdout.contains("resources: [\"pods/log\"]"));
+        // The operator grants `pods/log` for the on-demand `logs` operation.
+        assert!(rendered.stdout.contains("resources: [\"pods/log\"]"));
         assert!(!rendered.stdout.contains("void"));
     }
 
