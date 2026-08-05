@@ -49,10 +49,10 @@ tracing = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 
 # Trigger service
-cron = "0.15"
+cron = "0.17"
 notify = "7"
 uuid = { workspace = true, features = ["v4"] }
-prost-types = "0.13"
+prost-types = "0.14"
 
 # Port allocation
 port_check = { workspace = true }
