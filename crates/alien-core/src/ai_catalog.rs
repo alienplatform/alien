@@ -13,11 +13,21 @@
 use crate::Platform;
 use serde::{Deserialize, Serialize};
 
-/// The upstream wire protocol a model speaks. The gateway forwards to the
-/// matching native endpoint; the client SDK is responsible for speaking it.
+/// A public API accepted from an application client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClientApi {
+    OpenAiChatCompletions,
+    OpenAiResponses,
+    AnthropicMessages,
+}
+
+/// The provider API used for the upstream request. This is deliberately
+/// separate from [`ClientApi`]: an adapter may expose one client API over a
+/// different provider API, but only after that exact combination is qualified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Protocol {
+pub enum ProviderApi {
     /// OpenAI Chat Completions (`/v1/chat/completions`).
     OpenAi,
     /// Anthropic Messages (`/v1/messages`).
@@ -47,7 +57,8 @@ pub struct CatalogModel {
     pub public_id: &'static str,
     pub cloud: Platform,
     pub upstream_id: &'static str,
-    pub protocol: Protocol,
+    pub client_apis: &'static [ClientApi],
+    pub provider_api: ProviderApi,
 }
 
 impl CatalogModel {
@@ -184,217 +195,253 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "gpt-5.6-sol",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-5.6-sol",
-        protocol: Protocol::OpenAiResponses,
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
     },
     CatalogModel {
         public_id: "gpt-5.6-terra",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-5.6-terra",
-        protocol: Protocol::OpenAiResponses,
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
     },
     CatalogModel {
         public_id: "gpt-5.6-luna",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-5.6-luna",
-        protocol: Protocol::OpenAiResponses,
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
     },
     CatalogModel {
         public_id: "gpt-5.5",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-5.5",
-        protocol: Protocol::OpenAiResponses,
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
     },
     CatalogModel {
         public_id: "gpt-5.4",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-5.4",
-        protocol: Protocol::OpenAiResponses,
+        client_apis: &[ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAiResponses,
     },
     CatalogModel {
         public_id: "gpt-oss-20b",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-oss-20b-1:0",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gpt-oss-120b",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-oss-120b-1:0",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gpt-oss-safeguard-20b",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-oss-safeguard-20b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gpt-oss-safeguard-120b",
         cloud: Platform::Aws,
         upstream_id: "openai.gpt-oss-safeguard-120b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "deepseek-v3.2",
         cloud: Platform::Aws,
         upstream_id: "deepseek.v3.2",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "qwen3-32b",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-32b-v1:0",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "qwen3-coder-30b",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-coder-30b-a3b-v1:0",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "qwen3-coder-next",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-coder-next",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "qwen3-next-80b",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-next-80b-a3b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "qwen3-vl-235b",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-vl-235b-a22b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "mistral-large-3",
         cloud: Platform::Aws,
         upstream_id: "mistral.mistral-large-3-675b-instruct",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "devstral-2",
         cloud: Platform::Aws,
         upstream_id: "mistral.devstral-2-123b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "magistral-small",
         cloud: Platform::Aws,
         upstream_id: "mistral.magistral-small-2509",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "ministral-3-14b",
         cloud: Platform::Aws,
         upstream_id: "mistral.ministral-3-14b-instruct",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "ministral-3-8b",
         cloud: Platform::Aws,
         upstream_id: "mistral.ministral-3-8b-instruct",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "ministral-3-3b",
         cloud: Platform::Aws,
         upstream_id: "mistral.ministral-3-3b-instruct",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "minimax-m2",
         cloud: Platform::Aws,
         upstream_id: "minimax.minimax-m2",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "minimax-m2.1",
         cloud: Platform::Aws,
         upstream_id: "minimax.minimax-m2.1",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "minimax-m2.5",
         cloud: Platform::Aws,
         upstream_id: "minimax.minimax-m2.5",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "kimi-k2.5",
         cloud: Platform::Aws,
         upstream_id: "moonshotai.kimi-k2.5",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "nemotron-nano-9b",
         cloud: Platform::Aws,
         upstream_id: "nvidia.nemotron-nano-9b-v2",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "nemotron-nano-12b",
         cloud: Platform::Aws,
         upstream_id: "nvidia.nemotron-nano-12b-v2",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "nemotron-nano-3-30b",
         cloud: Platform::Aws,
         upstream_id: "nvidia.nemotron-nano-3-30b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "nemotron-super-3-120b",
         cloud: Platform::Aws,
         upstream_id: "nvidia.nemotron-super-3-120b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemma-3-4b",
         cloud: Platform::Aws,
         upstream_id: "google.gemma-3-4b-it",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemma-3-12b",
         cloud: Platform::Aws,
         upstream_id: "google.gemma-3-12b-it",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemma-3-27b",
         cloud: Platform::Aws,
         upstream_id: "google.gemma-3-27b-it",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "glm-4.7",
         cloud: Platform::Aws,
         upstream_id: "zai.glm-4.7",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "glm-4.7-flash",
         cloud: Platform::Aws,
         upstream_id: "zai.glm-4.7-flash",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "glm-5",
         cloud: Platform::Aws,
         upstream_id: "zai.glm-5",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "palmyra-vision-7b",
         cloud: Platform::Aws,
         upstream_id: "writer.palmyra-vision-7b",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     // AWS Bedrock, Claude over classic InvokeModel (the Anthropic Messages body is
     // the InvokeModel body; the model travels in the URL). `upstream_id` is the plain
@@ -406,85 +453,99 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "claude-opus-5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-opus-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-sonnet-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.8",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-opus-4-8",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.7",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-opus-4-7",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.6",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-opus-4-6-v1",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-opus-4-5-20251101-v1:0",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.1",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-opus-4-1-20250805-v1:0",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4.6",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-sonnet-4-6",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4.5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-haiku-4.5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-haiku-4-5-20251001-v1:0",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-fable-5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-fable-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-mythos-5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-mythos-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-sonnet-4-20250514-v1:0",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-3-haiku",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-3-haiku-20240307-v1:0",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     // GCP Vertex, Gemini. The OpenAI-compatible Vertex endpoint expects the `google/` prefix.
     // The 2.5 family serves in-region; the 3.x models serve on the `global` location.
@@ -492,31 +553,36 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "gemini-2.5-pro",
         cloud: Platform::Gcp,
         upstream_id: "google/gemini-2.5-pro",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemini-2.5-flash",
         cloud: Platform::Gcp,
         upstream_id: "google/gemini-2.5-flash",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemini-2.5-flash-lite",
         cloud: Platform::Gcp,
         upstream_id: "google/gemini-2.5-flash-lite",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemini-3.5-flash",
         cloud: Platform::Gcp,
         upstream_id: "google/gemini-3.5-flash",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gemini-3.1-flash-lite",
         cloud: Platform::Gcp,
         upstream_id: "google/gemini-3.1-flash-lite",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     // GCP Vertex, Claude. The upstream id is the Vertex Model Garden id that travels
     // in the `:rawPredict` URL path (`publishers/anthropic/models/<id>`); models past
@@ -526,55 +592,64 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "claude-sonnet-5",
         cloud: Platform::Gcp,
         upstream_id: "claude-sonnet-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.8",
         cloud: Platform::Gcp,
         upstream_id: "claude-opus-4-8",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.7",
         cloud: Platform::Gcp,
         upstream_id: "claude-opus-4-7",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.6",
         cloud: Platform::Gcp,
         upstream_id: "claude-opus-4-6",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.5",
         cloud: Platform::Gcp,
         upstream_id: "claude-opus-4-5@20251101",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4.6",
         cloud: Platform::Gcp,
         upstream_id: "claude-sonnet-4-6",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4.5",
         cloud: Platform::Gcp,
         upstream_id: "claude-sonnet-4-5@20250929",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-haiku-4.5",
         cloud: Platform::Gcp,
         upstream_id: "claude-haiku-4-5@20251001",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-fable-5",
         cloud: Platform::Gcp,
         upstream_id: "claude-fable-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     // Azure, OpenAI-protocol. The upstream id is the deployment name the controller
     // creates (see AZURE_DEPLOYMENTS); the app requests it by the same id. Azure serves
@@ -583,19 +658,22 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "gpt-4.1",
         cloud: Platform::Azure,
         upstream_id: "gpt-4.1",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "gpt-4o-mini",
         cloud: Platform::Azure,
         upstream_id: "gpt-4o-mini",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     CatalogModel {
         public_id: "model-router",
         cloud: Platform::Azure,
         upstream_id: "model-router",
-        protocol: Protocol::OpenAi,
+        client_apis: &[ClientApi::OpenAiChatCompletions],
+        provider_api: ProviderApi::OpenAi,
     },
     // Azure, Claude over the Foundry Anthropic endpoint. The upstream id is the
     // Foundry deployment name (defaults to the model id). Unlike the OpenAI list,
@@ -609,55 +687,64 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "claude-sonnet-5",
         cloud: Platform::Azure,
         upstream_id: "claude-sonnet-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.8",
         cloud: Platform::Azure,
         upstream_id: "claude-opus-4-8",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.7",
         cloud: Platform::Azure,
         upstream_id: "claude-opus-4-7",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.6",
         cloud: Platform::Azure,
         upstream_id: "claude-opus-4-6",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-opus-4.5",
         cloud: Platform::Azure,
         upstream_id: "claude-opus-4-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4.6",
         cloud: Platform::Azure,
         upstream_id: "claude-sonnet-4-6",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-sonnet-4.5",
         cloud: Platform::Azure,
         upstream_id: "claude-sonnet-4-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-haiku-4.5",
         cloud: Platform::Azure,
         upstream_id: "claude-haiku-4-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
         public_id: "claude-fable-5",
         cloud: Platform::Azure,
         upstream_id: "claude-fable-5",
-        protocol: Protocol::Anthropic,
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
     },
 ];
 
@@ -918,9 +1005,9 @@ mod tests {
         assert!(!aws.is_empty());
         assert!(aws
             .iter()
-            .any(|m| m.public_id == "gpt-oss-20b" && m.protocol == Protocol::OpenAi));
+            .any(|m| m.public_id == "gpt-oss-20b" && m.provider_api == ProviderApi::OpenAi));
         assert!(
-            aws.iter().any(|m| m.protocol == Protocol::Anthropic),
+            aws.iter().any(|m| m.provider_api == ProviderApi::Anthropic),
             "Claude must be included via the Anthropic protocol"
         );
         // The OpenAI endpoint rejects `us.*` cross-region profile ids.
@@ -935,7 +1022,7 @@ mod tests {
         assert_eq!(aws.upstream_id, "anthropic.claude-opus-4-8");
         let gcp = resolve_for("claude-opus-4.8", Platform::Gcp).expect("gcp claude");
         assert_eq!(gcp.upstream_id, "claude-opus-4-8");
-        assert_eq!(gcp.protocol, Protocol::Anthropic);
+        assert_eq!(gcp.provider_api, ProviderApi::Anthropic);
         // Canonicalization applies per cloud: Claude Code's dashed release-date
         // spelling resolves to the Vertex `@date` id.
         let dated = resolve_for("claude-haiku-4-5-20251001", Platform::Gcp).expect("dated id");
@@ -953,11 +1040,11 @@ mod tests {
     fn lookup_round_trips() {
         let m = lookup("gpt-oss-20b").expect("known model");
         assert_eq!(m.cloud, Platform::Aws);
-        assert_eq!(m.protocol, Protocol::OpenAi);
+        assert_eq!(m.provider_api, ProviderApi::OpenAi);
         assert_eq!(m.upstream_id, "openai.gpt-oss-20b-1:0");
 
         let c = lookup("claude-opus-4.8").expect("claude known");
-        assert_eq!(c.protocol, Protocol::Anthropic);
+        assert_eq!(c.provider_api, ProviderApi::Anthropic);
 
         assert!(lookup("nonexistent-model").is_none());
     }
@@ -976,19 +1063,48 @@ mod tests {
     }
 
     #[test]
-    fn protocol_serializes_lowercase() {
+    fn api_kinds_have_stable_wire_names() {
         assert_eq!(
-            serde_json::to_string(&Protocol::OpenAi).unwrap(),
+            serde_json::to_string(&ProviderApi::OpenAi).unwrap(),
             "\"openai\""
         );
         assert_eq!(
-            serde_json::to_string(&Protocol::Anthropic).unwrap(),
+            serde_json::to_string(&ProviderApi::Anthropic).unwrap(),
             "\"anthropic\""
         );
         assert_eq!(
-            serde_json::to_string(&Protocol::OpenAiResponses).unwrap(),
+            serde_json::to_string(&ProviderApi::OpenAiResponses).unwrap(),
             "\"openairesponses\""
         );
+        assert_eq!(
+            serde_json::to_string(&ClientApi::OpenAiChatCompletions).unwrap(),
+            "\"open-ai-chat-completions\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClientApi::OpenAiResponses).unwrap(),
+            "\"open-ai-responses\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClientApi::AnthropicMessages).unwrap(),
+            "\"anthropic-messages\""
+        );
+    }
+
+    #[test]
+    fn client_apis_are_explicit_and_non_empty() {
+        for model in CATALOG {
+            assert!(
+                !model.client_apis.is_empty(),
+                "'{}' has no supported client API",
+                model.public_id
+            );
+        }
+
+        let gpt_oss = resolve_for("gpt-oss-20b", Platform::Aws).unwrap();
+        assert!(gpt_oss
+            .client_apis
+            .contains(&ClientApi::OpenAiChatCompletions));
+        assert!(gpt_oss.client_apis.contains(&ClientApi::OpenAiResponses));
     }
 
     #[test]
@@ -1035,11 +1151,11 @@ mod tests {
     fn only_claude_ids_speak_the_anthropic_protocol() {
         for m in CATALOG {
             assert_eq!(
-                m.protocol == Protocol::Anthropic,
+                m.provider_api == ProviderApi::Anthropic,
                 m.public_id.starts_with("claude"),
                 "'{}' is {:?} but its id says otherwise",
                 m.public_id,
-                m.protocol
+                m.provider_api
             );
         }
     }

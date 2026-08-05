@@ -23,7 +23,7 @@
 use std::time::Duration;
 
 use alien_core::{
-    ai_catalog::{self, CatalogModel, Protocol},
+    ai_catalog::{self, CatalogModel, ProviderApi},
     Platform,
 };
 use alien_error::AlienError;
@@ -115,10 +115,10 @@ async fn probe_model(
     cm: &CatalogModel,
     timeout: Duration,
 ) -> Availability {
-    let built = match cm.protocol {
-        Protocol::OpenAi => openai_probe(route, cm),
-        Protocol::Anthropic => anthropic_probe(route, cm),
-        Protocol::OpenAiResponses => responses_probe(route, cm),
+    let built = match cm.provider_api {
+        ProviderApi::OpenAi => openai_probe(route, cm),
+        ProviderApi::Anthropic => anthropic_probe(route, cm),
+        ProviderApi::OpenAiResponses => responses_probe(route, cm),
     };
     let (url, service, body, extra_headers) = match built {
         Ok(probe) => probe,
@@ -170,7 +170,7 @@ fn anthropic_body(version: &str) -> Vec<u8> {
 type Probe = (String, &'static str, Vec<u8>, Vec<(&'static str, String)>);
 
 fn openai_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
-    let (url, service) = upstream_target(route, Protocol::OpenAi)?;
+    let (url, service) = upstream_target(route, ProviderApi::OpenAi)?;
     Ok((url, service, openai_body(cm.upstream_id), Vec::new()))
 }
 
