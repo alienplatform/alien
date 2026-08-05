@@ -42,7 +42,7 @@
     "@aws-sdk/client-ssm": "^3.0.0",
     "@azure/identity": "^4.0.0",
     "@azure/keyvault-secrets": "^4.0.0",
-    "@google-cloud/secret-manager": "^5.0.0"
+    "@google-cloud/secret-manager": "^5.0.0 || ^6.0.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-ssm": {
