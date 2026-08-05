@@ -140,6 +140,164 @@ async fn check_native_storage_encryption(ctx: &alien_test::TestContext) -> anyho
     }
 }
 
+async fn check_byo_key_rotation(ctx: &alien_test::TestContext) -> anyhow::Result<()> {
+    let response = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow!("get_deployment failed: {error}"))?;
+    let state_value = response
+        .into_inner()
+        .stack_state
+        .context("deployment is missing stack_state")?;
+    let stack_state: alien_core::StackState =
+        serde_json::from_value(state_value).context("failed to parse stack_state")?;
+    let key = stack_state
+        .resources
+        .get("enterprise-key")
+        .and_then(|state| state.outputs.as_ref())
+        .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        .context("enterprise-key is missing Key outputs")?
+        .clone();
+    let env = ctx
+        .distribution_cleanups
+        .first()
+        .context("distribution test is missing artifact credentials")?
+        .command_env()
+        .to_vec();
+
+    common::remote_bindings::check_remote_key_after_rotation(&ctx.deployment, ctx.platform, || {
+        rotate_provider_key(&key, &env)
+    })
+    .await
+}
+
+async fn rotate_provider_key(key: &KeyOutputs, env: &[(String, String)]) -> anyhow::Result<()> {
+    match &key.fingerprint {
+        KeyFingerprint::Aws { key_arn } => {
+            anyhow::ensure!(
+                key.wrapping_key_id == *key_arn,
+                "AWS wrapping key ID must be the immutable KMS key ARN"
+            );
+            let mut rotate = Command::new("aws");
+            rotate.args(["kms", "rotate-key-on-demand", "--key-id", key_arn]);
+            apply_test_env(&mut rotate, env);
+            run_test_command(rotate, "AWS KMS on-demand rotation").await?;
+
+            let mut status = Command::new("aws");
+            status.args([
+                "kms",
+                "get-key-rotation-status",
+                "--key-id",
+                key_arn,
+                "--query",
+                "KeyRotationEnabled",
+                "--output",
+                "text",
+            ]);
+            apply_test_env(&mut status, env);
+            let enabled = run_test_command(status, "AWS KMS rotation status").await?;
+            anyhow::ensure!(
+                String::from_utf8(enabled)?.trim() == "True",
+                "AWS KMS automatic rotation is not enabled"
+            );
+        }
+        KeyFingerprint::Gcp { crypto_key_name } => {
+            let segments = crypto_key_name.split('/').collect::<Vec<_>>();
+            anyhow::ensure!(segments.len() == 8, "invalid GCP CryptoKey name");
+            let project = segments[1];
+            let location = segments[3];
+            let key_ring = segments[5];
+            let key_name = segments[7];
+            let mut create = Command::new("gcloud");
+            create.args([
+                "kms",
+                "keys",
+                "versions",
+                "create",
+                "--project",
+                project,
+                "--location",
+                location,
+                "--keyring",
+                key_ring,
+                "--key",
+                key_name,
+                "--primary",
+                "--format=value(name)",
+            ]);
+            apply_test_env(&mut create, env);
+            let version = String::from_utf8(
+                run_test_command(create, "GCP KMS create primary version").await?,
+            )?;
+            anyhow::ensure!(
+                version
+                    .trim()
+                    .starts_with(&format!("{crypto_key_name}/cryptoKeyVersions/")),
+                "GCP rotation returned a version from another key"
+            );
+        }
+        KeyFingerprint::Azure {
+            vault_resource_id,
+            key_name,
+            lineage_version_id,
+        } => {
+            let vault_name = vault_resource_id
+                .rsplit('/')
+                .next()
+                .context("Azure Key fingerprint has an invalid vault resource ID")?;
+            anyhow::ensure!(
+                key.wrapping_key_id.ends_with(lineage_version_id),
+                "Azure initial wrapping key does not match its lineage version"
+            );
+            let mut create = Command::new("az");
+            create.args([
+                "keyvault",
+                "key",
+                "create",
+                "--vault-name",
+                vault_name,
+                "--name",
+                key_name,
+                "--kty",
+                "RSA",
+                "--size",
+                "2048",
+                "--ops",
+                "encrypt",
+                "decrypt",
+                "wrapKey",
+                "unwrapKey",
+                "--query",
+                "key.kid",
+                "--output",
+                "tsv",
+            ]);
+            apply_test_env(&mut create, env);
+            let rotated_id =
+                String::from_utf8(run_test_command(create, "Azure Key Vault rotation").await?)?;
+            let family = key
+                .wrapping_key_id
+                .rsplit_once('/')
+                .map(|(family, _)| family)
+                .context("Azure wrapping key ID is not versioned")?;
+            anyhow::ensure!(
+                rotated_id.trim().starts_with(&format!("{family}/")),
+                "Azure rotation returned a version from another key family"
+            );
+            anyhow::ensure!(
+                rotated_id.trim() != key.wrapping_key_id,
+                "Azure rotation did not create a new version"
+            );
+        }
+    }
+    Ok(())
+}
+
 const NATIVE_STORAGE_PAYLOAD: &[u8] = b"alien native storage encryption real-cloud e2e";
 
 async fn verify_aws_native_storage(
@@ -1337,6 +1495,60 @@ distribution_test_context!(
 #[tokio::test]
 async fn terraform_azure_push_byo_encryption_key(ctx: &mut TerraformAzurePushByoEncryptionKey) {
     check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+// These tests mutate durable provider key versions and therefore run only in
+// the serialized BYO lifecycle qualification job (or explicitly by an
+// operator). The ordinary distribution tests above remain safe to parallelize.
+distribution_test_context!(
+    TerraformAwsPushByoEncryptionKeyRotation,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformAwsPushByoEncryptionKeyRotation)]
+#[tokio::test]
+#[ignore = "serialized real-cloud Key rotation"]
+async fn terraform_aws_push_byo_encryption_key_rotation(
+    ctx: &mut TerraformAwsPushByoEncryptionKeyRotation,
+) {
+    if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
+        panic!("AWS Enterprise Key rotation checks failed: {error:#}");
+    }
+}
+
+distribution_test_context!(
+    TerraformGcpPushByoEncryptionKeyRotation,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformGcpPushByoEncryptionKeyRotation)]
+#[tokio::test]
+#[ignore = "serialized real-cloud Key rotation"]
+async fn terraform_gcp_push_byo_encryption_key_rotation(
+    ctx: &mut TerraformGcpPushByoEncryptionKeyRotation,
+) {
+    if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
+        panic!("GCP Enterprise Key rotation checks failed: {error:#}");
+    }
+}
+
+distribution_test_context!(
+    TerraformAzurePushByoEncryptionKeyRotation,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::ByoEncryptionKey
+);
+
+#[test_context(TerraformAzurePushByoEncryptionKeyRotation)]
+#[tokio::test]
+#[ignore = "serialized real-cloud Key rotation"]
+async fn terraform_azure_push_byo_encryption_key_rotation(
+    ctx: &mut TerraformAzurePushByoEncryptionKeyRotation,
+) {
+    if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
+        panic!("Azure Enterprise Key rotation checks failed: {error:#}");
+    }
 }
 
 // ---------------------------------------------------------------------------

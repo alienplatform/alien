@@ -277,6 +277,81 @@ pub fn check_remote_key<'a>(
     })
 }
 
+/// Encrypt before a provider-native rotation, then resolve a fresh remote
+/// client and decrypt the old ciphertext. The caller performs the serialized
+/// provider mutation so this helper exercises the same public discovery and
+/// credential path used by a newly started Gateway replica.
+pub async fn check_remote_key_after_rotation<F, Fut>(
+    deployment: &TestDeployment,
+    platform: Platform,
+    rotate: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    info!(
+        platform = %platform.as_str(),
+        "Checking remote Enterprise Key across provider-native rotation"
+    );
+    let discovery = DiscoveryServer::start(deployment, platform).await?;
+    let before =
+        RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+            .await
+            .context("discover assigned manager before Key rotation")?;
+    let before_key = before
+        .key(ENTERPRISE_KEY_BINDING)
+        .await
+        .context("resolve Enterprise Key before rotation")?;
+    let context = BTreeMap::from([
+        ("purpose".to_string(), "rotation-qualification".to_string()),
+        ("test".to_string(), deployment.id.clone()),
+    ]);
+    let plaintext = [0xa5u8; 32];
+    let ciphertext = before_key
+        .encrypt(&plaintext, Some(&context))
+        .await
+        .context("encrypt before provider-native Key rotation")?;
+    drop(before_key);
+    drop(before);
+
+    rotate().await?;
+
+    let after =
+        RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+            .await
+            .context("discover assigned manager after Key rotation")?;
+    let after_key = after
+        .key(ENTERPRISE_KEY_BINDING)
+        .await
+        .context("resolve Enterprise Key after rotation")?;
+    let decrypted = after_key
+        .decrypt(&ciphertext, Some(&context))
+        .await
+        .context("decrypt pre-rotation ciphertext with a fresh remote client")?;
+    anyhow::ensure!(
+        decrypted == plaintext,
+        "provider-native rotation changed the remote Key plaintext"
+    );
+    let new_ciphertext = after_key
+        .encrypt(&plaintext, Some(&context))
+        .await
+        .context("encrypt after provider-native Key rotation")?;
+    anyhow::ensure!(
+        after_key
+            .decrypt(&new_ciphertext, Some(&context))
+            .await
+            .context("decrypt post-rotation ciphertext")?
+            == plaintext,
+        "post-rotation remote Key plaintext changed"
+    );
+    info!(
+        platform = %platform.as_str(),
+        "Remote Enterprise Key rotation check passed"
+    );
+    Ok(())
+}
+
 async fn verify_before_delete(
     storage: &dyn alien_bindings::RemoteStorage,
     prefix: &Path,
