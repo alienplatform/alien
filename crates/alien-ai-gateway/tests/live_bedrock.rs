@@ -9,7 +9,7 @@
 
 use std::net::Ipv4Addr;
 
-use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, GatewayRoute};
+use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, GatewayRoute, GatewayTarget};
 use alien_core::Platform;
 use serde_json::{json, Value};
 
@@ -54,7 +54,7 @@ async fn live_bedrock_openai_chat() {
     );
     let route = GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Aws,
+        target: GatewayTarget::Cloud(Platform::Aws),
         region: Some("us-east-2".to_string()),
         project: None,
         azure_endpoint: None,
@@ -116,7 +116,7 @@ async fn live_bedrock_claude_streaming() {
     );
     let route = GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Aws,
+        target: GatewayTarget::Cloud(Platform::Aws),
         region: Some("us-east-2".to_string()),
         project: None,
         azure_endpoint: None,

@@ -19,7 +19,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
 use crate::error::{ErrorData, Result};
-use crate::{GatewayBinding, GatewayRoute};
+use crate::{GatewayBinding, GatewayRoute, GatewayTarget};
 
 /// The shared workload credential resolver used for the mint-gated (runtime-less) path.
 pub type Managed = Arc<LazyEnvBindingsProvider>;
@@ -251,7 +251,7 @@ pub async fn route_from_remote_ai_lease(
 
     Ok(GatewayRoute {
         name: binding.name,
-        cloud: binding.cloud,
+        target: GatewayTarget::Cloud(binding.cloud),
         region: binding.region,
         project: binding.project,
         azure_endpoint: binding.azure_endpoint,
@@ -314,7 +314,7 @@ pub async fn resolve_route(
 
     Ok(GatewayRoute {
         name: binding.name,
-        cloud: binding.cloud,
+        target: GatewayTarget::Cloud(binding.cloud),
         region: binding.region,
         project: binding.project,
         azure_endpoint: binding.azure_endpoint,
