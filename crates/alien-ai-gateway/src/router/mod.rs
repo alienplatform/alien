@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::ai_catalog::{self, Protocol};
+use alien_core::ai_catalog::{self, ClientApi, ProviderApi};
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::{
@@ -214,7 +214,14 @@ async fn proxy_chat_completions(
     headers: HeaderMap,
     body: ProxyBody,
 ) -> Result<Response> {
-    proxy(state, binding, headers, body, Protocol::OpenAi).await
+    proxy(
+        state,
+        binding,
+        headers,
+        body,
+        ClientApi::OpenAiChatCompletions,
+    )
+    .await
 }
 
 async fn proxy_messages(
@@ -223,7 +230,7 @@ async fn proxy_messages(
     headers: HeaderMap,
     body: ProxyBody,
 ) -> Result<Response> {
-    proxy(state, binding, headers, body, Protocol::Anthropic).await
+    proxy(state, binding, headers, body, ClientApi::AnthropicMessages).await
 }
 
 /// Proxy a Chat Completions or Messages request after binding the HTTP path to
@@ -234,7 +241,7 @@ async fn proxy(
     Path(binding): Path<String>,
     headers: HeaderMap,
     ProxyBody(body): ProxyBody,
-    client_protocol: Protocol,
+    client_api: ClientApi,
 ) -> Result<Response> {
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
@@ -253,11 +260,12 @@ async fn proxy(
         })
     })?;
 
-    if cm.protocol != client_protocol {
-        let expected_path = match cm.protocol {
-            Protocol::OpenAi => "v1/chat/completions",
-            Protocol::Anthropic => "v1/messages",
-            Protocol::OpenAiResponses => "v1/responses",
+    if !cm.client_apis.contains(&client_api) {
+        let expected_path = match cm.client_apis.first() {
+            Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
+            Some(ClientApi::AnthropicMessages) => "v1/messages",
+            Some(ClientApi::OpenAiResponses) => "v1/responses",
+            None => "v1/models",
         };
         return Err(AlienError::new(ErrorData::InvalidRequest {
             message: format!(
@@ -269,20 +277,20 @@ async fn proxy(
     // AWS serves Claude through classic Bedrock InvokeModel, not the passthrough
     // endpoint: the model id travels in the URL and the streamed reply is AWS
     // event-stream framing, so it needs its own request/response shape.
-    if route.cloud == Platform::Aws && cm.protocol == Protocol::Anthropic {
+    if route.cloud == Platform::Aws && cm.provider_api == ProviderApi::Anthropic {
         return proxy_bedrock_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
             .await;
     }
     // GCP serves Claude through Vertex rawPredict: the model id travels in the URL
     // and streaming is chosen by the URL verb, but the reply is native Anthropic
     // JSON/SSE — no decoder needed, unlike Bedrock.
-    if route.cloud == Platform::Gcp && cm.protocol == Protocol::Anthropic {
+    if route.cloud == Platform::Gcp && cm.provider_api == ProviderApi::Anthropic {
         return proxy_vertex_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
             .await;
     }
     // Azure serves Claude through Foundry's Anthropic endpoint: standard Messages
     // in both directions, on the `/anthropic/v1` path with the version header.
-    if route.cloud == Platform::Azure && cm.protocol == Protocol::Anthropic {
+    if route.cloud == Platform::Azure && cm.provider_api == ProviderApi::Anthropic {
         return proxy_foundry_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
             .await;
     }
@@ -295,7 +303,7 @@ async fn proxy(
                 message: "could not re-serialize the rewritten request body".to_string(),
             })?;
 
-    let (url, aws_service) = upstream_target(route, cm.protocol)?;
+    let (url, aws_service) = upstream_target(route, cm.provider_api)?;
 
     let upstream = sign_and_execute(
         &state.client,
@@ -331,14 +339,20 @@ async fn proxy_responses(
 
     // The Responses table implies AWS; the binding's cloud must still match so a
     // GCP/Azure binding doesn't forward to an AWS endpoint it has no credential for.
-    let target = ai_catalog::responses_target(&model)
-        .filter(|_| route.cloud == Platform::Aws)
+    let catalog_model = ai_catalog::resolve_for(&model, route.cloud)
+        .filter(|model| model.client_apis.contains(&ClientApi::OpenAiResponses))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ModelNotAvailable {
                 model: model.clone(),
                 binding: binding.clone(),
             })
         })?;
+    let target = ai_catalog::responses_target(catalog_model.public_id).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.clone(),
+            binding: binding.clone(),
+        })
+    })?;
 
     payload["model"] = Value::String(target.upstream_id.to_string());
     let upstream_body =
@@ -434,10 +448,10 @@ pub(crate) fn missing_field(route: &GatewayRoute, field: &str) -> AlienError<Err
 /// The upstream URL and (for AWS) the SigV4 service name for a binding + protocol.
 pub(crate) fn upstream_target(
     route: &GatewayRoute,
-    protocol: Protocol,
+    provider_api: ProviderApi,
 ) -> Result<(String, &'static str)> {
-    let (host, path, aws_service) = match (route.cloud, protocol) {
-        (Platform::Aws, Protocol::OpenAi) => {
+    let (host, path, aws_service) = match (route.cloud, provider_api) {
+        (Platform::Aws, ProviderApi::OpenAi) => {
             let region = route
                 .region
                 .as_deref()
@@ -448,7 +462,7 @@ pub(crate) fn upstream_target(
                 "bedrock",
             )
         }
-        (Platform::Gcp, Protocol::OpenAi) => {
+        (Platform::Gcp, ProviderApi::OpenAi) => {
             let location = route
                 .region
                 .as_deref()
@@ -465,7 +479,7 @@ pub(crate) fn upstream_target(
                 "",
             )
         }
-        (Platform::Azure, Protocol::OpenAi) => {
+        (Platform::Azure, ProviderApi::OpenAi) => {
             let endpoint = route
                 .azure_endpoint
                 .as_deref()
@@ -570,12 +584,13 @@ mod tests {
     fn gcp_vertex_url_regional_vs_global() {
         // A region prefixes the host; `global` uses the un-prefixed host. The path always
         // carries `locations/{location}`.
-        let (regional, _) = upstream_target(&gcp_route("us-central1"), Protocol::OpenAi).unwrap();
+        let (regional, _) =
+            upstream_target(&gcp_route("us-central1"), ProviderApi::OpenAi).unwrap();
         assert_eq!(
             regional,
             "https://us-central1-aiplatform.googleapis.com/v1/projects/my-proj/locations/us-central1/endpoints/openapi/chat/completions"
         );
-        let (global, _) = upstream_target(&gcp_route("global"), Protocol::OpenAi).unwrap();
+        let (global, _) = upstream_target(&gcp_route("global"), ProviderApi::OpenAi).unwrap();
         assert_eq!(
             global,
             "https://aiplatform.googleapis.com/v1/projects/my-proj/locations/global/endpoints/openapi/chat/completions"
