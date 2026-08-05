@@ -155,8 +155,8 @@ postgresql_embedded = { version = "0.20", default-features = false, features = [
 postgresql_extensions = { version = "0.20", default-features = false, features = ["tokio", "rustls", "portal-corp", "steampipe"] }
 prost = "0.13"
 prost-types = "0.13"
-rand = "0.10"
-rand_distr = "0.6"
+rand = "0.9"
+rand_distr = "0.5"
 regex = "1"
 reqwest = { version = "0.12.2", default-features = false }
 rkyv = "0.8.0"
