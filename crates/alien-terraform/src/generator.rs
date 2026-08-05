@@ -511,6 +511,7 @@ fn retained_key_detach_script(
             alien_core::Platform::Azure => {
                 addresses.push(format!("azurerm_key_vault_key.{label}"));
                 addresses.push(format!("azurerm_key_vault.{label}"));
+                addresses.push(format!("azurerm_resource_group.{label}_key"));
             }
             _ => {}
         }

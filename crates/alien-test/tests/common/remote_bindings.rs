@@ -33,6 +33,7 @@ const DEPLOYMENT_GROUP_ID: &str = "dg_dddddddddddddddddddddddddddd";
 const WORKSPACE_ID: &str = "ws_eeeeeeeeeeeeeeeeeeeeeeee";
 const PAYLOAD: &[u8] = b"alien remote storage live-cloud e2e";
 const ENTERPRISE_KEY_BINDING: &str = "enterprise-key";
+const STORAGE_KEY_BINDING: &str = "storage-key";
 
 #[derive(Clone)]
 struct DiscoveryState {
@@ -116,6 +117,7 @@ async fn deployment_handler(
         "platform": state.platform.as_str(),
         "deploymentProtocolVersion": 1,
         "deploymentGroupId": DEPLOYMENT_GROUP_ID,
+        "releaseChannel": "production",
         "stackSettings": {},
         "retryRequested": false,
         "createdAt": "2026-01-01T00:00:00Z",
@@ -236,6 +238,10 @@ pub fn check_remote_key<'a>(
             .key(ENTERPRISE_KEY_BINDING)
             .await
             .context("resolve real remote Key binding")?;
+        anyhow::ensure!(
+            bindings.key(STORAGE_KEY_BINDING).await.is_err(),
+            "native Storage Key must not be remotely accessible"
+        );
 
         let plaintext = [0x5au8; 128];
         let context = BTreeMap::from([

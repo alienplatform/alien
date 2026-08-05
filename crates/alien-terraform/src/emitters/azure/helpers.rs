@@ -301,6 +301,7 @@ pub fn emit_role_definition_and_assignments(
             expr::raw(&format!(
                 "uuidv5(\"oid\", \"deployment:azure:role-def:{role_name}\")"
             )),
+            default_resource_group_scope(),
             custom_role.role_definition.clone(),
         ));
     }
@@ -470,6 +471,7 @@ fn emit_setup_execution_role_definitions(
                 "uuidv5(\"oid\", \"deployment:azure:res-role-def:${{local.resource_prefix}}:{profile_name}:{}:{role_segment}\")",
                 permission_set.id
             )),
+            default_resource_group_scope(),
             custom_role.role_definition,
         ));
     }
@@ -499,6 +501,7 @@ fn emit_setup_management_role_definitions(
                 "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}:{role_segment}\")",
                 permission_set.id
             )),
+            default_resource_group_scope(),
             custom_role.role_definition,
         ));
     }
@@ -512,6 +515,24 @@ pub fn emit_remote_bindings_role_definitions(
     fragment: &mut TfFragment,
     permission_set: &PermissionSet,
 ) -> Result<()> {
+    emit_remote_bindings_role_definitions_at_scope(
+        fragment,
+        permission_set,
+        default_resource_group_scope(),
+        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+            .to_string(),
+    )
+}
+
+/// Emit Remote Bindings custom roles inside the resource's ownership group.
+/// This keeps retained resources usable without requiring subscription-level
+/// custom-role administration.
+pub fn emit_remote_bindings_role_definitions_at_scope(
+    fragment: &mut TfFragment,
+    permission_set: &PermissionSet,
+    scope: Expression,
+    assignable_scope: String,
+) -> Result<()> {
     for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
         .into_iter()
         .enumerate()
@@ -523,6 +544,7 @@ pub fn emit_remote_bindings_role_definitions(
             "${{local.resource_prefix}}-{} [application-access]",
             role_definition.name
         );
+        role_definition.assignable_scopes = vec![assignable_scope.clone()];
 
         fragment.push_shared_resource(role_definition_block(
             &role_label,
@@ -531,6 +553,7 @@ pub fn emit_remote_bindings_role_definitions(
                 "uuidv5(\"oid\", \"deployment:azure:application-access-role-def:${{local.resource_prefix}}:{}:{role_segment}\")",
                 permission_set.id
             )),
+            scope.clone(),
             custom_role.role_definition,
         ));
     }
@@ -570,6 +593,7 @@ fn role_definition_block(
     label: &str,
     name: Expression,
     role_definition_id: Expression,
+    scope: Expression,
     role_definition: alien_permissions::generators::AzureRoleDefinition,
 ) -> hcl::Block {
     resource_block(
@@ -578,12 +602,7 @@ fn role_definition_block(
         [
             attr("name", name),
             attr("role_definition_id", role_definition_id),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                ),
-            ),
+            attr("scope", scope),
             attr("description", expr::template(role_definition.description)),
             nested(block(
                 "permissions",
@@ -608,6 +627,12 @@ fn role_definition_block(
                 ),
             ),
         ],
+    )
+}
+
+fn default_resource_group_scope() -> Expression {
+    expr::raw(
+        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
     )
 }
 

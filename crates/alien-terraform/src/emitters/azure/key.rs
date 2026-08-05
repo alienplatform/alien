@@ -2,7 +2,7 @@ use crate::{
     block::{attr, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
-        downcast, emit_remote_bindings_role_definitions, permission_context,
+        downcast, emit_remote_bindings_role_definitions_at_scope, permission_context,
         remote_bindings_role_label, required_label, tags,
     },
     expr,
@@ -26,6 +26,7 @@ impl TfEmitter for AzureKeyEmitter {
         let label = required_label(ctx)?;
         let client_label = format!("{label}_current");
         let suffix_label = format!("{label}_vault_suffix");
+        let resource_group_label = format!("{label}_key");
         let mut fragment = TfFragment::default();
 
         fragment
@@ -38,6 +39,29 @@ impl TfEmitter for AzureKeyEmitter {
                 "byte_length",
                 Expression::Number(hcl::Number::from(3i64)),
             )],
+        ));
+        // A retained Key Vault cannot live in the deployment's ordinary
+        // resource group: detaching the vault and then destroying that group
+        // would either fail or delete unrelated retained data. Give each Key
+        // a small ownership boundary that is retained with it.
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_resource_group",
+            &resource_group_label,
+            [
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "substr(lower(replace(\"${{local.resource_prefix}}-{}-key\", \"_\", \"-\")), 0, 90)",
+                        ctx.resource_id
+                    )),
+                ),
+                attr("location", expr::raw("var.azure_location")),
+                attr("tags", tags(ctx, "key-resource-group")),
+                nested(crate::block::block(
+                    "lifecycle",
+                    [attr("prevent_destroy", Expression::Bool(true))],
+                )),
+            ],
         ));
         fragment.resource_blocks.push(resource_block(
             "azurerm_key_vault",
@@ -52,9 +76,20 @@ impl TfEmitter for AzureKeyEmitter {
                 ),
                 attr(
                     "resource_group_name",
-                    expr::raw("var.azure_resource_group_name"),
+                    expr::traversal([
+                        "azurerm_resource_group",
+                        resource_group_label.as_str(),
+                        "name",
+                    ]),
                 ),
-                attr("location", expr::raw("var.azure_location")),
+                attr(
+                    "location",
+                    expr::traversal([
+                        "azurerm_resource_group",
+                        resource_group_label.as_str(),
+                        "location",
+                    ]),
+                ),
                 attr(
                     "tenant_id",
                     expr::traversal([
@@ -281,7 +316,17 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
             message: "failed to generate Azure remote Key permissions".to_string(),
         })?;
 
-    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    let resource_group_label = format!("{label}_key");
+    emit_remote_bindings_role_definitions_at_scope(
+        fragment,
+        permission_set,
+        expr::traversal([
+            "azurerm_resource_group",
+            resource_group_label.as_str(),
+            "id",
+        ]),
+        format!("${{azurerm_resource_group.{resource_group_label}.id}}"),
+    )?;
     for (index, binding) in plan.bindings.iter().enumerate() {
         let role_definition_id = match &binding.role_definition {
             AzureRoleDefinitionRef::Predefined { role_definition_id } => {

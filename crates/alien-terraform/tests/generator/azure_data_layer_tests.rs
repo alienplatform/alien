@@ -48,10 +48,7 @@ fn azure_key_package_is_valid_and_retained() {
         .resources
         .get_mut("customer-key")
         .unwrap()
-        .dependencies = vec![
-        ResourceRef::new(AzureResourceGroup::RESOURCE_TYPE, "default-resource-group"),
-        ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access"),
-    ];
+        .dependencies = vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     let rendered = module
@@ -74,6 +71,7 @@ fn azure_key_package_is_valid_and_retained() {
         .expect("retained Key detach operation");
     assert!(detach.contains("azurerm_key_vault_key.customer_key"));
     assert!(detach.contains("azurerm_key_vault.customer_key"));
+    assert!(detach.contains("azurerm_resource_group.customer_key_key"));
     assert_terraform_valid(&module, "azure_key_package");
 }
 

@@ -87,6 +87,7 @@ impl TfEmitter for GcpStorageEmitter {
 
 fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &str) {
     let service_agent_label = format!("{label}_service_agent");
+    let iam_label = format!("{label}_storage_encryption");
     fragment.data_blocks.push(data_block(
         "google_storage_project_service_account",
         &service_agent_label,
@@ -94,7 +95,7 @@ fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &s
     ));
     fragment.resource_blocks.push(resource_block(
         "google_kms_crypto_key_iam_member",
-        &format!("{label}_storage_encryption"),
+        &iam_label,
         [
             attr(
                 "crypto_key_id",
@@ -109,6 +110,24 @@ fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &s
                 expr::template(format!(
                     "serviceAccount:${{data.google_storage_project_service_account.{service_agent_label}.email_address}}"
                 )),
+            ),
+        ],
+    ));
+    // Cloud KMS IAM is eventually consistent. Creating the bucket as soon as
+    // the IAM API accepts the grant intermittently fails with a 403 from Cloud
+    // Storage. Keep the propagation wait specific to this grant so unrelated
+    // resources can still provision concurrently.
+    fragment.resource_blocks.push(resource_block(
+        "time_sleep",
+        &format!("{label}_storage_encryption_propagation"),
+        [
+            attr("create_duration", Expression::String("120s".to_string())),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal([
+                    "google_kms_crypto_key_iam_member",
+                    &iam_label,
+                ])]),
             ),
         ],
     ));
@@ -155,6 +174,13 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
                 expr::traversal(["google_kms_crypto_key", key_label, "id"]),
             )],
         )));
+        body.push(attr(
+            "depends_on",
+            Expression::Array(vec![expr::traversal([
+                "time_sleep",
+                &format!("{label}_storage_encryption_propagation"),
+            ])]),
+        ));
     }
 
     for rule in &storage.lifecycle_rules {

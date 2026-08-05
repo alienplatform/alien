@@ -4,6 +4,7 @@
 //! path: CloudFormation for AWS and Terraform for cloud/K8s targets. They use
 //! the same application-specific assertions as push/pull E2E.
 
+use alien_core::{KeyFingerprint, KeyOutputs, Platform, StorageOutputs};
 use alien_test::{DistributionFlow, TestApp};
 use anyhow::{anyhow, Context};
 use reqwest::{Client, Response};
@@ -71,6 +72,371 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
             {
                 panic!("remote Enterprise Key checks failed: {error:#}");
             }
+            if let Err(error) = check_native_storage_encryption(ctx).await {
+                panic!("native Storage encryption checks failed: {error:#}");
+            }
+        }
+    }
+}
+
+/// Writes and reads an object through the provider API, then checks the live
+/// provider metadata rather than trusting the generated Terraform. The native
+/// Storage key is deliberately separate from the remotely accessible Key.
+async fn check_native_storage_encryption(ctx: &alien_test::TestContext) -> anyhow::Result<()> {
+    let response = ctx
+        .deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&ctx.deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow!("get_deployment failed: {error}"))?;
+    let state_value = response
+        .into_inner()
+        .stack_state
+        .context("deployment is missing stack_state")?;
+    let stack_state: alien_core::StackState =
+        serde_json::from_value(state_value).context("failed to parse stack_state")?;
+    let storage_state = stack_state
+        .resources
+        .get("customer-data")
+        .context("stack_state is missing customer-data Storage")?;
+    let storage = storage_state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<StorageOutputs>())
+        .context("customer-data is missing Storage outputs")?;
+    let key_state = stack_state
+        .resources
+        .get("storage-key")
+        .context("stack_state is missing native storage-key")?;
+    let key = key_state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<KeyOutputs>())
+        .context("storage-key is missing Key outputs")?;
+    let env = ctx
+        .distribution_cleanups
+        .first()
+        .context("distribution test is missing artifact credentials")?
+        .command_env()
+        .to_vec();
+
+    match ctx.platform {
+        Platform::Aws => verify_aws_native_storage(&storage.bucket_name, key, &env).await,
+        Platform::Gcp => verify_gcp_native_storage(&storage.bucket_name, key, &env).await,
+        Platform::Azure => {
+            let internal = storage_state
+                .internal_state
+                .as_ref()
+                .context("Azure Storage is missing controller state")?;
+            let account = json_string_field(internal, "storage_account_name")
+                .or_else(|| json_string_field(internal, "storageAccountName"))
+                .context("Azure Storage controller is missing storage account name")?;
+            verify_azure_native_storage(account, &storage.bucket_name, key, &env).await
+        }
+        platform => anyhow::bail!("native Storage encryption is unsupported on {platform}"),
+    }
+}
+
+const NATIVE_STORAGE_PAYLOAD: &[u8] = b"alien native storage encryption real-cloud e2e";
+
+async fn verify_aws_native_storage(
+    bucket: &str,
+    key: &KeyOutputs,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    let KeyFingerprint::Aws { key_arn } = &key.fingerprint else {
+        anyhow::bail!("AWS deployment returned a non-AWS Key fingerprint");
+    };
+    let object = format!("alien-e2e/native-encryption/{}", uuid::Uuid::new_v4());
+    let input = tempfile::NamedTempFile::new()?;
+    std::fs::write(input.path(), NATIVE_STORAGE_PAYLOAD)?;
+
+    let mut put = Command::new("aws");
+    put.args([
+        "s3api",
+        "put-object",
+        "--bucket",
+        bucket,
+        "--key",
+        &object,
+        "--body",
+    ])
+    .arg(input.path());
+    apply_test_env(&mut put, env);
+    run_test_command(put, "AWS S3 put-object").await?;
+
+    let verification = async {
+        let mut head = Command::new("aws");
+        head.args(["s3api", "head-object", "--bucket", bucket, "--key", &object]);
+        apply_test_env(&mut head, env);
+        let metadata: Value =
+            serde_json::from_slice(&run_test_command(head, "AWS S3 head-object").await?)?;
+        anyhow::ensure!(
+            metadata.get("ServerSideEncryption").and_then(Value::as_str) == Some("aws:kms"),
+            "S3 object was not encrypted with AWS KMS"
+        );
+        anyhow::ensure!(
+            metadata.get("SSEKMSKeyId").and_then(Value::as_str) == Some(key_arn.as_str()),
+            "S3 object used a different KMS key"
+        );
+
+        let output = tempfile::NamedTempFile::new()?;
+        let mut get = Command::new("aws");
+        get.args(["s3api", "get-object", "--bucket", bucket, "--key", &object])
+            .arg(output.path());
+        apply_test_env(&mut get, env);
+        run_test_command(get, "AWS S3 get-object").await?;
+        anyhow::ensure!(std::fs::read(output.path())? == NATIVE_STORAGE_PAYLOAD);
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let mut delete = Command::new("aws");
+    delete.args([
+        "s3api",
+        "delete-object",
+        "--bucket",
+        bucket,
+        "--key",
+        &object,
+    ]);
+    apply_test_env(&mut delete, env);
+    let cleanup = run_test_command(delete, "AWS S3 delete-object").await;
+    combine_verification_and_cleanup(verification, cleanup)?;
+    Ok(())
+}
+
+async fn verify_gcp_native_storage(
+    bucket: &str,
+    key: &KeyOutputs,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    let KeyFingerprint::Gcp { .. } = &key.fingerprint else {
+        anyhow::bail!("GCP deployment returned a non-GCP Key fingerprint");
+    };
+    let object = format!("alien-e2e/native-encryption/{}", uuid::Uuid::new_v4());
+    let uri = format!("gs://{bucket}/{object}");
+    let input = tempfile::NamedTempFile::new()?;
+    std::fs::write(input.path(), NATIVE_STORAGE_PAYLOAD)?;
+
+    let mut put = Command::new("gcloud");
+    put.args(["storage", "cp"]).arg(input.path()).arg(&uri);
+    apply_test_env(&mut put, env);
+    run_test_command(put, "GCS object upload").await?;
+
+    let verification = async {
+        let mut describe = Command::new("gcloud");
+        describe.args(["storage", "objects", "describe", &uri, "--format=json"]);
+        apply_test_env(&mut describe, env);
+        let metadata: Value =
+            serde_json::from_slice(&run_test_command(describe, "GCS object describe").await?)?;
+        let actual_key = json_string_field(&metadata, "kmsKeyName")
+            .or_else(|| json_string_field(&metadata, "kms_key"));
+        anyhow::ensure!(
+            actual_key == Some(key.wrapping_key_id.as_str()),
+            "GCS object used a different KMS key: {actual_key:?}"
+        );
+
+        let output = tempfile::NamedTempFile::new()?;
+        let mut get = Command::new("gcloud");
+        get.args(["storage", "cp", &uri]).arg(output.path());
+        apply_test_env(&mut get, env);
+        run_test_command(get, "GCS object download").await?;
+        anyhow::ensure!(std::fs::read(output.path())? == NATIVE_STORAGE_PAYLOAD);
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let mut delete = Command::new("gcloud");
+    delete.args(["storage", "rm", &uri]);
+    apply_test_env(&mut delete, env);
+    let cleanup = run_test_command(delete, "GCS object delete").await;
+    combine_verification_and_cleanup(verification, cleanup)?;
+    Ok(())
+}
+
+async fn verify_azure_native_storage(
+    account: &str,
+    container: &str,
+    key: &KeyOutputs,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    let KeyFingerprint::Azure {
+        vault_resource_id,
+        key_name,
+        ..
+    } = &key.fingerprint
+    else {
+        anyhow::bail!("Azure deployment returned a non-Azure Key fingerprint");
+    };
+    let config_dir = tempfile::tempdir()?;
+    let tenant = env_value(env, "ARM_TENANT_ID")?;
+    let client = env_value(env, "ARM_CLIENT_ID")?;
+    let secret = env_value(env, "ARM_CLIENT_SECRET")?;
+    let subscription = env_value(env, "ARM_SUBSCRIPTION_ID")?;
+
+    let mut login = Command::new("az");
+    login.args([
+        "login",
+        "--service-principal",
+        "--username",
+        client,
+        "--password",
+        secret,
+        "--tenant",
+        tenant,
+        "--output",
+        "none",
+    ]);
+    login.env("AZURE_CONFIG_DIR", config_dir.path());
+    run_test_command(login, "Azure service-principal login").await?;
+    let mut select = Command::new("az");
+    select.args(["account", "set", "--subscription", subscription]);
+    select.env("AZURE_CONFIG_DIR", config_dir.path());
+    run_test_command(select, "Azure subscription selection").await?;
+
+    let mut show = Command::new("az");
+    show.args([
+        "storage", "account", "show", "--name", account, "--output", "json",
+    ]);
+    show.env("AZURE_CONFIG_DIR", config_dir.path());
+    let metadata: Value =
+        serde_json::from_slice(&run_test_command(show, "Azure Storage account show").await?)?;
+    let encryption = metadata
+        .get("encryption")
+        .context("Azure account has no encryption metadata")?;
+    anyhow::ensure!(
+        json_string_field(encryption, "keySource") == Some("Microsoft.Keyvault"),
+        "Azure Storage account is not configured with a Key Vault key"
+    );
+    let properties = encryption
+        .get("keyVaultProperties")
+        .context("Azure Storage account has no Key Vault properties")?;
+    anyhow::ensure!(json_string_field(properties, "keyName") == Some(key_name.as_str()));
+    let expected_vault = vault_resource_id
+        .rsplit('/')
+        .next()
+        .context("Azure Key fingerprint has an invalid vault resource ID")?;
+    let vault_uri = json_string_field(properties, "keyVaultUri")
+        .context("Azure Storage account has no Key Vault URI")?;
+    anyhow::ensure!(
+        vault_uri.contains(expected_vault),
+        "Azure Storage uses a different Key Vault"
+    );
+
+    let blob = format!("alien-e2e-native-encryption-{}", uuid::Uuid::new_v4());
+    let input = tempfile::NamedTempFile::new()?;
+    std::fs::write(input.path(), NATIVE_STORAGE_PAYLOAD)?;
+    let mut put = Command::new("az");
+    put.args([
+        "storage",
+        "blob",
+        "upload",
+        "--auth-mode",
+        "key",
+        "--account-name",
+        account,
+        "--container-name",
+        container,
+        "--name",
+        &blob,
+        "--file",
+    ])
+    .arg(input.path())
+    .args(["--output", "none"]);
+    put.env("AZURE_CONFIG_DIR", config_dir.path());
+    run_test_command(put, "Azure Blob upload").await?;
+
+    let verification = async {
+        let output = tempfile::NamedTempFile::new()?;
+        let mut get = Command::new("az");
+        get.args([
+            "storage",
+            "blob",
+            "download",
+            "--auth-mode",
+            "key",
+            "--account-name",
+            account,
+            "--container-name",
+            container,
+            "--name",
+            &blob,
+            "--file",
+        ])
+        .arg(output.path())
+        .args(["--overwrite", "true", "--output", "none"]);
+        get.env("AZURE_CONFIG_DIR", config_dir.path());
+        run_test_command(get, "Azure Blob download").await?;
+        anyhow::ensure!(std::fs::read(output.path())? == NATIVE_STORAGE_PAYLOAD);
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let mut delete = Command::new("az");
+    delete.args([
+        "storage",
+        "blob",
+        "delete",
+        "--auth-mode",
+        "key",
+        "--account-name",
+        account,
+        "--container-name",
+        container,
+        "--name",
+        &blob,
+        "--output",
+        "none",
+    ]);
+    delete.env("AZURE_CONFIG_DIR", config_dir.path());
+    let cleanup = run_test_command(delete, "Azure Blob delete").await;
+    combine_verification_and_cleanup(verification, cleanup)?;
+    Ok(())
+}
+
+fn json_string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(Value::as_str)
+}
+
+fn env_value<'a>(env: &'a [(String, String)], name: &str) -> anyhow::Result<&'a str> {
+    env.iter()
+        .find_map(|(key, value)| (key == name).then_some(value.as_str()))
+        .with_context(|| format!("test credential environment is missing {name}"))
+}
+
+fn apply_test_env(command: &mut Command, env: &[(String, String)]) {
+    command.envs(env.iter().map(|(key, value)| (key, value)));
+}
+
+async fn run_test_command(mut command: Command, description: &str) -> anyhow::Result<Vec<u8>> {
+    let output = command
+        .output()
+        .await
+        .with_context(|| format!("failed to start {description}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{description} failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output.stdout)
+}
+
+fn combine_verification_and_cleanup(
+    verification: anyhow::Result<()>,
+    cleanup: anyhow::Result<Vec<u8>>,
+) -> anyhow::Result<()> {
+    match (verification, cleanup) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(()), Err(cleanup)) => Err(cleanup),
+        (Err(error), Err(cleanup)) => {
+            anyhow::bail!("verification failed: {error:#}; cleanup also failed: {cleanup:#}")
         }
     }
 }

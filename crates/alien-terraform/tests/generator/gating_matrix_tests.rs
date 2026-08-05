@@ -9,8 +9,8 @@
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Kv, PermissionProfile, Platform, Queue, ResourceLifecycle, ServiceAccount,
-    Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
+    AzureStorageAccount, Key, Kv, PermissionProfile, Platform, Queue, ResourceLifecycle,
+    ServiceAccount, Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
 
@@ -72,6 +72,11 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<Stack> {
         ),
         "ai" => base().add_enabled_when(
             Ai::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "fixtureEnabled",
+        ),
+        "key" => base().add_enabled_when(
+            Key::new("fixture".to_string()).build(),
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),

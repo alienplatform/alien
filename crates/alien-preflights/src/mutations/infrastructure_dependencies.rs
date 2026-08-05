@@ -101,6 +101,7 @@ impl InfrastructureDependenciesMutation {
 
         if platform == Platform::Azure
             && resource_id != "default-resource-group"
+            && resource_type != &alien_core::Key::RESOURCE_TYPE
             && stack.resources.contains_key("default-resource-group")
         {
             dependencies.push(ResourceRef::new(

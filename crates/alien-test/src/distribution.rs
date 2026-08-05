@@ -68,6 +68,9 @@ pub enum DistributionArtifactCleanup {
     Terraform {
         workdir: TempDir,
         env: Vec<(String, String)>,
+        /// Pre-existing test fixtures imported only so generated resources can
+        /// depend on them. They must not be destroyed with the deployment.
+        retained_state_addresses: Vec<String>,
     },
     Helm {
         release: String,
@@ -229,7 +232,11 @@ impl DistributionArtifactCleanup {
 
                 Ok(())
             }
-            DistributionArtifactCleanup::Terraform { workdir, env } => {
+            DistributionArtifactCleanup::Terraform {
+                workdir,
+                env,
+                retained_state_addresses,
+            } => {
                 info!(
                     workdir = %workdir.path().display(),
                     "destroying Terraform setup artifacts"
@@ -243,6 +250,14 @@ impl DistributionArtifactCleanup {
                         .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
                     apply_env(&mut detach, &env);
                     run_command(detach, "detach retained Terraform keys").await?;
+                }
+                for address in retained_state_addresses {
+                    let mut detach = Command::new("terraform");
+                    detach
+                        .current_dir(workdir.path())
+                        .args(["state", "rm", &address]);
+                    apply_env(&mut detach, &env);
+                    run_command(detach, &format!("detach retained test fixture {address}")).await?;
                 }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
@@ -1713,7 +1728,7 @@ fn stop_before_helm_for_terraform_handoff_debug(
         outputs,
         ..
     } = result;
-    let DistributionArtifactCleanup::Terraform { workdir, env: _ } = cleanup else {
+    let DistributionArtifactCleanup::Terraform { workdir, .. } = cleanup else {
         anyhow::bail!("Terraform handoff debug requires Terraform cleanup state");
     };
     let workdir = workdir.keep();
@@ -1844,6 +1859,7 @@ async fn apply_terraform_and_import(
     .await?;
 
     let workdir_path = workdir.path().to_path_buf();
+    let mut retained_state_addresses = Vec::new();
     let apply_result = async {
         run_terraform_cmd(
             &workdir_path,
@@ -1852,6 +1868,30 @@ async fn apply_terraform_and_import(
         )
         .await?;
         run_terraform_cmd(&workdir_path, &env, ["validate"]).await?;
+        if target == alien_terraform::TerraformTarget::Azure
+            && prepared.app == TestApp::ByoEncryptionKey
+        {
+            let azure = prepared
+                .config
+                .azure_target
+                .as_ref()
+                .context("Azure target missing")?;
+            let resource_group = std::env::var("AZURE_TARGET_RESOURCE_GROUP")
+                .context("AZURE_TARGET_RESOURCE_GROUP is required")?;
+            let resource_group_id = format!(
+                "/subscriptions/{}/resourceGroups/{resource_group}",
+                azure.subscription_id
+            );
+            terraform_import_required(
+                &workdir_path,
+                &env,
+                "azurerm_resource_group.default_resource_group",
+                &resource_group_id,
+            )
+            .await?;
+            retained_state_addresses
+                .push("azurerm_resource_group.default_resource_group".to_string());
+        }
         adopt_retained_aws_key_fixture(prepared, target, &workdir_path, &env).await?;
         adopt_retained_gcp_key_fixture(prepared, target, &workdir_path, &env).await?;
         adopt_retained_azure_key_fixture(prepared, target, &workdir_path, &env).await?;
@@ -1892,6 +1932,7 @@ async fn apply_terraform_and_import(
     let cleanup = DistributionArtifactCleanup::Terraform {
         workdir,
         env: env.clone(),
+        retained_state_addresses,
     };
     match apply_result {
         Ok((imported, outputs, base_platform, region)) => Ok(TerraformApplyResult {
@@ -1907,10 +1948,15 @@ async fn apply_terraform_and_import(
     }
 }
 
-fn aws_key_fixture_alias() -> anyhow::Result<String> {
+const BYO_KEY_FIXTURES: [(&str, &str); 2] = [
+    ("enterprise-key", "enterprise_key"),
+    ("storage-key", "storage_key"),
+];
+
+fn aws_key_fixture_alias(resource_id: &str) -> anyhow::Result<String> {
     Ok(format!(
-        "alias/alien-{}-enterprise-key",
-        crate::config::e2e_resource_prefix()?
+        "alias/alien-{}-{resource_id}",
+        crate::config::e2e_resource_prefix()?,
     ))
 }
 
@@ -1925,50 +1971,44 @@ async fn adopt_retained_aws_key_fixture(
         return Ok(());
     }
 
-    let alias = aws_key_fixture_alias()?;
-    let mut describe = Command::new("aws");
-    describe.args([
-        "kms",
-        "describe-key",
-        "--key-id",
-        &alias,
-        "--query",
-        "KeyMetadata.KeyId",
-        "--output",
-        "text",
-    ]);
-    apply_env(&mut describe, env);
-    let output = describe
-        .output()
-        .await
-        .context("failed to start aws kms describe-key")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("NotFoundException") {
-            return Ok(());
+    for (resource_id, label) in BYO_KEY_FIXTURES {
+        let alias = aws_key_fixture_alias(resource_id)?;
+        let mut describe = Command::new("aws");
+        describe.args([
+            "kms",
+            "describe-key",
+            "--key-id",
+            &alias,
+            "--query",
+            "KeyMetadata.KeyId",
+            "--output",
+            "text",
+        ]);
+        apply_env(&mut describe, env);
+        let output = describe
+            .output()
+            .await
+            .context("failed to start aws kms describe-key")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("NotFoundException") {
+                continue;
+            }
+            anyhow::bail!(
+                "aws kms describe-key failed for reusable Key alias {alias}\nstderr:\n{stderr}"
+            );
         }
-        anyhow::bail!(
-            "aws kms describe-key failed for the reusable Enterprise Key alias\nstderr:\n{stderr}"
-        );
-    }
-    let key_id = String::from_utf8(output.stdout)
-        .context("AWS KMS returned a non-UTF-8 key ID")?
-        .trim()
-        .to_string();
-    if key_id.is_empty() {
-        anyhow::bail!("AWS KMS returned an empty key ID for the reusable Enterprise Key alias");
-    }
+        let key_id = String::from_utf8(output.stdout)
+            .context("AWS KMS returned a non-UTF-8 key ID")?
+            .trim()
+            .to_string();
+        if key_id.is_empty() {
+            anyhow::bail!("AWS KMS returned an empty key ID for reusable Key alias {alias}");
+        }
 
-    let mut import = Command::new("terraform");
-    import.current_dir(workdir).args([
-        "import",
-        "-input=false",
-        "aws_kms_key.enterprise_key",
-        &key_id,
-    ]);
-    apply_env(&mut import, env);
-    run_command(import, "terraform import retained AWS Enterprise Key").await?;
-    info!(%alias, "adopted retained AWS Enterprise Key fixture");
+        terraform_import_required(workdir, env, &format!("aws_kms_key.{label}"), &key_id).await?;
+        info!(%alias, %resource_id, "adopted retained AWS Key fixture");
+    }
     Ok(())
 }
 
@@ -1985,52 +2025,58 @@ async fn ensure_aws_key_fixture_alias(
 
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(outputs, "deployment_resources")?)?;
-    let key = terraform_import_data::<AwsKeyImportData>(&resources, "key")?;
-    let alias = aws_key_fixture_alias()?;
+    for (resource_id, _) in BYO_KEY_FIXTURES {
+        let resource = resources
+            .iter()
+            .find(|resource| resource.id == resource_id && resource.resource_type.as_ref() == "key")
+            .with_context(|| format!("Terraform output missing Key {resource_id}"))?;
+        let key: AwsKeyImportData = serde_json::from_value(resource.import_data.clone())?;
+        let alias = aws_key_fixture_alias(resource_id)?;
 
-    let mut describe = Command::new("aws");
-    describe.args([
-        "kms",
-        "describe-key",
-        "--key-id",
-        &alias,
-        "--query",
-        "KeyMetadata.Arn",
-        "--output",
-        "text",
-    ]);
-    apply_env(&mut describe, env);
-    let output = describe
-        .output()
-        .await
-        .context("failed to start aws kms describe-key")?;
-    if output.status.success() {
-        let aliased_arn =
-            String::from_utf8(output.stdout).context("AWS KMS returned a non-UTF-8 key ARN")?;
-        if aliased_arn.trim() != key.key_arn {
-            anyhow::bail!("the reusable Enterprise Key alias points at a different KMS key");
+        let mut describe = Command::new("aws");
+        describe.args([
+            "kms",
+            "describe-key",
+            "--key-id",
+            &alias,
+            "--query",
+            "KeyMetadata.Arn",
+            "--output",
+            "text",
+        ]);
+        apply_env(&mut describe, env);
+        let output = describe
+            .output()
+            .await
+            .context("failed to start aws kms describe-key")?;
+        if output.status.success() {
+            let aliased_arn =
+                String::from_utf8(output.stdout).context("AWS KMS returned a non-UTF-8 key ARN")?;
+            if aliased_arn.trim() != key.key_arn {
+                anyhow::bail!("reusable Key alias {alias} points at a different KMS key");
+            }
+            continue;
         }
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.contains("NotFoundException") {
-        anyhow::bail!(
-            "aws kms describe-key failed for the reusable Enterprise Key alias\nstderr:\n{stderr}"
-        );
-    }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.contains("NotFoundException") {
+            anyhow::bail!(
+                "aws kms describe-key failed for reusable Key alias {alias}\nstderr:\n{stderr}"
+            );
+        }
 
-    let mut create = Command::new("aws");
-    create.args([
-        "kms",
-        "create-alias",
-        "--alias-name",
-        &alias,
-        "--target-key-id",
-        &key.key_arn,
-    ]);
-    apply_env(&mut create, env);
-    run_command(create, "aws kms create reusable Enterprise Key alias").await?;
-    info!(%alias, "created reusable AWS Enterprise Key fixture alias");
+        let mut create = Command::new("aws");
+        create.args([
+            "kms",
+            "create-alias",
+            "--alias-name",
+            &alias,
+            "--target-key-id",
+            &key.key_arn,
+        ]);
+        apply_env(&mut create, env);
+        run_command(create, "aws kms create reusable Key alias").await?;
+        info!(%alias, %resource_id, "created reusable AWS Key fixture alias");
+    }
     Ok(())
 }
 
@@ -2051,34 +2097,33 @@ async fn adopt_retained_gcp_key_fixture(
         .as_ref()
         .context("GCP target missing")?;
     let prefix = crate::config::e2e_resource_prefix()?;
-    let key_ring = format!(
-        "projects/{}/locations/{}/keyRings/{prefix}-enterprise-key",
-        gcp.project_id, gcp.region
-    );
-    let crypto_key = format!("{key_ring}/cryptoKeys/key");
-
-    // GCP KeyRings cannot be deleted. The serialized Enterprise Key fixture
-    // deliberately detaches its retained ring and key during cleanup, then
-    // adopts those exact resources on the next run. A missing ring is the
-    // first-run bootstrap case and is created by the following apply.
-    if !terraform_import_if_present(
-        workdir,
-        env,
-        "google_kms_key_ring.enterprise_key_ring",
-        &key_ring,
-    )
-    .await?
-    {
-        return Ok(());
+    // GCP KeyRings cannot be deleted. The serialized fixtures deliberately
+    // detach their retained rings and keys during cleanup, then adopt those
+    // exact resources on the next run. A missing ring is the first-run case.
+    for (resource_id, label) in BYO_KEY_FIXTURES {
+        let key_ring = format!(
+            "projects/{}/locations/{}/keyRings/{prefix}-{resource_id}",
+            gcp.project_id, gcp.region
+        );
+        let crypto_key = format!("{key_ring}/cryptoKeys/key");
+        if !terraform_import_if_present(
+            workdir,
+            env,
+            &format!("google_kms_key_ring.{label}_ring"),
+            &key_ring,
+        )
+        .await?
+        {
+            continue;
+        }
+        terraform_import_if_present(
+            workdir,
+            env,
+            &format!("google_kms_crypto_key.{label}"),
+            &crypto_key,
+        )
+        .await?;
     }
-
-    terraform_import_if_present(
-        workdir,
-        env,
-        "google_kms_crypto_key.enterprise_key",
-        &crypto_key,
-    )
-    .await?;
     Ok(())
 }
 
@@ -2100,7 +2145,6 @@ async fn adopt_retained_azure_key_fixture(
         .as_ref()
         .context("Azure target missing")?;
     let prefix = crate::config::e2e_resource_prefix()?;
-    let expected_name_prefix = format!("{prefix}-enterprise-");
     let azure_config = AzureClientConfig {
         subscription_id: azure.subscription_id.clone(),
         tenant_id: azure.tenant_id.clone(),
@@ -2111,81 +2155,113 @@ async fn adopt_retained_azure_key_fixture(
         },
         service_overrides: None,
     };
-    let resource_graph = AzureResourceGraphClient::new(
-        reqwest::Client::new(),
-        AzureTokenCache::new(azure_config.clone()),
-    );
     let escaped_prefix = prefix.replace('\'', "''");
-    let query = format!(
-        "Resources | where type =~ 'microsoft.keyvault/vaults' | where tags['resource'] == 'enterprise-key' and tags['deployment'] == '{escaped_prefix}' | project id, name | order by name asc"
-    );
-    let response = resource_graph
+    for (resource_id, label) in BYO_KEY_FIXTURES {
+        let escaped_resource_id = resource_id.replace('\'', "''");
+        let resource_group_name = format!("{prefix}-{resource_id}-key")
+            .chars()
+            .take(90)
+            .collect::<String>();
+        let escaped_resource_group = resource_group_name.replace('\'', "''");
+        let query = format!(
+            "Resources | where type =~ 'microsoft.keyvault/vaults' | where resourceGroup =~ '{escaped_resource_group}' and tags['resource'] == '{escaped_resource_id}' and tags['deployment'] == '{escaped_prefix}' | project id, name | order by name asc"
+        );
+        let response = AzureResourceGraphClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(azure_config.clone()),
+        )
         .resources(ResourceGraphQueryRequest::for_subscription(
             azure.subscription_id.clone(),
             query,
         ))
         .await
-        .context("failed to discover retained Azure Enterprise Key vaults")?;
-    let Some(vault) = response.data.into_iter().next() else {
-        return Ok(());
-    };
-    let vault_id = vault
-        .id
-        .context("retained Azure Key Vault has no resource ID")?;
-    let vault_name = vault.name.context("retained Azure Key Vault has no name")?;
-    let suffix = vault_name
-        .strip_prefix(&expected_name_prefix)
-        .with_context(|| format!("retained Azure Key Vault {vault_name} has an unexpected name"))?;
-    if suffix.len() != 6 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        anyhow::bail!("retained Azure Key Vault {vault_name} has an invalid random suffix");
+        .with_context(|| format!("failed to discover retained Azure Key vault {resource_id}"))?;
+        let Some(vault) = response.data.into_iter().next() else {
+            continue;
+        };
+        let vault_id = vault
+            .id
+            .context("retained Azure Key Vault has no resource ID")?;
+        let vault_name = vault.name.context("retained Azure Key Vault has no name")?;
+        let resource_group_id = vault_id
+            .split_once("/providers/")
+            .map(|(resource_group_id, _)| resource_group_id)
+            .context("retained Azure Key Vault has no resource-group parent")?;
+        terraform_import_required(
+            workdir,
+            env,
+            &format!("azurerm_resource_group.{label}_key"),
+            resource_group_id,
+        )
+        .await?;
+        let base_name = format!("{prefix}-{resource_id}")
+            .chars()
+            .take(17)
+            .collect::<String>();
+        let expected_name_prefix = format!("{}-", base_name.trim_end_matches('-'));
+        let suffix = vault_name
+            .strip_prefix(&expected_name_prefix)
+            .with_context(|| {
+                format!("retained Azure Key Vault {vault_name} has an unexpected name")
+            })?;
+        if suffix.len() != 6 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            anyhow::bail!("retained Azure Key Vault {vault_name} has an invalid random suffix");
+        }
+        let suffix_bytes = (0..suffix.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&suffix[index..index + 2], 16))
+            .collect::<Result<Vec<_>, _>>()
+            .context("failed to decode retained Azure Key Vault suffix")?;
+        let random_id = URL_SAFE_NO_PAD.encode(suffix_bytes);
+
+        terraform_import_required(
+            workdir,
+            env,
+            &format!("random_id.{label}_vault_suffix"),
+            &random_id,
+        )
+        .await?;
+        terraform_import_required(
+            workdir,
+            env,
+            &format!("azurerm_key_vault.{label}"),
+            &vault_id,
+        )
+        .await?;
+
+        // Cleanup removes installer access while retaining the purge-protected
+        // vault and key. Recreate only that temporary role before resolving the
+        // exact key version; the complete apply still owns and removes it.
+        run_terraform_cmd(
+            workdir,
+            env,
+            [
+                "apply",
+                "-auto-approve",
+                "-input=false",
+                &format!("-target=azurerm_role_assignment.{label}_installer_key_admin"),
+                &format!("-target=time_sleep.{label}_installer_rbac"),
+            ],
+        )
+        .await?;
+
+        let versionless_key_id = format!("https://{vault_name}.vault.azure.net/keys/key");
+        let key = AzureKeyVaultKeysClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(azure_config.clone()),
+        )
+        .get_key(&versionless_key_id)
+        .await
+        .with_context(|| format!("failed to resolve retained Azure Key {resource_id}"))?;
+        terraform_import_required(
+            workdir,
+            env,
+            &format!("azurerm_key_vault_key.{label}"),
+            &key.key.kid,
+        )
+        .await?;
+        info!(%vault_name, %resource_id, "adopted retained Azure Key fixture");
     }
-    let suffix_bytes = (0..suffix.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&suffix[index..index + 2], 16))
-        .collect::<Result<Vec<_>, _>>()
-        .context("failed to decode retained Azure Key Vault suffix")?;
-    let random_id = URL_SAFE_NO_PAD.encode(suffix_bytes);
-
-    terraform_import_required(
-        workdir,
-        env,
-        "random_id.enterprise_key_vault_suffix",
-        &random_id,
-    )
-    .await?;
-    terraform_import_required(workdir, env, "azurerm_key_vault.enterprise_key", &vault_id).await?;
-
-    // Cleanup removes the short-lived installer role assignment while retaining
-    // the purge-protected vault and key. Recreate only that assignment first so
-    // the normal installer identity can resolve the retained key version. The
-    // complete apply below still owns and later removes this temporary access.
-    run_terraform_cmd(
-        workdir,
-        env,
-        [
-            "apply",
-            "-auto-approve",
-            "-input=false",
-            "-target=azurerm_role_assignment.enterprise_key_installer_key_admin",
-            "-target=time_sleep.enterprise_key_installer_rbac",
-        ],
-    )
-    .await?;
-
-    let versionless_key_id = format!("https://{vault_name}.vault.azure.net/keys/key");
-    let key =
-        AzureKeyVaultKeysClient::new(reqwest::Client::new(), AzureTokenCache::new(azure_config))
-            .get_key(&versionless_key_id)
-            .await
-            .context("failed to resolve the retained Azure Enterprise Key version")?;
-    terraform_import_required(
-        workdir,
-        env,
-        "azurerm_key_vault_key.enterprise_key",
-        &key.key.kid,
-    )
-    .await?;
-    info!(%vault_name, "adopted retained Azure Enterprise Key fixture");
     Ok(())
 }
 
@@ -2221,7 +2297,7 @@ async fn terraform_import_if_present(
         .await
         .context("failed to start terraform import")?;
     if output.status.success() {
-        info!(%address, "adopted retained GCP Enterprise Key fixture resource");
+        info!(%address, "adopted retained GCP Key fixture resource");
         return Ok(true);
     }
 
@@ -4413,6 +4489,7 @@ mod tests {
         let cleanup = DistributionArtifactCleanup::Terraform {
             workdir,
             env: Vec::new(),
+            retained_state_addresses: Vec::new(),
         };
         let kubeconfig = r#""apiVersion": "v1"
 "clusters": []
@@ -4449,6 +4526,7 @@ mod tests {
         let cleanup = DistributionArtifactCleanup::Terraform {
             workdir,
             env: Vec::new(),
+            retained_state_addresses: Vec::new(),
         };
         let mut target = KubernetesHelmTarget {
             namespace: "alien-test".to_string(),
