@@ -67,6 +67,6 @@
     "@grpc/grpc-js": "^1.14.4",
     "nice-grpc": "^2.1.11",
     "nice-grpc-common": "^2.0.2",
-    "zod": "4.3.2"
+    "zod": "4.4.3"
   }
 }

@@ -291,7 +291,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0

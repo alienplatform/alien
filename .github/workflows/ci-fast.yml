@@ -120,7 +120,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -134,7 +134,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
@@ -283,7 +283,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
       - uses: actions/setup-node@v7
         with:
@@ -297,7 +297,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
