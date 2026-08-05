@@ -6,7 +6,6 @@
 //! passes its URL to the app; routing lives in `router`, credential injection in
 //! `creds`.
 
-mod availability;
 mod config;
 mod creds;
 mod error;
@@ -14,7 +13,7 @@ mod router;
 pub use config::{bindings_from_env, bindings_from_env_map, route_from_remote_ai_lease};
 pub use creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
 pub use error::{ErrorData, Result};
-pub use router::{build_router, GatewayRoute};
+pub use router::{build_router, build_router_with_availability, AvailableModels, GatewayRoute};
 
 use std::net::{Ipv4Addr, SocketAddr};
 

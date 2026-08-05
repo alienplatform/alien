@@ -41,9 +41,8 @@ pub(crate) async fn proxy_foundry_anthropic(
 
     // The binding carries the AIServices account endpoint; the Anthropic path
     // serves on that account. Whether the account host also needs the Entra
-    // audience swapped to https://ai.azure.com is settled by the live Foundry
-    // probe — the credential keeps the account audience until that probe says
-    // otherwise.
+    // audience swapped to https://ai.azure.com is settled by provider
+    // qualification. The credential keeps the account audience here.
     let base = route
         .upstream_base_override
         .clone()

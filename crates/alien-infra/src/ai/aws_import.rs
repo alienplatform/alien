@@ -24,6 +24,8 @@ impl ResourceImporter for AwsAiImporter {
         let controller = AwsAiController {
             state: AwsAiState::Ready,
             region: Some(data.region),
+            availability: None,
+            availability_observed_at: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

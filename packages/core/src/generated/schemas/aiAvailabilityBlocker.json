@@ -1,0 +1,1 @@
+{"type":"string","enum":["agreement-required","entitlement-required","model-activation-required","deployment-required","quota-configuration-required","region-unavailable","access-denied","observation-failed"],"x-readme-ref-name":"AiAvailabilityBlocker"}

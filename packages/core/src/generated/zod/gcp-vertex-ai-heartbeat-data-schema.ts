@@ -4,10 +4,14 @@
 */
 
 import * as z from "zod";
+import { AiAvailabilityObservationSchema } from "./ai-availability-observation-schema.js";
 import { AiHeartbeatStatusSchema } from "./ai-heartbeat-status-schema.js";
 
 export const GcpVertexAiHeartbeatDataSchema = z.object({
-    "location": z.string(),
+    get "availability"(){
+                return AiAvailabilityObservationSchema
+              },
+"location": z.string(),
 "project": z.string(),
 get "status"(){
                 return AiHeartbeatStatusSchema

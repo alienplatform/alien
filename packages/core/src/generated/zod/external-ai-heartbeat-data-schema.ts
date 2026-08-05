@@ -4,10 +4,14 @@
 */
 
 import * as z from "zod";
+import { AiAvailabilityObservationSchema } from "./ai-availability-observation-schema.js";
 import { AiHeartbeatStatusSchema } from "./ai-heartbeat-status-schema.js";
 
 export const ExternalAiHeartbeatDataSchema = z.object({
-    "provider": z.string().describe("The BYO-key provider serving this binding (e.g. \"openai\"). Used on the Local\nplatform, where the app brings its own provider key instead of an ambient cloud."),
+    get "availability"(){
+                return z.union([AiAvailabilityObservationSchema, z.null()]).optional()
+              },
+"provider": z.string().describe("The BYO-key provider serving this binding (e.g. \"openai\"). Used on the Local\nplatform, where the app brings its own provider key instead of an ambient cloud."),
 get "status"(){
                 return AiHeartbeatStatusSchema
               }

@@ -334,9 +334,8 @@ fn merge_beta_headers(obj: &mut Map<String, Value>, headers: &HeaderMap) {
 /// may repeat and each value may be comma-separated. Filtering is an allowlist
 /// because these endpoints validate what they are handed: an Anthropic-API-side
 /// marker (notably `oauth-2025-04-20`, declared by every OAuth Claude Code
-/// request) turns the whole request into a 400. Vertex and Foundry reuse the
-/// Bedrock-verified families until their own live probes verify per-upstream
-/// lists.
+/// request) turns the whole request into a 400. Vertex and Foundry currently
+/// reuse the beta families qualified against Bedrock.
 pub(crate) fn filtered_header_betas(headers: &HeaderMap) -> Vec<String> {
     let mut kept: Vec<String> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();

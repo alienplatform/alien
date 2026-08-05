@@ -28,6 +28,8 @@ impl ResourceImporter for AzureAiImporter {
             endpoint: Some(data.endpoint),
             resource_group: Some(data.resource_group),
             location: Some(data.location),
+            availability: None,
+            availability_observed_at: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
