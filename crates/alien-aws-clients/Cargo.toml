@@ -55,7 +55,7 @@ test-context = { workspace = true }
 regex = { workspace = true }
 anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
-rcgen = "0.13.2"
+rcgen = "0.14.0"
 
 [features]
 default = []

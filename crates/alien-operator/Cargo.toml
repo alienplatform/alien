@@ -29,7 +29,7 @@ alien-manager-api = { path = "../../client-sdks/manager/rust" }
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 axum = { workspace = true, features = ["tokio", "http2"] }
-opentelemetry-proto = { version = "0.30", features = ["gen-tonic-messages", "logs"] }
+opentelemetry-proto = { version = "0.32", features = ["gen-tonic-messages", "logs"] }
 prost = { workspace = true }
 
 # Database

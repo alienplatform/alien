@@ -60,7 +60,7 @@ heck = { workspace = true }
 sha2 = { workspace = true }
 serde_yaml = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v5", "serde"] }
-k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
+k8s-openapi = { version = "0.28.0", features = ["v1_33"] }
 alien-preflights = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 pem = { workspace = true }
@@ -94,7 +94,7 @@ dotenvy = { workspace = true }
 anyhow = { workspace = true }
 test-context = { workspace = true }
 regex = { workspace = true }
-httpmock = { version = "0.7" }
+httpmock = { version = "0.8" }
 rstest = { workspace = true }
 axum = { workspace = true }
 mockall = { workspace = true }
