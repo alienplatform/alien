@@ -1815,7 +1815,7 @@ jobs:
 
       - name: Metadata (alien-base)
         id: meta_base
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/alienplatform/alien-base
           tags: |
@@ -1837,7 +1837,7 @@ jobs:
 
       - name: Metadata (alien-worker-typescript)
         id: meta_worker_typescript
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/alienplatform/alien-worker-typescript
           tags: |
@@ -1871,7 +1871,7 @@ jobs:
 
       - name: Metadata (alien-builder)
         id: meta_builder
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/alienplatform/alien-builder
           tags: |
@@ -1892,7 +1892,7 @@ jobs:
 
       - name: Metadata (alien-operator)
         id: meta_agent
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/alienplatform/alien-operator
           tags: |
@@ -1913,7 +1913,7 @@ jobs:
 
       - name: Metadata (alien-manager)
         id: meta_manager
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/alienplatform/alien-manager
           tags: |
