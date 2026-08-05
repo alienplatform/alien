@@ -7,8 +7,8 @@
 use alien_azure_clients::{extract_oid_from_token, AzureClientConfigExt};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
-    bindings::KeyBinding, AzureClientConfig, AzureCredentials, AzureImpersonationConfig,
-    ClientConfig, KeyFingerprint, KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs,
+    bindings::KeyBinding, AzureClientConfig, AzureCredentials, ClientConfig, KeyFingerprint,
+    KeyOutputs, Platform, RemoteBindingsOutputs, StorageOutputs,
 };
 use alien_test::{DistributionFlow, TestApp};
 use anyhow::{anyhow, Context};
@@ -716,25 +716,29 @@ async fn revoke_remote_key_grant(
                     .trim()
                     .to_string()
             };
-            let impersonation: AzureImpersonationConfig =
-                serde_json::from_str(&access.access_configuration)
-                    .context("parse Azure Access identity configuration")?;
+            let access_configuration: Value = serde_json::from_str(&access.access_configuration)
+                .context("parse Azure Access identity configuration")?;
+            let access_client_id = access_configuration
+                .get("uamiClientId")
+                .and_then(Value::as_str)
+                .context("Azure Access identity configuration has no client ID")?;
+            let tenant_id = access_configuration
+                .get("tenantId")
+                .and_then(Value::as_str)
+                .context("Azure Access identity configuration has no tenant")?;
+            let subscription_id = vault_resource_id
+                .split('/')
+                .nth(2)
+                .context("Azure Key Vault resource ID has no subscription")?;
             let token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
                 .context("Azure Access identity qualification requires workload identity")?;
-            let tenant_id = impersonation
-                .tenant_id
-                .clone()
-                .context("Azure Access identity configuration has no tenant")?;
             let access_config = AzureClientConfig {
-                subscription_id: impersonation
-                    .target_subscription_id
-                    .clone()
-                    .context("Azure Access identity configuration has no subscription")?,
-                tenant_id: tenant_id.clone(),
-                region: impersonation.target_region.clone(),
+                subscription_id: subscription_id.to_string(),
+                tenant_id: tenant_id.to_string(),
+                region: None,
                 credentials: AzureCredentials::WorkloadIdentity {
-                    client_id: impersonation.client_id,
-                    tenant_id,
+                    client_id: access_client_id.to_string(),
+                    tenant_id: tenant_id.to_string(),
                     federated_token_file: token_file,
                     authority_host: std::env::var("AZURE_AUTHORITY_HOST")
                         .unwrap_or_else(|_| "https://login.microsoftonline.com/".to_string()),
