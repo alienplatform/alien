@@ -869,9 +869,7 @@ impl GcpStorageController {
             .state
             .resources
             .values()
-            .find(|state| {
-                state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
-            })
+            .find(|state| state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref())
             .and_then(|state| state.outputs.as_ref())
             .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
             .map(|outputs| format!("serviceAccount:{}", outputs.access_configuration));

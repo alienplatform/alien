@@ -42,7 +42,7 @@ impl ResolvedRemoteBinding {
                         },
                         service_overrides: None,
                     }),
-                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                    expires_at: parse_manager_expiry(expires_at, &resource_id)?,
                 }
             }
             manager_types::ResolveBindingResponse::Blob {
@@ -87,7 +87,7 @@ impl ResolvedRemoteBinding {
                         service_overrides: None,
                         project_number: client_config.project_number,
                     }),
-                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                    expires_at: parse_manager_expiry(expires_at, &resource_id)?,
                 }
             }
             manager_types::ResolveBindingResponse::Kms {
@@ -117,7 +117,7 @@ impl ResolvedRemoteBinding {
                         },
                         service_overrides: None,
                     }),
-                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                    expires_at: parse_manager_expiry(expires_at, &resource_id)?,
                 }
             }
             manager_types::ResolveBindingResponse::CloudKms {
@@ -160,6 +160,88 @@ impl ResolvedRemoteBinding {
                         service_overrides: None,
                     }),
                     expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
+            manager_types::ResolveBindingResponse::Bedrock {
+                resource_id,
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAwsCredentials::SessionCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                    expires_at: credential_expires_at,
+                } = client_config.credentials;
+                let expires_at = parse_manager_expiry(expires_at, &resource_id)?;
+                Self::Bedrock {
+                    resource_id,
+                    binding: alien_core::BedrockAiBinding {
+                        region: binding.region,
+                    },
+                    client_config: Box::new(alien_core::AwsClientConfig {
+                        account_id: client_config.account_id,
+                        region: client_config.region,
+                        credentials: alien_core::AwsCredentials::SessionCredentials {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                            expires_at: credential_expires_at,
+                        },
+                        service_overrides: None,
+                    }),
+                    expires_at,
+                }
+            }
+            manager_types::ResolveBindingResponse::Vertex {
+                resource_id,
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteGcpCredentials::AccessToken(token) =
+                    client_config.credentials;
+                let expires_at = parse_manager_expiry(expires_at, &resource_id)?;
+                Self::Vertex {
+                    resource_id,
+                    binding: alien_core::VertexAiBinding {
+                        project: binding.project,
+                        location: binding.location,
+                    },
+                    client_config: Box::new(alien_core::GcpClientConfig {
+                        project_id: client_config.project_id,
+                        region: client_config.region,
+                        credentials: alien_core::GcpCredentials::AccessToken { token },
+                        service_overrides: None,
+                        project_number: client_config.project_number,
+                    }),
+                    expires_at,
+                }
+            }
+            manager_types::ResolveBindingResponse::Foundry {
+                resource_id,
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAzureCredentials::AccessToken(token) =
+                    client_config.credentials;
+                let expires_at = parse_manager_expiry(expires_at, &resource_id)?;
+                Self::Foundry {
+                    resource_id,
+                    binding: alien_core::FoundryAiBinding {
+                        endpoint: binding.endpoint,
+                        account: binding.account,
+                    },
+                    client_config: Box::new(alien_core::AzureClientConfig {
+                        subscription_id: client_config.subscription_id,
+                        tenant_id: client_config.tenant_id,
+                        region: client_config.region,
+                        credentials: alien_core::AzureCredentials::AccessToken { token },
+                        service_overrides: None,
+                    }),
+                    expires_at,
                 }
             }
         };

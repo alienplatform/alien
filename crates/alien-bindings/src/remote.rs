@@ -195,6 +195,28 @@ pub struct RemoteBindings {
     provider: Arc<RemoteBindingsProvider>,
 }
 
+/// A short-lived managed AI binding and the cloud credential needed to use it.
+///
+/// Callers must discard this lease at `expires_at`. Credentials are deliberately
+/// omitted from `Debug` output.
+pub struct RemoteAiLease {
+    pub resource_id: String,
+    pub binding: alien_core::AiBinding,
+    pub client_config: alien_core::ClientConfig,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for RemoteAiLease {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RemoteAiLease")
+            .field("resource_id", &self.resource_id)
+            .field("binding", &self.binding)
+            .field("client_config", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 /// The complete remote Storage v0 operation surface.
 ///
 /// This intentionally does not extend [`Storage`] or `object_store::ObjectStore`:
@@ -294,6 +316,12 @@ impl RemoteBindings {
             resource_id.to_string(),
         )))
     }
+
+    /// Loads one short-lived managed AI binding lease.
+    pub async fn ai(&self) -> Result<RemoteAiLease> {
+        let resolved = self.provider.source.resolve_ai().await?;
+        resolved.into_ai_lease(self.provider.clock.now())
+    }
 }
 
 #[derive(Deserialize)]
@@ -343,6 +371,30 @@ enum ResolvedRemoteBinding {
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
+    Bedrock {
+        resource_id: String,
+        binding: alien_core::BedrockAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AwsClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Vertex {
+        resource_id: String,
+        binding: alien_core::VertexAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Foundry {
+        resource_id: String,
+        binding: alien_core::FoundryAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AzureClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
     #[cfg(test)]
     #[serde(rename = "local-storage")]
     Local {
@@ -361,6 +413,73 @@ struct TestLocalClientConfig {
 }
 
 impl ResolvedRemoteBinding {
+    fn into_ai_lease(self, now: DateTime<Utc>) -> Result<RemoteAiLease> {
+        let (resource_id, binding, client_config, expires_at) = match self {
+            Self::Bedrock {
+                resource_id,
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_aws_remote_client_config(&client_config, expires_at)?;
+                (
+                    resource_id,
+                    alien_core::AiBinding::Bedrock(binding),
+                    alien_core::ClientConfig::Aws(client_config),
+                    expires_at,
+                )
+            }
+            Self::Vertex {
+                resource_id,
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_gcp_remote_client_config(&client_config)?;
+                (
+                    resource_id,
+                    alien_core::AiBinding::Vertex(binding),
+                    alien_core::ClientConfig::Gcp(client_config),
+                    expires_at,
+                )
+            }
+            Self::Foundry {
+                resource_id,
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_azure_remote_client_config(&client_config)?;
+                (
+                    resource_id,
+                    alien_core::AiBinding::Foundry(binding),
+                    alien_core::ClientConfig::Azure(client_config),
+                    expires_at,
+                )
+            }
+            _ => {
+                return Err(AlienError::new(ErrorData::RemoteAccessFailed {
+                    operation: format!(
+                        "manager returned a non-AI lease for the deployment's remote AI binding"
+                    ),
+                }));
+            }
+        };
+        if expires_at <= now {
+            return Err(AlienError::new(ErrorData::RemoteAccessFailed {
+                operation: format!(
+                    "manager returned an expired lease for remote AI binding '{resource_id}'"
+                ),
+            }));
+        }
+        Ok(RemoteAiLease {
+            resource_id,
+            binding,
+            client_config,
+            expires_at,
+        })
+    }
+
     fn into_provider_parts(
         self,
     ) -> Result<(alien_core::ClientConfig, serde_json::Value, DateTime<Utc>)> {
@@ -436,6 +555,11 @@ impl ResolvedRemoteBinding {
                     serialize_remote_binding(alien_core::KeyBinding::AzureKeyVault(binding))?,
                     expires_at,
                 )
+            }
+            Self::Bedrock { .. } | Self::Vertex { .. } | Self::Foundry { .. } => {
+                return Err(AlienError::new(ErrorData::RemoteAccessFailed {
+                    operation: "use an AI lease as a Storage or Key binding".to_string(),
+                }));
             }
             #[cfg(test)]
             Self::Local {

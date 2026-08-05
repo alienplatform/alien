@@ -1053,11 +1053,17 @@ pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
     // Every listed model must carry picker metadata (provider + displayName).
     let models = data.models.unwrap_or_default();
     if models.len() != model_count {
-        bail!("modelCount {model_count} disagrees with the models list ({})", models.len());
+        bail!(
+            "modelCount {model_count} disagrees with the models list ({})",
+            models.len()
+        );
     }
     for m in &models {
         if m.provider.is_empty() || m.display_name.is_empty() {
-            bail!("listed model '{}' is missing provider/displayName enrichment", m.id);
+            bail!(
+                "listed model '{}' is missing provider/displayName enrichment",
+                m.id
+            );
         }
     }
 
@@ -1066,7 +1072,10 @@ pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
     // disabled model through.
     let results = data.results.unwrap_or_default();
     if results.len() != model_count {
-        bail!("modelCount {model_count} disagrees with the results list ({})", results.len());
+        bail!(
+            "modelCount {model_count} disagrees with the results list ({})",
+            results.len()
+        );
     }
     let failed: Vec<&AiInvokeResult> = results.iter().filter(|r| !r.ok).collect();
     if !failed.is_empty() {

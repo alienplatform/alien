@@ -26,15 +26,18 @@ pub(crate) async fn proxy_foundry_anthropic(
     mut payload: Value,
     headers: &HeaderMap,
 ) -> Result<Response> {
-    let endpoint =
-        route.azure_endpoint.as_deref().ok_or_else(|| missing_field(route, "endpoint"))?;
+    let endpoint = route
+        .azure_endpoint
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "endpoint"))?;
 
     payload["model"] = Value::String(upstream_id.to_string());
-    let upstream_body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not re-serialize the rewritten request body".to_string(),
-        })?;
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
 
     // The binding carries the AIServices account endpoint; the Anthropic path
     // serves on that account. Whether the account host also needs the Entra

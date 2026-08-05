@@ -36,6 +36,15 @@ pub use remote_storage::RemoteStorageHandle;
 pub use storage::StorageHandle;
 pub use vault::VaultHandle;
 
+#[cfg(feature = "platform-sdk")]
+#[napi(object)]
+pub struct RemoteAiLeaseJs {
+    pub resource_id: String,
+    pub binding_json: String,
+    pub client_config_json: String,
+    pub expires_at: String,
+}
+
 /// Returns the addon crate version. A synchronous surface used to smoke-test
 /// that the native module loads and calls under a given runtime.
 #[napi]
@@ -161,5 +170,19 @@ impl RemoteBindingsHandle {
     pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {
         let key = self.inner.key(&name).await.map_err(map_alien_error)?;
         Ok(KeyHandle::new(key))
+    }
+
+    /// Resolve the deployment's unique managed AI binding.
+    #[napi]
+    pub async fn ai(&self) -> napi::Result<RemoteAiLeaseJs> {
+        let lease = self.inner.ai().await.map_err(map_alien_error)?;
+        Ok(RemoteAiLeaseJs {
+            resource_id: lease.resource_id,
+            binding_json: serde_json::to_string(&lease.binding)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
+            client_config_json: serde_json::to_string(&lease.client_config)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
+            expires_at: lease.expires_at.to_rfc3339(),
+        })
     }
 }

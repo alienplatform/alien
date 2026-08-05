@@ -4,6 +4,7 @@ use crate::{ResourceEntry, ResourceLifecycle, ResourceType};
 pub enum RemoteBindingKind {
     Storage,
     Key,
+    Ai,
 }
 
 /// One resource type's provider-neutral Remote Bindings contract.
@@ -39,6 +40,14 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         permission_set: "key/remote-cryptography",
         kind: RemoteBindingKind::Key,
         description: "Encrypt and decrypt small values with this key",
+        setup_support_resource_types: &["azure_resource_group", "service_activation"],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "ai",
+        permission_set: "ai/invoke",
+        kind: RemoteBindingKind::Ai,
+        description: "Invoke models through this AI resource",
         setup_support_resource_types: &["azure_resource_group", "service_activation"],
         revision: 1,
     },

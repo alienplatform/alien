@@ -12,8 +12,13 @@
 import { createFactories } from "./factories.js"
 import { loadAddon } from "./loader.js"
 
-export type { RemoteDeploymentBindingsOptions } from "./remote.js"
 export { Bindings } from "./remote.js"
+export type {
+  RemoteAiBinding,
+  RemoteAiClientConfig,
+  RemoteAiLease,
+  RemoteDeploymentBindingsOptions,
+} from "./remote.js"
 
 const factories = createFactories(loadAddon)
 

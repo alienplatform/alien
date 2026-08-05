@@ -13,6 +13,12 @@ use tokio::sync::{Mutex, RwLock};
 use super::{Clock, ResolvedRemoteBinding};
 use crate::error::{ErrorData, Result};
 
+#[derive(Clone, Copy)]
+pub(super) enum RemoteBindingSelector<'a> {
+    Resource(&'a str),
+    Ai,
+}
+
 const DEFAULT_PLATFORM_API_URL: &str = "https://api.alien.dev";
 const MANAGER_ACCESS_MAX_AGE_SECONDS: i64 = 300;
 const MANAGER_TOKEN_REFRESH_SKEW_SECONDS: i64 = 30;
@@ -40,7 +46,7 @@ pub(super) trait ManagerBindingResolver: Send + Sync + fmt::Debug {
         &self,
         manager: &DiscoveredManager,
         deployment_id: &str,
-        resource_id: &str,
+        selector: RemoteBindingSelector<'_>,
     ) -> Result<ResolvedRemoteBinding>;
 }
 
@@ -201,17 +207,29 @@ impl RemoteBindingSource {
     }
 
     pub(super) async fn resolve(&self, resource_id: &str) -> Result<ResolvedRemoteBinding> {
+        self.resolve_selector(RemoteBindingSelector::Resource(resource_id))
+            .await
+    }
+
+    pub(super) async fn resolve_ai(&self) -> Result<ResolvedRemoteBinding> {
+        self.resolve_selector(RemoteBindingSelector::Ai).await
+    }
+
+    async fn resolve_selector(
+        &self,
+        selector: RemoteBindingSelector<'_>,
+    ) -> Result<ResolvedRemoteBinding> {
         let manager = self.manager_access().await?;
         match self
             .manager_resolver
-            .resolve(&manager, &self.deployment_id, resource_id)
+            .resolve(&manager, &self.deployment_id, selector)
             .await
         {
             Ok(binding) => Ok(binding),
             Err(error) if self.platform.is_some() && is_auth_or_assignment_rejection(&error) => {
                 let manager = self.refresh_after_rejection(manager.generation).await?;
                 self.manager_resolver
-                    .resolve(&manager, &self.deployment_id, resource_id)
+                    .resolve(&manager, &self.deployment_id, selector)
                     .await
             }
             Err(error) => Err(error),
@@ -225,7 +243,7 @@ impl ManagerBindingResolver for GeneratedManagerBindingResolver {
         &self,
         manager: &DiscoveredManager,
         deployment_id: &str,
-        resource_id: &str,
+        selector: RemoteBindingSelector<'_>,
     ) -> Result<ResolvedRemoteBinding> {
         let manager_client = alien_manager_api::Client::new_with_client(
             manager.url.as_str().trim_end_matches('/'),
@@ -233,9 +251,19 @@ impl ManagerBindingResolver for GeneratedManagerBindingResolver {
         );
         let response = manager_client
             .resolve_binding()
-            .body(alien_manager_api::types::ResolveBindingRequest {
-                deployment_id: deployment_id.to_string(),
-                resource_id: resource_id.to_string(),
+            .body(match selector {
+                RemoteBindingSelector::Resource(resource_id) => {
+                    alien_manager_api::types::ResolveBindingRequest {
+                        deployment_id: deployment_id.to_string(),
+                        resource_id: Some(resource_id.to_string()),
+                        kind: None,
+                    }
+                }
+                RemoteBindingSelector::Ai => alien_manager_api::types::ResolveBindingRequest {
+                    deployment_id: deployment_id.to_string(),
+                    resource_id: None,
+                    kind: Some(alien_manager_api::types::ResolveBindingKind::Ai),
+                },
             })
             .send()
             .await
@@ -244,7 +272,13 @@ impl ManagerBindingResolver for GeneratedManagerBindingResolver {
             .map_err(into_remote_error)?
             .into_inner();
 
-        ResolvedRemoteBinding::from_manager_response(response, resource_id)
+        ResolvedRemoteBinding::from_manager_response(
+            response,
+            match selector {
+                RemoteBindingSelector::Resource(resource_id) => resource_id,
+                RemoteBindingSelector::Ai => "the deployment's AI resource",
+            },
+        )
     }
 }
 
@@ -262,8 +296,12 @@ impl ManagerBindingResolver for LocalFixtureManagerBindingResolver {
         &self,
         manager: &DiscoveredManager,
         deployment_id: &str,
-        resource_id: &str,
+        selector: RemoteBindingSelector<'_>,
     ) -> Result<ResolvedRemoteBinding> {
+        let resource_id = match selector {
+            RemoteBindingSelector::Resource(resource_id) => resource_id,
+            RemoteBindingSelector::Ai => "models",
+        };
         let url = manager
             .url
             .join("v1/bindings/resolve")

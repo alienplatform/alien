@@ -55,9 +55,10 @@ fn test_ai_invoke_is_inference_only() {
                 entry.grant.predefined_roles.is_none(),
                 "ai/invoke GCP entry {i} must not use predefinedRoles (grants over-broad control-plane access); use a permissions list instead"
             );
-            let permissions = entry.grant.permissions.as_ref().unwrap_or_else(|| {
-                panic!("ai/invoke GCP entry {i} must have a permissions list")
-            });
+            let permissions =
+                entry.grant.permissions.as_ref().unwrap_or_else(|| {
+                    panic!("ai/invoke GCP entry {i} must have a permissions list")
+                });
             for perm in permissions {
                 // No control-plane write actions.
                 assert!(
@@ -82,8 +83,7 @@ fn test_ai_invoke_is_inference_only() {
             if let Some(actions) = &entry.grant.actions {
                 for action in actions {
                     assert_ne!(
-                        action,
-                        "Microsoft.CognitiveServices/accounts/deployments/write",
+                        action, "Microsoft.CognitiveServices/accounts/deployments/write",
                         "ai/invoke must not grant deployments/write; that belongs in ai/provision"
                     );
                 }
@@ -118,9 +118,8 @@ fn test_ai_provision_has_deployment_writes() {
             .actions
             .as_ref()
             .map(|actions| {
-                actions.contains(
-                    &"Microsoft.CognitiveServices/accounts/deployments/write".to_string(),
-                )
+                actions
+                    .contains(&"Microsoft.CognitiveServices/accounts/deployments/write".to_string())
             })
             .unwrap_or(false)
     });
@@ -142,9 +141,8 @@ fn test_ai_provision_has_deployment_writes() {
             .actions
             .as_ref()
             .map(|actions| {
-                actions.contains(
-                    &"Microsoft.CognitiveServices/accounts/deployments/write".to_string(),
-                )
+                actions
+                    .contains(&"Microsoft.CognitiveServices/accounts/deployments/write".to_string())
             })
             .unwrap_or(false)
     });
@@ -201,10 +199,22 @@ fn test_ai_permission_sets_have_all_platforms() {
     for id in ["ai/provision", "ai/management", "ai/heartbeat", "ai/invoke"] {
         let perm_set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));
         assert_eq!(perm_set.id, id);
-        assert!(!perm_set.description.is_empty(), "{id} must have a description");
-        assert!(perm_set.platforms.aws.is_some(), "{id} must have AWS platform");
-        assert!(perm_set.platforms.gcp.is_some(), "{id} must have GCP platform");
-        assert!(perm_set.platforms.azure.is_some(), "{id} must have Azure platform");
+        assert!(
+            !perm_set.description.is_empty(),
+            "{id} must have a description"
+        );
+        assert!(
+            perm_set.platforms.aws.is_some(),
+            "{id} must have AWS platform"
+        );
+        assert!(
+            perm_set.platforms.gcp.is_some(),
+            "{id} must have GCP platform"
+        );
+        assert!(
+            perm_set.platforms.azure.is_some(),
+            "{id} must have Azure platform"
+        );
     }
 }
 

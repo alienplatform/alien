@@ -288,12 +288,13 @@ impl LocalBindingsProvider {
             // Re-reads the password live from the manager's 0600 metadata. `try_get_binding`
             // is `None` for a name absent on recover; external (Remote Access) Postgres is
             // rejected upstream on the local platform, so it never reaches here.
-            return match self.postgres_manager.try_get_binding(binding_name).context(
-                BindingsErrorData::config_invalid(
+            return match self
+                .postgres_manager
+                .try_get_binding(binding_name)
+                .context(BindingsErrorData::config_invalid(
                     binding_name,
                     "Failed to read the local Postgres metadata",
-                ),
-            )? {
+                ))? {
                 Some(binding) => Ok(Some(
                     alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding)
                         .context(BindingsErrorData::config_invalid(

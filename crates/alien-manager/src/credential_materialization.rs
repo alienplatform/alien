@@ -19,12 +19,14 @@ use crate::traits::RemoteStorageCredentialSource;
 const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 pub(crate) const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 pub(crate) const AZURE_KEY_VAULT_SCOPE: &str = "https://vault.azure.net/.default";
+pub(crate) const AZURE_AI_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
 const REMOTE_STORAGE_DURATION_SECONDS: i32 = 3600;
-const AZURE_MINT_SCOPES: [&str; 4] = [
+const AZURE_MINT_SCOPES: [&str; 5] = [
     "https://management.azure.com/.default",
     AZURE_STORAGE_SCOPE,
     "https://vault.azure.net/.default",
     "https://servicebus.azure.net/.default",
+    AZURE_AI_SCOPE,
 ];
 
 pub(crate) struct MaterializedCredentialLease {
@@ -40,6 +42,9 @@ pub(crate) enum RemoteBindingCredentialScope {
     GcpCloudKms,
     AzureBlob,
     AzureKeyVault,
+    AwsAi,
+    GcpAi,
+    AzureAi,
 }
 
 impl std::fmt::Debug for MaterializedCredentialLease {
@@ -158,6 +163,7 @@ pub(crate) async fn materialize_remote_binding_lease(
             let azure_scope = match scope {
                 RemoteBindingCredentialScope::AzureBlob => AZURE_STORAGE_SCOPE,
                 RemoteBindingCredentialScope::AzureKeyVault => AZURE_KEY_VAULT_SCOPE,
+                RemoteBindingCredentialScope::AzureAi => AZURE_AI_SCOPE,
                 _ => {
                     return Err(ErrorData::internal(
                         "Remote Bindings credential scope does not match Azure",
@@ -219,10 +225,13 @@ fn remote_binding_scope_platform(scope: &RemoteBindingCredentialScope) -> Platfo
     match scope {
         RemoteBindingCredentialScope::AwsS3 => Platform::Aws,
         RemoteBindingCredentialScope::AwsKms => Platform::Aws,
+        RemoteBindingCredentialScope::AwsAi => Platform::Aws,
         RemoteBindingCredentialScope::GcpGcs => Platform::Gcp,
         RemoteBindingCredentialScope::GcpCloudKms => Platform::Gcp,
+        RemoteBindingCredentialScope::GcpAi => Platform::Gcp,
         RemoteBindingCredentialScope::AzureBlob => Platform::Azure,
         RemoteBindingCredentialScope::AzureKeyVault => Platform::Azure,
+        RemoteBindingCredentialScope::AzureAi => Platform::Azure,
     }
 }
 
@@ -282,6 +291,38 @@ mod tests {
             config.credentials,
             AzureCredentials::AccessToken {
                 token: "key-vault-token".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_ai_resolution_selects_only_the_cognitive_services_audience() {
+        let config = ClientConfig::Azure(Box::new(AzureClientConfig {
+            subscription_id: "subscription".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::ScopedAccessTokens {
+                tokens: HashMap::from([
+                    (AZURE_STORAGE_SCOPE.to_string(), "storage-token".to_string()),
+                    (AZURE_AI_SCOPE.to_string(), "ai-token".to_string()),
+                ]),
+            },
+            service_overrides: None,
+        }));
+
+        let lease = materialize_remote_binding_lease(
+            RemoteStorageCredentialSource::Direct(config),
+            RemoteBindingCredentialScope::AzureAi,
+        )
+        .await
+        .unwrap();
+        let ClientConfig::Azure(config) = lease.client_config else {
+            panic!("expected Azure client config");
+        };
+        assert_eq!(
+            config.credentials,
+            AzureCredentials::AccessToken {
+                token: "ai-token".to_string(),
             }
         );
     }

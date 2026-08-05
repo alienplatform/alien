@@ -1,4 +1,5 @@
 use super::*;
+use crate::remote::access::RemoteBindingSelector;
 
 #[tokio::test]
 async fn preissued_manager_access_loads_a_binding_without_platform_discovery() {
@@ -96,7 +97,11 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
     };
 
     let lease = adapter
-        .resolve(&manager, DEPLOYMENT_ID, "files")
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("files"),
+        )
         .await
         .expect("generated client should decode an S3 lease");
     let ResolvedRemoteBinding::S3 {
@@ -165,7 +170,11 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
         }),
     );
     let lease = adapter
-        .resolve(&manager, DEPLOYMENT_ID, "files")
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("files"),
+        )
         .await
         .expect("generated client should decode a Blob lease");
     let ResolvedRemoteBinding::Blob {
@@ -212,7 +221,11 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
         }),
     );
     let lease = adapter
-        .resolve(&manager, DEPLOYMENT_ID, "files")
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("files"),
+        )
         .await
         .expect("generated client should decode a GCS lease");
     let ResolvedRemoteBinding::Gcs {
@@ -256,7 +269,14 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
             "expiresAt": "not-a-timestamp",
         }),
     );
-    let error = match adapter.resolve(&manager, DEPLOYMENT_ID, "files").await {
+    let error = match adapter
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("files"),
+        )
+        .await
+    {
         Ok(_) => panic!("an invalid lease expiry must fail typed conversion"),
         Err(error) => error,
     };
@@ -282,7 +302,14 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
             "httpStatusCode": 403,
         }),
     );
-    let error = match adapter.resolve(&manager, DEPLOYMENT_ID, "files").await {
+    let error = match adapter
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("files"),
+        )
+        .await
+    {
         Ok(_) => panic!("generated client should preserve a structured manager error"),
         Err(error) => error,
     };
@@ -290,4 +317,70 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
     assert_eq!(error.message, "Remote access was revoked");
     assert!(!error.retryable);
     assert_eq!(error.http_status_code, Some(403));
+}
+
+#[tokio::test]
+async fn remote_ai_returns_a_typed_redacted_bedrock_lease() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        json!({
+            "service": "bedrock",
+            "resourceId": "models",
+            "binding": { "region": "us-east-1" },
+            "clientConfig": {
+                "accountId": "123456789012",
+                "region": "us-east-1",
+                "credentials": {
+                    "type": "sessionCredentials",
+                    "accessKeyId": "SENTINEL_ACCESS_KEY",
+                    "secretAccessKey": "SENTINEL_SECRET_KEY",
+                    "sessionToken": "SENTINEL_SESSION_TOKEN",
+                    "expiresAt": expires_at.to_rfc3339(),
+                },
+            },
+            "expiresAt": expires_at.to_rfc3339(),
+        }),
+    )));
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: requests.clone(),
+    })
+    .await;
+    let bindings = RemoteBindings::from_manager_access(
+        DEPLOYMENT_ID,
+        &manager_url,
+        GENERATED_MANAGER_TOKEN,
+        expires_at,
+    )
+    .expect("construct bindings from assigned Manager access");
+
+    let lease = bindings.ai().await.expect("resolve Bedrock AI lease");
+    assert_eq!(lease.resource_id, "models");
+    assert_eq!(lease.binding, alien_core::AiBinding::bedrock("us-east-1"));
+    assert_eq!(lease.client_config.platform(), alien_core::Platform::Aws);
+    assert_eq!(
+        requests
+            .lock()
+            .expect("generated contract requests lock")
+            .as_slice(),
+        &[RecordedRequest {
+            method: "POST".to_string(),
+            path: "/v1/bindings/resolve".to_string(),
+            authorization: Some(format!("Bearer {GENERATED_MANAGER_TOKEN}")),
+            body: Some(json!({
+                "deploymentId": DEPLOYMENT_ID,
+                "kind": "ai",
+            })),
+        }]
+    );
+    let debug = format!("{lease:?}");
+    for secret in [
+        "SENTINEL_ACCESS_KEY",
+        "SENTINEL_SECRET_KEY",
+        "SENTINEL_SESSION_TOKEN",
+    ] {
+        assert!(!debug.contains(secret));
+    }
 }

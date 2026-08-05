@@ -15,7 +15,7 @@ path = "src/bin/alien-ai-gateway.rs"
 
 [dependencies]
 alien-core = { workspace = true }
-alien-bindings = { workspace = true, default-features = false, features = ["aws", "gcp", "azure"] }
+alien-bindings = { workspace = true, default-features = false, features = ["aws", "gcp", "azure", "platform-sdk"] }
 alien-error = { workspace = true, features = ["axum"] }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "macros"] }
 axum = { workspace = true, features = ["http1", "tokio", "json"] }

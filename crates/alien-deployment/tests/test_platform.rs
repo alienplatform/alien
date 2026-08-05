@@ -1753,9 +1753,14 @@ async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
         .resources
         .contains_key("proxy"));
     assert!(
-        prepared_stack_of(&state).resources.contains_key("default-sa"),
+        prepared_stack_of(&state)
+            .resources
+            .contains_key("default-sa"),
         "the profile-derived service account belongs to the prepared stack: {:?}",
-        prepared_stack_of(&state).resources.keys().collect::<Vec<_>>()
+        prepared_stack_of(&state)
+            .resources
+            .keys()
+            .collect::<Vec<_>>()
     );
 
     // Declined on an update: the worker is deprovisioned, the deployment
@@ -1772,9 +1777,14 @@ async fn a_declined_live_worker_keeps_its_derived_baseline_across_updates() {
         .resources
         .contains_key("proxy"));
     assert!(
-        prepared_stack_of(&state).resources.contains_key("default-sa"),
+        prepared_stack_of(&state)
+            .resources
+            .contains_key("default-sa"),
         "declining the worker must not strip its derived baseline: {:?}",
-        prepared_stack_of(&state).resources.keys().collect::<Vec<_>>()
+        prepared_stack_of(&state)
+            .resources
+            .keys()
+            .collect::<Vec<_>>()
     );
     assert!(
         !prepared_stack_of(&state).resources.contains_key("proxy"),

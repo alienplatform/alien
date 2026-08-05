@@ -9,8 +9,8 @@
 
 use std::net::Ipv4Addr;
 
-use alien_core::Platform;
 use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, BearerTokenCred, GatewayRoute};
+use alien_core::Platform;
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
 use httpmock::prelude::*;
@@ -62,7 +62,8 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
     // return 404 and drop from the list, which the assertions tolerate.
     let _aws_claude_probe = aws_upstream
         .mock_async(|when, then| {
-            when.method(POST).matches(|req: &HttpMockRequest| req.path.contains("/model/"));
+            when.method(POST)
+                .matches(|req: &HttpMockRequest| req.path.contains("/model/"));
             then.status(200)
                 .header("content-type", "application/json")
                 .body(r#"{"id":"msg_probe","content":[{"type":"text","text":"ok"}]}"#);
@@ -146,7 +147,10 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         .collect();
     assert!(aws_ids.contains(&"gpt-oss-20b"));
     assert!(aws_ids.contains(&"claude-opus-4.8"));
-    assert!(!aws_ids.contains(&"gpt-4.1"), "AWS catalog must not list the Azure model");
+    assert!(
+        !aws_ids.contains(&"gpt-4.1"),
+        "AWS catalog must not list the Azure model"
+    );
 
     let az_models: Value = client
         .get(format!("{base}/azllm/v1/models"))
@@ -163,7 +167,10 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         .map(|m| m["id"].as_str().unwrap())
         .collect();
     assert!(az_ids.contains(&"gpt-4.1"));
-    assert!(!az_ids.contains(&"gpt-oss-20b"), "Azure catalog must not list the AWS model");
+    assert!(
+        !az_ids.contains(&"gpt-oss-20b"),
+        "Azure catalog must not list the AWS model"
+    );
 }
 
 #[tokio::test]
@@ -201,7 +208,11 @@ async fn large_body_reaches_the_upstream_instead_of_413() {
         .await
         .expect("large request");
 
-    assert_eq!(resp.status(), 200, "a >2 MB body must reach the upstream, not be rejected as 413");
+    assert_eq!(
+        resp.status(),
+        200,
+        "a >2 MB body must reach the upstream, not be rejected as 413"
+    );
     assert!(resp.text().await.unwrap().contains("pong"));
     upstream_mock.assert_async().await;
 }
@@ -239,7 +250,11 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
         .await
         .expect("oversized request");
 
-    assert_eq!(resp.status(), 413, "a body past the cap must be rejected, not buffered");
+    assert_eq!(
+        resp.status(),
+        413,
+        "a body past the cap must be rejected, not buffered"
+    );
     let error: serde_json::Value = resp.json().await.expect("a structured error body");
     assert_eq!(
         error["code"], "GATEWAY_REQUEST_TOO_LARGE",

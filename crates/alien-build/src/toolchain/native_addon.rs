@@ -610,10 +610,8 @@ pub(crate) fn workspace_addon_inputs(anchor: &Path, targets: &[BinaryTarget]) ->
                 cargo_package,
             } => {
                 // The host-built launcher binary under the workspace target dir.
-                let Some(root) =
-                    find_workspace_crate(anchor, cargo_package).and_then(|c| {
-                        c.parent().and_then(Path::parent).map(Path::to_path_buf)
-                    })
+                let Some(root) = find_workspace_crate(anchor, cargo_package)
+                    .and_then(|c| c.parent().and_then(Path::parent).map(Path::to_path_buf))
                 else {
                     continue;
                 };
@@ -679,7 +677,15 @@ pub(super) async fn stage_native_addon(
     // Take the per-path staging lock BEFORE writing, and hand it to the caller so
     // it survives until the compile that embeds the staged file has finished.
     guards.push(lock_staged_path(&bindings_dist.join(BINDINGS.staged_file)).await);
-    stage_addon_into(src_dir, &BINDINGS, &bindings_dist, target, resource_name, true).await?;
+    stage_addon_into(
+        src_dir,
+        &BINDINGS,
+        &bindings_dist,
+        target,
+        resource_name,
+        true,
+    )
+    .await?;
 
     // AI gateway: best-effort. Stage it only when the app resolves it AND an
     // addon for the target exists; skipping keeps non-AI Workers building.
@@ -838,7 +844,11 @@ async fn stage_addon_into(
     // concurrent compile. The dist directory is build output, so a lingering
     // copy is expected debris and the next staging simply renames over it.
     let staged = addon_dist.join(spec.staged_file);
-    let staged_tmp = addon_dist.join(format!("{}.staging-{}", spec.staged_file, std::process::id()));
+    let staged_tmp = addon_dist.join(format!(
+        "{}.staging-{}",
+        spec.staged_file,
+        std::process::id()
+    ));
     let stage_result = async {
         fs::copy(&source, &staged_tmp).await?;
         fs::rename(&staged_tmp, &staged).await
@@ -888,10 +898,7 @@ mod tests {
     /// Create `<dir>/node_modules/<spec.package>/dist/native.js` and return the
     /// `dist/` path — the directory an addon is staged into.
     async fn install_fake_addon_package(app_dir: &Path, spec: &NativeAddonSpec) -> PathBuf {
-        let dist = app_dir
-            .join("node_modules")
-            .join(spec.package)
-            .join("dist");
+        let dist = app_dir.join("node_modules").join(spec.package).join("dist");
         fs::create_dir_all(&dist).await.unwrap();
         fs::write(dist.join("native.js"), "// fake native entry")
             .await

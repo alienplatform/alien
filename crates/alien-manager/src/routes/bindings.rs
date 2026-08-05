@@ -5,9 +5,9 @@
 //! binding topology together with materialized, short-lived credentials.
 
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, BindingValue,
-    ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding, Platform,
-    ResourceLifecycle, ResourceStatus, Storage, StorageBinding,
+    Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
+    BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
+    Platform, ResourceLifecycle, ResourceStatus, Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -39,7 +39,16 @@ pub struct ResolveBindingRequest {
     /// Deployment containing the remote-enabled resource.
     pub deployment_id: String,
     /// Logical remote-enabled resource id in the deployment's stack state.
-    pub resource_id: String,
+    pub resource_id: Option<String>,
+    /// Deployment-level binding selector. V1 supports the unique managed AI resource.
+    pub kind: Option<ResolveBindingKind>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ResolveBindingKind {
+    Ai,
 }
 
 /// One approved remote Storage binding paired with credentials for the same
@@ -99,6 +108,59 @@ pub enum ResolveBindingResponse {
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
+    /// AWS Bedrock and an AWS session.
+    Bedrock {
+        #[serde(rename = "resourceId")]
+        resource_id: String,
+        binding: RemoteAwsBedrockAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// GCP Vertex AI and an access token.
+    Vertex {
+        #[serde(rename = "resourceId")]
+        resource_id: String,
+        binding: RemoteGcpVertexAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Azure AI Foundry and a Cognitive Services access token.
+    Foundry {
+        #[serde(rename = "resourceId")]
+        resource_id: String,
+        binding: RemoteAzureFoundryAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAzureClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAwsBedrockAiBinding {
+    pub region: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteGcpVertexAiBinding {
+    pub project: String,
+    pub location: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAzureFoundryAiBinding {
+    pub endpoint: String,
+    pub account: String,
 }
 
 #[derive(Serialize)]
@@ -269,9 +331,16 @@ enum RemoteKeyBinding {
     Azure(RemoteAzureKeyVaultKeyBinding),
 }
 
+enum RemoteAiBinding {
+    Aws(RemoteAwsBedrockAiBinding),
+    Gcp(RemoteGcpVertexAiBinding),
+    Azure(RemoteAzureFoundryAiBinding),
+}
+
 enum ResolvedRemoteBinding {
     Storage(RemoteStorageBinding),
     Key(RemoteKeyBinding),
+    Ai(RemoteAiBinding),
 }
 
 impl ResolvedRemoteBinding {
@@ -279,6 +348,17 @@ impl ResolvedRemoteBinding {
         match self {
             Self::Storage(binding) => binding.credential_scope(),
             Self::Key(binding) => binding.credential_scope(),
+            Self::Ai(binding) => binding.credential_scope(),
+        }
+    }
+}
+
+impl RemoteAiBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsAi,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpAi,
+            Self::Azure(_) => RemoteBindingCredentialScope::AzureAi,
         }
     }
 }
@@ -469,6 +549,41 @@ impl ResolveBindingResponse {
             )),
         }
     }
+
+    fn from_ai_parts(
+        resource_id: String,
+        binding: RemoteAiBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteAiBinding::Aws(binding), ClientConfig::Aws(client_config)) => {
+                Ok(Self::Bedrock {
+                    resource_id,
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteAiBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => Ok(Self::Vertex {
+                resource_id,
+                binding,
+                client_config: (*client_config).try_into()?,
+                expires_at,
+            }),
+            (RemoteAiBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
+                Ok(Self::Foundry {
+                    resource_id,
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote AI binding and materialized credential platforms do not match",
+            )),
+        }
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -513,6 +628,22 @@ async fn resolve_binding(
         Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
         Err(error) => return error.into_response(),
     };
+    let resource_id = match (&request.resource_id, &request.kind) {
+        (Some(resource_id), None) => resource_id.clone(),
+        (None, Some(ResolveBindingKind::Ai)) => {
+            match unique_current_release_remote_ai(state.release_store.as_ref(), &deployment).await
+            {
+                Ok(resource_id) => resource_id,
+                Err(error) => return error.into_response(),
+            }
+        }
+        _ => {
+            return ErrorData::bad_request(
+                "Specify exactly one of resourceId or kind when resolving a remote binding",
+            )
+            .into_response()
+        }
+    };
     if !state
         .authz
         .can_resolve_remote_bindings(&subject, &deployment)
@@ -533,7 +664,7 @@ async fn resolve_binding(
     let binding_kind = match require_current_release_remote_access(
         state.release_store.as_ref(),
         &deployment,
-        &request.resource_id,
+        &resource_id,
     )
     .await
     {
@@ -541,17 +672,19 @@ async fn resolve_binding(
         Err(error) => return error.into_response(),
     };
 
-    if let Err(error) = require_setup_owned_remote_binding(&deployment, &request.resource_id) {
+    if let Err(error) = require_setup_owned_remote_binding(&deployment, &resource_id) {
         return error.into_response();
     }
 
     let binding = match binding_kind {
         alien_core::remote_bindings::RemoteBindingKind::Storage => {
-            remote_storage_binding(&deployment, &request.resource_id)
-                .map(ResolvedRemoteBinding::Storage)
+            remote_storage_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Storage)
         }
         alien_core::remote_bindings::RemoteBindingKind::Key => {
-            remote_key_binding(&deployment, &request.resource_id).map(ResolvedRemoteBinding::Key)
+            remote_key_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Key)
+        }
+        alien_core::remote_bindings::RemoteBindingKind::Ai => {
+            remote_ai_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Ai)
         }
     };
     let binding = match binding {
@@ -562,7 +695,7 @@ async fn resolve_binding(
     let scope = binding.credential_scope();
     let resolved = match state
         .credential_resolver
-        .resolve_remote_storage_source(&deployment, &request.resource_id)
+        .resolve_remote_storage_source(&deployment, &resource_id)
         .await
     {
         Ok(source) => source,
@@ -593,6 +726,12 @@ async fn resolve_binding(
         ResolvedRemoteBinding::Key(binding) => {
             ResolveBindingResponse::from_key_parts(binding, lease, expires_at.clone())
         }
+        ResolvedRemoteBinding::Ai(binding) => ResolveBindingResponse::from_ai_parts(
+            resource_id.clone(),
+            binding,
+            lease,
+            expires_at.clone(),
+        ),
     };
     let response = match response {
         Ok(response) => response,
@@ -602,7 +741,7 @@ async fn resolve_binding(
     tracing::info!(
         event = "remote_binding_credentials_issued",
         deployment_id = %request.deployment_id,
-        resource_id = %request.resource_id,
+        resource_id = %resource_id,
         platform = %deployment.platform,
         expires_at = %expires_at,
         "Issued remote binding credentials"
@@ -613,6 +752,47 @@ async fn resolve_binding(
         Json(response),
     )
         .into_response()
+}
+
+async fn unique_current_release_remote_ai(
+    release_store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+) -> Result<String, alien_error::AlienError<ErrorData>> {
+    let release_id = deployment.current_release_id.as_deref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no current release; remote AI cannot be resolved")
+    })?;
+    let release = load_current_release(
+        release_store,
+        deployment,
+        release_id,
+        "remote AI resolution",
+    )
+    .await?;
+    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        ErrorData::internal(format!(
+            "Current release '{release_id}' has no {} stack",
+            deployment.platform
+        ))
+    })?;
+    let candidates = stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| {
+            entry.config.resource_type() == Ai::RESOURCE_TYPE
+                && entry.lifecycle == ResourceLifecycle::Frozen
+                && entry.remote_access
+        })
+        .map(|(resource_id, _)| resource_id)
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [resource_id] => Ok((*resource_id).clone()),
+        [] => Err(ErrorData::bad_request(
+            "Deployment has no Frozen AI resource enabled for remote access",
+        )),
+        _ => Err(ErrorData::bad_request(
+            "Deployment has more than one Frozen AI resource enabled for remote access",
+        )),
+    }
 }
 
 /// External bindings import caller-supplied resource references; they do not
@@ -730,16 +910,19 @@ async fn require_current_release_remote_access(
             "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
         )));
     }
-    if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
-        && stack
-            .resources
-            .values()
-            .filter(|entry| entry.remote_access)
-            .count()
-            != 1
+    if matches!(
+        definition.kind,
+        alien_core::remote_bindings::RemoteBindingKind::Key
+            | alien_core::remote_bindings::RemoteBindingKind::Ai
+    ) && stack
+        .resources
+        .values()
+        .filter(|entry| entry.remote_access)
+        .count()
+        != 1
     {
         return Err(ErrorData::bad_request(
-            "A remotely published Key must be the deployment's only remoteAccess resource",
+            "A remotely published Key or AI resource must be the deployment's only remoteAccess resource",
         ));
     }
 
@@ -896,6 +1079,82 @@ fn remote_key_binding(
         }
         _ => Err(ErrorData::bad_request(format!(
             "Key resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
+}
+
+fn remote_ai_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteAiBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote AI is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Ai::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not AI"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: AiBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("AI resource '{resource_id}' has an invalid remote binding"),
+            })?;
+
+    match (deployment.platform, binding) {
+        (Platform::Aws, AiBinding::Bedrock(binding)) => {
+            Ok(RemoteAiBinding::Aws(RemoteAwsBedrockAiBinding {
+                region: binding.region,
+            }))
+        }
+        (Platform::Gcp, AiBinding::Vertex(binding)) => {
+            Ok(RemoteAiBinding::Gcp(RemoteGcpVertexAiBinding {
+                project: binding.project,
+                location: binding.location,
+            }))
+        }
+        (Platform::Azure, AiBinding::Foundry(binding)) => {
+            Ok(RemoteAiBinding::Azure(RemoteAzureFoundryAiBinding {
+                endpoint: binding.endpoint,
+                account: binding.account,
+            }))
+        }
+        (_, AiBinding::External(_)) => Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' uses an external binding and cannot be resolved remotely"
+        ))),
+        _ => Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' binding does not match deployment platform '{}'",
             deployment.platform
         ))),
     }

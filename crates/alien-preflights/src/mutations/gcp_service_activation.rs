@@ -250,7 +250,10 @@ mod tests {
     #[test]
     fn ai_resource_requires_vertex_aiplatform() {
         let stack = Stack::new("test-stack".to_string())
-            .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+            .add(
+                Ai::new("llm".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
             .build();
         let services = GcpServiceActivationMutation.get_required_services(&stack);
         assert_eq!(

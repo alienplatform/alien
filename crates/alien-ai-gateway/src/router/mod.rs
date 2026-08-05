@@ -35,12 +35,12 @@ use vertex::proxy_vertex_anthropic;
 // items. `vertex_host` is also used by `upstream_target` here; `ensure_block_content` and
 // `EventStreamToSse` are test-only.
 pub(crate) use bedrock::bedrock_geo;
-pub(crate) use foundry::FOUNDRY_ANTHROPIC_VERSION;
-pub(crate) use vertex::vertex_host;
 #[cfg(test)]
 pub(crate) use bedrock::ensure_block_content;
 #[cfg(test)]
 pub(crate) use eventstream::EventStreamToSse;
+pub(crate) use foundry::FOUNDRY_ANTHROPIC_VERSION;
+pub(crate) use vertex::vertex_host;
 
 /// Clears the largest upstream request limit we serve (Bedrock `InvokeModel`, 25 MB) so the
 /// upstream still owns rejecting its own oversized payloads, while keeping the buffer finite.
@@ -99,7 +99,8 @@ struct AppState {
     /// Per-binding availability cache: the enabled model subset, probed lazily on
     /// the first `/v1/models` and reused for the process lifetime. Access grants
     /// change only across a redeploy (which restarts us), so there is no TTL.
-    models_cache: HashMap<String, tokio::sync::OnceCell<Arc<Vec<&'static ai_catalog::CatalogModel>>>>,
+    models_cache:
+        HashMap<String, tokio::sync::OnceCell<Arc<Vec<&'static ai_catalog::CatalogModel>>>>,
 }
 
 /// Build the axum router serving every binding under `/<name>/...`:
@@ -108,16 +109,21 @@ struct AppState {
 pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
     let routes: HashMap<String, GatewayRoute> =
         routes.into_iter().map(|r| (r.name.clone(), r)).collect();
-    let models_cache =
-        routes.keys().map(|name| (name.clone(), tokio::sync::OnceCell::new())).collect();
+    let models_cache = routes
+        .keys()
+        .map(|name| (name.clone(), tokio::sync::OnceCell::new()))
+        .collect();
     let state = Arc::new(AppState {
         routes,
         client: reqwest::Client::new(),
         models_cache,
     });
     Router::new()
-        .route("/{binding}/v1/chat/completions", post(proxy))
-        .route("/{binding}/v1/messages", post(proxy))
+        .route(
+            "/{binding}/v1/chat/completions",
+            post(proxy_chat_completions),
+        )
+        .route("/{binding}/v1/messages", post(proxy_messages))
         .route("/{binding}/v1/responses", post(proxy_responses))
         .route("/{binding}/v1/models", get(list_models))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
@@ -128,11 +134,12 @@ pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
 /// Both the chat/completions|messages handler and the Responses handler route on
 /// the request's `model`, so they share this preamble.
 fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
-    let payload: Value = serde_json::from_slice(body)
-        .into_alien_error()
-        .context(ErrorData::InvalidRequest {
-            message: "request body is not valid JSON".to_string(),
-        })?;
+    let payload: Value =
+        serde_json::from_slice(body)
+            .into_alien_error()
+            .context(ErrorData::InvalidRequest {
+                message: "request body is not valid JSON".to_string(),
+            })?;
     let model = payload
         .get("model")
         .and_then(Value::as_str)
@@ -201,14 +208,33 @@ pub(crate) async fn sign_and_execute(
         })
 }
 
-/// Proxy a chat/completions or messages request. Routes purely by the request's
-/// `model` (the catalog is the single source of truth for protocol + cloud), so the
-/// same handler serves both the OpenAI and Anthropic entry paths.
+async fn proxy_chat_completions(
+    state: State<Arc<AppState>>,
+    binding: Path<String>,
+    headers: HeaderMap,
+    body: ProxyBody,
+) -> Result<Response> {
+    proxy(state, binding, headers, body, Protocol::OpenAi).await
+}
+
+async fn proxy_messages(
+    state: State<Arc<AppState>>,
+    binding: Path<String>,
+    headers: HeaderMap,
+    body: ProxyBody,
+) -> Result<Response> {
+    proxy(state, binding, headers, body, Protocol::Anthropic).await
+}
+
+/// Proxy a Chat Completions or Messages request after binding the HTTP path to
+/// its exact client protocol. A model sent to the wrong API is rejected before
+/// credential lookup, signing, or an upstream request.
 async fn proxy(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
     headers: HeaderMap,
     ProxyBody(body): ProxyBody,
+    client_protocol: Protocol,
 ) -> Result<Response> {
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
@@ -226,6 +252,19 @@ async fn proxy(
             binding: binding.clone(),
         })
     })?;
+
+    if cm.protocol != client_protocol {
+        let expected_path = match cm.protocol {
+            Protocol::OpenAi => "v1/chat/completions",
+            Protocol::Anthropic => "v1/messages",
+            Protocol::OpenAiResponses => "v1/responses",
+        };
+        return Err(AlienError::new(ErrorData::InvalidRequest {
+            message: format!(
+                "model `{model}` is not supported by this client API; send it to /{binding}/{expected_path}"
+            ),
+        }));
+    }
 
     // AWS serves Claude through classic Bedrock InvokeModel, not the passthrough
     // endpoint: the model id travels in the URL and the streamed reply is AWS
@@ -248,29 +287,25 @@ async fn proxy(
             .await;
     }
 
-    // Bedrock's model cards mark Chat Completions unsupported for these, so there is
-    // no chat endpoint to forward to. Without this, `upstream_target` falls to its
-    // catch-all and answers an opaque 500 saying the cloud does not serve the protocol.
-    if cm.protocol == Protocol::OpenAiResponses {
-        return Err(AlienError::new(ErrorData::InvalidRequest {
-            message: format!(
-                "model `{model}` is served over the Responses API; \
-                 send it to /{binding}/v1/responses instead of /v1/chat/completions"
-            ),
-        }));
-    }
-
     payload["model"] = Value::String(cm.upstream_id.to_string());
-    let upstream_body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not re-serialize the rewritten request body".to_string(),
-        })?;
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
 
     let (url, aws_service) = upstream_target(route, cm.protocol)?;
 
-    let upstream =
-        sign_and_execute(&state.client, &route.cred, &url, aws_service, upstream_body, &[]).await?;
+    let upstream = sign_and_execute(
+        &state.client,
+        &route.cred,
+        &url,
+        aws_service,
+        upstream_body,
+        &[],
+    )
+    .await?;
 
     forward_response(upstream)
 }
@@ -306,22 +341,32 @@ async fn proxy_responses(
         })?;
 
     payload["model"] = Value::String(target.upstream_id.to_string());
-    let upstream_body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not re-serialize the rewritten request body".to_string(),
-        })?;
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
 
-    let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
+    let region = route
+        .region
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "region"))?;
     let base = route
         .upstream_base_override
         .clone()
         .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
     let url = format!("{}{}", base.trim_end_matches('/'), target.path);
 
-    let upstream =
-        sign_and_execute(&state.client, &route.cred, &url, "bedrock-mantle", upstream_body, &[])
-            .await?;
+    let upstream = sign_and_execute(
+        &state.client,
+        &route.cred,
+        &url,
+        "bedrock-mantle",
+        upstream_body,
+        &[],
+    )
+    .await?;
 
     forward_response(upstream)
 }
@@ -334,14 +379,16 @@ async fn list_models(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
 ) -> Result<Response> {
-    let route = state
-        .routes
-        .get(&binding)
-        .ok_or_else(|| AlienError::new(ErrorData::UnknownBinding { binding: binding.clone() }))?;
-    let cell = state
-        .models_cache
-        .get(&binding)
-        .ok_or_else(|| AlienError::new(ErrorData::UnknownBinding { binding: binding.clone() }))?;
+    let route = state.routes.get(&binding).ok_or_else(|| {
+        AlienError::new(ErrorData::UnknownBinding {
+            binding: binding.clone(),
+        })
+    })?;
+    let cell = state.models_cache.get(&binding).ok_or_else(|| {
+        AlienError::new(ErrorData::UnknownBinding {
+            binding: binding.clone(),
+        })
+    })?;
 
     // Cache only a fully-resolved probe: if any model came back Indeterminate (a
     // transient error), serve the current best but leave it uncached so the next
@@ -391,7 +438,10 @@ pub(crate) fn upstream_target(
 ) -> Result<(String, &'static str)> {
     let (host, path, aws_service) = match (route.cloud, protocol) {
         (Platform::Aws, Protocol::OpenAi) => {
-            let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
+            let region = route
+                .region
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "region"))?;
             (
                 format!("https://bedrock-runtime.{region}.amazonaws.com"),
                 "/openai/v1/chat/completions".to_string(),
@@ -399,10 +449,14 @@ pub(crate) fn upstream_target(
             )
         }
         (Platform::Gcp, Protocol::OpenAi) => {
-            let location =
-                route.region.as_deref().ok_or_else(|| missing_field(route, "location"))?;
-            let project =
-                route.project.as_deref().ok_or_else(|| missing_field(route, "project"))?;
+            let location = route
+                .region
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "location"))?;
+            let project = route
+                .project
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "project"))?;
             (
                 vertex_host(location),
                 format!(
@@ -412,8 +466,10 @@ pub(crate) fn upstream_target(
             )
         }
         (Platform::Azure, Protocol::OpenAi) => {
-            let endpoint =
-                route.azure_endpoint.as_deref().ok_or_else(|| missing_field(route, "endpoint"))?;
+            let endpoint = route
+                .azure_endpoint
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "endpoint"))?;
             (
                 endpoint.trim_end_matches('/').to_string(),
                 "/openai/v1/chat/completions".to_string(),
@@ -427,11 +483,11 @@ pub(crate) fn upstream_target(
         }
     };
 
-    let base = route
-        .upstream_base_override
-        .clone()
-        .unwrap_or(host);
-    Ok((format!("{}{}", base.trim_end_matches('/'), path), aws_service))
+    let base = route.upstream_base_override.clone().unwrap_or(host);
+    Ok((
+        format!("{}{}", base.trim_end_matches('/'), path),
+        aws_service,
+    ))
 }
 
 /// Read a request's `stream` field. Streaming picks between two different
@@ -573,7 +629,10 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         let text = resp.text().await.unwrap();
-        assert!(text.contains("\"pong\""), "upstream body must pass through: {text}");
+        assert!(
+            text.contains("\"pong\""),
+            "upstream body must pass through: {text}"
+        );
         mock.assert_async().await;
     }
 
@@ -610,8 +669,15 @@ mod tests {
             .expect("proxy request");
 
         assert_eq!(resp.status(), 200);
-        assert_eq!(resp.headers().get("content-type").unwrap(), "text/event-stream");
-        assert_eq!(resp.text().await.unwrap(), sse, "SSE must stream through byte-for-byte");
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        assert_eq!(
+            resp.text().await.unwrap(),
+            sse,
+            "SSE must stream through byte-for-byte"
+        );
         mock.assert_async().await;
     }
 
@@ -630,7 +696,10 @@ mod tests {
             .expect("proxy request");
         assert_eq!(resp.status(), 400);
         assert!(
-            resp.text().await.unwrap().contains("GATEWAY_INVALID_REQUEST"),
+            resp.text()
+                .await
+                .unwrap()
+                .contains("GATEWAY_INVALID_REQUEST"),
             "must fail on the stream-validation path, not some other 400"
         );
     }
@@ -663,7 +732,10 @@ mod tests {
         let url = serve(build_router(vec![route])).await;
         let resp = reqwest::Client::new()
             .post(format!("{url}/llm/v1/messages"))
-            .header("anthropic-beta", "computer-use-2025-01-24, oauth-2025-04-20")
+            .header(
+                "anthropic-beta",
+                "computer-use-2025-01-24, oauth-2025-04-20",
+            )
             .json(&json!({"model": "claude-opus-4.8", "max_tokens": 16, "messages": []}))
             .send()
             .await
@@ -729,7 +801,10 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         let text = resp.text().await.unwrap();
-        assert!(text.contains("\"pong\""), "upstream body must pass through: {text}");
+        assert!(
+            text.contains("\"pong\""),
+            "upstream body must pass through: {text}"
+        );
         mock.assert_async().await;
     }
 
@@ -752,7 +827,10 @@ mod tests {
         let url = serve(build_router(vec![azure_route(&server.base_url())])).await;
         let resp = reqwest::Client::new()
             .post(format!("{url}/llm/v1/messages"))
-            .header("anthropic-beta", "computer-use-2025-01-24, oauth-2025-04-20")
+            .header(
+                "anthropic-beta",
+                "computer-use-2025-01-24, oauth-2025-04-20",
+            )
             .json(&json!({"model": "claude-opus-4.8", "max_tokens": 16, "messages": []}))
             .send()
             .await
@@ -787,7 +865,10 @@ mod tests {
 
         assert_eq!(resp.status(), 200);
         let text = resp.text().await.unwrap();
-        assert!(text.contains("\"pong\""), "upstream body must pass through: {text}");
+        assert!(
+            text.contains("\"pong\""),
+            "upstream body must pass through: {text}"
+        );
         // The mock only matches when the body carries the rewritten upstream id and an
         // Authorization header, so a hit proves the model rewrite and cred injection.
         mock.assert_async().await;
@@ -816,9 +897,56 @@ mod tests {
 
         assert_eq!(resp.status(), 400);
         let body = resp.text().await.unwrap();
-        assert!(body.contains("GATEWAY_INVALID_REQUEST"), "wrong error variant: {body}");
-        assert!(body.contains("/v1/responses"), "must name the endpoint to use: {body}");
+        assert!(
+            body.contains("GATEWAY_INVALID_REQUEST"),
+            "wrong error variant: {body}"
+        );
+        assert!(
+            body.contains("/v1/responses"),
+            "must name the endpoint to use: {body}"
+        );
         // Nothing may reach the cloud: a forwarded request would be signed and billed.
+        upstream.assert_hits_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn client_api_must_match_the_catalog_before_provider_work() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(200).body("{}");
+            })
+            .await;
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let client = reqwest::Client::new();
+
+        let anthropic_model_on_chat = client
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"claude-opus-4.8","messages":[]}))
+            .send()
+            .await
+            .expect("chat request");
+        assert_eq!(anthropic_model_on_chat.status(), 400);
+        assert!(anthropic_model_on_chat
+            .text()
+            .await
+            .expect("chat error body")
+            .contains("/llm/v1/messages"));
+
+        let openai_model_on_messages = client
+            .post(format!("{url}/llm/v1/messages"))
+            .json(&json!({"model":"gpt-oss-20b","messages":[]}))
+            .send()
+            .await
+            .expect("messages request");
+        assert_eq!(openai_model_on_messages.status(), 400);
+        assert!(openai_model_on_messages
+            .text()
+            .await
+            .expect("messages error body")
+            .contains("/llm/v1/chat/completions"));
+
         upstream.assert_hits_async(0).await;
     }
 
@@ -879,8 +1007,13 @@ mod tests {
         // NOT wrapped in {"bytes": ...}. It must surface as an Anthropic error event
         // rather than be dropped, which would truncate the reply under a 200.
         let mut decoder = EventStreamToSse::default();
-        let out = decoder.push(&raw_payload_frame(r#"{"message":"Model stream timed out"}"#));
-        assert!(out.contains("event: error"), "exception frame must surface an error: {out}");
+        let out = decoder.push(&raw_payload_frame(
+            r#"{"message":"Model stream timed out"}"#,
+        ));
+        assert!(
+            out.contains("event: error"),
+            "exception frame must surface an error: {out}"
+        );
         assert!(
             out.contains("Model stream timed out"),
             "the upstream error message must reach the client: {out}"
@@ -894,7 +1027,10 @@ mod tests {
             eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"hi"}}"#);
         bytes.extend_from_slice(&raw_payload_frame(r#"{"message":"throttled"}"#));
         let out = decoder.push(&bytes);
-        assert!(out.contains("event: content_block_delta"), "the normal delta must decode: {out}");
+        assert!(
+            out.contains("event: content_block_delta"),
+            "the normal delta must decode: {out}"
+        );
         assert!(
             out.contains("event: error") && out.contains("throttled"),
             "a trailing exception frame must still surface: {out}"
@@ -910,7 +1046,10 @@ mod tests {
         let mut bytes = 8u32.to_be_bytes().to_vec(); // total=8 (<16): impossible
         bytes.extend_from_slice(&[0u8; 12]);
         let out = decoder.push(&bytes);
-        assert!(out.contains("event: error"), "a desynced frame must surface an error: {out}");
+        assert!(
+            out.contains("event: error"),
+            "a desynced frame must surface an error: {out}"
+        );
         // A desync is unrecoverable, so further input is ignored rather than decoded
         // mid-stream as if nothing were wrong.
         let after = decoder.push(&eventstream_frame(r#"{"type":"message_stop"}"#));
@@ -921,12 +1060,16 @@ mod tests {
     fn decoder_fails_loud_on_corrupted_frame() {
         // A bit-flip inside a valid frame fails the CRC check: the corruption must
         // surface as an error, not decode to garbage misattributed to Bedrock.
-        let mut bytes = eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"hi"}}"#);
+        let mut bytes =
+            eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"hi"}}"#);
         let middle = bytes.len() / 2;
         bytes[middle] ^= 0xFF;
         let mut decoder = EventStreamToSse::default();
         let out = decoder.push(&bytes);
-        assert!(out.contains("event: error"), "a corrupted frame must surface an error: {out}");
+        assert!(
+            out.contains("event: error"),
+            "a corrupted frame must surface an error: {out}"
+        );
     }
 
     #[test]
@@ -936,7 +1079,11 @@ mod tests {
         let mut decoder = EventStreamToSse::default();
         let full = eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"hi"}}"#);
         let partial = &full[..full.len() - 5];
-        assert_eq!(decoder.push(partial), "", "an incomplete frame emits nothing until it completes");
+        assert_eq!(
+            decoder.push(partial),
+            "",
+            "an incomplete frame emits nothing until it completes"
+        );
         let flushed = decoder.finish();
         assert!(
             flushed.contains("event: error"),
@@ -950,7 +1097,11 @@ mod tests {
         let mut decoder = EventStreamToSse::default();
         let out = decoder.push(&eventstream_frame(r#"{"type":"message_stop"}"#));
         assert!(out.contains("event: message_stop"));
-        assert_eq!(decoder.finish(), "", "a clean stream end must not emit an error");
+        assert_eq!(
+            decoder.finish(),
+            "",
+            "a clean stream end must not emit an error"
+        );
     }
 
     #[test]
@@ -1022,7 +1173,10 @@ mod tests {
             body.contains("event: content_block_delta"),
             "event-stream must be decoded to Anthropic SSE: {body}"
         );
-        assert!(body.contains(r#""text":"pong""#), "delta text must survive: {body}");
+        assert!(
+            body.contains(r#""text":"pong""#),
+            "delta text must survive: {body}"
+        );
         mock.assert_async().await;
     }
 
@@ -1062,7 +1216,10 @@ mod tests {
             "application/json"
         );
         let text = resp.text().await.unwrap();
-        assert!(text.contains(r#""pong""#), "non-streaming JSON must pass through: {text}");
+        assert!(
+            text.contains(r#""pong""#),
+            "non-streaming JSON must pass through: {text}"
+        );
         mock.assert_async().await;
     }
 
@@ -1073,7 +1230,8 @@ mod tests {
         // rather than a stream that just stops. This exercises the real
         // Body::from_stream + unfold finish() plumbing that the decoder unit tests
         // (which call finish() directly) do not cover.
-        let full = eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"partial"}}"#);
+        let full =
+            eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"partial"}}"#);
         let truncated = full[..full.len() - 6].to_vec(); // an incomplete final frame
         let server = MockServer::start_async().await;
         let mock = server
@@ -1548,7 +1706,11 @@ mod tests {
             .expect("proxy request");
 
         assert_eq!(resp.status(), 200);
-        assert_eq!(resp.text().await.unwrap(), sse, "Responses SSE must pass through byte-for-byte");
+        assert_eq!(
+            resp.text().await.unwrap(),
+            sse,
+            "Responses SSE must pass through byte-for-byte"
+        );
         mock.assert_async().await;
     }
 
@@ -1562,7 +1724,9 @@ mod tests {
                 when.method(POST)
                     .path("/openai/v1/responses")
                     .body_contains("\"openai.gpt-5.6-sol\"");
-                then.status(200).header("content-type", "application/json").body("{}");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body("{}");
             })
             .await;
 
@@ -1628,16 +1792,17 @@ mod tests {
         let responses = server
             .mock_async(|when, then| {
                 when.method(POST).path("/openai/v1/responses");
-                then.status(200).header("content-type", "application/json").body("{}");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body("{}");
             })
             .await;
         // Everything else on this account is denied, so a pass can only come from
         // the Responses probe above.
         server
             .mock_async(|when, then| {
-                when.method(POST).matches(|req: &HttpMockRequest| {
-                    !req.path.contains("/openai/v1/responses")
-                });
+                when.method(POST)
+                    .matches(|req: &HttpMockRequest| !req.path.contains("/openai/v1/responses"));
                 then.status(403).body("access denied");
             })
             .await;
@@ -1649,11 +1814,21 @@ mod tests {
             .json()
             .await
             .unwrap();
-        let ids: Vec<&str> =
-            body["data"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
 
-        assert!(ids.contains(&"gpt-5.6-sol"), "gpt-5.6-sol must be listed: {ids:?}");
-        assert!(responses.hits_async().await > 0, "the Responses path must be probed");
+        assert!(
+            ids.contains(&"gpt-5.6-sol"),
+            "gpt-5.6-sol must be listed: {ids:?}"
+        );
+        assert!(
+            responses.hits_async().await > 0,
+            "the Responses path must be probed"
+        );
         let sol = body["data"]
             .as_array()
             .unwrap()
@@ -1673,12 +1848,15 @@ mod tests {
         let openai = server
             .mock_async(|when, then| {
                 when.method(POST).path("/openai/v1/chat/completions");
-                then.status(200).header("content-type", "application/json").body(r#"{"choices":[]}"#);
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"choices":[]}"#);
             })
             .await;
         let claude = server
             .mock_async(|when, then| {
-                when.method(POST).matches(|req: &HttpMockRequest| req.path.contains("/model/"));
+                when.method(POST)
+                    .matches(|req: &HttpMockRequest| req.path.contains("/model/"));
                 then.status(403).body("access denied");
             })
             .await;
@@ -1693,8 +1871,14 @@ mod tests {
         let ids: Vec<&str> = data.iter().map(|m| m["id"].as_str().unwrap()).collect();
 
         // An enabled OpenAI model is kept, enriched with provider + displayName.
-        assert!(ids.contains(&"gpt-oss-20b"), "gpt-oss-20b must be listed: {ids:?}");
-        let gpt = data.iter().find(|m| m["id"] == "gpt-oss-20b").expect("gpt-oss-20b entry");
+        assert!(
+            ids.contains(&"gpt-oss-20b"),
+            "gpt-oss-20b must be listed: {ids:?}"
+        );
+        let gpt = data
+            .iter()
+            .find(|m| m["id"] == "gpt-oss-20b")
+            .expect("gpt-oss-20b entry");
         assert_eq!(gpt["provider"], "openai");
         assert_eq!(gpt["displayName"], "GPT-OSS 20B");
         // Un-granted Claude (403) is filtered out.
@@ -1702,7 +1886,10 @@ mod tests {
             !ids.iter().any(|id| id.starts_with("claude")),
             "Claude (403) must be filtered out: {ids:?}"
         );
-        assert!(claude.hits_async().await > 0, "the Claude InvokeModel path must be probed");
+        assert!(
+            claude.hits_async().await > 0,
+            "the Claude InvokeModel path must be probed"
+        );
 
         // A second call is served from cache: no new upstream probes.
         let hits = openai.hits_async().await;
@@ -1728,7 +1915,8 @@ mod tests {
             .await;
         let claude = server
             .mock_async(|when, then| {
-                when.method(POST).matches(|req: &HttpMockRequest| req.path.contains("/model/"));
+                when.method(POST)
+                    .matches(|req: &HttpMockRequest| req.path.contains("/model/"));
                 then.status(500).body("upstream blew up");
             })
             .await;
@@ -1738,8 +1926,12 @@ mod tests {
         let resp = reqwest::get(format!("{url}/llm/v1/models")).await.unwrap();
         assert_eq!(resp.status(), 200);
         let body: Value = resp.json().await.unwrap();
-        let ids: Vec<&str> =
-            body["data"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
         assert!(
             ids.contains(&"gpt-oss-20b") && ids.iter().any(|id| id.starts_with("claude")),
             "an indeterminate probe must keep the model listed: {ids:?}"
