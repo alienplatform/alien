@@ -42,6 +42,7 @@ fn aws_key_package_is_valid_and_retained() {
     assert!(rendered.contains("\"kms:Encrypt\""));
     assert!(rendered.contains("\"kms:Decrypt\""));
     assert!(rendered.contains("aws_kms_key.customer_key.arn"));
+    assert!(rendered.contains("variable \"management_url\""));
     let detach = module
         .get("detach-retained-keys.sh")
         .expect("retained Key detach operation");

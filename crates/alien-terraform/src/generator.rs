@@ -429,7 +429,6 @@ pub fn generate_terraform_module(
             options.registration.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
-            setup_only,
         ))?,
     );
     if let Some(helm_install) = options
@@ -1327,13 +1326,13 @@ fn variables_body(
         None,
         true,
     )));
+    blocks.push(nested(variable_block(
+        "management_url",
+        "Management endpoint used to register the deployment and serve ongoing management requests.",
+        Some(Expression::String("".to_string())),
+        false,
+    )));
     if !setup_only {
-        blocks.push(nested(variable_block(
-            "management_url",
-            "Optional management endpoint used by pull-style runtimes.",
-            Some(Expression::String("".to_string())),
-            false,
-        )));
         blocks.push(nested(string_enum_variable_block(
             "deployment_model",
             "How runtime updates are delivered after setup.",
@@ -2700,7 +2699,6 @@ fn registration_body(
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
     input_values: Expression,
-    setup_only: bool,
 ) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -2735,14 +2733,7 @@ fn registration_body(
             ),
             attr("platform", expr::raw("local.deployment_platform")),
             attr("region", expr::raw("local.deployment_region")),
-            attr(
-                "management_url",
-                if setup_only {
-                    Expression::String(String::new())
-                } else {
-                    expr::raw("var.management_url")
-                },
-            ),
+            attr("management_url", expr::raw("var.management_url")),
             attr(
                 "management_config",
                 expr::raw("jsondecode(jsonencode(local.deployment_management_config))"),
@@ -2813,14 +2804,7 @@ fn registration_body(
                             .unwrap_or_default(),
                     ))),
                 ),
-                (
-                    "management_url",
-                    if setup_only {
-                        Expression::String(String::new())
-                    } else {
-                        expr::raw("var.management_url")
-                    },
-                ),
+                ("management_url", expr::raw("var.management_url")),
                 (
                     "management_config",
                     expr::raw("local.deployment_management_config"),
@@ -3193,7 +3177,7 @@ fn readme_required_inputs(has_registration: bool) -> String {
 
 fn readme_common_inputs(setup_only: bool) -> String {
     if setup_only {
-        return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one."
+        return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: management endpoint used to register the deployment and serve ongoing management requests."
             .to_string();
     }
     "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.\n- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.".to_string()
@@ -3330,7 +3314,6 @@ mod tests {
             Some(&registration),
             &[],
             Expression::Object(Default::default()),
-            false,
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));
