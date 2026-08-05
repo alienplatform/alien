@@ -48,7 +48,7 @@
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.7"
+    "vitest": "^4.0.0"
   },
   "dependencies": {
     "@openapi-contrib/json-schema-to-openapi-schema": "^4.0.0",
