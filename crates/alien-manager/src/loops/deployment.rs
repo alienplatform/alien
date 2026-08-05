@@ -50,7 +50,7 @@ const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// minutes, but potentially taking seven minutes or longer. Keep the first
 /// target-side token exchange retryable for a bounded window after setup hands
 /// the deployment to Provisioning.
-const CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
+const CREDENTIAL_HANDOFF_DEADLINE_FROM_CREATION: Duration = Duration::from_secs(20 * 60);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -1027,16 +1027,17 @@ fn credential_handoff_retry_remaining(
         return None;
     }
 
-    // The setup registration or setup-to-runtime transition persists the
-    // deployment before Manager attempts the new target identity. Use that
-    // durable update as the start of a bounded provider propagation window.
-    let handoff_started_at = deployment.updated_at.unwrap_or(deployment.created_at);
+    // `updated_at` also advances while a deployment is acquired and reconciled,
+    // so it cannot bound this retry. Deployment creation is immutable and
+    // always precedes setup identity creation; allow the complete setup and
+    // provider propagation sequence twenty minutes from that durable point.
+    let handoff_started_at = deployment.created_at;
     let elapsed = now
         .signed_duration_since(handoff_started_at)
         .to_std()
         .unwrap_or(Duration::ZERO);
 
-    CREDENTIAL_HANDOFF_GRACE_PERIOD
+    CREDENTIAL_HANDOFF_DEADLINE_FROM_CREATION
         .checked_sub(elapsed)
         .filter(|remaining| !remaining.is_zero())
 }
@@ -1088,7 +1089,7 @@ mod tests {
         get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
         manager_candidate_statuses, needs_provision_capability, parse_status,
         retryable_failed_statuses, should_wait_for_credential_handoff, with_environment_snapshot,
-        worker_commands_push_env_vars, CREDENTIAL_HANDOFF_GRACE_PERIOD,
+        worker_commands_push_env_vars, CREDENTIAL_HANDOFF_DEADLINE_FROM_CREATION,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
@@ -1321,7 +1322,7 @@ mod tests {
             Some(stack_state_with_remote_management_outputs(true)),
         );
         deployment.platform = Platform::Gcp;
-        deployment.updated_at = Some(now - chrono::Duration::minutes(2));
+        deployment.created_at = now - chrono::Duration::minutes(2);
         let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Gcp,
@@ -1338,7 +1339,7 @@ mod tests {
 
         assert_eq!(
             remaining,
-            CREDENTIAL_HANDOFF_GRACE_PERIOD - Duration::from_secs(2 * 60)
+            CREDENTIAL_HANDOFF_DEADLINE_FROM_CREATION - Duration::from_secs(2 * 60)
         );
     }
 
@@ -1350,7 +1351,7 @@ mod tests {
             Some(stack_state_with_remote_management_outputs(true)),
         );
         deployment.platform = Platform::Aws;
-        deployment.updated_at = Some(now);
+        deployment.created_at = now;
         let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Aws,
@@ -1374,10 +1375,10 @@ mod tests {
             Some(stack_state_with_remote_management_outputs(true)),
         );
         deployment.platform = Platform::Gcp;
-        deployment.updated_at = Some(
-            now - chrono::Duration::from_std(CREDENTIAL_HANDOFF_GRACE_PERIOD)
-                .expect("grace period should fit chrono duration"),
-        );
+        deployment.created_at = now
+            - chrono::Duration::from_std(CREDENTIAL_HANDOFF_DEADLINE_FROM_CREATION)
+                .expect("handoff deadline should fit chrono duration");
+        deployment.updated_at = Some(now);
         let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
             deployment_id: deployment.id.clone(),
             platform: Platform::Gcp,
@@ -1417,7 +1418,7 @@ mod tests {
             Some(stack_state_with_remote_management_outputs(true)),
         );
         deployment.platform = Platform::Gcp;
-        deployment.updated_at = Some(now);
+        deployment.created_at = now;
         let error = AlienError::new(alien_error::GenericError {
             message: "management binding is missing".to_string(),
         });
