@@ -3325,37 +3325,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "defmt"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
-dependencies = [
- "bitflags 1.3.2",
- "defmt-macros",
-]
-
-[[package]]
-name = "defmt-macros"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8"
-dependencies = [
- "defmt-parser",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "defmt-parser"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
-dependencies = [
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "delegate-attr"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5262,41 +5231,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jiff"
-version = "0.2.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
-dependencies = [
- "defmt",
- "jiff-core",
- "jiff-static",
- "portable-atomic",
- "portable-atomic-util",
- "serde_core",
-]
-
-[[package]]
-name = "jiff-core"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7feca88439efe53da3754500c1851dedf3cb36c524dd5cf8225cc0794de95d09"
-dependencies = [
- "defmt",
-]
-
-[[package]]
-name = "jiff-static"
-version = "0.2.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
-dependencies = [
- "jiff-core",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "jni"
 version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5435,12 +5369,12 @@ dependencies = [
 
 [[package]]
 name = "k8s-openapi"
-version = "0.28.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c6922f6afe80418dd6019818af5d0d34584c371780ff09b9752370c25b4abb"
+checksum = "aa60a41b57ae1a0a071af77dbcf89fc9819cfe66edaf2beeb204c34459dcf0b2"
 dependencies = [
  "base64 0.22.1",
- "jiff",
+ "chrono",
  "serde",
  "serde_json",
 ]
@@ -7082,15 +7016,6 @@ name = "portable-atomic"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
-
-[[package]]
-name = "portable-atomic-util"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
-dependencies = [
- "portable-atomic",
-]
 
 [[package]]
 name = "portpicker"
