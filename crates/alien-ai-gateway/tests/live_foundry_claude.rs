@@ -15,7 +15,7 @@
 
 use std::net::Ipv4Addr;
 
-use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
+use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute, GatewayTarget};
 use alien_core::Platform;
 use serde_json::{json, Value};
 
@@ -37,7 +37,7 @@ fn foundry_route() -> GatewayRoute {
         std::env::var("AZURE_ACCESS_TOKEN").expect("AZURE_ACCESS_TOKEN must hold an Entra token");
     GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Azure,
+        target: GatewayTarget::Cloud(Platform::Azure),
         region: None,
         project: None,
         azure_endpoint: Some(endpoint),

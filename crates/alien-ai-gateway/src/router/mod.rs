@@ -19,7 +19,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::creds::AmbientCred;
+use crate::creds::{AmbientCred, AnthropicApiKeyCred};
 use crate::error::{ErrorData, Result};
 
 mod bedrock;
@@ -74,10 +74,16 @@ where
 /// One binding resolved into everything the proxy needs to serve it: the cloud (for
 /// catalog filtering and upstream selection), the location fields used to build the
 /// upstream URL, and the ambient credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayTarget {
+    Cloud(Platform),
+    DirectAnthropic,
+}
+
 pub struct GatewayRoute {
     /// The binding name — the first path segment the app calls (`/<name>/...`).
     pub name: String,
-    pub cloud: Platform,
+    pub target: GatewayTarget,
     /// AWS region or GCP location.
     pub region: Option<String>,
     /// GCP project id.
@@ -89,6 +95,24 @@ pub struct GatewayRoute {
     /// host (the per-protocol path is still appended). Lets tests aim a binding at a
     /// mock upstream.
     pub upstream_base_override: Option<String>,
+}
+
+/// Build the only static-key route supported by the gateway. The provider and
+/// host are fixed here; callers cannot turn an encrypted binding into a generic
+/// credential-forwarding proxy.
+pub fn route_from_direct_anthropic(
+    name: impl Into<String>,
+    api_key: impl Into<String>,
+) -> Result<GatewayRoute> {
+    Ok(GatewayRoute {
+        name: name.into(),
+        target: GatewayTarget::DirectAnthropic,
+        region: None,
+        project: None,
+        azure_endpoint: None,
+        cred: AmbientCred::AnthropicApiKey(AnthropicApiKeyCred::new(api_key)?),
+        upstream_base_override: None,
+    })
 }
 
 struct AppState {
@@ -264,7 +288,20 @@ async fn proxy(
 
     // Cloud-scoped resolution: Claude ids appear once per cloud, so a first-match
     // resolve would always land on another cloud's entry and fail the cloud filter.
-    let cm = ai_catalog::resolve_for(&model, route.cloud).ok_or_else(|| {
+    if route.target == GatewayTarget::DirectAnthropic {
+        ensure_model_available(&state, &binding, &model)?;
+        if client_api != ClientApi::AnthropicMessages {
+            return Err(AlienError::new(ErrorData::InvalidRequest {
+                message: format!("direct Anthropic supports only /{binding}/v1/messages"),
+            }));
+        }
+        return proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await;
+    }
+    let cloud = match route.target {
+        GatewayTarget::Cloud(cloud) => cloud,
+        GatewayTarget::DirectAnthropic => unreachable!("handled above"),
+    };
+    let cm = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
             model: model.clone(),
             binding: binding.clone(),
@@ -289,20 +326,20 @@ async fn proxy(
     // AWS serves Claude through classic Bedrock InvokeModel, not the passthrough
     // endpoint: the model id travels in the URL and the streamed reply is AWS
     // event-stream framing, so it needs its own request/response shape.
-    if route.cloud == Platform::Aws && cm.provider_api == ProviderApi::Anthropic {
+    if cloud == Platform::Aws && cm.provider_api == ProviderApi::Anthropic {
         return proxy_bedrock_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
             .await;
     }
     // GCP serves Claude through Vertex rawPredict: the model id travels in the URL
     // and streaming is chosen by the URL verb, but the reply is native Anthropic
     // JSON/SSE — no decoder needed, unlike Bedrock.
-    if route.cloud == Platform::Gcp && cm.provider_api == ProviderApi::Anthropic {
+    if cloud == Platform::Gcp && cm.provider_api == ProviderApi::Anthropic {
         return proxy_vertex_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
             .await;
     }
     // Azure serves Claude through Foundry's Anthropic endpoint: standard Messages
     // in both directions, on the `/anthropic/v1` path with the version header.
-    if route.cloud == Platform::Azure && cm.provider_api == ProviderApi::Anthropic {
+    if cloud == Platform::Azure && cm.provider_api == ProviderApi::Anthropic {
         return proxy_foundry_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
             .await;
     }
@@ -351,7 +388,16 @@ async fn proxy_responses(
 
     // The Responses table implies AWS; the binding's cloud must still match so a
     // GCP/Azure binding doesn't forward to an AWS endpoint it has no credential for.
-    let catalog_model = ai_catalog::resolve_for(&model, route.cloud)
+    let cloud = match route.target {
+        GatewayTarget::Cloud(cloud) => cloud,
+        GatewayTarget::DirectAnthropic => {
+            return Err(AlienError::new(ErrorData::ModelNotAvailable {
+                model,
+                binding,
+            }))
+        }
+    };
+    let catalog_model = ai_catalog::resolve_for(&model, cloud)
         .filter(|model| model.client_apis.contains(&ClientApi::OpenAiResponses))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ModelNotAvailable {
@@ -414,21 +460,40 @@ async fn list_models(
         .as_ref()
         .map(|by_binding| by_binding.get(&binding));
 
-    let data: Vec<Value> = ai_catalog::models_for(route.cloud)
-        .into_iter()
-        .filter(|model| {
-            allowed
-                .is_none_or(|models| models.is_some_and(|models| models.contains(model.public_id)))
-        })
-        .map(|m| {
-            json!({
-                "id": m.public_id,
-                "object": "model",
-                "provider": m.provider(),
-                "displayName": m.display_name(),
+    let data: Vec<Value> = match route.target {
+        GatewayTarget::Cloud(cloud) => ai_catalog::models_for(cloud)
+            .into_iter()
+            .filter(|model| {
+                allowed.is_none_or(|models| {
+                    models.is_some_and(|models| models.contains(model.public_id))
+                })
             })
-        })
-        .collect();
+            .map(|model| {
+                json!({
+                    "id": model.public_id,
+                    "object": "model",
+                    "provider": model.provider(),
+                    "displayName": model.display_name(),
+                })
+            })
+            .collect(),
+        GatewayTarget::DirectAnthropic => ai_catalog::direct_anthropic_models()
+            .into_iter()
+            .filter(|model| {
+                allowed.is_none_or(|models| {
+                    models.is_some_and(|models| models.contains(model.public_id))
+                })
+            })
+            .map(|model| {
+                json!({
+                    "id": model.public_id,
+                    "object": "model",
+                    "provider": "anthropic",
+                    "displayName": model.display_name(),
+                })
+            })
+            .collect(),
+    };
     Ok(Json(json!({ "object": "list", "data": data })).into_response())
 }
 
@@ -446,6 +511,43 @@ fn ensure_model_available(state: &AppState, binding: &str, model: &str) -> Resul
     Ok(())
 }
 
+async fn proxy_direct_anthropic(
+    client: &reqwest::Client,
+    route: &GatewayRoute,
+    mut payload: Value,
+    model: &str,
+    headers: &HeaderMap,
+) -> Result<Response> {
+    let direct = ai_catalog::resolve_direct_anthropic(model).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.to_string(),
+            binding: route.name.clone(),
+        })
+    })?;
+    payload["model"] = Value::String(direct.upstream_id.to_string());
+    let body = serde_json::to_vec(&payload)
+        .into_alien_error()
+        .context(ErrorData::Other {
+            message: "could not serialize the Anthropic request".to_string(),
+        })?;
+    let base = route
+        .upstream_base_override
+        .as_deref()
+        .unwrap_or("https://api.anthropic.com");
+    let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+    let version = headers
+        .get("anthropic-version")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("2023-06-01");
+    let betas = bedrock::filtered_header_betas(headers).join(",");
+    let mut extra_headers = vec![("anthropic-version", version)];
+    if !betas.is_empty() {
+        extra_headers.push(("anthropic-beta", betas.as_str()));
+    }
+    let upstream = sign_and_execute(client, &route.cred, &url, "", body, &extra_headers).await?;
+    forward_response(upstream)
+}
+
 /// The error for a binding missing a field a handler needs.
 pub(crate) fn missing_field(route: &GatewayRoute, field: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::BindingConfigInvalid {
@@ -459,7 +561,15 @@ pub(crate) fn upstream_target(
     route: &GatewayRoute,
     provider_api: ProviderApi,
 ) -> Result<(String, &'static str)> {
-    let (host, path, aws_service) = match (route.cloud, provider_api) {
+    let cloud = match route.target {
+        GatewayTarget::Cloud(cloud) => cloud,
+        GatewayTarget::DirectAnthropic => {
+            return Err(AlienError::new(ErrorData::Other {
+                message: "direct Anthropic does not use a cloud upstream target".to_string(),
+            }))
+        }
+    };
+    let (host, path, aws_service) = match (cloud, provider_api) {
         (Platform::Aws, ProviderApi::OpenAi) => {
             let region = route
                 .region
@@ -568,7 +678,7 @@ mod tests {
     fn aws_route(upstream: &str) -> GatewayRoute {
         GatewayRoute {
             name: "llm".to_string(),
-            cloud: Platform::Aws,
+            target: GatewayTarget::Cloud(Platform::Aws),
             region: Some("us-east-2".to_string()),
             project: None,
             azure_endpoint: None,
@@ -580,7 +690,7 @@ mod tests {
     fn gcp_route(location: &str) -> GatewayRoute {
         GatewayRoute {
             name: "llm".to_string(),
-            cloud: Platform::Gcp,
+            target: GatewayTarget::Cloud(Platform::Gcp),
             region: Some(location.to_string()),
             project: Some("my-proj".to_string()),
             azure_endpoint: None,
@@ -771,7 +881,7 @@ mod tests {
     fn azure_route(endpoint: &str) -> GatewayRoute {
         GatewayRoute {
             name: "llm".to_string(),
-            cloud: Platform::Azure,
+            target: GatewayTarget::Cloud(Platform::Azure),
             region: None,
             project: None,
             azure_endpoint: Some(endpoint.to_string()),

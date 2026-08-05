@@ -63,6 +63,22 @@ pub struct CatalogModel {
     pub provider_api: ProviderApi,
 }
 
+/// One model served directly by Anthropic. This is separate from `CatalogModel`:
+/// direct Anthropic is a provider connection, not a deployable cloud platform.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectAnthropicModel {
+    pub public_id: &'static str,
+    pub upstream_id: &'static str,
+}
+
+impl DirectAnthropicModel {
+    pub fn display_name(&self) -> &'static str {
+        resolve(self.public_id)
+            .map(CatalogModel::display_name)
+            .unwrap_or(self.public_id)
+    }
+}
+
 impl CatalogModel {
     /// The model's publisher, for grouping in a picker. Derived from the public id,
     /// so the same public id reports the same provider on every cloud.
@@ -762,6 +778,68 @@ static AZURE_DEPLOYMENTS: &[(&str, &str, &str)] = &[
     ("model-router", "model-router", "2025-11-18"),
 ];
 
+/// Direct Anthropic aliases qualified for the native Messages API. Keep this
+/// explicit: the three cloud providers use different upstream IDs and cannot be
+/// used as an accidental source of direct-provider routing data.
+static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
+    DirectAnthropicModel {
+        public_id: "claude-opus-5",
+        upstream_id: "claude-opus-5",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-sonnet-5",
+        upstream_id: "claude-sonnet-5",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-opus-4.8",
+        upstream_id: "claude-opus-4-8",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-opus-4.7",
+        upstream_id: "claude-opus-4-7",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-opus-4.6",
+        upstream_id: "claude-opus-4-6",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-opus-4.5",
+        upstream_id: "claude-opus-4-5",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-opus-4.1",
+        upstream_id: "claude-opus-4-1-20250805",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-sonnet-4.6",
+        upstream_id: "claude-sonnet-4-6",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-sonnet-4.5",
+        upstream_id: "claude-sonnet-4-5-20250929",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-haiku-4.5",
+        upstream_id: "claude-haiku-4-5-20251001",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-fable-5",
+        upstream_id: "claude-fable-5",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-mythos-5",
+        upstream_id: "claude-mythos-5",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-sonnet-4",
+        upstream_id: "claude-sonnet-4-20250514",
+    },
+    DirectAnthropicModel {
+        public_id: "claude-3-haiku",
+        upstream_id: "claude-3-haiku-20240307",
+    },
+];
+
 /// Where a model sits on the bedrock-mantle Responses API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResponsesTarget {
@@ -839,6 +917,16 @@ pub fn responses_target(public_id: &str) -> Option<ResponsesTarget> {
 
 pub fn models_for(cloud: Platform) -> Vec<&'static CatalogModel> {
     CATALOG.iter().filter(|m| m.cloud == cloud).collect()
+}
+
+pub fn direct_anthropic_models() -> Vec<&'static DirectAnthropicModel> {
+    DIRECT_ANTHROPIC_MODELS.iter().collect()
+}
+
+pub fn resolve_direct_anthropic(public_id: &str) -> Option<&'static DirectAnthropicModel> {
+    DIRECT_ANTHROPIC_MODELS
+        .iter()
+        .find(|model| model.public_id == public_id)
 }
 
 /// The catalog model for a public id, or `None` if it is not exposed.
@@ -962,6 +1050,24 @@ mod tests {
                 model.cloud
             );
         }
+    }
+
+    #[test]
+    fn direct_anthropic_aliases_are_unique_and_round_trip() {
+        let mut public_ids = std::collections::HashSet::new();
+        let mut upstream_ids = std::collections::HashSet::new();
+        for model in DIRECT_ANTHROPIC_MODELS {
+            assert!(public_ids.insert(model.public_id));
+            assert!(upstream_ids.insert(model.upstream_id));
+            assert_eq!(
+                resolve_direct_anthropic(model.public_id)
+                    .expect("direct model must resolve")
+                    .upstream_id,
+                model.upstream_id
+            );
+            assert_ne!(model.display_name(), model.public_id);
+        }
+        assert!(resolve_direct_anthropic("claude-not-real").is_none());
     }
 
     use super::*;

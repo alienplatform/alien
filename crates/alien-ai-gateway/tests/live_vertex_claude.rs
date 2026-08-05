@@ -13,7 +13,7 @@
 
 use std::net::Ipv4Addr;
 
-use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
+use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute, GatewayTarget};
 use alien_core::Platform;
 use serde_json::{json, Value};
 
@@ -34,7 +34,7 @@ fn vertex_route() -> GatewayRoute {
         std::env::var("GCP_ACCESS_TOKEN").expect("GCP_ACCESS_TOKEN must hold a bearer token");
     GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Gcp,
+        target: GatewayTarget::Cloud(Platform::Gcp),
         region: Some("global".to_string()),
         project: Some(project),
         azure_endpoint: None,

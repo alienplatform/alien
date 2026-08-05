@@ -9,7 +9,10 @@
 
 use std::net::Ipv4Addr;
 
-use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, BearerTokenCred, GatewayRoute};
+use alien_ai_gateway::{
+    build_router, route_from_direct_anthropic, AmbientCred, AwsSigV4Cred, BearerTokenCred,
+    GatewayRoute, GatewayTarget,
+};
 use alien_core::Platform;
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
@@ -73,7 +76,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
     let routes = vec![
         GatewayRoute {
             name: "llm".to_string(),
-            cloud: Platform::Aws,
+            target: GatewayTarget::Cloud(Platform::Aws),
             region: Some("us-east-2".to_string()),
             project: None,
             azure_endpoint: None,
@@ -82,7 +85,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         },
         GatewayRoute {
             name: "azllm".to_string(),
-            cloud: Platform::Azure,
+            target: GatewayTarget::Cloud(Platform::Azure),
             region: None,
             project: None,
             azure_endpoint: Some(azure_upstream.base_url()),
@@ -174,7 +177,7 @@ async fn large_body_reaches_the_upstream_instead_of_413() {
 
     let routes = vec![GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Aws,
+        target: GatewayTarget::Cloud(Platform::Aws),
         region: Some("us-east-2".to_string()),
         project: None,
         azure_endpoint: None,
@@ -218,7 +221,7 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
 
     let routes = vec![GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Aws,
+        target: GatewayTarget::Cloud(Platform::Aws),
         region: Some("us-east-2".to_string()),
         project: None,
         azure_endpoint: None,
@@ -251,4 +254,52 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
         0,
         "the oversized body must be rejected before any upstream call"
     );
+}
+
+#[tokio::test]
+async fn direct_anthropic_is_fixed_to_messages_and_injects_only_its_api_key() {
+    let upstream = MockServer::start_async().await;
+    let messages = upstream
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/messages")
+                .header("x-api-key", "sk-ant-api03-test-secret")
+                .header("anthropic-version", "2023-06-01")
+                .body_contains("claude-sonnet-4-6");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"msg_direct","content":[{"type":"text","text":"pong"}]}"#);
+        })
+        .await;
+
+    let mut route = route_from_direct_anthropic("direct", "sk-ant-api03-test-secret")
+        .expect("standard API key");
+    route.upstream_base_override = Some(upstream.base_url());
+    let base = serve(build_router(vec![route])).await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("{base}/direct/v1/messages"))
+        .json(&json!({
+            "model": "claude-sonnet-4.6",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .expect("direct request");
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.unwrap().contains("msg_direct"));
+    messages.assert_async().await;
+
+    let wrong_protocol = client
+        .post(format!("{base}/direct/v1/chat/completions"))
+        .json(&json!({"model": "claude-sonnet-4.6", "messages": []}))
+        .send()
+        .await
+        .expect("wrong protocol response");
+    assert_eq!(wrong_protocol.status(), 400);
+    assert_eq!(messages.hits_async().await, 1);
+
+    assert!(route_from_direct_anthropic("direct", "sk-ant-admin-test").is_err());
 }
