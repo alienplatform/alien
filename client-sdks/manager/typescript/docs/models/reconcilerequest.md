@@ -36,33 +36,19 @@ let value: ReconcileRequest = {
       data: {
         data: {
           name: "<value>",
+          privateEndpointConnectionCount: 289000,
           status: {
             collectionIssues: [],
             health: "healthy",
-            lifecycle: "scaling",
-            partial: true,
-            stale: false,
+            lifecycle: "running",
+            partial: false,
+            stale: true,
           },
-          workloadProfileCount: 324464,
-          workloadProfiles: [
-            {
-              name: "<value>",
-              workloadProfileType: "<value>",
-            },
-          ],
         },
-        resourceType: "azure_container_apps_environment",
+        resourceType: "azure_service_bus_namespace",
       },
-      observedAt: new Date("2024-12-01T23:55:46.090Z"),
-      raw: [
-        {
-          body: "<value>",
-          collectedAt: new Date("2026-05-11T10:48:38.268Z"),
-          format: "text",
-          source: "<value>",
-          truncated: false,
-        },
-      ],
+      observedAt: new Date("2026-04-15T12:52:58.852Z"),
+      raw: [],
       resourceId: "<id>",
       resourceType: "worker",
     },

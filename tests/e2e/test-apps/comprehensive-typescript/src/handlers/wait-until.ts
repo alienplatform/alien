@@ -30,7 +30,7 @@ app.get("/wait-until-verify/:testId/:storageBindingName", async c => {
     // Storage has no `exists`; a missing object surfaces as a thrown NotFound
     // from `get`, which the catch below maps to "not completed yet".
     const result = await s.get(`wait-until-${testId}.txt`)
-    const fileContent = new TextDecoder().decode(result)
+    const fileContent = new TextDecoder().decode(result.data)
     return c.json({
       success: true,
       testId,

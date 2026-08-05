@@ -14,6 +14,7 @@ impl CredentialResolver for RemoteAwsCredentialResolver {
     async fn resolve_remote_storage_source(
         &self,
         _deployment: &DeploymentRecord,
+        _resource_id: &str,
     ) -> Result<RemoteStorageCredentialSource, AlienError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(RemoteStorageCredentialSource::Direct(ClientConfig::Aws(

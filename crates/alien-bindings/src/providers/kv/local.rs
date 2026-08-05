@@ -1,4 +1,4 @@
-//! Local disk-persisted KV backed by turso (`localkv.v1`), multi-process safe.
+//! Local disk-persisted KV backed by turso (`localkv.v2`), multi-process safe.
 //!
 //! # Connection strategy
 //!
@@ -19,28 +19,40 @@
 //! are a single atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE` so the
 //! race is resolved by the database, not by application-level locking.
 //!
-//! See `crates/alien-bindings/FORMAT.md` for the on-disk `localkv.v1` contract.
+//! See `crates/alien-bindings/FORMAT.md` for the on-disk `localkv.v2` contract.
 use crate::error::{ErrorData, Result};
 use crate::providers::local_store::{
     as_blob, as_i64, as_opt_i64, as_text, opt_i64_value, query_all, LocalStore, StoreSpec,
 };
-use crate::traits::{Binding, Kv, PutOptions, ScanResult};
+use crate::traits::{Binding, Kv, KvEntry, PutCondition, PutOptions, ScanResult};
 use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use turso::Connection;
+use uuid::Uuid;
+
+use super::{decode_version, encode_version};
 
 static KV_SPEC: StoreSpec = StoreSpec {
     db_filename: "localkv.sqlite",
-    format_version: "localkv.v1",
+    format_version: "localkv.v2",
     binding_type: "local KV",
-    schema_ddl: "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER);",
+    schema_ddl: "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER, version TEXT NOT NULL);",
 };
 
 #[derive(Debug)]
 pub struct LocalKv {
     store: LocalStore,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CursorState {
+    version: u8,
+    prefix: String,
+    last_key: String,
 }
 
 /// Build the standard KV operation error context.
@@ -147,13 +159,53 @@ impl LocalKv {
     fn validate_value(value: &[u8]) -> Result<()> {
         crate::providers::kv::validate_value(value)
     }
+
+    fn encode_cursor(state: &CursorState) -> Result<String> {
+        let bytes =
+            serde_json::to_vec(state)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Local KV cursor encoding".to_string(),
+                    details: "Failed to serialize cursor state".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        Ok(URL_SAFE_NO_PAD.encode(bytes))
+    }
+
+    fn decode_cursor(prefix: &str, cursor: &str) -> Result<CursorState> {
+        let bytes =
+            URL_SAFE_NO_PAD
+                .decode(cursor)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Local KV cursor decoding".to_string(),
+                    details: "Invalid cursor encoding".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        let state: CursorState =
+            serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Local KV cursor decoding".to_string(),
+                    details: "Invalid cursor data".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        if state.version != 1 || state.prefix != prefix || !state.last_key.starts_with(prefix) {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "Local KV cursor validation".to_string(),
+                details: "Cursor does not belong to this prefix scan".to_string(),
+                field_name: Some("cursor".to_string()),
+            }));
+        }
+        Ok(state)
+    }
 }
 
 impl Binding for LocalKv {}
 
 #[async_trait]
 impl Kv for LocalKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         Self::validate_key(key)?;
 
         self.store
@@ -161,12 +213,12 @@ impl Kv for LocalKv {
                 let now = Utc::now().timestamp_millis();
                 let rows = query_all(
                     &conn,
-                    "SELECT value, expires_at FROM kv WHERE key = ?1",
+                    "SELECT value, expires_at, version FROM kv WHERE key = ?1",
                     (key,),
                 )
                 .await
                 .into_alien_error()
-                .context(kv_error("get", key, "failed to read value"))?;
+                .context(kv_error("get", key, "failed to read entry"))?;
 
                 let Some(row) = rows.first() else {
                     return Ok(None);
@@ -177,14 +229,20 @@ impl Kv for LocalKv {
                 let expires_at = row.get(1).and_then(as_opt_i64).ok_or_else(|| {
                     AlienError::new(kv_error("get", key, "stored expires_at is not an integer"))
                 })?;
+                let backend_version = row.get(2).and_then(as_text).ok_or_else(|| {
+                    AlienError::new(kv_error("get", key, "stored version is not text"))
+                })?;
 
                 if matches!(expires_at, Some(exp) if exp <= now) {
-                    // Lazily remove the expired row.
                     delete_expired(&conn, "get", key, now).await?;
-                    Ok(None)
-                } else {
-                    Ok(Some(value))
+                    return Ok(None);
                 }
+
+                Ok(Some(KvEntry {
+                    key: key.to_string(),
+                    value,
+                    version: encode_version(key, backend_version, expires_at)?,
+                }))
             })
             .await
     }
@@ -200,28 +258,52 @@ impl Kv for LocalKv {
                 let expires_at: Option<i64> = options
                     .ttl
                     .map(|d| now.saturating_add(i64::try_from(d.as_millis()).unwrap_or(i64::MAX)));
+                let new_version = Uuid::new_v4().simple().to_string();
 
-                if options.if_not_exists {
+                if matches!(options.condition, PutCondition::Absent) {
                     // One atomic statement: insert if absent, otherwise overwrite
                     // ONLY when the existing row is already expired. The changed
                     // row count (returned by `execute`) is 1 for the winner, 0
                     // for a loser.
                     let changed = conn
                         .execute(
-                            "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
-                             ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3 \
-                             WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?4",
-                            (key, value, opt_i64_value(expires_at), now),
+                            "INSERT INTO kv (key, value, expires_at, version) VALUES (?1, ?2, ?3, ?4) \
+                             ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3, version = ?4 \
+                             WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?5",
+                            (key, value, opt_i64_value(expires_at), new_version, now),
                         )
                         .await
                         .into_alien_error()
                         .context(kv_error("put", key, "failed conditional put"))?;
                     Ok(changed == 1)
+                } else if let PutCondition::Version(if_version) = options.condition {
+                    let expected = decode_version(key, &if_version)?;
+                    if expected.expired {
+                        return Ok(false);
+                    }
+                    let changed = conn
+                        .execute(
+                            "UPDATE kv SET value = ?2, expires_at = ?3, version = ?4 \
+                             WHERE key = ?1 AND version = ?5 \
+                               AND (expires_at IS NULL OR expires_at > ?6)",
+                            (
+                                key,
+                                value,
+                                opt_i64_value(expires_at),
+                                new_version,
+                                expected.backend_version,
+                                now,
+                            ),
+                        )
+                        .await
+                        .into_alien_error()
+                        .context(kv_error("put", key, "failed versioned put"))?;
+                    Ok(changed == 1)
                 } else {
                     conn.execute(
-                        "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
-                         ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3",
-                        (key, value, opt_i64_value(expires_at)),
+                        "INSERT INTO kv (key, value, expires_at, version) VALUES (?1, ?2, ?3, ?4) \
+                         ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3, version = ?4",
+                        (key, value, opt_i64_value(expires_at), new_version),
                     )
                     .await
                     .into_alien_error()
@@ -232,16 +314,33 @@ impl Kv for LocalKv {
             .await
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
         Self::validate_key(key)?;
 
         self.store
             .with_conn(|conn| async move {
-                conn.execute("DELETE FROM kv WHERE key = ?1", (key,))
-                    .await
-                    .into_alien_error()
-                    .context(kv_error("delete", key, "failed to delete key"))?;
-                Ok(())
+                if let Some(version) = if_version {
+                    let expected = decode_version(key, version)?;
+                    if expected.expired {
+                        return Ok(false);
+                    }
+                    let changed = conn
+                        .execute(
+                            "DELETE FROM kv WHERE key = ?1 AND version = ?2 \
+                             AND (expires_at IS NULL OR expires_at > ?3)",
+                            (key, expected.backend_version, Utc::now().timestamp_millis()),
+                        )
+                        .await
+                        .into_alien_error()
+                        .context(kv_error("delete", key, "failed conditional delete"))?;
+                    Ok(changed == 1)
+                } else {
+                    conn.execute("DELETE FROM kv WHERE key = ?1", (key,))
+                        .await
+                        .into_alien_error()
+                        .context(kv_error("delete", key, "failed to delete key"))?;
+                    Ok(true)
+                }
             })
             .await
     }
@@ -287,86 +386,107 @@ impl Kv for LocalKv {
     ) -> Result<ScanResult> {
         Self::validate_key(prefix)?;
 
-        // Parse cursor (simple offset-based pagination for local).
-        let start_offset = if let Some(cursor_str) = cursor {
-            cursor_str.parse::<usize>().map_err(|_| {
-                AlienError::new(ErrorData::InvalidInput {
-                    operation_context: "KV scan cursor parsing".to_string(),
-                    details: format!("Invalid cursor format: {}", cursor_str),
-                    field_name: Some("cursor".to_string()),
+        let limit = limit.unwrap_or(1000);
+        let last_key = cursor
+            .as_deref()
+            .map(|cursor| Self::decode_cursor(prefix, cursor))
+            .transpose()?
+            .map(|state| state.last_key);
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
+        // Collect matching, non-expired items after the last key in sorted order.
+        let matching: Vec<KvEntry> =
+            self.store
+                .with_conn(|conn| async move {
+                    let now = Utc::now().timestamp_millis();
+                    let rows = match last_key.as_deref() {
+                        Some(last_key) => {
+                            query_all(
+                                &conn,
+                                "SELECT key, value, expires_at, version FROM kv WHERE key > ?1 ORDER BY key",
+                                (last_key,),
+                            )
+                            .await
+                        }
+                        None => query_all(
+                            &conn,
+                            "SELECT key, value, expires_at, version FROM kv WHERE key >= ?1 ORDER BY key",
+                            (prefix,),
+                        )
+                        .await,
+                    }
+                    .into_alien_error()
+                    .context(kv_error(
+                        "scan_prefix",
+                        prefix,
+                        "failed to scan prefix",
+                    ))?;
+
+                    let mut matching = Vec::new();
+                    for row in &rows {
+                        let k = row.first().and_then(as_text).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "failed to read scan row key",
+                            ))
+                        })?;
+                        // Keys are ordered ascending starting at `prefix`; once a key
+                        // stops matching the prefix, no later key can match either.
+                        if !k.starts_with(prefix) {
+                            break;
+                        }
+                        let v = row.get(1).and_then(as_blob).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "stored value is not a blob",
+                            ))
+                        })?;
+                        let exp = row.get(2).and_then(as_opt_i64).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "stored expires_at is not an integer",
+                            ))
+                        })?;
+                        if matches!(exp, Some(e) if e <= now) {
+                            continue; // expired: treat as absent
+                        }
+                        let backend_version = row.get(3).and_then(as_text).ok_or_else(|| {
+                            AlienError::new(kv_error(
+                                "scan_prefix",
+                                prefix,
+                                "stored version is not text",
+                            ))
+                        })?;
+                        matching.push(KvEntry {
+                            version: encode_version(&k, backend_version, exp)?,
+                            key: k,
+                            value: v,
+                        });
+                    }
+                    Ok(matching)
                 })
-            })?
-        } else {
-            0
-        };
+                .await?;
 
-        // Collect matching, non-expired items in sorted key order.
-        let matching: Vec<(String, Vec<u8>)> = self
-            .store
-            .with_conn(|conn| async move {
-                let now = Utc::now().timestamp_millis();
-                let rows = query_all(
-                    &conn,
-                    "SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key",
-                    (prefix,),
-                )
-                .await
-                .into_alien_error()
-                .context(kv_error(
-                    "scan_prefix",
-                    prefix,
-                    "failed to scan prefix",
-                ))?;
-
-                let mut matching = Vec::new();
-                for row in &rows {
-                    let k = row.first().and_then(as_text).ok_or_else(|| {
-                        AlienError::new(kv_error(
-                            "scan_prefix",
-                            prefix,
-                            "failed to read scan row key",
-                        ))
-                    })?;
-                    // Keys are ordered ascending starting at `prefix`; once a key
-                    // stops matching the prefix, no later key can match either.
-                    if !k.starts_with(prefix) {
-                        break;
-                    }
-                    let v = row.get(1).and_then(as_blob).ok_or_else(|| {
-                        AlienError::new(kv_error(
-                            "scan_prefix",
-                            prefix,
-                            "stored value is not a blob",
-                        ))
-                    })?;
-                    let exp = row.get(2).and_then(as_opt_i64).ok_or_else(|| {
-                        AlienError::new(kv_error(
-                            "scan_prefix",
-                            prefix,
-                            "stored expires_at is not an integer",
-                        ))
-                    })?;
-                    if matches!(exp, Some(e) if e <= now) {
-                        continue; // expired: treat as absent
-                    }
-                    matching.push((k, v));
-                }
-                Ok(matching)
-            })
-            .await?;
-
-        // Apply offset-based pagination (results are already sorted by key).
-        let total_items = matching.len();
-        let end_offset = start_offset + limit.unwrap_or(total_items);
-
-        let items = matching
-            .into_iter()
-            .skip(start_offset)
-            .take(limit.unwrap_or(usize::MAX))
-            .collect::<Vec<_>>();
-
-        let next_cursor = if end_offset < total_items {
-            Some(end_offset.to_string())
+        let has_more = matching.len() > limit;
+        let items = matching.into_iter().take(limit).collect::<Vec<_>>();
+        let next_cursor = if has_more {
+            items
+                .last()
+                .map(|entry| {
+                    Self::encode_cursor(&CursorState {
+                        version: 1,
+                        prefix: prefix.to_string(),
+                        last_key: entry.key.clone(),
+                    })
+                })
+                .transpose()?
         } else {
             None
         };
@@ -400,13 +520,13 @@ mod tests {
             .put("test_key", b"test_value".to_vec(), None)
             .await
             .unwrap());
-        let value = kv.get("test_key").await.unwrap();
+        let value = kv.get("test_key").await.unwrap().map(|entry| entry.value);
         assert_eq!(value, Some(b"test_value".to_vec()));
 
         assert!(kv.exists("test_key").await.unwrap());
         assert!(!kv.exists("nonexistent").await.unwrap());
 
-        kv.delete("test_key").await.unwrap();
+        kv.delete("test_key", None).await.unwrap();
         assert!(!kv.exists("test_key").await.unwrap());
         assert_eq!(kv.get("test_key").await.unwrap(), None);
     }
@@ -417,7 +537,7 @@ mod tests {
 
         let options = Some(PutOptions {
             ttl: None,
-            if_not_exists: true,
+            condition: PutCondition::Absent,
         });
         assert!(kv
             .put("key", b"value1".to_vec(), options.clone())
@@ -426,10 +546,16 @@ mod tests {
 
         assert!(!kv.put("key", b"value2".to_vec(), options).await.unwrap());
 
-        assert_eq!(kv.get("key").await.unwrap(), Some(b"value1".to_vec()));
+        assert_eq!(
+            kv.get("key").await.unwrap().map(|entry| entry.value),
+            Some(b"value1".to_vec())
+        );
 
         assert!(kv.put("key", b"value3".to_vec(), None).await.unwrap());
-        assert_eq!(kv.get("key").await.unwrap(), Some(b"value3".to_vec()));
+        assert_eq!(
+            kv.get("key").await.unwrap().map(|entry| entry.value),
+            Some(b"value3".to_vec())
+        );
     }
 
     #[tokio::test]
@@ -438,7 +564,7 @@ mod tests {
 
         let options = Some(PutOptions {
             ttl: Some(Duration::from_millis(500)),
-            if_not_exists: false,
+            condition: PutCondition::None,
         });
 
         kv.put("expiring_key", b"value".to_vec(), options)
@@ -447,7 +573,10 @@ mod tests {
 
         assert!(kv.exists("expiring_key").await.unwrap());
         assert_eq!(
-            kv.get("expiring_key").await.unwrap(),
+            kv.get("expiring_key")
+                .await
+                .unwrap()
+                .map(|entry| entry.value),
             Some(b"value".to_vec())
         );
 
@@ -476,9 +605,9 @@ mod tests {
         assert_eq!(result.items.len(), 3);
         assert!(result.next_cursor.is_none());
 
-        assert_eq!(result.items[0].0, "prefix:key1");
-        assert_eq!(result.items[1].0, "prefix:key2");
-        assert_eq!(result.items[2].0, "prefix:key3");
+        assert_eq!(result.items[0].key, "prefix:key1");
+        assert_eq!(result.items[1].key, "prefix:key2");
+        assert_eq!(result.items[2].key, "prefix:key3");
 
         let result = kv.scan_prefix("prefix:", Some(2), None).await.unwrap();
         assert_eq!(result.items.len(), 2);
@@ -490,8 +619,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].0, "prefix:key3");
+        assert_eq!(result.items[0].key, "prefix:key3");
         assert!(result.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn prefix_cursor_does_not_skip_after_an_earlier_key_is_deleted() {
+        let (kv, _temp_dir) = create_test_kv().await;
+        for key in ["prefix:key1", "prefix:key2", "prefix:key3"] {
+            kv.put(key, key.as_bytes().to_vec(), None).await.unwrap();
+        }
+
+        let first = kv.scan_prefix("prefix:", Some(2), None).await.unwrap();
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|entry| entry.key.as_str())
+                .collect::<Vec<_>>(),
+            ["prefix:key1", "prefix:key2"]
+        );
+
+        kv.delete("prefix:key1", None).await.unwrap();
+        let second = kv
+            .scan_prefix("prefix:", Some(2), first.next_cursor)
+            .await
+            .unwrap();
+        assert_eq!(second.items[0].key, "prefix:key3");
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn prefix_cursor_is_rejected_for_another_prefix() {
+        let (kv, _temp_dir) = create_test_kv().await;
+        for key in ["first:key1", "first:key2"] {
+            kv.put(key, key.as_bytes().to_vec(), None).await.unwrap();
+        }
+
+        let cursor = kv
+            .scan_prefix("first:", Some(1), None)
+            .await
+            .unwrap()
+            .next_cursor
+            .expect("the first page should have a cursor");
+        assert!(kv
+            .scan_prefix("second:", Some(1), Some(cursor.clone()))
+            .await
+            .is_err());
+        assert!(kv
+            .scan_prefix("second:", Some(0), Some(cursor))
+            .await
+            .is_err());
+        assert!(kv
+            .scan_prefix("first:", Some(0), Some("not-a-cursor".to_string()))
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -512,7 +694,11 @@ mod tests {
             let kv = LocalKv::new(db_path)
                 .await
                 .expect("Failed to reopen LocalKv");
-            let value = kv.get("persistent_key").await.unwrap();
+            let value = kv
+                .get("persistent_key")
+                .await
+                .unwrap()
+                .map(|entry| entry.value);
             assert_eq!(value, Some(b"persistent_value".to_vec()));
         }
     }
@@ -600,7 +786,7 @@ mod tests {
                 .expect("raw open");
             let conn = db.connect().expect("raw connect");
             conn.execute(
-                "UPDATE meta SET value = 'localkv.v2' WHERE key = 'format'",
+                "UPDATE meta SET value = 'localkv.v99' WHERE key = 'format'",
                 (),
             )
             .await
@@ -613,11 +799,11 @@ mod tests {
             .expect_err("unknown format must be rejected");
         let msg = err.to_string();
         assert!(
-            msg.contains("localkv.v2"),
+            msg.contains("localkv.v99"),
             "error must name the found format, got: {msg}"
         );
         assert!(
-            msg.contains("localkv.v1"),
+            msg.contains("localkv.v2"),
             "error must name the expected format, got: {msg}"
         );
     }
@@ -644,7 +830,7 @@ mod tests {
                 let val = format!("val-{i}").into_bytes();
                 let opts = Some(PutOptions {
                     ttl: None,
-                    if_not_exists: true,
+                    condition: PutCondition::Absent,
                 });
                 let won = kv.put("race", val.clone(), opts).await.expect("put ok");
                 (won, val)
@@ -665,9 +851,16 @@ mod tests {
             "exactly one conditional put must win across both handles"
         );
         let stored = kv_a.get("race").await.unwrap().expect("key present");
-        assert_eq!(stored, winners[0], "stored value must equal the winner");
         assert_eq!(
-            kv_b.get("race").await.unwrap().expect("key present via b"),
+            stored.value, winners[0],
+            "stored value must equal the winner"
+        );
+        assert_eq!(
+            kv_b.get("race")
+                .await
+                .unwrap()
+                .expect("key present via b")
+                .value,
             winners[0]
         );
     }
@@ -686,7 +879,7 @@ mod tests {
                 b"initial".to_vec(),
                 Some(PutOptions {
                     ttl: Some(Duration::from_millis(300)),
-                    if_not_exists: true,
+                    condition: PutCondition::Absent,
                 }),
             )
             .await
@@ -699,7 +892,7 @@ mod tests {
                 b"early".to_vec(),
                 Some(PutOptions {
                     ttl: None,
-                    if_not_exists: true,
+                    condition: PutCondition::Absent,
                 }),
             )
             .await
@@ -725,7 +918,7 @@ mod tests {
                         val.clone(),
                         Some(PutOptions {
                             ttl: None,
-                            if_not_exists: true,
+                            condition: PutCondition::Absent,
                         }),
                     )
                     .await
@@ -749,7 +942,7 @@ mod tests {
         );
         let stored = kv_b.get("k").await.unwrap().expect("key present");
         assert_eq!(
-            stored, winners[0],
+            stored.value, winners[0],
             "stored value must equal the takeover winner"
         );
     }
@@ -774,7 +967,7 @@ mod tests {
                 // No busy errors expected under multi-process WAL + busy_timeout.
                 kv.put(&key, val.clone(), None).await.expect("put ok");
                 let got = kv.get(&key).await.expect("get ok");
-                assert_eq!(got, Some(val));
+                assert_eq!(got.map(|entry| entry.value), Some(val));
             }));
         }
         for h in handles {

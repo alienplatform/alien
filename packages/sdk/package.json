@@ -1,8 +1,10 @@
 {
   "name": "@alienplatform/sdk",
-  "version": "3.3.1",
+  "version": "3.3.11",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -30,7 +32,12 @@
     "format-and-lint:fix": "biome check . --write"
   },
   "sideEffects": false,
-  "keywords": ["alien", "sdk", "worker", "bindings"],
+  "keywords": [
+    "alien",
+    "sdk",
+    "worker",
+    "bindings"
+  ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "homepage": "https://alien.dev",
@@ -45,12 +52,12 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "ts-proto": "^2.7.0",
     "tsdown": "^0.13.0",
-    "typescript": "^5.8.3",
-    "vitest": "^3.1.4"
+    "typescript": "~5.8.3",
+    "vitest": "^4.0.0"
   },
   "dependencies": {
     "@alienplatform/ai-gateway": "workspace:^",
@@ -60,6 +67,6 @@
     "@grpc/grpc-js": "^1.14.4",
     "nice-grpc": "^2.1.11",
     "nice-grpc-common": "^2.0.2",
-    "zod": "4.3.2"
+    "zod": "4.4.3"
   }
 }

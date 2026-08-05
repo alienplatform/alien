@@ -81,6 +81,21 @@ fn aws_email_renders_ses_infrastructure() {
         destination["SnsDestination"]["TopicARN"]["Ref"],
         "MailerEventsTopic"
     );
+    assert_eq!(
+        resources["MailerEventDestination"]["DependsOn"],
+        serde_json::json!(["MailerEventsTopicPolicy"]),
+        "SES validates topic publish access while creating the event destination"
+    );
+    let topic_policy_statement =
+        &resources["MailerEventsTopicPolicy"]["Properties"]["PolicyDocument"]["Statement"][0];
+    assert_eq!(
+        topic_policy_statement["Principal"]["Service"],
+        "ses.amazonaws.com"
+    );
+    assert_eq!(
+        topic_policy_statement["Condition"]["StringEquals"]["AWS:SourceAccount"]["Ref"],
+        "AWS::AccountId"
+    );
     let subscription = &resources["MailerEventsSubscription"]["Properties"];
     assert_eq!(subscription["Protocol"], "sqs");
     assert_eq!(
@@ -118,8 +133,12 @@ fn aws_email_renders_ses_infrastructure() {
         "Mailbox"
     );
     assert_eq!(
+        rule["Properties"]["Rule"]["Actions"][0]["S3Action"]["TopicArn"]["Ref"],
+        "MailerEventsTopic"
+    );
+    assert_eq!(
         rule["DependsOn"],
-        serde_json::json!(["MailboxBucketPolicy"])
+        serde_json::json!(["MailboxBucketPolicy", "MailerEventsTopicPolicy"])
     );
     let activation = &resources["MailerRuleSetActivation"];
     assert_eq!(activation["Type"], "AWS::CloudFormation::CustomResource");
@@ -494,38 +513,39 @@ fn aws_email_resource_permissions_attach_to_service_account_role() {
     let template: serde_json::Value =
         serde_yaml::from_str(&yaml).expect("template YAML should parse");
 
-    let send_policy = &template["Resources"]["MailerSenderSaRoleEmailPermission00"];
-    let identities_policy = &template["Resources"]["MailerSenderSaRoleEmailPermission01"];
-    assert_eq!(send_policy["Type"], "AWS::IAM::Policy");
-    assert_eq!(identities_policy["Type"], "AWS::IAM::Policy");
-
-    let send_actions = send_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
-        .as_array()
-        .expect("send statement should list actions");
-    assert!(send_actions.contains(&serde_json::json!("ses:SendEmail")));
-    assert!(send_actions.contains(&serde_json::json!("ses:SendRawEmail")));
-
-    let identity_statements = identities_policy["Properties"]["PolicyDocument"]["Statement"]
-        .as_array()
-        .expect("manage-identities statements");
-    let identity_actions: Vec<String> = identity_statements
+    let policies = template["Resources"]
+        .as_object()
+        .expect("resources should be an object")
+        .values()
+        .filter(|resource| {
+            matches!(
+                resource["Type"].as_str(),
+                Some("AWS::IAM::Policy" | "AWS::IAM::ManagedPolicy")
+            ) && resource["Properties"]["Roles"][0]["Ref"] == "SenderSaRole"
+        })
+        .collect::<Vec<_>>();
+    assert!(!policies.is_empty());
+    let identity_statements = policies
         .iter()
-        .flat_map(|statement| statement["Action"].as_array().cloned().unwrap_or_default())
+        .flat_map(|policy| {
+            policy["Properties"]["PolicyDocument"]["Statement"]
+                .as_array()
+                .expect("email permission statements")
+        })
+        .collect::<Vec<_>>();
+    let actions: Vec<String> = identity_statements
+        .into_iter()
+        .flat_map(|statement| match statement["Action"].as_array() {
+            Some(actions) => actions.clone(),
+            None => vec![statement["Action"].clone()],
+        })
         .filter_map(|action| action.as_str().map(str::to_string))
         .collect();
-    assert!(identity_actions.contains(&"ses:CreateEmailIdentity".to_string()));
-    let identity_resources = identity_statements[0]["Resource"]
-        .as_array()
-        .expect("manage-identities statement should list resources");
-    assert!(identity_resources.contains(&serde_json::json!({
-        "Fn::Sub":
-            "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-mailer"
-    })));
-
-    for policy in [send_policy, identities_policy] {
-        assert_eq!(
-            policy["Properties"]["Roles"][0]["Ref"],
-            serde_json::json!("SenderSaRole")
-        );
-    }
+    assert!(actions.contains(&"ses:SendEmail".to_string()));
+    assert!(actions.contains(&"ses:SendRawEmail".to_string()));
+    assert!(actions.contains(&"ses:CreateEmailIdentity".to_string()));
+    let rendered_policy = serde_json::to_string(&policies).expect("policies should serialize");
+    assert!(rendered_policy.contains(
+        "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${AWS::StackName}-mailer"
+    ));
 }

@@ -6,12 +6,12 @@ import {
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
-export type { BuildOutputs, ComputeType, BuildStatus, BuildConfig } from "./generated/index.js"
+export type { BuildConfig, BuildOutputs, BuildStatus, ComputeType } from "./generated/index.js"
 export {
-  BuildOutputsSchema,
-  ComputeTypeSchema,
-  BuildStatusSchema,
   BuildConfigSchema,
+  BuildOutputsSchema,
+  BuildStatusSchema,
+  ComputeTypeSchema,
 } from "./generated/index.js"
 
 /**

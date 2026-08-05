@@ -6,8 +6,8 @@
 
 import { randomUUID } from "node:crypto"
 import { afterAll, describe, expect, it } from "vitest"
-import { AlienError, vault } from "../src/index.js"
 import type { Vault } from "../src/index.js"
+import { AlienError, vault } from "../src/index.js"
 import { cleanupTempDirs, localVaultBindingEnv } from "./helpers/local-binding-env.js"
 
 let bunFixtureIndex = 0

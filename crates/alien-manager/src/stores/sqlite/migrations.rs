@@ -371,6 +371,35 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         }
     }
 
+    // DEPLOYMENT_FAILED with resource counts is a derived headline. Older
+    // versions could retain it after the deployment returned to a healthy
+    // status, even though the resource errors had already cleared.
+    conn.execute(
+        "UPDATE deployments
+         SET error = NULL
+         WHERE error IS NOT NULL
+           AND json_valid(error)
+           AND status NOT IN (
+             'preflights-failed',
+             'initial-setup-failed',
+             'provisioning-failed',
+             'refresh-failed',
+             'update-failed',
+             'delete-failed',
+             'teardown-failed',
+             'error'
+           )
+           AND json_extract(error, '$.code') = 'DEPLOYMENT_FAILED'
+           AND json_type(error, '$.context.resource_errors') = 'array'
+           AND json_type(error, '$.context.total_resources') IN ('integer', 'real')
+           AND json_type(error, '$.context.failed_resources') IN ('integer', 'real')
+           AND json_type(error, '$.context.interrupted_resources') IN ('integer', 'real')",
+        (),
+    )
+    .await
+    .into_alien_error()
+    .map_err(|e| db_error(&format!("Recovered error cleanup failed: {}", e.message)))?;
+
     let post_index_statements: &[&str] = &[
         "CREATE INDEX IF NOT EXISTS idx_releases_project ON releases(workspace_id, project_id)",
         "CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(workspace_id, project_id)",

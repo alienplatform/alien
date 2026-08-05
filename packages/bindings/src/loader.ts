@@ -34,6 +34,12 @@ import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import type {
+  StorageGetResult,
+  StorageHeadResult,
+  StoragePutOptions,
+  StoragePutResult,
+} from "./types.js"
 
 const require = createRequire(import.meta.url)
 
@@ -41,6 +47,7 @@ const require = createRequire(import.meta.url)
 export interface RawKvItem {
   key: string
   value: Buffer
+  version: string
 }
 
 /** Raw napi scan result. */
@@ -54,6 +61,8 @@ export interface RawObjectMeta {
   location: string
   size: number
   lastModified: string
+  eTag?: string
+  version?: string
 }
 
 /** Raw napi presigned request. */
@@ -73,34 +82,35 @@ export interface RawQueueMessage {
 
 /** Raw napi storage handle. */
 export interface RawStorageHandle {
-  get(path: string): Promise<Buffer>
-  put(path: string, data: Buffer): Promise<void>
+  get(path: string): Promise<StorageGetResult>
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>
   delete(path: string): Promise<void>
   list(prefix?: string | null): Promise<RawObjectMeta[]>
-  head(path: string): Promise<RawObjectMeta>
+  head(path: string): Promise<StorageHeadResult>
   copy(from: string, to: string): Promise<void>
   signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>
 }
 
 /** Raw napi remote Storage v0 handle. */
 export interface RawRemoteStorageHandle {
-  get(path: string): Promise<Buffer>
-  put(path: string, data: Buffer): Promise<void>
+  get(path: string): Promise<StorageGetResult>
+  put(path: string, data: Buffer, options?: StoragePutOptions | null): Promise<StoragePutResult>
   delete(path: string): Promise<void>
   list(prefix?: string | null): Promise<RawObjectMeta[]>
-  head(path: string): Promise<RawObjectMeta>
+  head(path: string): Promise<StorageHeadResult>
 }
 
 /** Raw napi key-value handle. */
 export interface RawKvHandle {
-  get(key: string): Promise<Buffer | null>
+  get(key: string): Promise<RawKvItem | null>
   put(
     key: string,
     value: Buffer,
     ttlSecs?: number | null,
-    ifNotExists?: boolean | null,
+    condition?: "absent" | "version" | null,
+    version?: string | null,
   ): Promise<boolean>
-  delete(key: string): Promise<void>
+  delete(key: string, ifVersion?: string | null): Promise<boolean>
   exists(key: string): Promise<boolean>
   scan(prefix: string, limit?: number | null, cursor?: string | null): Promise<RawScanResult>
 }

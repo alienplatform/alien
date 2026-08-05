@@ -62,6 +62,18 @@ pub trait ReleaseStore: Send + Sync {
         caller: &crate::auth::Subject,
     ) -> Result<Option<ReleaseRecord>, AlienError>;
 
+    /// Resolve the release used when a project-scoped operation omits an
+    /// explicit release. Standalone stores have one release stream, so the
+    /// default is the latest release. Hosted implementations may override this
+    /// without changing chronological release history.
+    async fn get_default_release(
+        &self,
+        caller: &crate::auth::Subject,
+        _project_id: &str,
+    ) -> Result<Option<ReleaseRecord>, AlienError> {
+        self.get_latest_release(caller).await
+    }
+
     async fn list_releases(
         &self,
         caller: &crate::auth::Subject,

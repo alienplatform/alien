@@ -252,7 +252,7 @@ function toDefaultValue(
 }
 
 function validateDraft(id: string, draft: StackInputDraft): void {
-  if (!draft || draft[stackInputDraftSymbol] !== true) {
+  if (draft?.[stackInputDraftSymbol] !== true) {
     throw new Error(
       `Stack input '${id}' must be created with alien.string(), alien.secret(), or another input helper`,
     )

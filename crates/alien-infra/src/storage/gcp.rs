@@ -862,8 +862,22 @@ impl GcpStorageController {
         )
         .await?;
 
-        // Apply the bindings to the bucket if we have any
-        if !all_bindings.is_empty() {
+        // This identity is wholly Alien-owned. Remove its previous bucket grants before adding
+        // the desired ones so direct setup updates can revoke `remoteAccess` without leaving
+        // stale data-plane access behind.
+        let remote_bindings_member = ctx
+            .state
+            .resources
+            .values()
+            .find(|state| {
+                state.resource_type == alien_core::RemoteBindings::RESOURCE_TYPE.as_ref()
+            })
+            .and_then(|state| state.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteBindingsOutputs>())
+            .map(|outputs| format!("serviceAccount:{}", outputs.access_configuration));
+
+        // Apply desired bindings, or remove stale Remote Bindings grants when opt-in was removed.
+        if !all_bindings.is_empty() || remote_bindings_member.is_some() {
             info!(
                 bucket = %bucket_name,
                 bindings_count = all_bindings.len(),
@@ -878,6 +892,15 @@ impl GcpStorageController {
                     message: format!("Failed to get bucket IAM policy for '{}' before applying resource-scoped permissions. Refusing to proceed to avoid overwriting existing bindings.", bucket_name),
                     resource_id: Some(config.id.clone()),
                 })?;
+
+            if let Some(member) = remote_bindings_member.as_ref() {
+                for binding in &mut existing_policy.bindings {
+                    binding.members.retain(|candidate| candidate != member);
+                }
+                existing_policy
+                    .bindings
+                    .retain(|binding| !binding.members.is_empty());
+            }
 
             // Merge new bindings with existing ones
             existing_policy.bindings.extend(all_bindings);

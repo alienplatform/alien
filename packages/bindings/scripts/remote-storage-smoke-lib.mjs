@@ -8,6 +8,12 @@ const requiredEnvironmentVariables = [
 ]
 
 const payload = Buffer.from("alien remote storage smoke")
+const attributes = {
+  contentType: "application/octet-stream",
+  contentDisposition: 'attachment; filename="payload.txt"',
+  cacheControl: "private, max-age=60",
+  metadata: { source: "remote-storage-smoke" },
+}
 
 /**
  * @typedef {object} RemoteStorageSmokeConfig
@@ -49,15 +55,26 @@ export async function verifyRemoteStorage(storage, object) {
   let verificationError
 
   try {
-    await storage.put(object, payload)
+    const putResult = await storage.put(object, payload, { attributes })
+    assert.equal(typeof putResult, "object")
 
     const prefix = object.slice(0, object.lastIndexOf("/") + 1)
     const downloaded = await storage.get(object)
-    assert.deepEqual(downloaded, payload)
+    assert.deepEqual(downloaded.data, payload)
+    assert.equal(downloaded.meta.location, object)
+    assert.equal(downloaded.meta.size, payload.byteLength)
+    assert.equal(downloaded.attributes.contentType, attributes.contentType)
+    assert.equal(downloaded.attributes.contentDisposition, attributes.contentDisposition)
+    assert.equal(downloaded.attributes.cacheControl, attributes.cacheControl)
+    assert.deepEqual(downloaded.attributes.metadata, attributes.metadata)
 
-    const metadata = await storage.head(object)
-    assert.equal(metadata.location, object)
-    assert.equal(metadata.size, payload.byteLength)
+    const head = await storage.head(object)
+    assert.equal(head.meta.location, object)
+    assert.equal(head.meta.size, payload.byteLength)
+    assert.equal(head.attributes.contentType, attributes.contentType)
+    assert.equal(head.attributes.contentDisposition, attributes.contentDisposition)
+    assert.equal(head.attributes.cacheControl, attributes.cacheControl)
+    assert.deepEqual(head.attributes.metadata, attributes.metadata)
 
     const listed = await storage.list(prefix)
     assert.ok(

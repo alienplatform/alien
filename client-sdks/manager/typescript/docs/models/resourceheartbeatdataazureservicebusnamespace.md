@@ -8,13 +8,13 @@ import { ResourceHeartbeatDataAzureServiceBusNamespace } from "@alienplatform/ma
 let value: ResourceHeartbeatDataAzureServiceBusNamespace = {
   data: {
     name: "<value>",
-    privateEndpointConnectionCount: 24724,
+    privateEndpointConnectionCount: 289000,
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "deleted",
-      partial: true,
-      stale: false,
+      lifecycle: "running",
+      partial: false,
+      stale: true,
     },
   },
   resourceType: "azure_service_bus_namespace",

@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { dlv } from "./dlv.js";
 
 export interface Env {
   ALIEN_MANAGER_BEARER?: string | undefined;
@@ -37,16 +38,11 @@ export function env(): Env {
     return envMemo;
   }
 
-  const globals = globalThis as {
-    Deno?: { env?: { toObject?: () => Record<string, string | undefined> } };
-    process?: { env?: Record<string, string | undefined> };
-  };
-
   let envObject: Record<string, unknown> = {};
   if (isDeno()) {
-    envObject = globals.Deno?.env?.toObject?.() ?? {};
+    envObject = (globalThis as any).Deno?.env?.toObject?.() ?? {};
   } else {
-    envObject = globals.process?.env ?? {};
+    envObject = dlv(globalThis, "process.env") ?? {};
   }
 
   envMemo = envSchema.parse(envObject);

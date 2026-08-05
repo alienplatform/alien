@@ -80,7 +80,7 @@ jobs:
       qualification_head_sha: ${{ steps.qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           fetch-depth: 0
@@ -248,20 +248,26 @@ jobs:
               const root = 'client-sdks/' + sdk + '/typescript/.speakeasy/';
               const configPath = root + 'gen.yaml';
               const config = fs.readFileSync(configPath, 'utf8');
+              const configVersionPattern = /(typescript:\\n  version: )[^\\n]+/;
+              if (!configVersionPattern.test(config)) {
+                throw new Error(sdk + ' SDK version not found in gen.yaml');
+              }
               const updatedConfig = config.replace(
-                /(typescript:\\n  version: )[^\\n]+/,
+                configVersionPattern,
                 (_, prefix) => prefix + '${VERSION}',
               );
-              if (updatedConfig === config) throw new Error(sdk + ' SDK version not found in gen.yaml');
               fs.writeFileSync(configPath, updatedConfig);
 
               const lockPath = root + 'gen.lock';
               const lock = fs.readFileSync(lockPath, 'utf8');
+              const lockVersionPattern = /(  releaseVersion: )[^\\n]+/;
+              if (!lockVersionPattern.test(lock)) {
+                throw new Error(sdk + ' SDK releaseVersion not found in gen.lock');
+              }
               const updatedLock = lock.replace(
-                /(  releaseVersion: )[^\\n]+/,
+                lockVersionPattern,
                 (_, prefix) => prefix + '${VERSION}',
               );
-              if (updatedLock === lock) throw new Error(sdk + ' SDK releaseVersion not found in gen.lock');
               fs.writeFileSync(lockPath, updatedLock);
             }
           "
@@ -399,7 +405,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
           fetch-depth: 0
@@ -430,7 +436,7 @@ jobs:
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -441,7 +447,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
@@ -618,17 +624,17 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -711,18 +717,15 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          version: 10.11.0
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Validate npm auth
         if: ${{ inputs.stable_action == 'publish' }}
@@ -852,7 +855,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -902,11 +905,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
@@ -986,7 +989,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1009,11 +1012,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: oven-sh/setup-bun@v2
@@ -1051,7 +1054,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1074,11 +1077,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -1136,9 +1139,9 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
@@ -1193,7 +1196,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -1211,11 +1214,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
@@ -1287,9 +1290,9 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Validate npm auth
@@ -1348,13 +1351,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/x86_64-unknown-linux-musl/release/alien
@@ -1403,13 +1406,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/aarch64-unknown-linux-musl/release/alien
@@ -1460,13 +1463,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/aarch64-apple-darwin/release/alien
@@ -1489,7 +1492,7 @@ jobs:
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.16.0
 
@@ -1530,13 +1533,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             target/x86_64-pc-windows-msvc/release/alien.exe
@@ -1557,7 +1560,7 @@ jobs:
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.16.0
 
@@ -1611,7 +1614,7 @@ jobs:
           merge-multiple: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
           aws-region: us-east-1
@@ -1744,7 +1747,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
@@ -2032,7 +2035,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
           fetch-depth: 0
@@ -2360,7 +2363,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::216938125589:role/alien-releases-upload
           aws-region: us-east-1
@@ -2388,13 +2391,13 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -2426,13 +2429,13 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.release_commit }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 

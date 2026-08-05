@@ -24,10 +24,20 @@ to this dedicated bucket or container.
 
 ## Customer: run the normal setup
 
-The customer creates a deployment from that release and completes the normal
-generated CloudFormation, Terraform, or Azure setup. The setup creates a new
-dedicated S3 bucket, GCS bucket, or Blob container in the customer's account and
-hands the resulting Frozen resource state back to Alien.
+The customer creates a deployment from that release and chooses the setup method
+that fits their environment:
+
+- run `alien deploy` with their cloud credentials;
+- apply the generated Terraform module; or
+- on AWS, create the generated CloudFormation stack.
+
+Every method creates one dedicated S3 bucket, GCS bucket, or Blob container and
+one Remote Bindings identity. That identity trusts the vendor's configured
+identity and receives only the object-storage permissions listed in the generated
+`PERMISSIONS.md` (or visible directly in the CloudFormation template).
+
+The generated setup registers the completed Frozen resources with Alien. Direct
+setup performs the same work itself with the customer's setup credentials.
 
 This flow does not attach an existing bucket. The resource must reach Running
 before Remote Bindings can resolve it.
@@ -56,8 +66,9 @@ const bindings = await Bindings.forRemoteDeployment({
 
 const uploads = bindings.storage("uploads")
 await uploads.put("hello.txt", new TextEncoder().encode("hello"))
-await uploads.get("hello.txt")
-await uploads.head("hello.txt")
+const object = await uploads.get("hello.txt")
+const head = await uploads.head("hello.txt")
+console.log(new TextDecoder().decode(object.data), head.meta, head.attributes)
 await uploads.list()
 await uploads.delete("hello.txt")
 ```

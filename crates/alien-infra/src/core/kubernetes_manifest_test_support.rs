@@ -164,6 +164,7 @@ impl KubernetesManifestTestHarness {
             desired_stack: &self.stack,
             service_provider: &self.service_provider,
             deployment_config: &self.deployment_config,
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             heartbeat_collector: HeartbeatCollector::default(),
         }
     }

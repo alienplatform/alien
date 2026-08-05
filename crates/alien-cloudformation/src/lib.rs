@@ -14,6 +14,7 @@ mod built_ins;
 mod emitter;
 pub mod emitters;
 mod generator;
+mod inline_policy;
 mod registry;
 mod template;
 #[doc(hidden)]

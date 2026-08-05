@@ -1,14 +1,27 @@
 use crate::error::{map_cloud_client_error, ErrorData, Result};
-use crate::traits::{Binding, Kv, PutOptions, ScanResult};
+use crate::traits::{Binding, Kv, KvEntry, PutCondition, PutOptions, ScanResult};
 use alien_aws_clients::dynamodb::*;
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use base64::{prelude::BASE64_STANDARD, Engine};
+use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use uuid::Uuid;
 
-use super::{validate_key, validate_value};
+use super::{decode_version, encode_version, validate_key, validate_value};
+
+const HASH_BUCKET_COUNT: u8 = 16;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CursorState {
+    version: u8,
+    prefix: String,
+    bucket: u8,
+    last_key: Option<String>,
+}
 
 /// AWS DynamoDB implementation of the KV trait.
 ///
@@ -39,7 +52,7 @@ impl AwsDynamodbKv {
 
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
-        let bucket_id = hasher.finish() % 16; // 16 buckets for load distribution
+        let bucket_id = hasher.finish() % u64::from(HASH_BUCKET_COUNT);
         format!("bucket_{}", bucket_id)
     }
 
@@ -52,63 +65,133 @@ impl AwsDynamodbKv {
             false
         }
     }
+
+    fn primary_key(&self, key: &str) -> HashMap<String, AttributeValue> {
+        HashMap::from([
+            ("pk".to_string(), AttributeValue::s(self.hash_bucket(key))),
+            ("sk".to_string(), AttributeValue::s(key.to_string())),
+        ])
+    }
+
+    async fn load_item(&self, key: &str) -> Result<Option<HashMap<String, AttributeValue>>> {
+        let request = GetItemRequest::builder()
+            .table_name(self.table_name.clone())
+            .key(self.primary_key(key))
+            .consistent_read(true)
+            .build();
+        self.client
+            .get_item(request)
+            .await
+            .map(|response| response.item)
+            .map_err(|error| {
+                map_cloud_client_error(
+                    error,
+                    format!("Failed to get item with key '{}'", key),
+                    Some(key.to_string()),
+                )
+            })
+    }
+
+    fn item_ttl(item: &HashMap<String, AttributeValue>) -> Option<i64> {
+        item.get("ttl")
+            .and_then(|attribute| attribute.n.as_deref())
+            .and_then(|value| value.parse::<i64>().ok())
+    }
+
+    fn item_value(key: &str, item: &HashMap<String, AttributeValue>) -> Result<Vec<u8>> {
+        item.get("value")
+            .and_then(|attribute| attribute.b.as_ref())
+            .and_then(|value| base64::prelude::BASE64_STANDARD.decode(value).ok())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Missing or invalid value attribute for key '{}'", key),
+                    resource_id: Some(key.to_string()),
+                })
+            })
+    }
+
+    fn encode_cursor(state: &CursorState) -> Result<String> {
+        let json =
+            serde_json::to_vec(state)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "DynamoDB KV scan cursor encoding".to_string(),
+                    details: "Failed to serialize cursor state".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        Ok(BASE64_URL_SAFE_NO_PAD.encode(json))
+    }
+
+    fn decode_cursor(prefix: &str, cursor: &str) -> Result<CursorState> {
+        let decoded = BASE64_URL_SAFE_NO_PAD
+            .decode(cursor)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor decoding".to_string(),
+                details: "Invalid cursor encoding".to_string(),
+                field_name: Some("cursor".to_string()),
+            })?;
+        let state: CursorState = serde_json::from_slice(&decoded)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor decoding".to_string(),
+                details: "Invalid cursor data".to_string(),
+                field_name: Some("cursor".to_string()),
+            })?;
+        if state.version != 1 || state.prefix != prefix || state.bucket >= HASH_BUCKET_COUNT {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor validation".to_string(),
+                details: "Cursor does not belong to this prefix scan".to_string(),
+                field_name: Some("cursor".to_string()),
+            }));
+        }
+        if state
+            .last_key
+            .as_ref()
+            .is_some_and(|last_key| !last_key.starts_with(prefix))
+        {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "DynamoDB KV scan cursor validation".to_string(),
+                details: "Cursor key does not match the scan prefix".to_string(),
+                field_name: Some("cursor".to_string()),
+            }));
+        }
+        Ok(state)
+    }
 }
 
 impl Binding for AwsDynamodbKv {}
 
 #[async_trait]
 impl Kv for AwsDynamodbKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         validate_key(key)?;
 
-        let bucket = self.hash_bucket(key);
-        let mut primary_key = HashMap::new();
-        primary_key.insert("pk".to_string(), AttributeValue::s(bucket));
-        primary_key.insert("sk".to_string(), AttributeValue::s(key.to_string()));
-
-        let request = GetItemRequest::builder()
-            .table_name(self.table_name.clone())
-            .key(primary_key)
-            // `Kv::put` followed by `Kv::get` must observe the write. DynamoDB
-            // GetItem is eventually consistent by default, which can make a
-            // freshly stored command payload appear missing during immediate
-            // push dispatch.
-            .consistent_read(true)
-            .build();
-
-        let response = self.client.get_item(request).await.map_err(|e| {
-            map_cloud_client_error(
-                e,
-                format!("Failed to get item with key '{}'", key),
-                Some(key.to_string()),
-            )
-        })?;
-
-        if let Some(item) = response.item {
-            // Check TTL expiry (logical expiry contract)
-            if let Some(ttl_attr) = item.get("ttl") {
-                if let Some(ttl_epoch) = ttl_attr.n.as_ref().and_then(|s| s.parse::<i64>().ok()) {
-                    if self.is_expired(Some(ttl_epoch)) {
-                        return Ok(None); // Logically expired
-                    }
-                }
-            }
-
-            let value = item
-                .get("value")
-                .and_then(|attr| attr.b.as_ref())
-                .and_then(|base64_value| BASE64_STANDARD.decode(base64_value).ok())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::CloudPlatformError {
-                        message: format!("Missing or invalid value attribute for key '{}'", key),
-                        resource_id: Some(key.to_string()),
-                    })
-                })?;
-
-            Ok(Some(value))
-        } else {
-            Ok(None)
+        let Some(item) = self.load_item(key).await? else {
+            return Ok(None);
+        };
+        let ttl = Self::item_ttl(&item);
+        if self.is_expired(ttl) {
+            return Ok(None);
         }
+        let backend_version = item
+            .get("version")
+            .and_then(|value| value.s.clone())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Missing or invalid version attribute for key '{}'", key),
+                    resource_id: Some(key.to_string()),
+                })
+            })?;
+        Ok(Some(KvEntry {
+            key: key.to_string(),
+            value: Self::item_value(key, &item)?,
+            version: encode_version(
+                key,
+                backend_version,
+                ttl.map(|expires_at| expires_at.saturating_mul(1000)),
+            )?,
+        }))
     }
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<PutOptions>) -> Result<bool> {
@@ -123,7 +206,11 @@ impl Kv for AwsDynamodbKv {
         item.insert("sk".to_string(), AttributeValue::s(key.to_string()));
         item.insert(
             "value".to_string(),
-            AttributeValue::b(BASE64_STANDARD.encode(&value)),
+            AttributeValue::b(base64::prelude::BASE64_STANDARD.encode(&value)),
+        );
+        item.insert(
+            "version".to_string(),
+            AttributeValue::s(Uuid::new_v4().simple().to_string()),
         );
 
         if let Some(ttl) = options.ttl {
@@ -131,7 +218,7 @@ impl Kv for AwsDynamodbKv {
             item.insert("ttl".to_string(), AttributeValue::n(expires_at.to_string()));
         }
 
-        let request = if options.if_not_exists {
+        let request = if matches!(options.condition, PutCondition::Absent) {
             // Expired rows count as ABSENT, exactly like the local provider's
             // atomic takeover: DynamoDB's background TTL sweeper can lag the
             // logical expiry by hours, and without the `#ttl <= :now` arm a
@@ -155,6 +242,33 @@ impl Kv for AwsDynamodbKv {
                 .expression_attribute_names(expression_attribute_names)
                 .expression_attribute_values(expression_attribute_values)
                 .build()
+        } else if let PutCondition::Version(ref version) = options.condition {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            PutItemRequest::builder()
+                .table_name(self.table_name.clone())
+                .item(item)
+                .condition_expression(
+                    "#version = :version AND (attribute_not_exists(#ttl) OR #ttl > :now)"
+                        .to_string(),
+                )
+                .expression_attribute_names(HashMap::from([
+                    ("#version".to_string(), "version".to_string()),
+                    ("#ttl".to_string(), "ttl".to_string()),
+                ]))
+                .expression_attribute_values(HashMap::from([
+                    (
+                        ":version".to_string(),
+                        AttributeValue::s(expected.backend_version),
+                    ),
+                    (
+                        ":now".to_string(),
+                        AttributeValue::n(Utc::now().timestamp().to_string()),
+                    ),
+                ]))
+                .build()
         } else {
             PutItemRequest::builder()
                 .table_name(self.table_name.clone())
@@ -165,8 +279,7 @@ impl Kv for AwsDynamodbKv {
         match self.client.put_item(request).await {
             Ok(_) => Ok(true),
             Err(e) => {
-                // Check if this is a conditional check failure for if_not_exists
-                if options.if_not_exists {
+                if !matches!(options.condition, PutCondition::None) {
                     if let Some(alien_client_core::ErrorData::RemoteResourceConflict { .. }) =
                         &e.error
                     {
@@ -182,28 +295,60 @@ impl Kv for AwsDynamodbKv {
         }
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
         validate_key(key)?;
 
-        let bucket = self.hash_bucket(key);
-        let mut primary_key = HashMap::new();
-        primary_key.insert("pk".to_string(), AttributeValue::s(bucket));
-        primary_key.insert("sk".to_string(), AttributeValue::s(key.to_string()));
+        let request = if let Some(version) = if_version {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            DeleteItemRequest::builder()
+                .table_name(self.table_name.clone())
+                .key(self.primary_key(key))
+                .condition_expression(
+                    "#version = :version AND (attribute_not_exists(#ttl) OR #ttl > :now)"
+                        .to_string(),
+                )
+                .expression_attribute_names(HashMap::from([
+                    ("#version".to_string(), "version".to_string()),
+                    ("#ttl".to_string(), "ttl".to_string()),
+                ]))
+                .expression_attribute_values(HashMap::from([
+                    (
+                        ":version".to_string(),
+                        AttributeValue::s(expected.backend_version),
+                    ),
+                    (
+                        ":now".to_string(),
+                        AttributeValue::n(Utc::now().timestamp().to_string()),
+                    ),
+                ]))
+                .build()
+        } else {
+            DeleteItemRequest::builder()
+                .table_name(self.table_name.clone())
+                .key(self.primary_key(key))
+                .build()
+        };
 
-        let request = DeleteItemRequest::builder()
-            .table_name(self.table_name.clone())
-            .key(primary_key)
-            .build();
-
-        self.client.delete_item(request).await.map_err(|e| {
-            map_cloud_client_error(
-                e,
+        match self.client.delete_item(request).await {
+            Ok(_) => Ok(true),
+            Err(error)
+                if if_version.is_some()
+                    && matches!(
+                        error.error.as_ref(),
+                        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                    ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(map_cloud_client_error(
+                error,
                 format!("Failed to delete item with key '{}'", key),
                 Some(key.to_string()),
-            )
-        })?;
-
-        Ok(())
+            )),
+        }
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
@@ -253,35 +398,51 @@ impl Kv for AwsDynamodbKv {
         &self,
         prefix: &str,
         limit: Option<usize>,
-        _cursor: Option<String>,
+        cursor: Option<String>,
     ) -> Result<ScanResult> {
-        validate_key(prefix)?; // Prefix follows same key validation rules
-
-        // For prefix scans with hash-based bucketing, we must query ALL buckets
-        // since items with the same prefix can be distributed across different buckets
-        let mut all_items = Vec::new();
-        let mut total_fetched = 0;
+        validate_key(prefix)?;
         let limit = limit.unwrap_or(1000);
+        let initial = cursor
+            .as_deref()
+            .map(|cursor| Self::decode_cursor(prefix, cursor))
+            .transpose()?
+            .unwrap_or(CursorState {
+                version: 1,
+                prefix: prefix.to_string(),
+                bucket: 0,
+                last_key: None,
+            });
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
 
-        // For simplicity, we'll query all 16 buckets sequentially
-        // In production, this could be parallelized for better performance
-        for bucket_id in 0..16 {
-            if total_fetched >= limit {
-                break;
-            }
+        let mut items = Vec::with_capacity(limit);
+        let mut bucket_id = initial.bucket;
+        let mut last_key = initial.last_key;
 
+        while bucket_id < HASH_BUCKET_COUNT {
             let bucket = format!("bucket_{}", bucket_id);
             let mut expression_attribute_values = HashMap::new();
-            expression_attribute_values.insert(":bucket".to_string(), AttributeValue::s(bucket));
+            expression_attribute_values
+                .insert(":bucket".to_string(), AttributeValue::s(bucket.clone()));
             expression_attribute_values
                 .insert(":prefix".to_string(), AttributeValue::s(prefix.to_string()));
 
-            // Build request for this bucket
+            let exclusive_start_key = last_key.as_ref().map(|key| {
+                HashMap::from([
+                    ("pk".to_string(), AttributeValue::s(bucket.clone())),
+                    ("sk".to_string(), AttributeValue::s(key.clone())),
+                ])
+            });
             let request = QueryRequest::builder()
                 .table_name(self.table_name.clone())
                 .key_condition_expression("pk = :bucket AND begins_with(sk, :prefix)".to_string())
                 .expression_attribute_values(expression_attribute_values)
-                .limit((limit - total_fetched) as i32)
+                .limit(i32::try_from(limit - items.len()).unwrap_or(i32::MAX))
+                .maybe_exclusive_start_key(exclusive_start_key)
                 .build();
 
             let response = self.client.query(request).await.map_err(|e| {
@@ -292,13 +453,7 @@ impl Kv for AwsDynamodbKv {
                 )
             })?;
 
-            // Process items from this bucket
             for item in response.items {
-                if total_fetched >= limit {
-                    break;
-                }
-
-                // Check TTL expiry
                 if let Some(ttl_attr) = item.get("ttl") {
                     if let Some(ttl_epoch) = ttl_attr.n.as_ref().and_then(|s| s.parse::<i64>().ok())
                     {
@@ -312,19 +467,72 @@ impl Kv for AwsDynamodbKv {
                     if let (Some(key), Some(base64_value)) =
                         (key_attr.s.as_ref(), value_attr.b.as_ref())
                     {
-                        if let Ok(value) = BASE64_STANDARD.decode(base64_value) {
-                            all_items.push((key.clone(), value));
-                            total_fetched += 1;
+                        if let Ok(value) = base64::prelude::BASE64_STANDARD.decode(base64_value) {
+                            let ttl = Self::item_ttl(&item);
+                            if let Some(backend_version) =
+                                item.get("version").and_then(|value| value.s.clone())
+                            {
+                                items.push(KvEntry {
+                                    key: key.clone(),
+                                    value,
+                                    version: encode_version(
+                                        key,
+                                        backend_version,
+                                        ttl.map(|expires_at| expires_at.saturating_mul(1000)),
+                                    )?,
+                                });
+                            } else {
+                                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Missing or invalid version attribute for key '{}'",
+                                        key
+                                    ),
+                                    resource_id: Some(key.clone()),
+                                }));
+                            }
                         }
                     }
                 }
             }
+
+            let provider_last_key = response
+                .last_evaluated_key
+                .as_ref()
+                .and_then(|key| key.get("sk"))
+                .and_then(|value| value.s.clone());
+
+            if items.len() == limit {
+                let (next_bucket, next_key) = match provider_last_key {
+                    Some(key) => (bucket_id, Some(key)),
+                    None if bucket_id + 1 < HASH_BUCKET_COUNT => (bucket_id + 1, None),
+                    None => {
+                        return Ok(ScanResult {
+                            items,
+                            next_cursor: None,
+                        });
+                    }
+                };
+                return Ok(ScanResult {
+                    items,
+                    next_cursor: Some(Self::encode_cursor(&CursorState {
+                        version: 1,
+                        prefix: prefix.to_string(),
+                        bucket: next_bucket,
+                        last_key: next_key,
+                    })?),
+                });
+            }
+
+            if let Some(key) = provider_last_key {
+                last_key = Some(key);
+            } else {
+                bucket_id += 1;
+                last_key = None;
+            }
         }
 
-        // For simplicity, we're not implementing cursor-based pagination across buckets
-        // In production, this would require more complex cursor state management
         Ok(ScanResult {
-            items: all_items,
+            items,
             next_cursor: None,
         })
     }

@@ -13,9 +13,9 @@ pub mod manager_api_transport;
 mod observe;
 mod pending;
 pub use pending::{
-    enforce_frozen_gate_fixity, frozen_gating_inputs, resolve_frozen_gate_answers,
-    resolve_frozen_gate_answers_from_presence, strip_declined_live_resources,
-    strip_frozen_declines,
+    enforce_frozen_gate_fixity, frozen_gating_inputs, prepare_direct_setup_update,
+    resolve_frozen_gate_answers, resolve_frozen_gate_answers_from_presence,
+    strip_declined_live_resources, strip_frozen_declines,
 };
 mod provisioning;
 pub mod runner;
@@ -35,6 +35,7 @@ pub use alien_core::{
 pub use helpers::collect_environment_info;
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
+pub use helpers::deployment_state_error_from_headline;
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};

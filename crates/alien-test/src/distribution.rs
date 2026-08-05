@@ -4240,18 +4240,6 @@ mod tests {
             !contains_resource_type(&rendered_stack, "compute-cluster"),
             "Kubernetes Terraform setup must not reuse the cloud VM compute substrate"
         );
-        let secrets = rendered_stack
-            .resources
-            .get("secrets")
-            .expect("Kubernetes setup should include the managed secrets vault");
-        assert!(
-            secrets
-                .dependencies
-                .iter()
-                .all(|dependency| dependency.id() != "management-sa"),
-            "cloud-backed Kubernetes setup uses remote-stack-management, not a stack-local management-sa"
-        );
-
         let registry = alien_terraform::TfRegistry::built_in();
         alien_terraform::generate_terraform_module(
             &rendered_stack,
@@ -4391,14 +4379,14 @@ mod tests {
             .matches("role    = \"roles/secretmanager.viewer\"")
             .count();
         assert_eq!(
-            viewer_bindings, 4,
+            viewer_bindings, 2,
             "GCP vault heartbeat/management bindings should be emitted once per target scope"
         );
         assert_eq!(
             rendered
                 .matches("title       = \"ResourceVaultSecretsHeartbeat\"")
                 .count(),
-            2,
+            1,
             "resource-scoped vault heartbeat conditions should be emitted once per generated vault"
         );
     }

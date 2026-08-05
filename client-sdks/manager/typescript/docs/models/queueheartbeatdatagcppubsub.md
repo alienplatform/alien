@@ -12,9 +12,9 @@ let value: QueueHeartbeatDataGcpPubSub = {
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "deleted",
-    partial: true,
-    stale: false,
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   subscriptionLabels: {
     "key": "<value>",

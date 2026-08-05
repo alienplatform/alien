@@ -12,7 +12,6 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -42,15 +41,9 @@ Metadata:
         default: Management role ARN
       TelemetryMode:
         default: Telemetry
-      Token:
-        default: Install token
       UpdatesMode:
         default: Updates
 Parameters:
-  Token:
-    Type: String
-    Description: Install token from the application setup page.
-    NoEcho: true
   ManagingRoleArn:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.

@@ -26,9 +26,14 @@ function fakeRemoteAddon() {
   const head = vi.fn<RawRemoteStorageHandle["head"]>(async () => {
     throw new Error("unused")
   })
+  const put = vi.fn<RawRemoteStorageHandle["put"]>(async () => ({}))
   const storage: RawRemoteStorageHandle = {
-    get: async path => Buffer.from(path),
-    put: async () => {},
+    get: async path => ({
+      data: Buffer.from(path),
+      meta: { location: path, size: path.length, lastModified: "" },
+      attributes: { metadata: {} },
+    }),
+    put,
     delete: async () => {},
     list: async () => [],
     head,
@@ -92,6 +97,7 @@ function fakeRemoteAddon() {
     forRemoteDeployment,
     resolveStorage,
     head,
+    put,
   }
 }
 
@@ -127,9 +133,12 @@ describe("Bindings.forRemoteDeployment", () => {
   it("reuses one native bindings handle and resolves each Storage handle lazily once", async () => {
     const fixture = fakeRemoteAddon()
     fixture.head.mockResolvedValue({
-      location: "archive/a.txt",
-      size: 1,
-      lastModified: "2026-01-01T00:00:00Z",
+      meta: {
+        location: "archive/a.txt",
+        size: 1,
+        lastModified: "2026-01-01T00:00:00Z",
+      },
+      attributes: { metadata: {} },
     })
     loadAddon.mockReturnValue(fixture.addon)
 
@@ -148,6 +157,25 @@ describe("Bindings.forRemoteDeployment", () => {
 
     expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce()
     expect(fixture.resolveStorage.mock.calls).toEqual([["archive"], ["logs"]])
+  })
+
+  it("forwards object attributes through remote Storage puts", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+    const options = {
+      attributes: {
+        contentType: "application/json",
+        metadata: { schema: "event-v1" },
+      },
+    }
+
+    await bindings.storage("archive").put("events/1.json", Buffer.from("{}"), options)
+
+    expect(fixture.put).toHaveBeenCalledWith("events/1.json", Buffer.from("{}"), options)
   })
 
   it("unwraps napi errors from discovery and Storage operations", async () => {

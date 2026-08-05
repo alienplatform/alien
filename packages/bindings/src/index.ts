@@ -12,8 +12,8 @@
 import { createFactories } from "./factories.js"
 import { loadAddon } from "./loader.js"
 
-export { Bindings } from "./remote.js"
 export type { RemoteDeploymentBindingsOptions } from "./remote.js"
+export { Bindings } from "./remote.js"
 
 const factories = createFactories(loadAddon)
 
@@ -42,6 +42,8 @@ export {
 export type {
   Container,
   Kv,
+  KvDeleteOptions,
+  KvEntry,
   KvScanItem,
   KvScanResult,
   KvSetOptions,
@@ -57,5 +59,11 @@ export type {
   SignedUrlMethod,
   SignedUrlOptions,
   Storage,
+  StorageGetResult,
+  StorageHeadResult,
+  StorageObjectAttributes,
+  StoragePutAttributes,
+  StoragePutOptions,
+  StoragePutResult,
   Vault,
 } from "./types.js"

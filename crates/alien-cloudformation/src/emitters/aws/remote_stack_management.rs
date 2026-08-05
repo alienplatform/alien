@@ -8,8 +8,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
-            PARAM_MANAGING_ROLE_ARN,
+            cf_from_json, chunk_managed_policy_statements, required_logical_id, resource_config,
+            tags, uniquify_iam_statement_sids, PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -46,24 +46,6 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
 
         let policy_documents = remote_management_policy_documents(ctx)?;
         let mut resources = vec![role];
-        if has_remote_bindings(ctx) {
-            let mut bindings_role = CfResource::new(
-                remote_bindings_role_logical_id(logical_id),
-                "AWS::IAM::Role".to_string(),
-            );
-            bindings_role.properties.insert(
-                "RoleName".to_string(),
-                CfExpression::sub("${AWS::StackName}-remote-bindings"),
-            );
-            bindings_role.properties.insert(
-                "AssumeRolePolicyDocument".to_string(),
-                remote_management_trust_policy(),
-            );
-            bindings_role
-                .properties
-                .insert("Tags".to_string(), tags(ctx));
-            resources.push(bindings_role);
-        }
         resources.extend(management_policy_resources(&role_id, policy_documents));
 
         Ok(resources)
@@ -73,29 +55,13 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
         resource_config::<RemoteStackManagement>(ctx, RemoteStackManagement::RESOURCE_TYPE)?;
         let logical_id = required_logical_id(ctx)?;
         let role_id = role_logical_id(logical_id);
-        let mut fields = vec![
+        let fields = vec![
             ("roleName", CfExpression::ref_(&role_id)),
             ("roleArn", CfExpression::get_att(&role_id, "Arn")),
             ("managementPermissionsApplied", CfExpression::from(true)),
         ];
-        if has_remote_bindings(ctx) {
-            fields.push((
-                "remoteBindingsRoleArn",
-                CfExpression::get_att(&remote_bindings_role_logical_id(logical_id), "Arn"),
-            ));
-        }
         Ok(CfExpression::object(fields))
     }
-}
-
-pub(crate) fn remote_bindings_role_logical_id(resource_logical_id: &str) -> String {
-    format!("{}RemoteBindings", role_logical_id(resource_logical_id))
-}
-
-fn has_remote_bindings(ctx: &EmitContext<'_>) -> bool {
-    ctx.stack
-        .resources()
-        .any(|(_, entry)| entry.has_remote_bindings())
 }
 
 fn role_logical_id(resource_logical_id: &str) -> String {
@@ -140,7 +106,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     let context = permission_context();
 
     if let Some(profile) = ctx.stack.management().profile() {
-        for permission_set_ref in global_permission_refs(profile) {
+        for permission_set_ref in global_permission_refs(ctx, profile) {
             if let Some(permission_set) = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             {
@@ -230,14 +196,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         ),
     ]));
 
-    chunk_policy_statements(uniquify_iam_statement_sids(statements))
-}
-
-fn policy_document(statements: Vec<CfExpression>) -> CfExpression {
-    CfExpression::object([
-        ("Version", CfExpression::from("2012-10-17")),
-        ("Statement", CfExpression::list(statements)),
-    ])
+    chunk_managed_policy_statements(uniquify_iam_statement_sids(statements))
 }
 
 fn management_policy_resources(
@@ -269,53 +228,28 @@ fn management_policy_resources(
         .collect()
 }
 
-fn chunk_policy_statements(statements: Vec<CfExpression>) -> Result<Vec<CfExpression>> {
-    const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
-
-    let mut chunks = Vec::new();
-    let mut current = Vec::new();
-
-    for statement in statements {
-        let mut candidate = current.clone();
-        candidate.push(statement.clone());
-        if policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
-            current = candidate;
-            continue;
-        }
-
-        if current.is_empty() {
-            return Err(AlienError::new(ErrorData::GenericError {
-                message: "AWS management IAM statement is too large for a managed policy"
-                    .to_string(),
-            }));
-        }
-
-        chunks.push(policy_document(current));
-        current = vec![statement];
-    }
-
-    if !current.is_empty() {
-        chunks.push(policy_document(current));
-    }
-
-    Ok(chunks)
-}
-
-fn policy_document_size(statements: &[CfExpression]) -> Result<usize> {
-    serde_json::to_string(&policy_document(statements.to_vec()))
-        .into_alien_error()
-        .context(ErrorData::TemplateSerializationFailed {
-            format: "CloudFormation IAM policy".to_string(),
-            reason: "Failed to serialize IAM policy for size validation".to_string(),
-        })
-        .map(|policy| policy.len())
-}
-
-fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
+fn global_permission_refs<'a>(
+    ctx: &EmitContext<'_>,
+    profile: &'a PermissionProfile,
+) -> Vec<&'a PermissionSetReference> {
     profile
         .0
         .get("*")
-        .map(|refs| refs.iter().collect())
+        .map(|refs| {
+            refs.iter()
+                .filter(|permission_ref| {
+                    !ctx.stack.resources.values().any(|entry| {
+                        alien_core::remote_bindings::remote_binding_for_entry(entry).is_some_and(
+                            |definition| {
+                                permission_ref
+                                    .id()
+                                    .starts_with(&format!("{}/", definition.resource_type))
+                            },
+                        )
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 

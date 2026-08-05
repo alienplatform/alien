@@ -22,14 +22,28 @@ const bindings = await Bindings.forRemoteDeployment({
 })
 
 const archive = bindings.storage("archive")
-await archive.put("reports/latest.json", Buffer.from(JSON.stringify({ ready: true })))
+const write = await archive.put("reports/latest.json", Buffer.from(JSON.stringify({ ready: true })), {
+  attributes: {
+    contentType: "application/json",
+    cacheControl: "private, max-age=60",
+    metadata: { schema: "report-v1" },
+  },
+})
 
-const metadata = await archive.head("reports/latest.json")
-const report = await archive.get("reports/latest.json")
+const head = await archive.head("reports/latest.json")
+const object = await archive.get("reports/latest.json")
+const report = JSON.parse(object.data.toString())
+console.log(write.eTag, head.meta, head.attributes, report)
 const reports = await archive.list("reports/")
 
 await archive.delete("reports/latest.json")
 ```
+
+Cloud storage providers persist these object attributes. The local filesystem
+provider rejects attribute-bearing writes because it cannot represent them.
+GCS also rejects `contentEncoding: "gzip"`: its decompressive transcoding omits
+the response length required for byte-exact reads. Other GCS encodings, such as
+`br`, are preserved.
 
 Remote Storage exposes `get`, `put`, `head`, `list`, and `delete`. It does not
 expose copy or signed URLs. The same `Bindings` and Storage handles remain valid

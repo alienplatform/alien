@@ -6,8 +6,13 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  PublicEndpointOutput,
+  PublicEndpointOutput$inboundSchema,
+} from "./publicendpointoutput.js";
 
 export type ResourceEntry = {
+  publicEndpoints?: { [k: string]: PublicEndpointOutput } | undefined;
   publicUrl?: string | null | undefined;
   resourceType: string;
 };
@@ -15,6 +20,8 @@ export type ResourceEntry = {
 /** @internal */
 export const ResourceEntry$inboundSchema: z.ZodType<ResourceEntry, unknown> = z
   .object({
+    publicEndpoints: z.record(z.string(), PublicEndpointOutput$inboundSchema)
+      .optional(),
     publicUrl: z.nullable(z.string()).optional(),
     resourceType: z.string(),
   });

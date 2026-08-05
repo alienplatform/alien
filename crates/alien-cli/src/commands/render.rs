@@ -1,8 +1,8 @@
 use crate::config::load_configuration;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Platform, StackSettings,
-    StackState,
+    AwsManagementConfig, AzureManagementConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
+    ExternalBindings, GcpManagementConfig, ManagementConfig, Platform, StackSettings, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
@@ -118,7 +118,7 @@ async fn prepare_stack_for_render(
         input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
-        management_config: None,
+        management_config: render_management_config(base_platform.unwrap_or(platform)),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
             hash: "empty".to_string(),
@@ -143,6 +143,23 @@ async fn prepare_stack_for_render(
         .apply_mutations(stack, &stack_state, &config)
         .await
         .map_err(preflight_error)
+}
+
+fn render_management_config(platform: Platform) -> Option<ManagementConfig> {
+    match platform {
+        Platform::Aws => Some(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "rendered-from-template-parameter".to_string(),
+        })),
+        Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            service_account_email: "rendered-from-terraform-variable".to_string(),
+        })),
+        Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: "rendered-from-terraform-variable".to_string(),
+            oidc_issuer: "rendered-from-terraform-variable".to_string(),
+            oidc_subject: "rendered-from-terraform-variable".to_string(),
+        })),
+        _ => None,
+    }
 }
 
 fn validate_args(args: &RenderArgs) -> Result<()> {

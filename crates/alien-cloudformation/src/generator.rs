@@ -1,5 +1,6 @@
 use crate::{
     emitters::enabled,
+    inline_policy::consolidate_role_inline_policies,
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -10,10 +11,9 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
     ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
-    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform,
-    RemoteStackManagement, Result, Stack, StackInputDefaultValue, StackInputDefinition,
-    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
+    ResourceLifecycle, Result, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -249,6 +249,14 @@ pub fn generate_cloudformation_template(
     };
 
     let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
+    let access_only = stack
+        .resources
+        .values()
+        .any(|entry| alien_core::remote_bindings::remote_binding_for_entry(entry).is_some())
+        && !stack
+            .resources
+            .values()
+            .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
     let stack_inputs = stack_inputs_for_cloudformation(stack, options.target);
 
     add_standard_parameters(
@@ -256,24 +264,30 @@ pub fn generate_cloudformation_template(
         stack,
         &stack_settings,
         supports_custom_domain,
+        access_only,
+        !matches!(options.registration, RegistrationMode::OutputsFallback),
     )?;
     add_stack_input_parameters(&mut template, &stack_inputs)?;
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
     }
-    add_standard_conditions(
-        &mut template,
-        stack,
-        &stack_settings,
-        supports_custom_domain,
-    );
+    if !access_only {
+        add_standard_conditions(
+            &mut template,
+            stack,
+            &stack_settings,
+            supports_custom_domain,
+        );
+    }
     add_console_interface_metadata(
         &mut template,
         stack,
         &stack_settings,
         supports_custom_domain,
         &stack_inputs,
+        access_only,
+        !matches!(options.registration, RegistrationMode::OutputsFallback),
     );
 
     let mut registration_resources: Vec<RegistrationEntry> = Vec::new();
@@ -386,8 +400,10 @@ pub fn generate_cloudformation_template(
         &stack_settings,
         kubernetes_namespace.clone(),
         supports_custom_domain,
+        access_only,
     );
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
+    consolidate_role_inline_policies(&mut template)?;
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
@@ -641,17 +657,23 @@ fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
     for line in yaml.lines() {
         let trimmed = line.trim_start();
         let indent = &line[..line.len() - trimmed.len()];
-        let replacement = match trimmed {
-            "Default: on" => Some("Default: \"on\""),
-            "Default: off" => Some("Default: \"off\""),
-            "- on" => Some("- \"on\""),
-            "- off" => Some("- \"off\""),
-            _ => None,
-        };
+        let replacement = trimmed
+            .strip_suffix(": on")
+            .map(|key| format!("{key}: \"on\""))
+            .or_else(|| {
+                trimmed
+                    .strip_suffix(": off")
+                    .map(|key| format!("{key}: \"off\""))
+            })
+            .or_else(|| match trimmed {
+                "- on" => Some("- \"on\"".to_string()),
+                "- off" => Some("- \"off\"".to_string()),
+                _ => None,
+            });
 
         if let Some(replacement) = replacement {
             quoted.push_str(indent);
-            quoted.push_str(replacement);
+            quoted.push_str(&replacement);
         } else {
             quoted.push_str(line);
         }
@@ -853,32 +875,6 @@ fn apply_resource_dependencies(
             (resource_id.clone(), targets)
         })
         .collect();
-    // Remote Storage grants refer back to the management role. For the
-    // management -> storage bootstrap edge, wait for the bucket resources but
-    // not the grants that cannot exist until management does.
-    let remote_storage_prerequisite_targets: IndexMap<String, Vec<String>> = emitted_resource_ids
-        .iter()
-        .filter(|(resource_id, _)| {
-            stack
-                .resources
-                .get(*resource_id)
-                .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage)
-        })
-        .map(|(resource_id, logical_ids)| {
-            let targets = logical_ids
-                .iter()
-                .filter(|logical_id| {
-                    template.resources.get(*logical_id).is_some_and(|resource| {
-                        resource.condition.is_none()
-                            && !is_remote_storage_permission_support_resource(resource)
-                    })
-                })
-                .cloned()
-                .collect();
-            (resource_id.clone(), targets)
-        })
-        .collect();
-
     for (resource_id, entry) in stack.resources() {
         let Some(resource_logical_ids) = emitted_resource_ids.get(resource_id) else {
             continue;
@@ -889,13 +885,18 @@ fn apply_resource_dependencies(
             if dependency.id() == resource_id {
                 continue;
             }
-            let targets = if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
-                remote_storage_prerequisite_targets
-                    .get(dependency.id())
-                    .or_else(|| dependency_targets.get(dependency.id()))
-            } else {
-                dependency_targets.get(dependency.id())
-            };
+            // The resource-specific grant already depends on both the bindings identity and the
+            // physical resource. The executor edge exists so direct setup attaches that grant only
+            // after identity creation; it should not make generated physical resources wait on the
+            // identity itself.
+            if stack
+                .resources
+                .get(dependency.id())
+                .is_some_and(|entry| entry.config.downcast_ref::<RemoteBindings>().is_some())
+            {
+                continue;
+            }
+            let targets = dependency_targets.get(dependency.id());
             if let Some(targets) = targets {
                 for target in targets {
                     if !depends_on.contains(target) {
@@ -922,34 +923,37 @@ fn apply_resource_dependencies(
     }
 }
 
-fn is_remote_storage_permission_support_resource(resource: &CfResource) -> bool {
-    resource.resource_type == "AWS::IAM::Policy"
-}
-
 fn add_standard_parameters(
     template: &mut CfTemplate,
     stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
+    bindings_only: bool,
+    uses_custom_registration: bool,
 ) -> Result<()> {
-    template.parameters.insert(
-        PARAM_TOKEN.to_string(),
-        string_parameter(
-            "Install token from the application setup page.",
-            None,
-            None,
-            true,
-        ),
-    );
+    if uses_custom_registration {
+        template.parameters.insert(
+            PARAM_TOKEN.to_string(),
+            string_parameter(
+                "Install token from the application setup page.",
+                None,
+                None,
+                true,
+            ),
+        );
+    }
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
         string_parameter(
             "ARN of the management identity allowed to assume setup-created roles.",
-            Some(String::new()),
+            (!bindings_only).then(String::new),
             None,
             false,
         ),
     );
+    if bindings_only {
+        return Ok(());
+    }
     template.parameters.insert(
         PARAM_MANAGING_ACCOUNT_ID.to_string(),
         string_parameter(
@@ -1331,17 +1335,26 @@ fn add_console_interface_metadata(
     settings: &StackSettings,
     supports_custom_domain: bool,
     stack_inputs: &[StackInputDefinition],
+    bindings_only: bool,
+    uses_custom_registration: bool,
 ) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
     let compute_parameters = compute_parameter_names(stack, settings.compute.as_ref());
+    let registration_parameters = if uses_custom_registration {
+        vec![PARAM_TOKEN, PARAM_MANAGING_ROLE_ARN]
+    } else {
+        vec![PARAM_MANAGING_ROLE_ARN]
+    };
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
-        "Parameters": [
-            PARAM_TOKEN,
-            PARAM_MANAGING_ROLE_ARN,
-            PARAM_MANAGING_ACCOUNT_ID,
-        ]
+        "Parameters": registration_parameters
     })];
+    if !bindings_only {
+        parameter_groups[0]["Parameters"]
+            .as_array_mut()
+            .expect("registration parameter group is an array")
+            .push(json!(PARAM_MANAGING_ACCOUNT_ID));
+    }
     if !network_parameters.is_empty() {
         parameter_groups.push(json!({
             "Label": { "default": "Network" },
@@ -1369,27 +1382,33 @@ fn add_console_interface_metadata(
             "Parameters": compute_parameters
         }));
     }
-    parameter_groups.push(json!({
-        "Label": { "default": "Operations" },
-        "Parameters": [
-            PARAM_UPDATES_MODE,
-            PARAM_TELEMETRY_MODE,
-            PARAM_HEARTBEATS_MODE
-        ]
-    }));
+    if !bindings_only {
+        parameter_groups.push(json!({
+            "Label": { "default": "Operations" },
+            "Parameters": [
+                PARAM_UPDATES_MODE,
+                PARAM_TELEMETRY_MODE,
+                PARAM_HEARTBEATS_MODE
+            ]
+        }));
+    }
 
     let mut parameter_labels = serde_json::Map::new();
-    insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Install token");
+    if uses_custom_registration {
+        insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Install token");
+    }
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ROLE_ARN,
         "Management role ARN",
     );
-    insert_parameter_label(
-        &mut parameter_labels,
-        PARAM_MANAGING_ACCOUNT_ID,
-        "Image account ID",
-    );
+    if !bindings_only {
+        insert_parameter_label(
+            &mut parameter_labels,
+            PARAM_MANAGING_ACCOUNT_ID,
+            "Image account ID",
+        );
+    }
     for parameter in network_parameter_names(settings.network.as_ref()) {
         let label = match parameter {
             PARAM_VPC_CIDR => "VPC CIDR",
@@ -1426,9 +1445,11 @@ fn add_console_interface_metadata(
     for (parameter, label) in compute_parameter_labels(stack, settings.compute.as_ref()) {
         insert_parameter_label(&mut parameter_labels, &parameter, &label);
     }
-    insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
-    insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
-    insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
+    if !bindings_only {
+        insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
+        insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
+        insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
+    }
 
     template.metadata.insert(
         "AWS::CloudFormation::Interface".to_string(),
@@ -2009,7 +2030,16 @@ fn stack_settings_expression(
     settings: &StackSettings,
     kubernetes_namespace: Option<CfExpression>,
     supports_custom_domain: bool,
+    bindings_only: bool,
 ) -> CfExpression {
+    if bindings_only {
+        return CfExpression::object([
+            ("deploymentModel", CfExpression::from("push")),
+            ("updates", CfExpression::from("approval-required")),
+            ("telemetry", CfExpression::from("off")),
+            ("heartbeats", CfExpression::from("on")),
+        ]);
+    }
     let mut values = vec![
         ("deploymentModel", CfExpression::from("push")),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
@@ -2487,6 +2517,16 @@ impl DomainParameterDefaults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quotes_yaml_1_1_boolean_like_strings_in_object_values() {
+        let yaml = "Properties:\n  StackSettings:\n    telemetry: off\n    heartbeats: on\n  AllowedValues:\n  - off\n  - on\n  Label: only-on-request\n";
+
+        assert_eq!(
+            quote_yaml_1_1_mode_scalars(yaml),
+            "Properties:\n  StackSettings:\n    telemetry: \"off\"\n    heartbeats: \"on\"\n  AllowedValues:\n  - \"off\"\n  - \"on\"\n  Label: only-on-request\n"
+        );
+    }
 
     #[test]
     fn merge_replaces_intrinsic_expression_with_structured_overlay() {

@@ -10,8 +10,8 @@
 
 import { randomUUID } from "node:crypto"
 import { afterAll, describe, expect, it } from "vitest"
-import { queue } from "../src/index.js"
 import type { Queue } from "../src/index.js"
+import { queue } from "../src/index.js"
 import { cleanupTempDirs, localQueueBindingEnv, only } from "./helpers/local-binding-env.js"
 
 let bunFixtureIndex = 0

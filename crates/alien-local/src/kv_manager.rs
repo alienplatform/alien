@@ -6,7 +6,7 @@ use tracing::{debug, info};
 /// Manager for local KV resources.
 ///
 /// Creates the on-disk directory for each KV resource. The `LocalKv` binding
-/// opens its own SQLite-compatible database (`localkv.v1`) inside that
+/// opens its own SQLite-compatible database (`localkv.v2`) inside that
 /// directory and performs all operations directly.
 ///
 /// # State Scoping
@@ -124,12 +124,12 @@ impl LocalKvManager {
     }
 
     /// Verifies that a KV resource exists and is healthy by inspecting its
-    /// store against the `localkv.v1` on-disk contract.
+    /// store against the `localkv.v2` on-disk contract.
     ///
     /// Mirrors the format check `LocalKv` performs on open: it opens
     /// `<kv_path>/localkv.sqlite` with turso (SQLite-compatible file format),
     /// reads the `('format', ...)` row from the `meta` table, and reports
-    /// healthy only when it equals `localkv.v1`. turso exposes no read-only
+    /// healthy only when it equals `localkv.v2`. turso exposes no read-only
     /// open, so the probe is a plain open that only ever runs `SELECT`;
     /// turso's multi-process WAL mode (experimental upstream, enabled
     /// explicitly here exactly as in the binding) plus a busy_timeout let it
@@ -183,7 +183,7 @@ impl LocalKvManager {
             return Ok(());
         }
 
-        crate::store_probe::check_store_format(&db_path, "localkv.v1").await
+        crate::store_probe::check_store_format(&db_path, "localkv.v2").await
     }
 
     /// Gets the binding configuration for a KV resource.

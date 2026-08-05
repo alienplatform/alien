@@ -1,7 +1,8 @@
 use crate::error::{ErrorData, Result};
-use crate::traits::{Binding, Kv, PutOptions, ScanResult};
+use crate::traits::{Binding, Kv, KvEntry, PutCondition, PutOptions, ScanResult};
 use alien_azure_clients::tables::{
-    AzureTableStorageClient, EntityQueryOptions, TableEntity, TableStorageApi,
+    AzureTableStorageClient, EntityQueryContinuation, EntityQueryOptions, TableEntity,
+    TableStorageApi,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
@@ -12,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
-use super::{validate_key, validate_value};
+use super::{decode_version, encode_version, validate_key, validate_value};
 
 /// Convert a KV operation to a Table Storage entity
 /// This only base64 encodes the raw bytes when creating the properties map, not in memory
@@ -84,11 +85,31 @@ fn is_entity_expired(entity: &TableEntity) -> bool {
     false
 }
 
+fn entity_expiration_millis(entity: &TableEntity) -> Option<i64> {
+    entity
+        .properties
+        .get("ExpiresAt")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_millis())
+}
+
+fn entity_etag(entity: &TableEntity) -> Option<String> {
+    entity
+        .properties
+        .get("odata.etag")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
 /// Cursor state for pagination across partitions
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CursorState {
+    version: u8,
+    prefix: String,
     current_partition: u32,
-    partition_continuation_token: Option<String>, // Azure's NextPartitionKey + NextRowKey combined
+    continuation: Option<EntityQueryContinuation>,
 }
 
 /// Azure Table Storage implementation of the KV trait
@@ -238,22 +259,28 @@ impl AzureTableStorageKv {
     }
 
     /// Encodes cursor state as base64url JSON for safe HTTP transmission
-    fn encode_cursor(&self, state: &CursorState) -> String {
-        let json = serde_json::to_string(state).unwrap();
-        BASE64.encode(json.as_bytes())
+    fn encode_cursor(&self, state: &CursorState) -> Result<String> {
+        let json =
+            serde_json::to_vec(state)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Azure Table Storage KV cursor encoding".to_string(),
+                    details: "Failed to serialize cursor state".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json))
     }
 
     /// Decodes cursor state from base64url JSON
-    fn decode_cursor(&self, cursor: &str) -> Result<CursorState> {
-        let decoded =
-            BASE64
-                .decode(cursor)
-                .into_alien_error()
-                .context(ErrorData::InvalidInput {
-                    operation_context: "Azure Table Storage KV cursor decoding".to_string(),
-                    details: "Invalid cursor encoding".to_string(),
-                    field_name: Some("cursor".to_string()),
-                })?;
+    fn decode_cursor(&self, prefix: &str, cursor: &str) -> Result<CursorState> {
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(cursor)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "Azure Table Storage KV cursor decoding".to_string(),
+                details: "Invalid cursor encoding".to_string(),
+                field_name: Some("cursor".to_string()),
+            })?;
         let json =
             String::from_utf8(decoded)
                 .into_alien_error()
@@ -262,13 +289,25 @@ impl AzureTableStorageKv {
                     details: "Invalid cursor UTF-8".to_string(),
                     field_name: Some("cursor".to_string()),
                 })?;
-        serde_json::from_str(&json)
-            .into_alien_error()
-            .context(ErrorData::InvalidInput {
-                operation_context: "Azure Table Storage KV cursor decoding".to_string(),
-                details: "Invalid cursor JSON".to_string(),
+        let state: CursorState =
+            serde_json::from_str(&json)
+                .into_alien_error()
+                .context(ErrorData::InvalidInput {
+                    operation_context: "Azure Table Storage KV cursor decoding".to_string(),
+                    details: "Invalid cursor JSON".to_string(),
+                    field_name: Some("cursor".to_string()),
+                })?;
+        if state.version != 1
+            || state.prefix != prefix
+            || state.current_partition >= self.num_partitions
+        {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "Azure Table Storage KV cursor validation".to_string(),
+                details: "Cursor does not belong to this prefix scan".to_string(),
                 field_name: Some("cursor".to_string()),
-            })
+            }));
+        }
+        Ok(state)
     }
 }
 
@@ -276,7 +315,7 @@ impl Binding for AzureTableStorageKv {}
 
 #[async_trait]
 impl Kv for AzureTableStorageKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         validate_key(key)?;
 
         let (partition_key, row_key) = self.split_key(key);
@@ -300,7 +339,19 @@ impl Kv for AzureTableStorageKv {
                 }
 
                 let value = extract_value_from_entity(&entity)?;
-                Ok(Some(value))
+                let etag = entity_etag(&entity).ok_or_else(|| {
+                    AlienError::new(ErrorData::UnexpectedResponseFormat {
+                        provider: "azure".to_string(),
+                        binding_name: "table-storage".to_string(),
+                        field: "odata.etag".to_string(),
+                        response_json: serde_json::to_string(&entity).unwrap_or_default(),
+                    })
+                })?;
+                Ok(Some(KvEntry {
+                    key: key.to_string(),
+                    value,
+                    version: encode_version(key, etag, entity_expiration_millis(&entity))?,
+                }))
             }
             Err(e) => {
                 use alien_client_core::ErrorData as CloudErrorData;
@@ -327,7 +378,7 @@ impl Kv for AzureTableStorageKv {
         let entity =
             create_table_entity(partition_key.clone(), row_key.clone(), &value, expires_at);
 
-        if options.if_not_exists {
+        if matches!(options.condition, PutCondition::Absent) {
             match self
                 .client
                 .insert_entity(
@@ -361,6 +412,42 @@ impl Kv for AzureTableStorageKv {
                     }
                 }
             }
+        } else if let PutCondition::Version(ref version) = options.condition {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            match self
+                .client
+                .update_entity(
+                    &self.resource_group_name,
+                    &self.account_name,
+                    &self.table_name,
+                    &partition_key,
+                    &row_key,
+                    &entity,
+                    Some(alien_azure_clients::azure::tables::ETag::from(
+                        expected.backend_version,
+                    )),
+                )
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(error)
+                    if matches!(
+                        error.error.as_ref(),
+                        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                            | Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    Ok(false)
+                }
+                Err(error) => Err(crate::error::map_cloud_client_error(
+                    error,
+                    format!("Failed to conditionally update entity for key '{}'", key),
+                    Some(key.to_string()),
+                )),
+            }
         } else {
             // Insert Or Replace (upsert) - matches Azure REST API terminology
             self.client
@@ -384,12 +471,23 @@ impl Kv for AzureTableStorageKv {
         }
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
         validate_key(key)?;
 
         let (partition_key, row_key) = self.split_key(key);
 
-        // Delete entity, ignore if not found
+        let etag = if let Some(version) = if_version {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            Some(alien_azure_clients::azure::tables::ETag::from(
+                expected.backend_version,
+            ))
+        } else {
+            None
+        };
+
         match self
             .client
             .delete_entity(
@@ -398,15 +496,18 @@ impl Kv for AzureTableStorageKv {
                 &self.table_name,
                 &partition_key,
                 &row_key,
-                None, // No specific ETag constraint
+                etag,
             )
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(true),
             Err(e) => {
                 use alien_client_core::ErrorData as CloudErrorData;
                 match e.error.as_ref() {
-                    Some(CloudErrorData::RemoteResourceNotFound { .. }) => Ok(()), // No error if key doesn't exist
+                    Some(CloudErrorData::RemoteResourceNotFound { .. }) => Ok(if_version.is_none()),
+                    Some(CloudErrorData::RemoteResourceConflict { .. }) if if_version.is_some() => {
+                        Ok(false)
+                    }
                     _ => Err(crate::error::map_cloud_client_error(
                         e,
                         format!("Failed to delete entity for key '{}'", key),
@@ -458,22 +559,30 @@ impl Kv for AzureTableStorageKv {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<ScanResult> {
-        validate_key(prefix)?; // Prefix follows same key validation rules
-
-        // For prefix scans with hash-based partitioning, must fan-out across ALL partitions
-        // A RowKey-only filter forces expensive table-wide scans
-
-        // Decode cursor to get partition progress and continuation tokens
-        let cursor_state = cursor.as_ref().map(|c| self.decode_cursor(c)).transpose()?;
-
-        let mut all_items = Vec::new();
-        let mut total_fetched = 0;
+        validate_key(prefix)?;
         let limit = limit.unwrap_or(1000);
+        let initial = cursor
+            .as_deref()
+            .map(|cursor| self.decode_cursor(prefix, cursor))
+            .transpose()?
+            .unwrap_or(CursorState {
+                version: 1,
+                prefix: prefix.to_string(),
+                current_partition: 0,
+                continuation: None,
+            });
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
 
-        // Start from the partition in cursor, or 0 if no cursor
-        let start_partition = cursor_state.as_ref().map_or(0, |cs| cs.current_partition);
+        let mut items = Vec::with_capacity(limit);
+        let mut partition_id = initial.current_partition;
+        let mut continuation = initial.continuation;
 
-        for partition_id in start_partition..self.num_partitions {
+        while partition_id < self.num_partitions {
             let partition_key = format!("p{}", partition_id);
 
             // Build filter with BOTH PartitionKey and RowKey conditions
@@ -490,7 +599,8 @@ impl Kv for AzureTableStorageKv {
             let query_options = EntityQueryOptions {
                 filter: Some(filter_with_ttl),
                 select: None,
-                top: Some((limit - total_fetched) as u32),
+                top: Some(u32::try_from(limit - items.len()).unwrap_or(u32::MAX)),
+                continuation: continuation.clone(),
             };
 
             let response = self
@@ -510,40 +620,57 @@ impl Kv for AzureTableStorageKv {
                     )
                 })?;
 
-            // Process entities from this partition
             for entity in response.entities {
-                if total_fetched >= limit {
-                    break;
-                }
-
-                // Additional client-side TTL check for precision
                 if is_entity_expired(&entity) {
-                    continue; // Skip expired
+                    continue;
                 }
 
                 let key = self.combine_key(&entity.partition_key, &entity.row_key);
                 let value = extract_value_from_entity(&entity)?;
 
-                all_items.push((key, value));
-                total_fetched += 1;
+                if let Some(etag) = entity_etag(&entity) {
+                    items.push(KvEntry {
+                        version: encode_version(&key, etag, entity_expiration_millis(&entity))?,
+                        key,
+                        value,
+                    });
+                } else if let Some(entry) = self.get(&key).await? {
+                    items.push(entry);
+                }
             }
 
-            // If we hit the limit or have more data in this partition, encode cursor and return
-            if total_fetched >= limit || response.next_link.is_some() {
-                let next_cursor = self.encode_cursor(&CursorState {
-                    current_partition: partition_id,
-                    partition_continuation_token: response.next_link,
-                });
+            if items.len() == limit {
+                let (next_partition, next_continuation) = match response.continuation {
+                    Some(continuation) => (partition_id, Some(continuation)),
+                    None if partition_id + 1 < self.num_partitions => (partition_id + 1, None),
+                    None => {
+                        return Ok(ScanResult {
+                            items,
+                            next_cursor: None,
+                        });
+                    }
+                };
                 return Ok(ScanResult {
-                    items: all_items,
-                    next_cursor: Some(next_cursor),
+                    items,
+                    next_cursor: Some(self.encode_cursor(&CursorState {
+                        version: 1,
+                        prefix: prefix.to_string(),
+                        current_partition: next_partition,
+                        continuation: next_continuation,
+                    })?),
                 });
+            }
+
+            if let Some(next) = response.continuation {
+                continuation = Some(next);
+            } else {
+                partition_id += 1;
+                continuation = None;
             }
         }
 
-        // Scanned all partitions without hitting limit
         Ok(ScanResult {
-            items: all_items,
+            items,
             next_cursor: None,
         })
     }

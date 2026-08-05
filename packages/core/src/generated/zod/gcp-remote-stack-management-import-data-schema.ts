@@ -12,7 +12,6 @@ export const GcpRemoteStackManagementImportDataSchema = z.object({
     "managementPermissionsApplied": z.boolean().describe("Whether the management role binding was attached by the\ngenerated stack."),
 "projectId": z.string().describe("Project ID containing the management service account."),
 "projectNumber": z.string().describe("Numeric project number containing the management service account.").nullish(),
-"remoteBindingsServiceAccountEmail": z.string().describe("Setup-owned service account used only for opted-in remote bindings.").nullish(),
 "serviceAccountEmail": z.string().describe("Service account email the manager impersonates."),
 "serviceAccountUniqueId": z.string().describe("Stable unique id Google assigns to the service account.")
     }).describe("GCP RemoteStackManagement ImportData — cross-project service account\nthe manager impersonates.")

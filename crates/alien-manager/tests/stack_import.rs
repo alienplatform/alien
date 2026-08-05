@@ -29,12 +29,12 @@ use alien_core::import::{
 use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
-    AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
+    AwsServiceAccountImportData, AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
     AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus, EnvironmentInfo,
     GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo,
-    RemoteStackManagement, ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage,
-    Worker, WorkerCode,
+    RemoteStackManagement, ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackSettings,
+    Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -264,15 +264,28 @@ fn aws_s3_import_request(
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
         input_values: Default::default(),
-        resources: vec![ImportedResource {
-            id: resource_id.to_string(),
-            resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
-            import_data: serde_json::to_value(AwsStorageImportData {
-                bucket_name: bucket.to_string(),
-                bucket_arn: format!("arn:aws:s3:::{}", bucket),
-            })
-            .unwrap(),
-        }],
+        resources: vec![
+            ImportedResource {
+                id: resource_id.to_string(),
+                resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(AwsStorageImportData {
+                    bucket_name: bucket.to_string(),
+                    bucket_arn: format!("arn:aws:s3:::{}", bucket),
+                })
+                .unwrap(),
+            },
+            ImportedResource {
+                id: "management".to_string(),
+                resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
+                    role_name: "AlienManager".to_string(),
+                    role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
+                    management_permissions_applied: true,
+                    remote_bindings_role_arn: None,
+                })
+                .unwrap(),
+            },
+        ],
     }
 }
 
@@ -367,20 +380,45 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
         input_values: Default::default(),
-        resources: vec![ImportedResource {
-            id: "kubernetes".to_string(),
-            resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
-            import_data: serde_json::to_value(KubernetesClusterImportData {
-                provider: KubernetesClusterProvider::Eks,
-                ownership: KubernetesClusterOwnership::Existing,
-                namespace: "alien-e2e".to_string(),
-                cluster_name: Some("alien-e2e".to_string()),
-                cluster_id: None,
-                cloud_metadata_ready: Some(true),
-                azure_application_gateway_for_containers: None,
-            })
-            .unwrap(),
-        }],
+        resources: vec![
+            ImportedResource {
+                id: "kubernetes".to_string(),
+                resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(KubernetesClusterImportData {
+                    provider: KubernetesClusterProvider::Eks,
+                    ownership: KubernetesClusterOwnership::Existing,
+                    namespace: "alien-e2e".to_string(),
+                    cluster_name: Some("alien-e2e".to_string()),
+                    cluster_id: None,
+                    cloud_metadata_ready: Some(true),
+                    azure_application_gateway_for_containers: None,
+                })
+                .unwrap(),
+            },
+            ImportedResource {
+                id: "execution-sa".to_string(),
+                resource_type: ServiceAccount::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(AwsServiceAccountImportData {
+                    role_name: format!("{deployment_name}-execution"),
+                    role_arn: format!("arn:aws:iam::123456789012:role/{deployment_name}-execution"),
+                    stack_permissions_applied: true,
+                })
+                .unwrap(),
+            },
+            ImportedResource {
+                id: "management".to_string(),
+                resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(AwsRemoteStackManagementImportData {
+                    role_name: format!("{deployment_name}-management"),
+                    role_arn: format!(
+                        "arn:aws:iam::123456789012:role/{deployment_name}-management"
+                    ),
+                    remote_bindings_role_arn: None,
+                    management_permissions_applied: true,
+                })
+                .unwrap(),
+            },
+        ],
     }
 }
 
@@ -457,23 +495,23 @@ fn azure_remote_management_import_request(
         })),
         input_values: Default::default(),
         resources: vec![ImportedResource {
-            id: resource_id.to_string(),
-            resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
-            import_data: serde_json::to_value(AzureRemoteStackManagementImportData {
-                subscription_id: subscription_id.to_string(),
-                resource_group: format!("{deployment_name}-rg"),
-                tenant_id: tenant_id.to_string(),
-                identity_id: format!(
-                    "/subscriptions/{subscription_id}/resourceGroups/{deployment_name}-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{deployment_name}-management"
-                ),
-                principal_id: "00000000-0000-0000-0000-000000000001".to_string(),
-                client_id: "00000000-0000-0000-0000-000000000002".to_string(),
-                remote_bindings_identity_id: None,
-                remote_bindings_client_id: None,
-                management_permissions_applied: true,
-            })
-            .unwrap(),
-        }],
+                id: resource_id.to_string(),
+                resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
+                import_data: serde_json::to_value(AzureRemoteStackManagementImportData {
+                    subscription_id: subscription_id.to_string(),
+                    resource_group: format!("{deployment_name}-rg"),
+                    tenant_id: tenant_id.to_string(),
+                    identity_id: format!(
+                        "/subscriptions/{subscription_id}/resourceGroups/{deployment_name}-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{deployment_name}-management"
+                    ),
+                    principal_id: "00000000-0000-0000-0000-000000000001".to_string(),
+                    client_id: "00000000-0000-0000-0000-000000000002".to_string(),
+                    remote_bindings_identity_id: None,
+                    remote_bindings_client_id: None,
+                    management_permissions_applied: true,
+                })
+                .unwrap(),
+            }],
     }
 }
 
@@ -558,7 +596,7 @@ async fn happy_path_creates_imported_deployment() {
     let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(parsed.deployment_id.starts_with("dep_"));
     let resources = &parsed.stack_state.resources;
-    assert_eq!(resources.len(), 1);
+    assert_eq!(resources.len(), 2);
     let imported = resources.get("assets").expect("resource id round-trips");
     assert_eq!(
         imported.status,
@@ -577,7 +615,7 @@ async fn happy_path_creates_imported_deployment() {
         .await
         .unwrap()
         .expect("deployment must persist");
-    assert_eq!(persisted.status, "initial-setup");
+    assert_eq!(persisted.status, "provisioning");
     assert_eq!(
         persisted.import_source,
         Some(ImportSourceKind::CloudFormation)
@@ -628,6 +666,19 @@ async fn happy_path_creates_imported_deployment() {
         token_record.deployment_id.as_deref(),
         Some(parsed.deployment_id.as_str())
     );
+}
+
+#[tokio::test]
+async fn incomplete_setup_handoff_is_rejected_before_deployment_creation() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    body.resources
+        .retain(|resource| resource.id != "management");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(json.to_string().contains("management"));
 }
 
 #[tokio::test]

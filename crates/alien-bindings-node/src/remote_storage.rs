@@ -2,13 +2,16 @@
 //! operations and cannot expose the wider local `StorageHandle` API.
 
 use crate::error::map_object_store_error;
-use crate::storage::{object_meta_to_js, ObjectMetaJs};
+use crate::storage::{
+    object_attributes_to_js, object_meta_to_js, object_store_put_options, put_result_to_js,
+    ObjectMetaJs, StorageGetResultJs, StorageHeadResultJs, StoragePutOptionsJs, StoragePutResultJs,
+};
 use alien_bindings::RemoteStorage;
 use futures::StreamExt;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use object_store::path::Path;
-use object_store::PutPayload;
+use object_store::{GetOptions, PutPayload};
 use std::sync::Arc;
 
 #[napi]
@@ -26,26 +29,44 @@ impl RemoteStorageHandle {
 #[napi]
 impl RemoteStorageHandle {
     #[napi]
-    pub async fn get(&self, path: String) -> napi::Result<Buffer> {
+    pub async fn get(&self, path: String) -> napi::Result<StorageGetResultJs> {
         let result = self
             .inner
             .get(&Path::from(path))
             .await
             .map_err(|error| map_object_store_error(error, &self.binding, "get"))?;
-        let bytes = result
+        let meta = object_meta_to_js(&result.meta);
+        let attributes = object_attributes_to_js(&result.attributes);
+        let data = result
             .bytes()
             .await
             .map_err(|error| map_object_store_error(error, &self.binding, "get"))?;
-        Ok(Buffer::from(bytes.to_vec()))
+        Ok(StorageGetResultJs {
+            data: Buffer::from(data.to_vec()),
+            meta,
+            attributes,
+        })
     }
 
     #[napi]
-    pub async fn put(&self, path: String, data: Buffer) -> napi::Result<()> {
-        self.inner
-            .put(&Path::from(path), PutPayload::from(data.to_vec()))
-            .await
-            .map_err(|error| map_object_store_error(error, &self.binding, "put"))?;
-        Ok(())
+    pub async fn put(
+        &self,
+        path: String,
+        data: Buffer,
+        options: Option<StoragePutOptionsJs>,
+    ) -> napi::Result<StoragePutResultJs> {
+        let path = Path::from(path);
+        let payload = PutPayload::from(data.to_vec());
+        let result = match options {
+            Some(options) => {
+                self.inner
+                    .put_opts(&path, payload, object_store_put_options(options))
+                    .await
+            }
+            None => self.inner.put(&path, payload).await,
+        }
+        .map_err(|error| map_object_store_error(error, &self.binding, "put"))?;
+        Ok(put_result_to_js(result))
     }
 
     #[napi]
@@ -70,11 +91,21 @@ impl RemoteStorageHandle {
     }
 
     #[napi]
-    pub async fn head(&self, path: String) -> napi::Result<ObjectMetaJs> {
-        self.inner
-            .head(&Path::from(path))
+    pub async fn head(&self, path: String) -> napi::Result<StorageHeadResultJs> {
+        let result = self
+            .inner
+            .get_opts(
+                &Path::from(path),
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
             .await
-            .map(|metadata| object_meta_to_js(&metadata))
-            .map_err(|error| map_object_store_error(error, &self.binding, "head"))
+            .map_err(|error| map_object_store_error(error, &self.binding, "head"))?;
+        Ok(StorageHeadResultJs {
+            meta: object_meta_to_js(&result.meta),
+            attributes: object_attributes_to_js(&result.attributes),
+        })
     }
 }

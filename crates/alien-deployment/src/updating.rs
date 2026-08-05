@@ -169,6 +169,7 @@ pub async fn handle_update_pending(
             &client_config,
             old_stack_for_comparison, // Pass old mutated stack for compatibility checks
             setup_update_authorization,
+            None,
         )
         .await
         .context(ErrorData::PreflightChecksFailed)?;
@@ -280,6 +281,7 @@ pub async fn handle_updating(
     // This checks the hash and only syncs if needed
     info!("Syncing secrets to vault before updating live resources");
     let synced = crate::helpers::sync_secrets_to_vault(
+        &target_stack,
         &stack_state,
         &client_config,
         &config,
@@ -619,12 +621,14 @@ mod tests {
         stack_state.resources.insert(
             "declined".to_string(),
             state_entry(
-                Resource::new(Worker::new("declined".to_string())
-                    .permissions("execution".to_string())
-                    .code(WorkerCode::Image {
-                        image: "example.com/declined:latest".to_string(),
-                    })
-                    .build()),
+                Resource::new(
+                    Worker::new("declined".to_string())
+                        .permissions("execution".to_string())
+                        .code(WorkerCode::Image {
+                            image: "example.com/declined:latest".to_string(),
+                        })
+                        .build(),
+                ),
                 ResourceStatus::Running,
             ),
         );

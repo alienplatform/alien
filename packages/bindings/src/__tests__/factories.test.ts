@@ -68,18 +68,25 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   const constructions: unknown[] = []
 
   const storageHandle: RawStorageHandle = {
-    get: async () => Buffer.from("x"),
-    put: async () => {},
+    get: async () => ({
+      data: Buffer.from("x"),
+      meta: { location: "p", size: 1, lastModified: "" },
+      attributes: { metadata: {} },
+    }),
+    put: async () => ({}),
     delete: async () => {},
     list: async () => [],
-    head: async () => ({ location: "p", size: 0, lastModified: "" }),
+    head: async () => ({
+      meta: { location: "p", size: 0, lastModified: "" },
+      attributes: { metadata: {} },
+    }),
     copy: async () => {},
     signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
   }
   const kvHandle: RawKvHandle = {
     get: async () => null,
     put: async () => true,
-    delete: async () => {},
+    delete: async () => true,
     exists: async () => false,
     scan: async () => ({ items: [] }),
   }
@@ -162,6 +169,20 @@ function addonForKv(kvHandle: RawKvHandle): NativeAddon {
   }
 }
 
+/** Build an addon whose `storage(name)` resolves to a caller-supplied handle. */
+function addonForStorage(storageHandle: RawStorageHandle): NativeAddon {
+  class FakeBindingsHandle {
+    async storage(): Promise<RawStorageHandle> {
+      return storageHandle
+    }
+  }
+  return {
+    BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    RemoteBindingsHandle: unusedRemoteBindingsHandle(),
+    version: () => "test",
+  }
+}
+
 describe("createFactories laziness", () => {
   it("constructs factories without loading the addon; loads only on first op", async () => {
     const getAddon = vi.fn<() => NativeAddon>(() => {
@@ -203,12 +224,16 @@ describe("createFactories laziness", () => {
 })
 
 describe("createFactories kv surface", () => {
-  it("kv.get returns the raw value bytes over the napi get", async () => {
-    const get = vi.fn(async () => Buffer.from("raw-bytes"))
+  it("kv.get returns the value and opaque version over the napi get", async () => {
+    const get = vi.fn(async () => ({
+      key: "k",
+      value: Buffer.from("raw-bytes"),
+      version: "opaque",
+    }))
     const kvHandle: RawKvHandle = {
       get,
       put: async () => true,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({ items: [] }),
     }
@@ -219,14 +244,15 @@ describe("createFactories kv surface", () => {
 
     expect(get).toHaveBeenCalledWith("k")
     expect(value).not.toBeNull()
-    expect((value as Buffer).toString("utf8")).toBe("raw-bytes")
+    expect(value?.value.toString("utf8")).toBe("raw-bytes")
+    expect(value?.version).toBe("opaque")
   })
 
   it("kv.get returns null when the key is absent", async () => {
     const kvHandle: RawKvHandle = {
       get: async () => null,
       put: async () => true,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({ items: [] }),
     }
@@ -240,7 +266,7 @@ describe("createFactories kv surface", () => {
     const kvHandle: RawKvHandle = {
       get: async () => null,
       put,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({ items: [] }),
     }
@@ -251,23 +277,24 @@ describe("createFactories kv surface", () => {
     expect(created).toBe(true)
     const firstCall = put.mock.calls[0]
     if (!firstCall) throw new Error("put was not called")
-    const [key, buffer, ttl, ifNotExists] = firstCall
+    const [key, buffer, ttl, condition, version] = firstCall
     expect(key).toBe("k")
     expect(buffer.toString("utf8")).toBe(JSON.stringify({ hello: "world" }))
     expect(ttl).toBe(30)
-    expect(ifNotExists).toBeNull()
+    expect(condition).toBeNull()
+    expect(version).toBeNull()
   })
 
   it("kv.scan surfaces items with both keys and values (no data discarded)", async () => {
     const kvHandle: RawKvHandle = {
       get: async () => null,
       put: async () => true,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({
         items: [
-          { key: "a", value: Buffer.from("one") },
-          { key: "b", value: Buffer.from("two") },
+          { key: "a", value: Buffer.from("one"), version: "v1" },
+          { key: "b", value: Buffer.from("two"), version: "v2" },
         ],
         nextCursor: "next",
       }),
@@ -283,6 +310,109 @@ describe("createFactories kv surface", () => {
 })
 
 describe("createFactories method mapping", () => {
+  it("returns structured storage reads without discarding metadata or attributes", async () => {
+    const result = {
+      data: Buffer.from("hello"),
+      meta: {
+        location: "notes/note.txt",
+        size: 5,
+        lastModified: "2026-08-02T00:00:00Z",
+        eTag: "etag-123",
+        version: "version-456",
+      },
+      attributes: {
+        contentType: "text/plain",
+        storageClass: "STANDARD",
+        metadata: { source: "upload" },
+      },
+    }
+    const storageHandle: RawStorageHandle = {
+      get: async () => result,
+      put: async () => ({}),
+      delete: async () => {},
+      list: async () => [],
+      head: async () => ({ meta: result.meta, attributes: result.attributes }),
+      copy: async () => {},
+      signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
+    }
+    const { storage } = createFactories(() => addonForStorage(storageHandle))
+
+    await expect(storage("files").get("notes/note.txt")).resolves.toEqual(result)
+    await expect(storage("files").head("notes/note.txt")).resolves.toEqual({
+      meta: result.meta,
+      attributes: result.attributes,
+    })
+  })
+
+  it("forwards storage object attributes and converts Uint8Array data", async () => {
+    const put = vi.fn<RawStorageHandle["put"]>(async () => ({
+      eTag: "etag-123",
+      version: "version-456",
+    }))
+    const storageHandle: RawStorageHandle = {
+      get: async () => ({
+        data: Buffer.from("x"),
+        meta: { location: "p", size: 1, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
+      put,
+      delete: async () => {},
+      list: async () => [],
+      head: async () => ({
+        meta: { location: "p", size: 0, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
+      copy: async () => {},
+      signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
+    }
+    const { storage } = createFactories(() => addonForStorage(storageHandle))
+    const options = {
+      attributes: {
+        contentType: "text/plain",
+        contentDisposition: 'attachment; filename="note.txt"',
+        contentEncoding: "gzip",
+        contentLanguage: "en-US",
+        cacheControl: "private, max-age=60",
+        metadata: { source: "upload", checksum: "abc123" },
+      },
+    }
+
+    const result = await storage("files").put("notes/note.txt", new Uint8Array([1, 2, 3]), options)
+
+    expect(put).toHaveBeenCalledOnce()
+    const firstCall = put.mock.calls[0]
+    if (!firstCall) throw new Error("put was not called")
+    expect(firstCall[0]).toBe("notes/note.txt")
+    expect(firstCall[1]).toEqual(Buffer.from([1, 2, 3]))
+    expect(firstCall[2]).toEqual(options)
+    expect(result).toEqual({ eTag: "etag-123", version: "version-456" })
+  })
+
+  it("preserves two-argument storage puts", async () => {
+    const put = vi.fn<RawStorageHandle["put"]>(async () => ({}))
+    const storageHandle: RawStorageHandle = {
+      get: async () => ({
+        data: Buffer.from("x"),
+        meta: { location: "p", size: 1, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
+      put,
+      delete: async () => {},
+      list: async () => [],
+      head: async () => ({
+        meta: { location: "p", size: 0, lastModified: "" },
+        attributes: { metadata: {} },
+      }),
+      copy: async () => {},
+      signedUrl: async () => ({ url: "u", method: "GET", headers: {} }),
+    }
+    const { storage } = createFactories(() => addonForStorage(storageHandle))
+
+    await storage("files").put("note.txt", Buffer.from("hello"))
+
+    expect(put).toHaveBeenCalledWith("note.txt", Buffer.from("hello"), null)
+  })
+
   it("serializes queue.send payloads as JSON via the bound queue handle", async () => {
     const sendJson = vi.fn(async () => {})
     const queueHandle: RawQueueHandle = {

@@ -324,7 +324,7 @@ resource "azurerm_role_definition" "setup_management_write_key_vault_secrets_0" 
   name               = "${local.resource_prefix}-Write Key Vault Secrets [mgmt]"
   role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write:write-key-vault-secrets")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Used by $${local.deployment_name}. Create, update, and delete application-owned Azure Key Vault secrets. Resource prefix: $${local.resource_prefix}."
+  description        = "Used by ${local.deployment_name}. Create, update, and delete application-owned Azure Key Vault secrets. Resource prefix: ${local.resource_prefix}."
 
   permissions {
     actions = []
@@ -346,7 +346,7 @@ resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
   name               = "${local.resource_prefix}-Manage Container Apps [mgmt]"
   role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:worker/management:manage-container-apps")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Used by $${local.deployment_name}. Update Azure Container Apps, queues, identities, certificates, and role assignments owned by this application. Resource prefix: $${local.resource_prefix}."
+  description        = "Used by ${local.deployment_name}. Update Azure Container Apps, queues, identities, certificates, and role assignments owned by this application. Resource prefix: ${local.resource_prefix}."
 
   permissions {
     actions = [
@@ -803,17 +803,6 @@ resource "azurerm_role_assignment" "management_management_uami_assignment_1" {
   ]
 }
 
-resource "azurerm_role_assignment" "management_existing_vnet_reader_uami" {
-  count              = try(local.deployment_settings.network.type, "") == "byo-vnet-azure" ? 1 : 0
-  name               = uuidv5("oid", "deployment:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
-  scope              = try(local.deployment_settings.network.vnet_resource_id, "")
-  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
-  principal_id       = azurerm_user_assigned_identity.management.principal_id
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
 resource "azurerm_federated_identity_credential" "management_fic" {
   count               = var.azure_oidc_issuer != "" && var.azure_oidc_subject != "" ? 1 : 0
   name                = "${local.resource_prefix}-federated-credential"
@@ -1026,7 +1015,6 @@ resource "terraform_data" "deployment_registration" {
     azurerm_role_definition.management_management_role,
     azurerm_role_assignment.management_management_uami_assignment_0,
     azurerm_role_assignment.management_management_uami_assignment_1,
-    azurerm_role_assignment.management_existing_vnet_reader_uami,
     azurerm_federated_identity_credential.management_fic,
     azurerm_storage_container.assets,
     azurerm_role_assignment.assets_reader_management_assignment_0,

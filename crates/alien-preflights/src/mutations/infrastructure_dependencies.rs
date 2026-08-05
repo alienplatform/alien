@@ -1,13 +1,11 @@
 //! Infrastructure Dependencies mutation that adds dependencies from user resources to infrastructure resources.
 
-use crate::error::{ErrorData, Result};
+use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState, Storage,
+    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
 };
-use alien_error::AlienError;
 use async_trait::async_trait;
-use std::collections::HashSet;
 use tracing::{debug, info};
 
 /// Mutation that adds dependencies from user resources to infrastructure resources.
@@ -38,6 +36,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
             stack_state.platform,
             Platform::Azure | Platform::Gcp | Platform::Kubernetes
         ) || remote_stack_management_id(stack).is_some()
+            || remote_bindings_id(stack).is_some()
     }
 
     async fn mutate(
@@ -60,16 +59,10 @@ impl StackMutation for InfrastructureDependenciesMutation {
                 continue;
             };
             let resource_type = entry.config.resource_type();
-            let remote_frozen_storage = entry.is_remote_frozen_storage();
             let deps =
                 self.get_dependencies_for_resource(&stack, &resource_id, &resource_type, platform);
 
             if let Some(entry) = stack.resources.get_mut(&resource_id) {
-                if remote_frozen_storage {
-                    entry.dependencies.retain(|dependency| {
-                        dependency.resource_type() != &RemoteStackManagement::RESOURCE_TYPE
-                    });
-                }
                 for dependency in deps {
                     if dependency.id() == resource_id {
                         continue;
@@ -83,10 +76,6 @@ impl StackMutation for InfrastructureDependenciesMutation {
                     }
                 }
             }
-        }
-
-        if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-            validate_management_bootstrap_permissions(&stack)?;
         }
 
         Ok(stack)
@@ -105,10 +94,10 @@ impl InfrastructureDependenciesMutation {
         let mut dependencies = Vec::new();
         let is_infrastructure_resource =
             self.is_infrastructure_resource(resource_id, Some(resource_type));
-        let is_remote_frozen_storage = stack
+        let remote_binding = stack
             .resources
             .get(resource_id)
-            .is_some_and(alien_core::ResourceEntry::is_remote_frozen_storage);
+            .and_then(alien_core::remote_bindings::remote_binding_for_entry);
 
         if platform == Platform::Azure
             && resource_id != "default-resource-group"
@@ -120,14 +109,20 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
-        if resource_type == &RemoteStackManagement::RESOURCE_TYPE {
-            dependencies.extend(remote_frozen_storage_refs(stack));
-        } else if !is_infrastructure_resource && !is_remote_frozen_storage {
+        if !is_infrastructure_resource {
             if let Some(management_id) = remote_stack_management_id(stack) {
                 dependencies.push(ResourceRef::new(
                     RemoteStackManagement::RESOURCE_TYPE,
                     management_id,
                 ));
+            }
+            if remote_binding.is_some() {
+                if let Some(bindings_id) = remote_bindings_id(stack) {
+                    dependencies.push(ResourceRef::new(
+                        alien_core::RemoteBindings::RESOURCE_TYPE,
+                        bindings_id,
+                    ));
+                }
             }
         }
 
@@ -370,6 +365,7 @@ impl InfrastructureDependenciesMutation {
                     | "service-activation"
                     | "service_activation"
                     | "remote-stack-management"
+                    | "resource-access"
                     | "permission-profile"
                     | "service-account"
             ) {
@@ -389,85 +385,26 @@ fn remote_stack_management_id(stack: &Stack) -> Option<&str> {
         .map(|(resource_id, _)| resource_id.as_str())
 }
 
-fn remote_frozen_storage_refs(stack: &Stack) -> Vec<ResourceRef> {
+fn remote_bindings_id(stack: &Stack) -> Option<&str> {
     stack
         .resources
         .iter()
-        .filter(|(_, entry)| entry.is_remote_frozen_storage())
-        .map(|(resource_id, _)| ResourceRef::new(Storage::RESOURCE_TYPE, resource_id))
-        .collect()
-}
-
-/// Reject exact management grants on resources that must become ready before
-/// RemoteStackManagement. Their controllers apply exact grants through the
-/// management identity, which would make the prerequisite wait on its own
-/// dependent. Remote Storage is exempt because its exact grants are reconciled
-/// by RemoteStackManagement after the storage resource exists.
-fn validate_management_bootstrap_permissions(stack: &Stack) -> Result<()> {
-    let Some(management_id) = remote_stack_management_id(stack) else {
-        return Ok(());
-    };
-    let Some(management_profile) = stack.management().profile() else {
-        return Ok(());
-    };
-    let Some(management) = stack.resources.get(management_id) else {
-        return Ok(());
-    };
-
-    let mut pending = management
-        .config
-        .get_dependencies()
-        .into_iter()
-        .chain(management.dependencies.iter().cloned())
-        .map(|dependency| dependency.id().to_string())
-        .collect::<Vec<_>>();
-    let mut visited = HashSet::new();
-
-    while let Some(resource_id) = pending.pop() {
-        if resource_id == management_id || !visited.insert(resource_id.clone()) {
-            continue;
-        }
-        let Some(entry) = stack.resources.get(&resource_id) else {
-            continue;
-        };
-
-        if !entry.is_remote_frozen_storage()
-            && management_profile
-                .0
-                .get(&resource_id)
-                .is_some_and(|references| !references.is_empty())
-        {
-            return Err(AlienError::new(ErrorData::InvalidResourceDependency {
-                resource_id: management_id.to_string(),
-                dependency_id: resource_id.clone(),
-                reason: format!(
-                    "management permissions cannot be scoped to bootstrap prerequisite '{resource_id}'; use stack-wide permissions or remove the exact scope"
-                ),
-            }));
-        }
-
-        pending.extend(
-            entry
-                .config
-                .get_dependencies()
-                .into_iter()
-                .chain(entry.dependencies.iter().cloned())
-                .map(|dependency| dependency.id().to_string()),
-        );
-    }
-
-    Ok(())
+        .find(|(_, entry)| {
+            entry.config.resource_type() == alien_core::RemoteBindings::RESOURCE_TYPE
+        })
+        .map(|(resource_id, _)| resource_id.as_str())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
+    use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
         KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-        KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, ServiceAccount,
-        ServiceActivation, StackSettings, Storage, Worker, WorkerCode, WorkerTrigger,
+        KubernetesHeartbeatMode, RemoteBindings, Resource, ResourceEntry, ResourceLifecycle,
+        ServiceAccount, ServiceActivation, StackSettings, Storage, Worker, WorkerCode,
+        WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -659,7 +596,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_storage_is_ready_before_management_and_normal_resources_wait_for_management() {
+    async fn published_storage_waits_for_both_identities_without_inverting_management() {
         let storage = Storage::new("archive".to_string()).build();
         let worker = Worker::new("processor".to_string())
             .code(WorkerCode::Image {
@@ -671,6 +608,10 @@ mod tests {
             .add_with_remote_access(storage, ResourceLifecycle::Frozen)
             .add(
                 RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteBindings::new("remote-bindings".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
             .add(
@@ -711,16 +652,24 @@ mod tests {
             .mutate(stack, &stack_state, &config)
             .await
             .unwrap();
-        let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "archive");
         let storage_activation_ref =
             ResourceRef::new(ServiceActivation::RESOURCE_TYPE, "enable-cloud-storage");
 
-        assert!(!result
+        assert!(result
             .resources
             .get("archive")
             .unwrap()
             .dependencies
             .contains(&management_ref));
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&ResourceRef::new(
+                RemoteBindings::RESOURCE_TYPE,
+                "remote-bindings",
+            )));
         assert!(result
             .resources
             .get("archive")
@@ -748,12 +697,12 @@ mod tests {
             .unwrap()
             .dependencies
             .contains(&management_ref));
-        assert!(result
+        assert!(!result
             .resources
             .get("management")
             .unwrap()
             .dependencies
-            .contains(&storage_ref));
+            .contains(&ResourceRef::new(Storage::RESOURCE_TYPE, "archive")));
         assert!(result
             .resources
             .get("processor")
@@ -764,49 +713,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_management_scope_on_remote_storage_prerequisite_is_rejected() {
-        let storage = Storage::new("archive".to_string()).build();
-        let mut stack = Stack::new("test-stack".to_string())
-            .add_with_remote_access(storage, ResourceLifecycle::Frozen)
-            .add(
-                RemoteStackManagement::new("management".to_string()).build(),
+    async fn aws_bindings_only_storage_waits_for_the_narrow_identity() {
+        let stack = Stack::new("byo-bucket".to_string())
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
             .add(
-                ServiceAccount::new("execution-sa".to_string()).build(),
+                RemoteBindings::new("remote-bindings".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
-            .management(ManagementPermissions::Override(
-                PermissionProfile::new()
-                    .resource("execution-sa", ["service-account/management"])
-                    .resource("archive", ["storage/remote-data-write"]),
-            ))
             .build();
-        stack
-            .resources
-            .get_mut("archive")
-            .unwrap()
-            .dependencies
-            .push(ResourceRef::new(
-                ServiceAccount::RESOURCE_TYPE,
-                "execution-sa",
-            ));
+        let state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
 
-        let error = InfrastructureDependenciesMutation
-            .mutate(
-                stack,
-                &StackState::new(Platform::Gcp),
-                &DeploymentConfig::builder()
-                    .stack_settings(StackSettings::default())
-                    .environment_variables(empty_env_snapshot())
-                    .allow_frozen_changes(false)
-                    .external_bindings(ExternalBindings::default())
-                    .build(),
-            )
+        assert!(InfrastructureDependenciesMutation.should_run(&stack, &state, &config));
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &state, &config)
             .await
-            .expect_err("an exact management grant on a bootstrap prerequisite must fail fast");
-
-        assert_eq!(error.code, "INVALID_RESOURCE_DEPENDENCY");
-        assert!(error.message.contains("execution-sa"));
+            .unwrap();
+        assert_eq!(
+            result.resources["exports"].dependencies,
+            vec![ResourceRef::new(
+                RemoteBindings::RESOURCE_TYPE,
+                "remote-bindings",
+            )]
+        );
     }
 }

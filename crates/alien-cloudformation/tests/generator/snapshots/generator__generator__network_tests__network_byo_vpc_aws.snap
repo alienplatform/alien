@@ -12,7 +12,6 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -50,8 +49,6 @@ Metadata:
         default: Security group IDs
       TelemetryMode:
         default: Telemetry
-      Token:
-        default: Install token
       UpdatesMode:
         default: Updates
       VpcCidr:
@@ -59,10 +56,6 @@ Metadata:
       VpcId:
         default: VPC ID
 Parameters:
-  Token:
-    Type: String
-    Description: Install token from the application setup page.
-    NoEcho: true
   ManagingRoleArn:
     Type: String
     Description: ARN of the management identity allowed to assume setup-created roles.

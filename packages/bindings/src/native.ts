@@ -62,6 +62,8 @@ export {
 export type {
   Container,
   Kv,
+  KvDeleteOptions,
+  KvEntry,
   KvScanItem,
   KvScanResult,
   KvSetOptions,
@@ -76,5 +78,11 @@ export type {
   SignedUrlMethod,
   SignedUrlOptions,
   Storage,
+  StorageGetResult,
+  StorageHeadResult,
+  StorageObjectAttributes,
+  StoragePutAttributes,
+  StoragePutOptions,
+  StoragePutResult,
   Vault,
 } from "./types.js"

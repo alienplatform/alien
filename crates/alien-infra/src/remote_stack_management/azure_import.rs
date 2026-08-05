@@ -41,8 +41,6 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             uami_resource_id: Some(data.identity_id),
             uami_client_id: Some(data.client_id),
             uami_principal_id: Some(data.principal_id),
-            remote_bindings_identity_id: data.remote_bindings_identity_id,
-            remote_bindings_client_id: data.remote_bindings_client_id,
             tenant_id: Some(data.tenant_id),
             // FIC name and role-assignment IDs are reconstructed by the
             // heartbeat path from `ctx.management_config` and the FIC template

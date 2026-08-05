@@ -1,4 +1,5 @@
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
+use crate::RemoteBindingsOutputs;
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -56,27 +57,11 @@ pub struct RemoteStackManagementOutputs {
     /// For Azure: JSON containing the target managed identity client ID and tenant ID
     pub access_configuration: String,
 
-    /// Setup-owned identity whose data-plane permissions are the union of the
-    /// permissions explicitly enabled for remote bindings in this stack.
-    ///
-    /// This identity is deliberately separate from the management identity:
-    /// its short-lived credentials may be returned to an external application,
-    /// while management credentials must never leave the manager.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_bindings_access: Option<RemoteBindingsAccessOutputs>,
-}
-
-/// Provider-neutral handoff for the stack's Remote Bindings identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RemoteBindingsAccessOutputs {
-    /// Provider resource identifier (role ARN, service-account email, or UAMI
-    /// resource id) of the setup-owned Remote Bindings identity.
-    pub resource_id: String,
-
-    /// Provider-specific impersonation configuration consumed by the manager.
-    pub access_configuration: String,
+    /// Read-only compatibility for deployments imported before Remote Bindings became a
+    /// first-class resource. New controllers never serialize this field.
+    #[serde(default, rename = "remoteBindingsAccess", skip_serializing)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub legacy_remote_bindings_access: Option<RemoteBindingsOutputs>,
 }
 
 // Implementation of ResourceDefinition trait for RemoteStackManagement
@@ -168,5 +153,37 @@ impl ResourceOutputsDefinition for RemoteStackManagementOutputs {
 
     fn to_json_value(&self) -> serde_json::Result<serde_json::Value> {
         serde_json::to_value(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteStackManagementOutputs;
+
+    #[test]
+    fn legacy_remote_bindings_output_remains_readable_but_is_not_reemitted() {
+        let outputs: RemoteStackManagementOutputs = serde_json::from_value(serde_json::json!({
+            "managementResourceId": "management",
+            "accessConfiguration": "management-access",
+            "remoteBindingsAccess": {
+                "resourceId": "legacy-bindings",
+                "accessConfiguration": "legacy-access"
+            }
+        }))
+        .expect("legacy persisted output must remain readable");
+        assert_eq!(
+            outputs
+                .legacy_remote_bindings_access
+                .as_ref()
+                .map(|access| access.resource_id.as_str()),
+            Some("legacy-bindings")
+        );
+        assert!(
+            serde_json::to_value(outputs)
+                .expect("serialize")
+                .get("remoteBindingsAccess")
+                .is_none(),
+            "new state must not keep writing the legacy ownership slot"
+        );
     }
 }

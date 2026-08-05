@@ -31,15 +31,15 @@ export const ai = client.ai
 /** Resolve an AI binding to `{ baseURL, apiKey? }`, starting the gateway for ambient bindings. */
 export const getAiConnection = client.getAiConnection
 
-export { Ai } from "./client.js"
+export type { AiBinding, AmbientAiBinding, ExternalAiBinding } from "./binding.js"
+export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js"
 export type {
   AiConnection,
   AiModel,
   ChatCompletionCreateParams,
   ResponseCreateParams,
 } from "./client.js"
-export { aiBindingEnvVarName, isExternalAiBinding, parseAiBinding } from "./binding.js"
-export type { AiBinding, AmbientAiBinding, ExternalAiBinding } from "./binding.js"
+export { Ai } from "./client.js"
 export {
   AiTransportError,
   AiUpstreamError,

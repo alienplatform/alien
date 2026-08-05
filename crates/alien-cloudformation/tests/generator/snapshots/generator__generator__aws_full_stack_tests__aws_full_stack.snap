@@ -1017,33 +1017,6 @@ Resources:
           Condition:
             Bool:
               aws:SecureTransport: 'false'
-  AssetsManagementRoleStoragePermission00:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName:
-        Fn::Sub: ${AWS::StackName}-assets-storage-0-0
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Action:
-          - s3:GetBucketAcl
-          - s3:GetBucketLocation
-          - s3:GetBucketPolicy
-          - s3:GetBucketPublicAccessBlock
-          - s3:GetBucketVersioning
-          - s3:GetEncryptionConfiguration
-          - s3:GetLifecycleConfiguration
-          Effect: Allow
-          Resource:
-          - Fn::GetAtt:
-            - Assets
-            - Arn
-          Sid: CheckS3BucketHealth
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - Assets
-    - ManagementRole
   Jobs:
     Type: AWS::SQS::Queue
     Properties:
@@ -1093,23 +1066,6 @@ Resources:
         Value: kv
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
-  SecretsManagementVaultPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName:
-        Fn::Sub: management-secrets-vault-policy
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Action:
-          - ssm:DeleteParameter
-          - ssm:PutParameter
-          Effect: Allow
-          Resource:
-          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
-          Sid: WriteSsmParameters
-      Roles:
-      - Ref: ManagementRole
   Mailbox:
     Type: AWS::S3::Bucket
     Properties:
@@ -1182,33 +1138,6 @@ Resources:
             StringEquals:
               aws:SourceAccount:
                 Ref: AWS::AccountId
-  MailboxManagementRoleStoragePermission00:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName:
-        Fn::Sub: ${AWS::StackName}-mailbox-storage-0-0
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Action:
-          - s3:GetBucketAcl
-          - s3:GetBucketLocation
-          - s3:GetBucketPolicy
-          - s3:GetBucketPublicAccessBlock
-          - s3:GetBucketVersioning
-          - s3:GetEncryptionConfiguration
-          - s3:GetLifecycleConfiguration
-          Effect: Allow
-          Resource:
-          - Fn::GetAtt:
-            - Mailbox
-            - Arn
-          Sid: CheckS3BucketHealth
-      Roles:
-      - Ref: ManagementRole
-    DependsOn:
-    - Mailbox
-    - ManagementRole
   MailEvents:
     Type: AWS::SQS::Queue
     Properties:
@@ -1264,6 +1193,25 @@ Resources:
         Value: mailer
       - Key: resource-type
         Value: email
+  MailerEventsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+      - Ref: MailerEventsTopic
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowSesPublish
+          Effect: Allow
+          Principal:
+            Service: ses.amazonaws.com
+          Action: sns:Publish
+          Resource:
+            Ref: MailerEventsTopic
+          Condition:
+            StringEquals:
+              AWS:SourceAccount:
+                Ref: AWS::AccountId
   MailerEventDestination:
     Type: AWS::SES::ConfigurationSetEventDestination
     Properties:
@@ -1283,6 +1231,8 @@ Resources:
         SnsDestination:
           TopicARN:
             Ref: MailerEventsTopic
+    DependsOn:
+    - MailerEventsTopicPolicy
   MailerEventsSubscription:
     Type: AWS::SNS::Subscription
     Properties:
@@ -1334,8 +1284,11 @@ Resources:
         - S3Action:
             BucketName:
               Ref: Mailbox
+            TopicArn:
+              Ref: MailerEventsTopic
     DependsOn:
     - MailboxBucketPolicy
+    - MailerEventsTopicPolicy
   MailerRuleSetActivatorRole:
     Type: AWS::IAM::Role
     Properties:
@@ -1619,6 +1572,42 @@ Resources:
         Value: build
     DependsOn:
     - BuilderLogGroup
+  ManagementRoleManagedPermissions1:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Resource:
+          - Fn::GetAtt:
+            - Assets
+            - Arn
+          - Fn::GetAtt:
+            - Mailbox
+            - Arn
+          Sid: CheckS3BucketHealth
+          Action:
+          - s3:GetBucketAcl
+          - s3:GetBucketLocation
+          - s3:GetBucketPolicy
+          - s3:GetBucketPublicAccessBlock
+          - s3:GetBucketVersioning
+          - s3:GetEncryptionConfiguration
+          - s3:GetLifecycleConfiguration
+        - Effect: Allow
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
+          Sid: WriteSsmParameters
+          Action:
+          - ssm:DeleteParameter
+          - ssm:PutParameter
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - Assets
+    - ManagementRole
+    - Mailbox
   DeploymentRegistration:
     Type: AWS::CloudFormation::CustomResource
     Properties:
@@ -1925,17 +1914,15 @@ Resources:
     - ManagementRoleManagementPolicy2
     - Assets
     - AssetsBucketPolicy
-    - AssetsManagementRoleStoragePermission00
     - Jobs
     - Metadata
-    - SecretsManagementVaultPolicy
     - Mailbox
     - MailboxBucketPolicy
-    - MailboxManagementRoleStoragePermission00
     - MailEvents
     - MailerConfigSet
     - MailerIdentity0
     - MailerEventsTopic
+    - MailerEventsTopicPolicy
     - MailerEventDestination
     - MailerEventsSubscription
     - MailerEventsQueuePolicy
@@ -1949,6 +1936,7 @@ Resources:
     - RegistryPushRole
     - BuilderLogGroup
     - Builder
+    - ManagementRoleManagedPermissions1
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation

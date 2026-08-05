@@ -176,6 +176,52 @@ async fn create_and_get_deployment() {
     assert_eq!(fetched.status, "pending");
 }
 
+#[tokio::test]
+async fn migrations_clear_only_recovered_resource_error_headlines() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let running = create_test_deployment(&store, &group_id, "running", Platform::Aws).await;
+    let failed = create_test_deployment(&store, &group_id, "failed", Platform::Aws).await;
+    let headline = serde_json::json!({
+        "code": "DEPLOYMENT_FAILED",
+        "message": "Deployment failed",
+        "context": {
+            "resource_errors": [],
+            "total_resources": 1,
+            "failed_resources": 1,
+            "interrupted_resources": 0
+        }
+    });
+
+    for (deployment, status) in [(&running, "running"), (&failed, "provisioning-failed")] {
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                "UPDATE deployments SET status = ?1, error = ?2 WHERE id = ?3",
+                (status, headline.to_string(), deployment.id.as_str()),
+            )
+            .await
+            .unwrap();
+    }
+
+    migrations::run_migrations(&db).await.unwrap();
+
+    let running = store
+        .get_deployment(&test_subject(), &running.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let failed = store
+        .get_deployment(&test_subject(), &failed.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(running.error.is_none());
+    assert_eq!(failed.error, Some(headline));
+}
+
 /// Gated live resources resolve against the deployer's stored answers on
 /// every reconcile, so losing them here would silently flip resources back
 /// to their declared defaults.

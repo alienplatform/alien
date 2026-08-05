@@ -33,7 +33,7 @@ use crate::presigned::PresignedRequest;
 #[cfg(feature = "platform-sdk")]
 use crate::remote::RemoteStorage;
 use crate::traits::{
-    Binding, BindingsProviderApi, Kv, MessagePayload, PutOptions as KvPutOptions, Queue,
+    Binding, BindingsProviderApi, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions, Queue,
     QueueMessage, ScanResult, Storage, Vault,
 };
 
@@ -311,8 +311,21 @@ impl RemoteStorage for RefreshingStorage {
         ObjectStore::get(self, path).await
     }
 
+    async fn get_opts(&self, path: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+        ObjectStore::get_opts(self, path, options).await
+    }
+
     async fn put(&self, path: &Path, payload: PutPayload) -> object_store::Result<PutResult> {
         ObjectStore::put(self, path, payload).await
+    }
+
+    async fn put_opts(
+        &self,
+        path: &Path,
+        payload: PutPayload,
+        options: ObjectStorePutOptions,
+    ) -> object_store::Result<PutResult> {
+        ObjectStore::put_opts(self, path, payload, options).await
     }
 
     async fn head(&self, path: &Path) -> object_store::Result<ObjectMeta> {
@@ -346,7 +359,7 @@ impl Binding for RefreshingKv {}
 
 #[async_trait]
 impl Kv for RefreshingKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         self.resolver.kv().await?.get(key).await
     }
 
@@ -354,8 +367,8 @@ impl Kv for RefreshingKv {
         self.resolver.kv().await?.put(key, value, options).await
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
-        self.resolver.kv().await?.delete(key).await
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
+        self.resolver.kv().await?.delete(key, if_version).await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {

@@ -28,11 +28,11 @@ jobs:
       git_sha: ${{ steps.identity.outputs.git_sha }}
       short_sha: ${{ steps.identity.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source_ref }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           path: .npm-dev-tools
@@ -54,11 +54,11 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Test version and dependency rewriting
@@ -109,7 +109,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.git_sha }}
 
@@ -138,11 +138,11 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
@@ -209,22 +209,22 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.git_sha }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           path: .npm-dev-tools
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
 

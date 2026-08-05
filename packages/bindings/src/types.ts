@@ -12,6 +12,10 @@ export interface ObjectMeta {
   size: number
   /** Last-modified timestamp as an RFC 3339 string. */
   lastModified: string
+  /** Provider entity tag, when available. */
+  eTag?: string
+  /** Provider object version, when available. */
+  version?: string
 }
 
 /** HTTP method a presigned request may be issued for. */
@@ -38,18 +42,80 @@ export interface PresignedRequest {
   headers: Record<string, string>
 }
 
+/** Provider-neutral attributes returned with a stored object. */
+export interface StorageObjectAttributes {
+  /** Stored MIME type. */
+  contentType?: string
+  /** Stored browser content-disposition behavior. */
+  contentDisposition?: string
+  /** Stored content encoding. */
+  contentEncoding?: string
+  /** Stored content language. */
+  contentLanguage?: string
+  /** Stored cache-control policy. */
+  cacheControl?: string
+  /** Provider storage class, when reported. */
+  storageClass?: string
+  /** User-defined object metadata. */
+  metadata: Record<string, string>
+}
+
+/** Provider-neutral object attributes accepted by {@link Storage.put}. */
+export interface StoragePutAttributes {
+  /** MIME type to store with the object. */
+  contentType?: string
+  /** Browser content-disposition behavior to store with the object. */
+  contentDisposition?: string
+  /** Content encoding to store. GCS rejects `gzip` because it transcodes gzip responses. */
+  contentEncoding?: string
+  /** Content language to store with the object. */
+  contentLanguage?: string
+  /** Cache-control policy to store with the object. */
+  cacheControl?: string
+  /** User-defined object metadata to store. */
+  metadata?: Record<string, string>
+}
+
+/** Options for {@link Storage.put}. */
+export interface StoragePutOptions {
+  attributes?: StoragePutAttributes
+}
+
+/** Result of reading a stored object. */
+export interface StorageGetResult {
+  data: Buffer
+  meta: ObjectMeta
+  attributes: StorageObjectAttributes
+}
+
+/** Result of reading object information without its payload. */
+export interface StorageHeadResult {
+  meta: ObjectMeta
+  attributes: StorageObjectAttributes
+}
+
+/** Provider identifiers returned after a successful storage write. */
+export interface StoragePutResult {
+  eTag?: string
+  version?: string
+}
+
 /** A resolved object-storage binding. */
 export interface Storage {
   /** Fetch the object at `path`. */
-  get(path: string): Promise<Buffer>
-  /** Store `data` at `path`. */
-  put(path: string, data: Buffer | Uint8Array): Promise<void>
+  get(path: string): Promise<StorageGetResult>
+  /** Store `data` at `path`, optionally with provider-neutral object attributes. */
+  put(
+    path: string,
+    data: Buffer | Uint8Array,
+    options?: StoragePutOptions,
+  ): Promise<StoragePutResult>
   /** Delete the object at `path`. */
   delete(path: string): Promise<void>
   /** List objects, optionally filtered by `prefix`. */
   list(prefix?: string): Promise<ObjectMeta[]>
-  /** Fetch metadata for the object at `path`. */
-  head(path: string): Promise<ObjectMeta>
+  /** Fetch metadata and attributes for `path` without downloading its payload. */
+  head(path: string): Promise<StorageHeadResult>
   /** Copy the object at `from` to `to`. */
   copy(from: string, to: string): Promise<void>
   /** Create a presigned request for `path`. */
@@ -63,17 +129,32 @@ export type RemoteStorage = Pick<Storage, "get" | "put" | "delete" | "list" | "h
 export interface KvSetOptions {
   /** Time-to-live, in seconds. */
   ttl?: number
-  /** Only create the key if it does not already exist. */
-  ifNotExists?: boolean
+  /**
+   * Atomic write precondition. `null` means the key must be absent; an opaque
+   * version means the key must still match an earlier read. Omit for an
+   * unconditional write.
+   */
+  ifVersion?: string | null
 }
 
-/** A single key-value pair returned by a scan. */
-export interface KvScanItem {
+/** Options for {@link Kv.delete}. */
+export interface KvDeleteOptions {
+  /** Delete only when the key still matches this opaque version. */
+  ifVersion?: string
+}
+
+/** A value and its opaque version. */
+export interface KvEntry<T> {
   /** The key. */
   key: string
-  /** The raw value bytes. */
-  value: Buffer
+  /** The decoded value. */
+  value: T
+  /** Opaque version for a later conditional set or delete. */
+  version: string
 }
+
+/** A raw entry returned by a scan. */
+export type KvScanItem = KvEntry<Buffer>
 
 /** A page of scan results. */
 export interface KvScanResult {
@@ -88,25 +169,25 @@ export interface KvScanResult {
 
 /** A resolved key-value binding. */
 export interface Kv {
-  /** Get the raw value bytes for `key`, or `null` if absent/expired. */
-  get(key: string): Promise<Buffer | null>
-  /** Get the value for `key` as UTF-8 text, or `null` if absent/expired. */
-  getText(key: string): Promise<string | null>
-  /** Get the value for `key` parsed as JSON, or `null` if absent/expired. */
-  getJson<T = unknown>(key: string): Promise<T | null>
+  /** Get the raw entry for `key`, or `null` if absent/expired. */
+  get(key: string): Promise<KvEntry<Buffer> | null>
+  /** Get the entry for `key` with its value decoded as UTF-8 text. */
+  getText(key: string): Promise<KvEntry<string> | null>
+  /** Get the entry for `key` with its value parsed as JSON. */
+  getJson<T = unknown>(key: string): Promise<KvEntry<T> | null>
   /**
-   * Set `key` to the UTF-8 `value`. With `ifNotExists`, resolves `true` when
-   * created and `false` when the key already existed; otherwise `true`.
+   * Set `key` to the UTF-8 `value`. Conditional writes resolve `false` when
+   * their version precondition is not met; all applied writes resolve `true`.
    */
   set(key: string, value: string, options?: KvSetOptions): Promise<boolean>
   /**
-   * Set `key` to `value` serialized as JSON (via `JSON.stringify`). With
-   * `ifNotExists`, resolves `true` when created and `false` when the key already
-   * existed; otherwise `true`.
+   * Set `key` to `value` serialized as JSON (via `JSON.stringify`). Conditional
+   * writes resolve `false` when their version precondition is not
+   * met; all applied writes resolve `true`.
    */
   setJson(key: string, value: unknown, options?: KvSetOptions): Promise<boolean>
-  /** Delete `key` (no error if absent). */
-  delete(key: string): Promise<void>
+  /** Delete `key`, optionally only when its version still matches. */
+  delete(key: string, options?: KvDeleteOptions): Promise<boolean>
   /** Check whether `key` exists. */
   exists(key: string): Promise<boolean>
   /** Scan keys under `prefix`, with optional pagination. */

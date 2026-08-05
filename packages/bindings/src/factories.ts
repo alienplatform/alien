@@ -35,6 +35,7 @@ import type {
 import type {
   Container,
   Kv,
+  KvEntry,
   KvScanResult,
   KvSetOptions,
   Postgres,
@@ -46,6 +47,7 @@ import type {
   RemoteStorage,
   SignedUrlOptions,
   Storage,
+  StoragePutOptions,
   Vault,
 } from "./types.js"
 
@@ -97,7 +99,8 @@ async function guard<THandle, TResult>(
 function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
   return {
     get: path => guard(handle, raw => raw.get(path)),
-    put: (path, data) => guard(handle, raw => raw.put(path, toBuffer(data))),
+    put: (path, data, options?: StoragePutOptions) =>
+      guard(handle, raw => raw.put(path, toBuffer(data), options ?? null)),
     delete: path => guard(handle, raw => raw.delete(path)),
     list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
     head: path => guard(handle, raw => raw.head(path)),
@@ -110,7 +113,8 @@ function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
 function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): RemoteStorage {
   return {
     get: path => guard(handle, raw => raw.get(path)),
-    put: (path, data) => guard(handle, raw => raw.put(path, toBuffer(data))),
+    put: (path, data, options?: StoragePutOptions) =>
+      guard(handle, raw => raw.put(path, toBuffer(data), options ?? null)),
     delete: path => guard(handle, raw => raw.delete(path)),
     list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
     head: path => guard(handle, raw => raw.head(path)),
@@ -122,13 +126,15 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
     get: key => guard(handle, raw => raw.get(key)),
     getText: key =>
       guard(handle, async raw => {
-        const value = await raw.get(key)
-        return value === null ? null : value.toString("utf8")
+        const entry = await raw.get(key)
+        return entry === null ? null : { ...entry, value: entry.value.toString("utf8") }
       }),
-    getJson: <T = unknown>(key: string): Promise<T | null> =>
+    getJson: <T = unknown>(key: string): Promise<KvEntry<T> | null> =>
       guard(handle, async raw => {
-        const value = await raw.get(key)
-        return value === null ? null : (JSON.parse(value.toString("utf8")) as T)
+        const entry = await raw.get(key)
+        return entry === null
+          ? null
+          : { ...entry, value: JSON.parse(entry.value.toString("utf8")) as T }
       }),
     set: (key, value, options?: KvSetOptions) =>
       guard(handle, raw =>
@@ -136,7 +142,12 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
           key,
           Buffer.from(value, "utf8"),
           options?.ttl ?? null,
-          options?.ifNotExists ?? null,
+          options && "ifVersion" in options
+            ? options.ifVersion === null
+              ? "absent"
+              : "version"
+            : null,
+          typeof options?.ifVersion === "string" ? options.ifVersion : null,
         ),
       ),
     setJson: (key, value, options?: KvSetOptions) =>
@@ -145,10 +156,15 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
           key,
           Buffer.from(JSON.stringify(value), "utf8"),
           options?.ttl ?? null,
-          options?.ifNotExists ?? null,
+          options && "ifVersion" in options
+            ? options.ifVersion === null
+              ? "absent"
+              : "version"
+            : null,
+          typeof options?.ifVersion === "string" ? options.ifVersion : null,
         ),
       ),
-    delete: key => guard(handle, raw => raw.delete(key)),
+    delete: (key, options) => guard(handle, raw => raw.delete(key, options?.ifVersion ?? null)),
     exists: key => guard(handle, raw => raw.exists(key)),
     // The napi scan already returns each key with its value bytes; pass them
     // straight through rather than dropping the values.
