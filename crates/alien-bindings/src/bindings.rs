@@ -11,8 +11,8 @@ use crate::refreshing::{
     RefreshingKey, RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault,
 };
 use crate::traits::{
-    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage, Storage,
-    Vault,
+    BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage,
+    Storage, Vault,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

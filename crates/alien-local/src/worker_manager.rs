@@ -1342,7 +1342,7 @@ impl LocalWorkerManager {
                 runtime_only_bindings: Vec::new(), // Will be set during start_worker
                 runtime_only_binding_names: Vec::new(),
                 runtime_only_env_names: Vec::new(), // Will be set during start_daemon
-                stop_grace_period_seconds: None, // Will be set during start_daemon
+                stop_grace_period_seconds: None,    // Will be set during start_daemon
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1420,7 +1420,7 @@ impl LocalWorkerManager {
                 runtime_only_bindings: Vec::new(), // Will be set during start_worker
                 runtime_only_binding_names: Vec::new(),
                 runtime_only_env_names: Vec::new(), // Will be set during start_daemon
-                stop_grace_period_seconds: None, // Will be set during start_daemon
+                stop_grace_period_seconds: None,    // Will be set during start_daemon
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1597,7 +1597,10 @@ mod tests {
 
         // Persisted metadata: no password, no binding key; the (non-secret) link name stays.
         let json = serde_json::to_string(&metadata).expect("metadata serializes");
-        assert!(!json.contains("s3cr3t"), "persisted metadata leaks the password: {json}");
+        assert!(
+            !json.contains("s3cr3t"),
+            "persisted metadata leaks the password: {json}"
+        );
         assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
         assert!(metadata
             .runtime_only_bindings
@@ -1763,7 +1766,10 @@ mod tests {
             &[],
         );
         let json = serde_json::to_string(&metadata).expect("metadata serializes");
-        assert!(!json.contains("s3cr3t"), "named binding must be stripped even unresolved: {json}");
+        assert!(
+            !json.contains("s3cr3t"),
+            "named binding must be stripped even unresolved: {json}"
+        );
         assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
         assert_eq!(metadata.env_vars.get("FOO"), Some(&"bar".to_string()));
     }

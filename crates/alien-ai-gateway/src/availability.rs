@@ -101,7 +101,10 @@ pub(crate) async fn available_models(
             }
         }
     }
-    ProbeResult { models, fully_resolved }
+    ProbeResult {
+        models,
+        fully_resolved,
+    }
 }
 
 /// Send one `max_tokens: 1` request to the model's native endpoint and classify the
@@ -124,8 +127,10 @@ async fn probe_model(
             return Availability::Indeterminate;
         }
     };
-    let header_refs: Vec<(&str, &str)> =
-        extra_headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let header_refs: Vec<(&str, &str)> = extra_headers
+        .iter()
+        .map(|(k, v)| (*k, v.as_str()))
+        .collect();
     let sent = sign_and_execute(client, &route.cred, &url, service, body, &header_refs);
     match tokio::time::timeout(timeout, sent).await {
         Ok(Ok(resp)) => classify_status(resp.status().as_u16()),
@@ -178,7 +183,10 @@ fn responses_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
     }
     let target = ai_catalog::responses_target(cm.public_id)
         .ok_or_else(|| missing_field(route, "Responses endpoint"))?;
-    let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
+    let region = route
+        .region
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "region"))?;
     let base = route
         .upstream_base_override
         .clone()
@@ -190,7 +198,12 @@ fn responses_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
     })
     .to_string()
     .into_bytes();
-    Ok((format!("{}{}", base.trim_end_matches('/'), target.path), "bedrock-mantle", body, Vec::new()))
+    Ok((
+        format!("{}{}", base.trim_end_matches('/'), target.path),
+        "bedrock-mantle",
+        body,
+        Vec::new(),
+    ))
 }
 
 /// Build the same per-cloud Claude endpoint the proxy uses (Bedrock InvokeModel /
@@ -198,7 +211,10 @@ fn responses_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
 fn anthropic_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
     match route.cloud {
         Platform::Aws => {
-            let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
+            let region = route
+                .region
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "region"))?;
             let base = route
                 .upstream_base_override
                 .clone()
@@ -209,13 +225,26 @@ fn anthropic_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
                 bedrock_geo(region),
                 cm.upstream_id
             );
-            Ok((url, "bedrock", anthropic_body("bedrock-2023-05-31"), Vec::new()))
+            Ok((
+                url,
+                "bedrock",
+                anthropic_body("bedrock-2023-05-31"),
+                Vec::new(),
+            ))
         }
         Platform::Gcp => {
-            let location = route.region.as_deref().ok_or_else(|| missing_field(route, "location"))?;
-            let project = route.project.as_deref().ok_or_else(|| missing_field(route, "project"))?;
-            let base =
-                route.upstream_base_override.clone().unwrap_or_else(|| vertex_host(location));
+            let location = route
+                .region
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "location"))?;
+            let project = route
+                .project
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "project"))?;
+            let base = route
+                .upstream_base_override
+                .clone()
+                .unwrap_or_else(|| vertex_host(location));
             let url = format!(
                 "{}/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{}:rawPredict",
                 base.trim_end_matches('/'),
@@ -224,10 +253,14 @@ fn anthropic_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
             Ok((url, "", anthropic_body("vertex-2023-10-16"), Vec::new()))
         }
         Platform::Azure => {
-            let endpoint =
-                route.azure_endpoint.as_deref().ok_or_else(|| missing_field(route, "endpoint"))?;
-            let base =
-                route.upstream_base_override.clone().unwrap_or_else(|| endpoint.to_string());
+            let endpoint = route
+                .azure_endpoint
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "endpoint"))?;
+            let base = route
+                .upstream_base_override
+                .clone()
+                .unwrap_or_else(|| endpoint.to_string());
             let url = format!("{}/anthropic/v1/messages", base.trim_end_matches('/'));
             let body = json!({
                 "model": cm.upstream_id,
@@ -236,7 +269,12 @@ fn anthropic_probe(route: &GatewayRoute, cm: &CatalogModel) -> Result<Probe> {
             })
             .to_string()
             .into_bytes();
-            Ok((url, "", body, vec![("anthropic-version", FOUNDRY_ANTHROPIC_VERSION.to_string())]))
+            Ok((
+                url,
+                "",
+                body,
+                vec![("anthropic-version", FOUNDRY_ANTHROPIC_VERSION.to_string())],
+            ))
         }
         cloud => Err(AlienError::new(ErrorData::Other {
             message: format!("{cloud:?} does not serve the Anthropic protocol"),
@@ -295,8 +333,13 @@ mod tests {
         let cm = ai_catalog::lookup("gpt-oss-20b").expect("a known OpenAI-protocol model");
 
         let started = Instant::now();
-        let verdict =
-            probe_model(&route, &reqwest::Client::new(), cm, Duration::from_millis(200)).await;
+        let verdict = probe_model(
+            &route,
+            &reqwest::Client::new(),
+            cm,
+            Duration::from_millis(200),
+        )
+        .await;
 
         assert!(
             matches!(verdict, Availability::Indeterminate),

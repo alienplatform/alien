@@ -2,7 +2,7 @@
 
 use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
-    DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
+    Ai, DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
     ResourceLifecycle, Stack, StackState,
 };
 use alien_error::AlienError;
@@ -44,7 +44,7 @@ impl StackMutation for RemoteBindingsMutation {
         _stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
-        validate_remote_key_is_the_only_published_resource(&stack, self.description())?;
+        validate_isolated_remote_resource(&stack, self.description())?;
 
         if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
@@ -89,32 +89,37 @@ impl StackMutation for RemoteBindingsMutation {
     }
 }
 
-fn validate_remote_key_is_the_only_published_resource(
-    stack: &Stack,
-    mutation_name: &str,
-) -> Result<()> {
+fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Result<()> {
     let remote_resources = stack
         .resources
         .iter()
         .filter(|(_, entry)| entry.has_remote_bindings())
         .collect::<Vec<_>>();
-    let remote_keys = remote_resources
+    let isolated_resources = remote_resources
         .iter()
-        .filter(|(_, entry)| entry.config.resource_type() == Key::RESOURCE_TYPE)
-        .count();
+        .filter(|(_, entry)| {
+            matches!(
+                entry.config.resource_type(),
+                resource_type if resource_type == Key::RESOURCE_TYPE || resource_type == Ai::RESOURCE_TYPE
+            )
+        })
+        .collect::<Vec<_>>();
 
-    if remote_keys == 0 || (remote_keys == 1 && remote_resources.len() == 1) {
+    if isolated_resources.is_empty()
+        || (isolated_resources.len() == 1 && remote_resources.len() == 1)
+    {
         return Ok(());
     }
 
+    let (resource_id, entry) = isolated_resources[0];
+
     Err(AlienError::new(ErrorData::StackMutationFailed {
         mutation_name: mutation_name.to_string(),
-        message: "a remotely published Key must be the deployment's only remoteAccess resource"
-            .to_string(),
-        resource_id: remote_resources
-            .iter()
-            .find(|(_, entry)| entry.config.resource_type() == Key::RESOURCE_TYPE)
-            .map(|(id, _)| (*id).clone()),
+        message: format!(
+            "a remotely published {} must be the deployment's only remoteAccess resource",
+            entry.config.resource_type()
+        ),
+        resource_id: Some((*resource_id).clone()),
     }))
 }
 
@@ -122,7 +127,7 @@ fn validate_remote_key_is_the_only_published_resource(
 mod tests {
     use super::*;
     use alien_core::{
-        EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, StackSettings,
+        Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, StackSettings,
         Storage,
     };
 
@@ -278,5 +283,55 @@ mod tests {
         assert_eq!(bindings.grants.len(), 1);
         assert_eq!(bindings.grants[0].resource_id, "customer-key");
         assert_eq!(bindings.grants[0].permission_set, "key/remote-cryptography");
+    }
+
+    #[tokio::test]
+    async fn remote_ai_adds_only_the_inference_grant_and_allows_non_remote_siblings() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(
+                Ai::new("models".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("internal".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let mutated = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect("non-remote siblings are allowed beside remote AI");
+        let bindings = mutated
+            .resources
+            .get(REMOTE_BINDINGS_ID)
+            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
+            .expect("Remote Bindings config");
+
+        assert_eq!(bindings.grants.len(), 1);
+        assert_eq!(bindings.grants[0].resource_id, "models");
+        assert_eq!(bindings.grants[0].permission_set, "ai/invoke");
+    }
+
+    #[tokio::test]
+    async fn remote_ai_rejects_another_published_resource() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(
+                Ai::new("models".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect_err("remote AI must reject another remotely published resource");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(error.to_string().contains("only remoteAccess resource"));
     }
 }

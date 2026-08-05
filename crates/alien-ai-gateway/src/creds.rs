@@ -49,34 +49,61 @@ struct ManagedAwsCredentials {
 
 impl ManagedAwsCredentials {
     fn new(provider: Managed) -> Self {
-        Self { provider, native: tokio::sync::OnceCell::new() }
+        Self {
+            provider,
+            native: tokio::sync::OnceCell::new(),
+        }
     }
 
     /// The SDK default chain, which resolves and refreshes the workload's projected identity.
-    async fn native_chain(&self) -> std::result::Result<&SharedCredentialsProvider, CredentialsError> {
+    async fn native_chain(
+        &self,
+    ) -> std::result::Result<&SharedCredentialsProvider, CredentialsError> {
         self.native
             .get_or_try_init(|| async {
                 let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
                 config.credentials_provider().ok_or_else(|| {
-                    CredentialsError::not_loaded("the AWS default credential chain provided no credentials provider")
+                    CredentialsError::not_loaded(
+                        "the AWS default credential chain provided no credentials provider",
+                    )
                 })
             })
             .await
     }
 
     async fn resolve(&self) -> std::result::Result<Credentials, CredentialsError> {
-        let provider = self.provider.provider().await.map_err(CredentialsError::provider_error)?;
-        let aws = provider
-            .client_config()
-            .aws_config()
-            .ok_or_else(|| CredentialsError::not_loaded("the workload identity is not an AWS credential"))?;
+        let provider = self
+            .provider
+            .provider()
+            .await
+            .map_err(CredentialsError::provider_error)?;
+        let aws = provider.client_config().aws_config().ok_or_else(|| {
+            CredentialsError::not_loaded("the workload identity is not an AWS credential")
+        })?;
         match &aws.credentials {
-            AwsCredentials::AccessKeys { access_key_id, secret_access_key, session_token } => Ok(
-                Credentials::new(access_key_id, secret_access_key, session_token.clone(), None, "alien-managed"),
-            ),
-            AwsCredentials::SessionCredentials { access_key_id, secret_access_key, session_token, .. } => Ok(
-                Credentials::new(access_key_id, secret_access_key, Some(session_token.clone()), None, "alien-managed"),
-            ),
+            AwsCredentials::AccessKeys {
+                access_key_id,
+                secret_access_key,
+                session_token,
+            } => Ok(Credentials::new(
+                access_key_id,
+                secret_access_key,
+                session_token.clone(),
+                None,
+                "alien-managed",
+            )),
+            AwsCredentials::SessionCredentials {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                ..
+            } => Ok(Credentials::new(
+                access_key_id,
+                secret_access_key,
+                Some(session_token.clone()),
+                None,
+                "alien-managed",
+            )),
             // The resolver selected the workload's projected identity (Imds / Profile /
             // WebIdentity); the SDK default chain resolves and refreshes it.
             _ => self.native_chain().await?.provide_credentials().await,
@@ -103,7 +130,11 @@ impl AmbientCred {
     /// Authorize an outgoing upstream request. `aws_sigv4_service` is the SigV4
     /// service name (`bedrock` or `bedrock-mantle`); it is consumed only by the AWS
     /// variant and ignored by bearer-token clouds.
-    pub async fn authorize(&self, req: &mut reqwest::Request, aws_sigv4_service: &str) -> Result<()> {
+    pub async fn authorize(
+        &self,
+        req: &mut reqwest::Request,
+        aws_sigv4_service: &str,
+    ) -> Result<()> {
         match self {
             AmbientCred::Aws(c) => c.sign(req, aws_sigv4_service).await,
             AmbientCred::Bearer(c) => c.attach(req).await,
@@ -124,15 +155,22 @@ impl AwsSigV4Cred {
         let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
         let provider = config.credentials_provider().ok_or_else(|| {
             AlienError::new(ErrorData::WorkloadIdentityInvalid {
-                message: "the AWS default credential chain provided no credentials provider".to_string(),
+                message: "the AWS default credential chain provided no credentials provider"
+                    .to_string(),
             })
         })?;
-        Ok(Self { region: region.into(), provider })
+        Ok(Self {
+            region: region.into(),
+            provider,
+        })
     }
 
     /// Build from an explicit credentials provider (used by tests).
     pub fn with_provider(region: impl Into<String>, provider: SharedCredentialsProvider) -> Self {
-        Self { region: region.into(), provider }
+        Self {
+            region: region.into(),
+            provider,
+        }
     }
 
     /// Sign with credentials the runtime-less resolver mints and refreshes. Each request
@@ -149,7 +187,10 @@ impl AwsSigV4Cred {
     /// short-lived credentials. Explicit keys/session credentials are signed directly;
     /// an instance-role/profile config falls back to the SDK default chain, which
     /// resolves (and refreshes) them.
-    pub async fn from_client_config(region: impl Into<String>, config: &ClientConfig) -> Result<Self> {
+    pub async fn from_client_config(
+        region: impl Into<String>,
+        config: &ClientConfig,
+    ) -> Result<Self> {
         let region = region.into();
         let aws = config.aws_config().ok_or_else(|| {
             AlienError::new(ErrorData::WorkloadIdentityInvalid {
@@ -169,7 +210,10 @@ impl AwsSigV4Cred {
                     None,
                     "alien-workload",
                 );
-                Ok(Self::with_provider(region, SharedCredentialsProvider::new(creds)))
+                Ok(Self::with_provider(
+                    region,
+                    SharedCredentialsProvider::new(creds),
+                ))
             }
             AwsCredentials::SessionCredentials {
                 access_key_id,
@@ -184,7 +228,10 @@ impl AwsSigV4Cred {
                     None,
                     "alien-workload",
                 );
-                Ok(Self::with_provider(region, SharedCredentialsProvider::new(creds)))
+                Ok(Self::with_provider(
+                    region,
+                    SharedCredentialsProvider::new(creds),
+                ))
             }
             // Imds / Profile: the SDK default chain resolves the projected identity.
             _ => Self::new(region).await,
@@ -198,7 +245,9 @@ impl AwsSigV4Cred {
             .await
             .into_alien_error()
             .context(ErrorData::AmbientCredentialUnavailable {
-                message: format!("the SigV4 signer for {service} got no credentials from the provider"),
+                message: format!(
+                    "the SigV4 signer for {service} got no credentials from the provider"
+                ),
             })?;
         let identity = creds.into();
         let params = v4::SigningParams::builder()
@@ -209,7 +258,9 @@ impl AwsSigV4Cred {
             .settings(SigningSettings::default())
             .build()
             .into_alien_error()
-            .context(ErrorData::Other { message: "could not build SigV4 params".to_string() })?;
+            .context(ErrorData::Other {
+                message: "could not build SigV4 params".to_string(),
+            })?;
 
         // SigV4 hashes the exact body; a non-in-memory (streaming) body would sign as
         // empty and silently fail upstream, so reject it rather than mis-sign.
@@ -218,7 +269,8 @@ impl AwsSigV4Cred {
                 .as_bytes()
                 .ok_or_else(|| {
                     AlienError::new(ErrorData::Other {
-                        message: "cannot SigV4-sign a streaming (non-in-memory) request body".to_string(),
+                        message: "cannot SigV4-sign a streaming (non-in-memory) request body"
+                            .to_string(),
                     })
                 })?
                 .to_vec(),
@@ -228,7 +280,11 @@ impl AwsSigV4Cred {
         let mut headers: Vec<(String, String)> = req
             .headers()
             .iter()
-            .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string())))
+            .filter_map(|(k, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|v| (k.as_str().to_string(), v.to_string()))
+            })
             .collect();
         // SigV4 must cover the Host header; reqwest sets it from the URL at send time,
         // so sign the same value (with port when non-default) for the signature to match.
@@ -246,20 +302,28 @@ impl AwsSigV4Cred {
             SignableBody::Bytes(&body_bytes),
         )
         .into_alien_error()
-        .context(ErrorData::Other { message: "could not build signable request".to_string() })?;
+        .context(ErrorData::Other {
+            message: "could not build signable request".to_string(),
+        })?;
 
         let (instructions, _signature) = sign(signable, &params.into())
             .into_alien_error()
-            .context(ErrorData::Other { message: "SigV4 signing failed".to_string() })?
+            .context(ErrorData::Other {
+                message: "SigV4 signing failed".to_string(),
+            })?
             .into_parts();
 
         for (name, value) in instructions.headers() {
             let hn = HeaderName::from_bytes(name.as_bytes())
                 .into_alien_error()
-                .context(ErrorData::Other { message: format!("invalid signed header name {name}") })?;
+                .context(ErrorData::Other {
+                    message: format!("invalid signed header name {name}"),
+                })?;
             let hv = HeaderValue::from_str(value)
                 .into_alien_error()
-                .context(ErrorData::Other { message: "invalid signed header value".to_string() })?;
+                .context(ErrorData::Other {
+                    message: "invalid signed header value".to_string(),
+                })?;
             req.headers_mut().insert(hn, hv);
         }
         Ok(())
@@ -270,13 +334,20 @@ impl AwsSigV4Cred {
 /// pre-supplied token (local-dev ADC / `az` CLI token, or tests).
 enum BearerSource {
     Gcp,
-    Azure { resource: String },
-    Static { token: String },
+    Azure {
+        resource: String,
+    },
+    Static {
+        token: String,
+    },
     /// The runtime-less resolver: re-resolve the workload's bearer token on each request,
     /// re-minting when the short-lived credential is near expiry. The resolver is
     /// native-first, so it may instead select the workload's projected identity, which
     /// carries no bearer token — `native` is the metadata source that issues one.
-    Managed { provider: Managed, native: Box<BearerSource> },
+    Managed {
+        provider: Managed,
+        native: Box<BearerSource>,
+    },
 }
 
 /// Bound the instance-metadata fetch. It feeds `/v1/models`, and single-flight holds the
@@ -309,7 +380,9 @@ impl BearerTokenCred {
     /// `resource` is the audience, e.g. `https://cognitiveservices.azure.com`.
     pub fn azure(resource: impl Into<String>) -> Self {
         Self {
-            source: BearerSource::Azure { resource: resource.into() },
+            source: BearerSource::Azure {
+                resource: resource.into(),
+            },
             client: reqwest::Client::new(),
             cache: Mutex::new(None),
             metadata_base: None,
@@ -320,7 +393,9 @@ impl BearerTokenCred {
     /// local development (an ADC / `az` CLI token) or tests.
     pub fn static_token(token: impl Into<String>) -> Self {
         Self {
-            source: BearerSource::Static { token: token.into() },
+            source: BearerSource::Static {
+                token: token.into(),
+            },
             client: reqwest::Client::new(),
             cache: Mutex::new(None),
             metadata_base: None,
@@ -336,12 +411,20 @@ impl BearerTokenCred {
     /// Resolve the Azure bearer token from the runtime-less resolver, falling back to IMDS
     /// for `resource` when the resolver selects the workload's projected identity.
     pub fn managed_azure(provider: Managed, resource: impl Into<String>) -> Self {
-        Self::managed(provider, BearerSource::Azure { resource: resource.into() })
+        Self::managed(
+            provider,
+            BearerSource::Azure {
+                resource: resource.into(),
+            },
+        )
     }
 
     fn managed(provider: Managed, native: BearerSource) -> Self {
         Self {
-            source: BearerSource::Managed { provider, native: Box::new(native) },
+            source: BearerSource::Managed {
+                provider,
+                native: Box::new(native),
+            },
             client: reqwest::Client::new(),
             cache: Mutex::new(None),
             metadata_base: None,
@@ -352,7 +435,9 @@ impl BearerTokenCred {
         let token = self.token().await?;
         let hv = HeaderValue::from_str(&format!("Bearer {token}"))
             .into_alien_error()
-            .context(ErrorData::Other { message: "invalid bearer token".to_string() })?;
+            .context(ErrorData::Other {
+                message: "invalid bearer token".to_string(),
+            })?;
         req.headers_mut().insert(http::header::AUTHORIZATION, hv);
         Ok(())
     }
@@ -362,10 +447,12 @@ impl BearerTokenCred {
             // A supplied token has no refresh clock of its own, and the resolver holds one
             // for minted credentials, so neither uses the local metadata cache.
             BearerSource::Static { token } => Ok(token.clone()),
-            BearerSource::Managed { provider, native } => match self.managed_token(provider, native).await? {
-                Some(token) => Ok(token),
-                None => self.metadata_token(native).await,
-            },
+            BearerSource::Managed { provider, native } => {
+                match self.managed_token(provider, native).await? {
+                    Some(token) => Ok(token),
+                    None => self.metadata_token(native).await,
+                }
+            }
             native => self.metadata_token(native).await,
         }
     }
@@ -373,19 +460,37 @@ impl BearerTokenCred {
     /// The bearer token the resolver selected, or `None` when it selected the workload's
     /// projected identity — which carries no token of its own, so the metadata service
     /// issues one.
-    async fn managed_token(&self, provider: &Managed, native: &BearerSource) -> Result<Option<String>> {
-        let resolved = provider.provider().await.context(ErrorData::AmbientCredentialUnavailable {
-            message: "the workload credential resolver failed".to_string(),
-        })?;
+    async fn managed_token(
+        &self,
+        provider: &Managed,
+        native: &BearerSource,
+    ) -> Result<Option<String>> {
+        let resolved =
+            provider
+                .provider()
+                .await
+                .context(ErrorData::AmbientCredentialUnavailable {
+                    message: "the workload credential resolver failed".to_string(),
+                })?;
         Ok(match native {
-            BearerSource::Gcp => resolved.client_config().gcp_config().and_then(|g| match &g.credentials {
-                GcpCredentials::AccessToken { token } => Some(token.clone()),
-                _ => None,
-            }),
-            BearerSource::Azure { .. } => resolved.client_config().azure_config().and_then(|a| match &a.credentials {
-                AzureCredentials::AccessToken { token } => Some(token.clone()),
-                _ => None,
-            }),
+            BearerSource::Gcp => {
+                resolved
+                    .client_config()
+                    .gcp_config()
+                    .and_then(|g| match &g.credentials {
+                        GcpCredentials::AccessToken { token } => Some(token.clone()),
+                        _ => None,
+                    })
+            }
+            BearerSource::Azure { .. } => {
+                resolved
+                    .client_config()
+                    .azure_config()
+                    .and_then(|a| match &a.credentials {
+                        AzureCredentials::AccessToken { token } => Some(token.clone()),
+                        _ => None,
+                    })
+            }
             // `managed` only ever builds a Gcp / Azure native source.
             BearerSource::Static { .. } | BearerSource::Managed { .. } => None,
         })
@@ -405,29 +510,32 @@ impl BearerTokenCred {
             }
         }
 
-        let (url, header_name, header_value) = match source {
-            BearerSource::Gcp => (
-                format!(
-                    "{}/computeMetadata/v1/instance/service-accounts/default/token",
-                    self.metadata_base.as_deref().unwrap_or("http://metadata.google.internal")
+        let (url, header_name, header_value) =
+            match source {
+                BearerSource::Gcp => (
+                    format!(
+                        "{}/computeMetadata/v1/instance/service-accounts/default/token",
+                        self.metadata_base
+                            .as_deref()
+                            .unwrap_or("http://metadata.google.internal")
+                    ),
+                    "Metadata-Flavor",
+                    "Google".to_string(),
                 ),
-                "Metadata-Flavor",
-                "Google".to_string(),
-            ),
-            BearerSource::Azure { resource } => (
-                format!(
+                BearerSource::Azure { resource } => (
+                    format!(
                     "{}/metadata/identity/oauth2/token?api-version=2018-02-01&resource={resource}",
                     self.metadata_base.as_deref().unwrap_or("http://169.254.169.254")
                 ),
-                "Metadata",
-                "true".to_string(),
-            ),
-            BearerSource::Static { .. } | BearerSource::Managed { .. } => {
-                return Err(AlienError::new(ErrorData::Other {
-                    message: "no metadata endpoint for this credential source".to_string(),
-                }))
-            }
-        };
+                    "Metadata",
+                    "true".to_string(),
+                ),
+                BearerSource::Static { .. } | BearerSource::Managed { .. } => {
+                    return Err(AlienError::new(ErrorData::Other {
+                        message: "no metadata endpoint for this credential source".to_string(),
+                    }))
+                }
+            };
 
         let resp = self
             .client
@@ -446,16 +554,20 @@ impl BearerTokenCred {
             }));
         }
         // GCP returns expires_in as a number; Azure IMDS returns it as a string.
-        let v: serde_json::Value = resp
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::Other { message: "could not parse the metadata token response".to_string() })?;
+        let v: serde_json::Value =
+            resp.json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "could not parse the metadata token response".to_string(),
+                })?;
         let access_token = v["access_token"]
             .as_str()
-            .ok_or_else(|| AlienError::new(ErrorData::Other {
-                message: "metadata token response had no access_token".to_string(),
-            }))?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::Other {
+                    message: "metadata token response had no access_token".to_string(),
+                })
+            })?
             .to_string();
         // A wrong shape here would silently cache a token past its real expiry, and there is
         // no 401-triggered invalidation to recover — so fail rather than invent a lifetime.
@@ -496,7 +608,9 @@ mod tests {
             .build()
             .expect("request builds");
 
-        cred.sign(&mut req, "bedrock").await.expect("signing succeeds");
+        cred.sign(&mut req, "bedrock")
+            .await
+            .expect("signing succeeds");
 
         let auth = req
             .headers()
@@ -504,9 +618,18 @@ mod tests {
             .expect("authorization header present")
             .to_str()
             .unwrap();
-        assert!(auth.contains("AWS4-HMAC-SHA256"), "must be a SigV4 auth header: {auth}");
-        assert!(auth.contains("/bedrock/"), "credential scope must name the bedrock service: {auth}");
-        assert!(req.headers().contains_key("x-amz-date"), "must add x-amz-date");
+        assert!(
+            auth.contains("AWS4-HMAC-SHA256"),
+            "must be a SigV4 auth header: {auth}"
+        );
+        assert!(
+            auth.contains("/bedrock/"),
+            "credential scope must name the bedrock service: {auth}"
+        );
+        assert!(
+            req.headers().contains_key("x-amz-date"),
+            "must add x-amz-date"
+        );
     }
 
     #[tokio::test]
@@ -528,7 +651,9 @@ mod tests {
             .build()
             .expect("request builds");
 
-        cred.sign(&mut req, "bedrock").await.expect("signing succeeds");
+        cred.sign(&mut req, "bedrock")
+            .await
+            .expect("signing succeeds");
 
         let auth = req
             .headers()
@@ -578,7 +703,9 @@ mod tests {
             tokio::spawn(async move { cred.token().await })
         });
         for joined in futures::future::join_all(calls).await {
-            let token = joined.expect("token task did not panic").expect("token fetch succeeds");
+            let token = joined
+                .expect("token task did not panic")
+                .expect("token fetch succeeds");
             assert_eq!(token, "tok-single-flight");
         }
 

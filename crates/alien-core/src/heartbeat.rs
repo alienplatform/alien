@@ -2869,26 +2869,24 @@ mod tests {
             },
         )))
         .unwrap();
-        let gcp =
-            serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::GcpVertex(
-                GcpVertexAiHeartbeatData {
-                    status: AiHeartbeatStatus::default(),
-                    project: "my-project".to_string(),
-                    location: "us-central1".to_string(),
-                },
-            )))
-            .unwrap();
-        let azure =
-            serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(
-                AzureFoundryAiHeartbeatData {
-                    status: AiHeartbeatStatus::default(),
-                    account_name: "my-ai-account".to_string(),
-                    endpoint: Some("https://my-ai-account.openai.azure.com/".to_string()),
-                    resource_group: Some("my-rg".to_string()),
-                    location: Some("eastus".to_string()),
-                },
-            )))
-            .unwrap();
+        let gcp = serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::GcpVertex(
+            GcpVertexAiHeartbeatData {
+                status: AiHeartbeatStatus::default(),
+                project: "my-project".to_string(),
+                location: "us-central1".to_string(),
+            },
+        )))
+        .unwrap();
+        let azure = serde_json::to_value(ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(
+            AzureFoundryAiHeartbeatData {
+                status: AiHeartbeatStatus::default(),
+                account_name: "my-ai-account".to_string(),
+                endpoint: Some("https://my-ai-account.openai.azure.com/".to_string()),
+                resource_group: Some("my-rg".to_string()),
+                location: Some("eastus".to_string()),
+            },
+        )))
+        .unwrap();
 
         assert_eq!(aws["resourceType"], "ai");
         assert_eq!(aws["data"]["backend"], "awsBedrock");

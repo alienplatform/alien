@@ -16,8 +16,13 @@ use crate::error::{ErrorData, Result};
 /// The client-executed tool families Bedrock hosts on classic `InvokeModel`
 /// (verified against AWS docs). Anything else typed is server-executed by Anthropic's
 /// own API servers, which Bedrock is not, so it is dropped rather than 400'd.
-const BEDROCK_HOSTED_TOOL_PREFIXES: &[&str] =
-    &["bash_", "text_editor_", "computer_", "memory_", "tool_search_"];
+const BEDROCK_HOSTED_TOOL_PREFIXES: &[&str] = &[
+    "bash_",
+    "text_editor_",
+    "computer_",
+    "memory_",
+    "tool_search_",
+];
 
 /// The `anthropic_beta` families Bedrock's classic `InvokeModel` accepts in the body
 /// (each live-verified: an accepted tag returns 200, an unknown one is a
@@ -72,7 +77,10 @@ pub(crate) async fn proxy_bedrock_anthropic(
     mut payload: Value,
     headers: &HeaderMap,
 ) -> Result<Response> {
-    let region = route.region.as_deref().ok_or_else(|| missing_field(route, "region"))?;
+    let region = route
+        .region
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "region"))?;
 
     let obj = payload.as_object_mut().ok_or_else(|| {
         AlienError::new(ErrorData::InvalidRequest {
@@ -139,7 +147,9 @@ pub(crate) async fn proxy_bedrock_anthropic(
             let keep = match tool.get("type").and_then(Value::as_str) {
                 // Plain client tools carry no type, or `custom`.
                 None | Some("custom") => true,
-                Some(tag) => BEDROCK_HOSTED_TOOL_PREFIXES.iter().any(|p| tag.starts_with(p)),
+                Some(tag) => BEDROCK_HOSTED_TOOL_PREFIXES
+                    .iter()
+                    .any(|p| tag.starts_with(p)),
             };
             if !keep {
                 let label = tool
@@ -219,21 +229,32 @@ pub(crate) async fn proxy_bedrock_anthropic(
         }
     }
 
-    let upstream_body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not re-serialize the Bedrock request body".to_string(),
-        })?;
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the Bedrock request body".to_string(),
+            })?;
 
-    let suffix = if stream { "invoke-with-response-stream" } else { "invoke" };
+    let suffix = if stream {
+        "invoke-with-response-stream"
+    } else {
+        "invoke"
+    };
     let model_id = format!("{}.{}", bedrock_geo(region), upstream_id);
     let base = route
         .upstream_base_override
         .clone()
         .unwrap_or_else(|| format!("https://bedrock-runtime.{region}.amazonaws.com"));
-    let url = format!("{}/model/{}/{}", base.trim_end_matches('/'), model_id, suffix);
+    let url = format!(
+        "{}/model/{}/{}",
+        base.trim_end_matches('/'),
+        model_id,
+        suffix
+    );
 
-    let upstream = sign_and_execute(client, &route.cred, &url, "bedrock", upstream_body, &[]).await?;
+    let upstream =
+        sign_and_execute(client, &route.cred, &url, "bedrock", upstream_body, &[]).await?;
 
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -250,15 +271,20 @@ pub(crate) async fn proxy_bedrock_anthropic(
     // then flush once the upstream closes: a stream that ended mid-frame surfaces a
     // loud error via finish() instead of a silently truncated reply.
     let sse = futures::stream::unfold(
-        (Box::pin(upstream.bytes_stream()), EventStreamToSse::default(), false),
+        (
+            Box::pin(upstream.bytes_stream()),
+            EventStreamToSse::default(),
+            false,
+        ),
         |(mut body, mut decoder, done)| async move {
             if done {
                 return None;
             }
             match body.next().await {
-                Some(Ok(bytes)) => {
-                    Some((Ok(Bytes::from(decoder.push(&bytes))), (body, decoder, false)))
-                }
+                Some(Ok(bytes)) => Some((
+                    Ok(Bytes::from(decoder.push(&bytes))),
+                    (body, decoder, false),
+                )),
                 Some(Err(err)) => Some((Err(err), (body, decoder, true))),
                 // Upstream closed: emit the end-of-stream flush, then stop.
                 None => Some((Ok(Bytes::from(decoder.finish())), (body, decoder, true))),
@@ -287,9 +313,10 @@ pub(crate) async fn proxy_bedrock_anthropic(
 /// list and gets Bedrock's loud answer.
 fn merge_beta_headers(obj: &mut Map<String, Value>, headers: &HeaderMap) {
     let mut betas: Vec<String> = match obj.get("anthropic_beta") {
-        Some(Value::Array(list)) => {
-            list.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()
-        }
+        Some(Value::Array(list)) => list
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
         Some(Value::String(tag)) => vec![tag.clone()],
         _ => Vec::new(),
     };

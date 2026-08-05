@@ -53,6 +53,17 @@ function fakeRemoteAddon() {
     decrypt: async ciphertext => ciphertext,
   }
   const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
+  const resolveAi = vi.fn<RawRemoteBindingsHandle["ai"]>(async () => ({
+    resourceId: "models",
+    bindingJson: JSON.stringify({ service: "bedrock", region: "us-east-1" }),
+    clientConfigJson: JSON.stringify({
+      platform: "aws",
+      accountId: "123456789012",
+      region: "us-east-1",
+      credentials: { type: "sessionCredentials" },
+    }),
+    expiresAt: "2026-08-05T08:00:00Z",
+  }))
 
   class FakeBindingsHandle implements RawBindingsHandle {
     key = resolveKey
@@ -92,6 +103,8 @@ function fakeRemoteAddon() {
     storage = resolveStorage
 
     key = resolveKey
+
+    ai = resolveAi
   }
 
   const forRemoteDeployment = vi.fn<
@@ -110,6 +123,7 @@ function fakeRemoteAddon() {
     head,
     put,
     resolveKey,
+    resolveAi,
   }
 }
 
@@ -158,6 +172,23 @@ describe("Bindings.forRemoteDeployment", () => {
     expect(ciphertext.toString()).toBe("rootacme")
     expect(fixture.resolveKey).toHaveBeenCalledOnce()
     expect(fixture.resolveKey).toHaveBeenCalledWith("customer-key")
+  })
+
+  it("resolves the deployment-level AI lease without a resource name", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+
+    const lease = await bindings.ai()
+
+    expect(fixture.resolveAi).toHaveBeenCalledWith()
+    expect(lease.resourceId).toBe("models")
+    expect(lease.binding).toEqual({ service: "bedrock", region: "us-east-1" })
+    expect(lease.clientConfig.platform).toBe("aws")
+    expect(lease.expiresAt).toEqual(new Date("2026-08-05T08:00:00Z"))
   })
 
   it("reuses one native bindings handle and resolves each Storage handle lazily once", async () => {

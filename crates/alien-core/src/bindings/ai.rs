@@ -119,10 +119,7 @@ impl AiBinding {
         })
     }
 
-    pub fn external(
-        provider: impl Into<String>,
-        api_key: impl Into<BindingValue<String>>,
-    ) -> Self {
+    pub fn external(provider: impl Into<String>, api_key: impl Into<BindingValue<String>>) -> Self {
         Self::External(ExternalAiBinding {
             provider: provider.into(),
             api_key: api_key.into(),
@@ -180,7 +177,10 @@ mod tests {
         // `ai(name)` parser expects: service-tagged, camelCase, key inline.
         let json = serde_json::to_value(&binding).unwrap();
         let json_str = json.to_string();
-        assert!(json_str.contains(r#""apiKey""#), "external binding must serialize apiKey in camelCase");
+        assert!(
+            json_str.contains(r#""apiKey""#),
+            "external binding must serialize apiKey in camelCase"
+        );
         assert_eq!(
             json,
             serde_json::json!({

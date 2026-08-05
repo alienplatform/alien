@@ -159,11 +159,7 @@ pub trait CognitiveServicesAccountsApi: Send + Sync + std::fmt::Debug {
     ) -> Result<CognitiveServicesAccount>;
 
     /// Delete a CognitiveServices account.
-    async fn delete_account(
-        &self,
-        resource_group_name: &str,
-        account_name: &str,
-    ) -> Result<()>;
+    async fn delete_account(&self, resource_group_name: &str, account_name: &str) -> Result<()>;
 
     /// Create (or update) a model deployment under an account (PUT). May return a
     /// long-running operation.
@@ -253,11 +249,11 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
         let body = serde_json::to_string(parameters)
             .into_alien_error()
             .context(ErrorData::SerializationError {
-                message: format!(
-                    "Failed to serialize CognitiveServices account create parameters for resource: {}",
-                    account_name
-                ),
-            })?;
+            message: format!(
+                "Failed to serialize CognitiveServices account create parameters for resource: {}",
+                account_name
+            ),
+        })?;
 
         let builder = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
@@ -268,7 +264,11 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
         let signed = self.base.sign_request(req, &bearer_token).await?;
 
         self.base
-            .execute_request_with_long_running_support(signed, "CreateCognitiveServicesAccount", account_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateCognitiveServicesAccount",
+                account_name,
+            )
             .await
     }
 
@@ -329,11 +329,7 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
     }
 
     /// Delete a CognitiveServices account
-    async fn delete_account(
-        &self,
-        resource_group_name: &str,
-        account_name: &str,
-    ) -> Result<()> {
+    async fn delete_account(&self, resource_group_name: &str, account_name: &str) -> Result<()> {
         let bearer_token = self
             .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
@@ -583,22 +579,19 @@ mod mock_tests {
     async fn mock_create_get_delete_round_trip() {
         let mut mock = MockCognitiveServicesAccountsApi::new();
 
-        mock.expect_create_account()
-            .returning(|_, _, _| {
-                Ok(OperationResult::Completed(CognitiveServicesAccount {
-                    kind: Some("AIServices".to_string()),
-                    location: Some("eastus".to_string()),
-                    sku: Some(CognitiveServicesSku {
-                        name: "S0".to_string(),
-                    }),
-                    properties: Some(CognitiveServicesAccountProperties {
-                        endpoint: Some(
-                            "https://my-account.cognitiveservices.azure.com/".to_string(),
-                        ),
-                        provisioning_state: Some("Succeeded".to_string()),
-                    }),
-                }))
-            });
+        mock.expect_create_account().returning(|_, _, _| {
+            Ok(OperationResult::Completed(CognitiveServicesAccount {
+                kind: Some("AIServices".to_string()),
+                location: Some("eastus".to_string()),
+                sku: Some(CognitiveServicesSku {
+                    name: "S0".to_string(),
+                }),
+                properties: Some(CognitiveServicesAccountProperties {
+                    endpoint: Some("https://my-account.cognitiveservices.azure.com/".to_string()),
+                    provisioning_state: Some("Succeeded".to_string()),
+                }),
+            }))
+        });
 
         mock.expect_get_account().returning(|_, _| {
             Ok(CognitiveServicesAccount {
@@ -608,9 +601,7 @@ mod mock_tests {
                     name: "S0".to_string(),
                 }),
                 properties: Some(CognitiveServicesAccountProperties {
-                    endpoint: Some(
-                        "https://my-account.cognitiveservices.azure.com/".to_string(),
-                    ),
+                    endpoint: Some("https://my-account.cognitiveservices.azure.com/".to_string()),
                     provisioning_state: Some("Succeeded".to_string()),
                 }),
             })

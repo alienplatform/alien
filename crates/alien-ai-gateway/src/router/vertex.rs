@@ -34,8 +34,14 @@ pub(crate) async fn proxy_vertex_anthropic(
     mut payload: Value,
     headers: &HeaderMap,
 ) -> Result<Response> {
-    let location = route.region.as_deref().ok_or_else(|| missing_field(route, "location"))?;
-    let project = route.project.as_deref().ok_or_else(|| missing_field(route, "project"))?;
+    let location = route
+        .region
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "location"))?;
+    let project = route
+        .project
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "project"))?;
 
     let obj = payload.as_object_mut().ok_or_else(|| {
         AlienError::new(ErrorData::InvalidRequest {
@@ -46,19 +52,27 @@ pub(crate) async fn proxy_vertex_anthropic(
     obj.insert("anthropic_version".to_string(), json!("vertex-2023-10-16"));
     // The `stream` field stays in the body; Vertex accepts it alongside the verb.
     let stream = parse_stream_flag(obj.get("stream").cloned())?;
-    let verb = if stream { "streamRawPredict" } else { "rawPredict" };
+    let verb = if stream {
+        "streamRawPredict"
+    } else {
+        "rawPredict"
+    };
 
-    let base = route.upstream_base_override.clone().unwrap_or_else(|| vertex_host(location));
+    let base = route
+        .upstream_base_override
+        .clone()
+        .unwrap_or_else(|| vertex_host(location));
     let url = format!(
         "{}/v1/projects/{project}/locations/{location}/publishers/anthropic/models/{upstream_id}:{verb}",
         base.trim_end_matches('/')
     );
 
-    let upstream_body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not re-serialize the rewritten request body".to_string(),
-        })?;
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
 
     // Vertex is the native Messages API, so betas ride the standard header —
     // filtered through the same allowlist that keeps Anthropic-API-side markers

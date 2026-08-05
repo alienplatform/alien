@@ -9,8 +9,8 @@
 
 use std::net::Ipv4Addr;
 
-use alien_core::Platform;
 use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, GatewayRoute};
+use alien_core::Platform;
 use serde_json::{json, Value};
 
 /// Load the shared alien-test-target credentials from the workspace-root
@@ -27,7 +27,8 @@ fn load_test_env() {
         // Fail loud rather than fall through to whatever AWS creds are already
         // ambient (e.g. a developer's own profile): this test must sign as the
         // alien-test-target account, so a missing var is a setup error.
-        let value = std::env::var(from).unwrap_or_else(|_| panic!("{from} must be set in .env.test"));
+        let value =
+            std::env::var(from).unwrap_or_else(|_| panic!("{from} must be set in .env.test"));
         std::env::set_var(to, value);
     }
 }

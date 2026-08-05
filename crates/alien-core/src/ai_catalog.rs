@@ -180,88 +180,423 @@ static CATALOG: &[CatalogModel] = &[
     // The GPT-5 family is Responses-only: chat completions, converse and invoke are
     // all unavailable, so `upstream_id` here is the mantle id and the chat probe
     // would reject them.
-    CatalogModel { public_id: "gpt-5.6-sol", cloud: Platform::Aws, upstream_id: "openai.gpt-5.6-sol", protocol: Protocol::OpenAiResponses },
-    CatalogModel { public_id: "gpt-5.6-terra", cloud: Platform::Aws, upstream_id: "openai.gpt-5.6-terra", protocol: Protocol::OpenAiResponses },
-    CatalogModel { public_id: "gpt-5.6-luna", cloud: Platform::Aws, upstream_id: "openai.gpt-5.6-luna", protocol: Protocol::OpenAiResponses },
-    CatalogModel { public_id: "gpt-5.5", cloud: Platform::Aws, upstream_id: "openai.gpt-5.5", protocol: Protocol::OpenAiResponses },
-    CatalogModel { public_id: "gpt-5.4", cloud: Platform::Aws, upstream_id: "openai.gpt-5.4", protocol: Protocol::OpenAiResponses },
-    CatalogModel { public_id: "gpt-oss-20b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-20b-1:0", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gpt-oss-120b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-120b-1:0", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gpt-oss-safeguard-20b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-safeguard-20b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gpt-oss-safeguard-120b", cloud: Platform::Aws, upstream_id: "openai.gpt-oss-safeguard-120b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "deepseek-v3.2", cloud: Platform::Aws, upstream_id: "deepseek.v3.2", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "qwen3-32b", cloud: Platform::Aws, upstream_id: "qwen.qwen3-32b-v1:0", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "qwen3-coder-30b", cloud: Platform::Aws, upstream_id: "qwen.qwen3-coder-30b-a3b-v1:0", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "qwen3-coder-next", cloud: Platform::Aws, upstream_id: "qwen.qwen3-coder-next", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "qwen3-next-80b", cloud: Platform::Aws, upstream_id: "qwen.qwen3-next-80b-a3b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "qwen3-vl-235b", cloud: Platform::Aws, upstream_id: "qwen.qwen3-vl-235b-a22b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "mistral-large-3", cloud: Platform::Aws, upstream_id: "mistral.mistral-large-3-675b-instruct", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "devstral-2", cloud: Platform::Aws, upstream_id: "mistral.devstral-2-123b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "magistral-small", cloud: Platform::Aws, upstream_id: "mistral.magistral-small-2509", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "ministral-3-14b", cloud: Platform::Aws, upstream_id: "mistral.ministral-3-14b-instruct", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "ministral-3-8b", cloud: Platform::Aws, upstream_id: "mistral.ministral-3-8b-instruct", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "ministral-3-3b", cloud: Platform::Aws, upstream_id: "mistral.ministral-3-3b-instruct", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "minimax-m2", cloud: Platform::Aws, upstream_id: "minimax.minimax-m2", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "minimax-m2.1", cloud: Platform::Aws, upstream_id: "minimax.minimax-m2.1", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "minimax-m2.5", cloud: Platform::Aws, upstream_id: "minimax.minimax-m2.5", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "kimi-k2.5", cloud: Platform::Aws, upstream_id: "moonshotai.kimi-k2.5", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "nemotron-nano-9b", cloud: Platform::Aws, upstream_id: "nvidia.nemotron-nano-9b-v2", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "nemotron-nano-12b", cloud: Platform::Aws, upstream_id: "nvidia.nemotron-nano-12b-v2", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "nemotron-nano-3-30b", cloud: Platform::Aws, upstream_id: "nvidia.nemotron-nano-3-30b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "nemotron-super-3-120b", cloud: Platform::Aws, upstream_id: "nvidia.nemotron-super-3-120b", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemma-3-4b", cloud: Platform::Aws, upstream_id: "google.gemma-3-4b-it", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemma-3-12b", cloud: Platform::Aws, upstream_id: "google.gemma-3-12b-it", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemma-3-27b", cloud: Platform::Aws, upstream_id: "google.gemma-3-27b-it", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "glm-4.7", cloud: Platform::Aws, upstream_id: "zai.glm-4.7", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "glm-4.7-flash", cloud: Platform::Aws, upstream_id: "zai.glm-4.7-flash", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "glm-5", cloud: Platform::Aws, upstream_id: "zai.glm-5", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "palmyra-vision-7b", cloud: Platform::Aws, upstream_id: "writer.palmyra-vision-7b", protocol: Protocol::OpenAi },
+    CatalogModel {
+        public_id: "gpt-5.6-sol",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-5.6-sol",
+        protocol: Protocol::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-5.6-terra",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-5.6-terra",
+        protocol: Protocol::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-5.6-luna",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-5.6-luna",
+        protocol: Protocol::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-5.5",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-5.5",
+        protocol: Protocol::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-5.4",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-5.4",
+        protocol: Protocol::OpenAiResponses,
+    },
+    CatalogModel {
+        public_id: "gpt-oss-20b",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-oss-20b-1:0",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gpt-oss-120b",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-oss-120b-1:0",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gpt-oss-safeguard-20b",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-oss-safeguard-20b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gpt-oss-safeguard-120b",
+        cloud: Platform::Aws,
+        upstream_id: "openai.gpt-oss-safeguard-120b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "deepseek-v3.2",
+        cloud: Platform::Aws,
+        upstream_id: "deepseek.v3.2",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "qwen3-32b",
+        cloud: Platform::Aws,
+        upstream_id: "qwen.qwen3-32b-v1:0",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "qwen3-coder-30b",
+        cloud: Platform::Aws,
+        upstream_id: "qwen.qwen3-coder-30b-a3b-v1:0",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "qwen3-coder-next",
+        cloud: Platform::Aws,
+        upstream_id: "qwen.qwen3-coder-next",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "qwen3-next-80b",
+        cloud: Platform::Aws,
+        upstream_id: "qwen.qwen3-next-80b-a3b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "qwen3-vl-235b",
+        cloud: Platform::Aws,
+        upstream_id: "qwen.qwen3-vl-235b-a22b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "mistral-large-3",
+        cloud: Platform::Aws,
+        upstream_id: "mistral.mistral-large-3-675b-instruct",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "devstral-2",
+        cloud: Platform::Aws,
+        upstream_id: "mistral.devstral-2-123b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "magistral-small",
+        cloud: Platform::Aws,
+        upstream_id: "mistral.magistral-small-2509",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "ministral-3-14b",
+        cloud: Platform::Aws,
+        upstream_id: "mistral.ministral-3-14b-instruct",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "ministral-3-8b",
+        cloud: Platform::Aws,
+        upstream_id: "mistral.ministral-3-8b-instruct",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "ministral-3-3b",
+        cloud: Platform::Aws,
+        upstream_id: "mistral.ministral-3-3b-instruct",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "minimax-m2",
+        cloud: Platform::Aws,
+        upstream_id: "minimax.minimax-m2",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "minimax-m2.1",
+        cloud: Platform::Aws,
+        upstream_id: "minimax.minimax-m2.1",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "minimax-m2.5",
+        cloud: Platform::Aws,
+        upstream_id: "minimax.minimax-m2.5",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "kimi-k2.5",
+        cloud: Platform::Aws,
+        upstream_id: "moonshotai.kimi-k2.5",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "nemotron-nano-9b",
+        cloud: Platform::Aws,
+        upstream_id: "nvidia.nemotron-nano-9b-v2",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "nemotron-nano-12b",
+        cloud: Platform::Aws,
+        upstream_id: "nvidia.nemotron-nano-12b-v2",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "nemotron-nano-3-30b",
+        cloud: Platform::Aws,
+        upstream_id: "nvidia.nemotron-nano-3-30b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "nemotron-super-3-120b",
+        cloud: Platform::Aws,
+        upstream_id: "nvidia.nemotron-super-3-120b",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemma-3-4b",
+        cloud: Platform::Aws,
+        upstream_id: "google.gemma-3-4b-it",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemma-3-12b",
+        cloud: Platform::Aws,
+        upstream_id: "google.gemma-3-12b-it",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemma-3-27b",
+        cloud: Platform::Aws,
+        upstream_id: "google.gemma-3-27b-it",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "glm-4.7",
+        cloud: Platform::Aws,
+        upstream_id: "zai.glm-4.7",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "glm-4.7-flash",
+        cloud: Platform::Aws,
+        upstream_id: "zai.glm-4.7-flash",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "glm-5",
+        cloud: Platform::Aws,
+        upstream_id: "zai.glm-5",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "palmyra-vision-7b",
+        cloud: Platform::Aws,
+        upstream_id: "writer.palmyra-vision-7b",
+        protocol: Protocol::OpenAi,
+    },
     // AWS Bedrock, Claude over classic InvokeModel (the Anthropic Messages body is
     // the InvokeModel body; the model travels in the URL). `upstream_id` is the plain
     // Bedrock model id; the gateway prepends the region's cross-region inference-profile
     // geo prefix (`us.`/`eu.`/`apac.`) at request time, since Claude is invocable only
     // through a profile. Dated ids (`…-<date>-v1:0`) are required where AWS has no short
     // alias. These need Claude model access granted on the deployment's account.
-    CatalogModel { public_id: "claude-opus-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-sonnet-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.8", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-8", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.7", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-7", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.6", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-6-v1", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.5", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-5-20251101-v1:0", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.1", cloud: Platform::Aws, upstream_id: "anthropic.claude-opus-4-1-20250805-v1:0", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4.6", cloud: Platform::Aws, upstream_id: "anthropic.claude-sonnet-4-6", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4.5", cloud: Platform::Aws, upstream_id: "anthropic.claude-sonnet-4-5-20250929-v1:0", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-haiku-4.5", cloud: Platform::Aws, upstream_id: "anthropic.claude-haiku-4-5-20251001-v1:0", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-fable-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-fable-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-mythos-5", cloud: Platform::Aws, upstream_id: "anthropic.claude-mythos-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4", cloud: Platform::Aws, upstream_id: "anthropic.claude-sonnet-4-20250514-v1:0", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-3-haiku", cloud: Platform::Aws, upstream_id: "anthropic.claude-3-haiku-20240307-v1:0", protocol: Protocol::Anthropic },
+    CatalogModel {
+        public_id: "claude-opus-5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-opus-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-sonnet-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.8",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-opus-4-8",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.7",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-opus-4-7",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.6",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-opus-4-6-v1",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-opus-4-5-20251101-v1:0",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.1",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-opus-4-1-20250805-v1:0",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4.6",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-sonnet-4-6",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4.5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-haiku-4.5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-haiku-4-5-20251001-v1:0",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-fable-5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-fable-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-mythos-5",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-mythos-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-sonnet-4-20250514-v1:0",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-3-haiku",
+        cloud: Platform::Aws,
+        upstream_id: "anthropic.claude-3-haiku-20240307-v1:0",
+        protocol: Protocol::Anthropic,
+    },
     // GCP Vertex, Gemini. The OpenAI-compatible Vertex endpoint expects the `google/` prefix.
     // The 2.5 family serves in-region; the 3.x models serve on the `global` location.
-    CatalogModel { public_id: "gemini-2.5-pro", cloud: Platform::Gcp, upstream_id: "google/gemini-2.5-pro", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemini-2.5-flash", cloud: Platform::Gcp, upstream_id: "google/gemini-2.5-flash", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemini-2.5-flash-lite", cloud: Platform::Gcp, upstream_id: "google/gemini-2.5-flash-lite", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemini-3.5-flash", cloud: Platform::Gcp, upstream_id: "google/gemini-3.5-flash", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gemini-3.1-flash-lite", cloud: Platform::Gcp, upstream_id: "google/gemini-3.1-flash-lite", protocol: Protocol::OpenAi },
+    CatalogModel {
+        public_id: "gemini-2.5-pro",
+        cloud: Platform::Gcp,
+        upstream_id: "google/gemini-2.5-pro",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemini-2.5-flash",
+        cloud: Platform::Gcp,
+        upstream_id: "google/gemini-2.5-flash",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemini-2.5-flash-lite",
+        cloud: Platform::Gcp,
+        upstream_id: "google/gemini-2.5-flash-lite",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemini-3.5-flash",
+        cloud: Platform::Gcp,
+        upstream_id: "google/gemini-3.5-flash",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gemini-3.1-flash-lite",
+        cloud: Platform::Gcp,
+        upstream_id: "google/gemini-3.1-flash-lite",
+        protocol: Protocol::OpenAi,
+    },
     // GCP Vertex, Claude. The upstream id is the Vertex Model Garden id that travels
     // in the `:rawPredict` URL path (`publishers/anthropic/models/<id>`); models past
     // Sonnet 4.5 carry no date suffix, older ones keep an `@<date>` version. Needs
     // Claude model access granted on the deployment's project.
-    CatalogModel { public_id: "claude-sonnet-5", cloud: Platform::Gcp, upstream_id: "claude-sonnet-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.8", cloud: Platform::Gcp, upstream_id: "claude-opus-4-8", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.7", cloud: Platform::Gcp, upstream_id: "claude-opus-4-7", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.6", cloud: Platform::Gcp, upstream_id: "claude-opus-4-6", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.5", cloud: Platform::Gcp, upstream_id: "claude-opus-4-5@20251101", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4.6", cloud: Platform::Gcp, upstream_id: "claude-sonnet-4-6", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4.5", cloud: Platform::Gcp, upstream_id: "claude-sonnet-4-5@20250929", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-haiku-4.5", cloud: Platform::Gcp, upstream_id: "claude-haiku-4-5@20251001", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-fable-5", cloud: Platform::Gcp, upstream_id: "claude-fable-5", protocol: Protocol::Anthropic },
+    CatalogModel {
+        public_id: "claude-sonnet-5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-sonnet-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.8",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-opus-4-8",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.7",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-opus-4-7",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.6",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-opus-4-6",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-opus-4-5@20251101",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4.6",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-sonnet-4-6",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4.5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-sonnet-4-5@20250929",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-haiku-4.5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-haiku-4-5@20251001",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-fable-5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-fable-5",
+        protocol: Protocol::Anthropic,
+    },
     // Azure, OpenAI-protocol. The upstream id is the deployment name the controller
     // creates (see AZURE_DEPLOYMENTS); the app requests it by the same id. Azure serves
     // only what is deployed, so this list must stay in sync with AZURE_DEPLOYMENTS.
-    CatalogModel { public_id: "gpt-4.1", cloud: Platform::Azure, upstream_id: "gpt-4.1", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "gpt-4o-mini", cloud: Platform::Azure, upstream_id: "gpt-4o-mini", protocol: Protocol::OpenAi },
-    CatalogModel { public_id: "model-router", cloud: Platform::Azure, upstream_id: "model-router", protocol: Protocol::OpenAi },
+    CatalogModel {
+        public_id: "gpt-4.1",
+        cloud: Platform::Azure,
+        upstream_id: "gpt-4.1",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "gpt-4o-mini",
+        cloud: Platform::Azure,
+        upstream_id: "gpt-4o-mini",
+        protocol: Protocol::OpenAi,
+    },
+    CatalogModel {
+        public_id: "model-router",
+        cloud: Platform::Azure,
+        upstream_id: "model-router",
+        protocol: Protocol::OpenAi,
+    },
     // Azure, Claude over the Foundry Anthropic endpoint. The upstream id is the
     // Foundry deployment name (defaults to the model id). Unlike the OpenAI list,
     // these are not in AZURE_DEPLOYMENTS: a first Claude deployment requires
@@ -270,15 +605,60 @@ static CATALOG: &[CatalogModel] = &[
     // in the catalog as the deployment-name contract, but the gateway's /v1/models
     // availability probe drops any that the portal step has not created, so the
     // list omits any Claude that Foundry would 404.
-    CatalogModel { public_id: "claude-sonnet-5", cloud: Platform::Azure, upstream_id: "claude-sonnet-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.8", cloud: Platform::Azure, upstream_id: "claude-opus-4-8", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.7", cloud: Platform::Azure, upstream_id: "claude-opus-4-7", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.6", cloud: Platform::Azure, upstream_id: "claude-opus-4-6", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-opus-4.5", cloud: Platform::Azure, upstream_id: "claude-opus-4-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4.6", cloud: Platform::Azure, upstream_id: "claude-sonnet-4-6", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-sonnet-4.5", cloud: Platform::Azure, upstream_id: "claude-sonnet-4-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-haiku-4.5", cloud: Platform::Azure, upstream_id: "claude-haiku-4-5", protocol: Protocol::Anthropic },
-    CatalogModel { public_id: "claude-fable-5", cloud: Platform::Azure, upstream_id: "claude-fable-5", protocol: Protocol::Anthropic },
+    CatalogModel {
+        public_id: "claude-sonnet-5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-sonnet-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.8",
+        cloud: Platform::Azure,
+        upstream_id: "claude-opus-4-8",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.7",
+        cloud: Platform::Azure,
+        upstream_id: "claude-opus-4-7",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.6",
+        cloud: Platform::Azure,
+        upstream_id: "claude-opus-4-6",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-opus-4.5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-opus-4-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4.6",
+        cloud: Platform::Azure,
+        upstream_id: "claude-sonnet-4-6",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-sonnet-4.5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-sonnet-4-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-haiku-4.5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-haiku-4-5",
+        protocol: Protocol::Anthropic,
+    },
+    CatalogModel {
+        public_id: "claude-fable-5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-fable-5",
+        protocol: Protocol::Anthropic,
+    },
 ];
 
 /// Azure deployments to create at provision time: (deployment name, model name,
@@ -305,13 +685,55 @@ pub struct ResponsesTarget {
 /// Qwen rejects it. Kept explicit rather than derived: both the id scheme and the
 /// path differ per model family, not by a rule.
 static RESPONSES_UPSTREAM: &[(&str, ResponsesTarget)] = &[
-    ("gpt-oss-20b", ResponsesTarget { upstream_id: "openai.gpt-oss-20b", path: "/v1/responses" }),
-    ("gpt-oss-120b", ResponsesTarget { upstream_id: "openai.gpt-oss-120b", path: "/v1/responses" }),
-    ("gpt-5.6-sol", ResponsesTarget { upstream_id: "openai.gpt-5.6-sol", path: "/openai/v1/responses" }),
-    ("gpt-5.6-terra", ResponsesTarget { upstream_id: "openai.gpt-5.6-terra", path: "/openai/v1/responses" }),
-    ("gpt-5.6-luna", ResponsesTarget { upstream_id: "openai.gpt-5.6-luna", path: "/openai/v1/responses" }),
-    ("gpt-5.5", ResponsesTarget { upstream_id: "openai.gpt-5.5", path: "/openai/v1/responses" }),
-    ("gpt-5.4", ResponsesTarget { upstream_id: "openai.gpt-5.4", path: "/openai/v1/responses" }),
+    (
+        "gpt-oss-20b",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-oss-20b",
+            path: "/v1/responses",
+        },
+    ),
+    (
+        "gpt-oss-120b",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-oss-120b",
+            path: "/v1/responses",
+        },
+    ),
+    (
+        "gpt-5.6-sol",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-5.6-sol",
+            path: "/openai/v1/responses",
+        },
+    ),
+    (
+        "gpt-5.6-terra",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-5.6-terra",
+            path: "/openai/v1/responses",
+        },
+    ),
+    (
+        "gpt-5.6-luna",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-5.6-luna",
+            path: "/openai/v1/responses",
+        },
+    ),
+    (
+        "gpt-5.5",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-5.5",
+            path: "/openai/v1/responses",
+        },
+    ),
+    (
+        "gpt-5.4",
+        ResponsesTarget {
+            upstream_id: "openai.gpt-5.4",
+            path: "/openai/v1/responses",
+        },
+    ),
 ];
 
 /// The bedrock-mantle Responses target for a public model id, or `None` when the
@@ -336,7 +758,9 @@ pub fn lookup(public_id: &str) -> Option<&'static CatalogModel> {
 }
 
 fn lookup_for(public_id: &str, cloud: Platform) -> Option<&'static CatalogModel> {
-    CATALOG.iter().find(|m| m.public_id == public_id && m.cloud == cloud)
+    CATALOG
+        .iter()
+        .find(|m| m.public_id == public_id && m.cloud == cloud)
 }
 
 /// The catalog model for a client-sent model id on a specific cloud. A public id
@@ -381,7 +805,9 @@ fn canonical_public_id(model_id: &str) -> String {
 fn strip_invoke_version(id: &str) -> &str {
     let base = id.split_once(':').map_or(id, |(base, _)| base);
     match base.rsplit_once("-v") {
-        Some((stem, digits)) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+        Some((stem, digits))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
             stem
         }
         _ => base,
@@ -392,7 +818,9 @@ fn strip_invoke_version(id: &str) -> &str {
 fn strip_release_date(id: &str) -> &str {
     match id.rsplit_once('-') {
         Some((stem, date))
-            if date.len() == 8 && date.starts_with("20") && date.bytes().all(|b| b.is_ascii_digit()) =>
+            if date.len() == 8
+                && date.starts_with("20")
+                && date.bytes().all(|b| b.is_ascii_digit()) =>
         {
             stem
         }
@@ -449,14 +877,19 @@ mod tests {
     #[test]
     fn resolve_accepts_anthropic_native_spellings() {
         // Claude Code /model forms: dashed minor version, with and without date.
-        assert_eq!(resolve("claude-haiku-4-5").unwrap().public_id, "claude-haiku-4.5");
+        assert_eq!(
+            resolve("claude-haiku-4-5").unwrap().public_id,
+            "claude-haiku-4.5"
+        );
         assert_eq!(
             resolve("claude-sonnet-4-5-20250929").unwrap().public_id,
             "claude-sonnet-4.5"
         );
         // Full Bedrock upstream ids, with geo/vendor prefix and version suffix.
         assert_eq!(
-            resolve("us.anthropic.claude-haiku-4-5-20251001-v1:0").unwrap().public_id,
+            resolve("us.anthropic.claude-haiku-4-5-20251001-v1:0")
+                .unwrap()
+                .public_id,
             "claude-haiku-4.5"
         );
         assert_eq!(
@@ -464,9 +897,15 @@ mod tests {
             "claude-opus-4.6"
         );
         // Whole versions are already catalog form.
-        assert_eq!(resolve("claude-sonnet-5").unwrap().public_id, "claude-sonnet-5");
+        assert_eq!(
+            resolve("claude-sonnet-5").unwrap().public_id,
+            "claude-sonnet-5"
+        );
         // Exact public ids still win untouched.
-        assert_eq!(resolve("claude-opus-4.8").unwrap().public_id, "claude-opus-4.8");
+        assert_eq!(
+            resolve("claude-opus-4.8").unwrap().public_id,
+            "claude-opus-4.8"
+        );
         assert_eq!(resolve("gpt-oss-20b").unwrap().public_id, "gpt-oss-20b");
         // Unknowns stay unknown — no fuzzy matching.
         assert!(resolve("claude-nonexistent-9-9").is_none());
@@ -538,8 +977,14 @@ mod tests {
 
     #[test]
     fn protocol_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&Protocol::OpenAi).unwrap(), "\"openai\"");
-        assert_eq!(serde_json::to_string(&Protocol::Anthropic).unwrap(), "\"anthropic\"");
+        assert_eq!(
+            serde_json::to_string(&Protocol::OpenAi).unwrap(),
+            "\"openai\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Protocol::Anthropic).unwrap(),
+            "\"anthropic\""
+        );
         assert_eq!(
             serde_json::to_string(&Protocol::OpenAiResponses).unwrap(),
             "\"openairesponses\""
@@ -549,7 +994,12 @@ mod tests {
     #[test]
     fn every_model_has_provider_display_name_and_activation() {
         for m in CATALOG {
-            assert_ne!(m.provider(), "unknown", "no provider mapping for '{}'", m.public_id);
+            assert_ne!(
+                m.provider(),
+                "unknown",
+                "no provider mapping for '{}'",
+                m.public_id
+            );
             assert_ne!(
                 m.display_name(),
                 m.public_id,
@@ -560,11 +1010,19 @@ mod tests {
             let is_claude = m.public_id.starts_with("claude");
             match m.activation() {
                 Activation::OutOfBox => {
-                    assert!(!is_claude, "'{}' (Claude) must require a one-time step", m.public_id)
+                    assert!(
+                        !is_claude,
+                        "'{}' (Claude) must require a one-time step",
+                        m.public_id
+                    )
                 }
                 Activation::RequiresOneTimeStep(summary) => {
                     assert!(is_claude, "'{}' must be out of the box", m.public_id);
-                    assert!(!summary.is_empty(), "'{}' step summary is empty", m.public_id);
+                    assert!(
+                        !summary.is_empty(),
+                        "'{}' step summary is empty",
+                        m.public_id
+                    );
                 }
             }
         }

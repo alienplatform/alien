@@ -104,6 +104,13 @@ export interface RawRemoteStorageHandle {
   head(path: string): Promise<StorageHeadResult>
 }
 
+export interface RawRemoteAiLease {
+  resourceId: string
+  bindingJson: string
+  clientConfigJson: string
+  expiresAt: string
+}
+
 /** Raw napi key-value handle. */
 export interface RawKvHandle {
   get(key: string): Promise<Buffer | null>
@@ -180,6 +187,7 @@ export interface RawBindingsHandle {
 export interface RawRemoteBindingsHandle {
   storage(name: string): Promise<RawRemoteStorageHandle>
   key(name: string): Promise<RawKeyHandle>
+  ai(): Promise<RawRemoteAiLease>
 }
 
 /** Native environment-backed bindings class. */
