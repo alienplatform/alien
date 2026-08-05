@@ -106,7 +106,7 @@ importers:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^4.0.0
@@ -136,7 +136,7 @@ importers:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^4.0.0
@@ -164,7 +164,7 @@ importers:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^4.0.0
@@ -215,7 +215,7 @@ importers:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^4.0.0
@@ -272,7 +272,7 @@ importers:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^4.0.0
@@ -315,7 +315,7 @@ importers:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^4.0.0
@@ -330,7 +330,7 @@ importers:
         specifier: link:../../../../packages/config-typescript
         version: link:../../../../packages/config-typescript
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
 
   tests/e2e/test-apps/comprehensive-typescript:
@@ -364,7 +364,7 @@ importers:
         specifier: link:../../../../packages/config-typescript
         version: link:../../../../packages/config-typescript
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
 
   tests/e2e/test-apps/enabled-demo:
@@ -408,7 +408,7 @@ importers:
         specifier: ^24.0.15
         version: 24.10.4
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
 
 packages:

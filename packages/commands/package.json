@@ -51,7 +51,7 @@
     "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
-    "typescript": "^5.8.3",
+    "typescript": "~5.8.3",
     "vitest": "^4.0.0",
     "zod": "4.4.3"
   },
