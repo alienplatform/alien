@@ -139,29 +139,29 @@ lambda-extension = "0.12"
 lambda_http = "0.17"
 lambda_runtime = "0.14"
 ngrok = "0.19"
-oci-client = { version = "0.17", default-features = false }
+oci-client = { version = "0.15", default-features = false }
 oci-spec = "0.10.0"
 ocipkg = "0.4.0"
-object_store = "0.14.0"
+object_store = "0.12.2"
 once_cell = "1"
 petgraph = "0.8.1"
 pin-project-lite = "0.2"
 poem = "3.1"
 poem-openapi = "5"
 port_check = "0.3"
-postgresql_embedded = { version = "0.21", default-features = false, features = ["rustls", "theseus"] }
+postgresql_embedded = { version = "0.20", default-features = false, features = ["rustls", "theseus"] }
 # `steampipe` is enabled only because the crate uses `serde_json` unconditionally while
 # gating the dependency behind that feature; we never use the steampipe namespace at runtime.
-postgresql_extensions = { version = "0.21", default-features = false, features = ["tokio", "rustls", "portal-corp", "steampipe"] }
+postgresql_extensions = { version = "0.20", default-features = false, features = ["tokio", "rustls", "portal-corp", "steampipe"] }
 prost = "0.14"
 prost-types = "0.14"
 rand = "0.10"
 rand_distr = "0.6"
 regex = "1"
-reqwest = { version = "0.13.0", default-features = false }
+reqwest = { version = "0.12.2", default-features = false }
 rkyv = "0.8.0"
 rstest = "0.26.0"
-schemars = { version = "0.9", features = ["indexmap2"] }
+schemars = { version = "0.8", features = ["indexmap2"] }
 sea-query = { version = "0.32", features = ["with-chrono", "with-json", "with-uuid"] }
 sec = "1"
 serde = "1.0.219"
@@ -204,7 +204,7 @@ walkdir = "2"
 workspace_root = "0.2"
 pem = "3.0"
 oci-tar-builder = "0.4"
-sha2 = "0.11"
+sha2 = "0.10"
 oauth2 = { version = "5.0", default-features = false, features = ["reqwest"] }
 cacache = { version = "13.1", default-features = false, features = ["tokio-runtime"] }
 strip-ansi-escapes = "0.2.1"
