@@ -2282,12 +2282,56 @@ async fn terraform_azure_push_byo_encryption_key_rotation(
     if std::env::var("AZURE_FEDERATED_TOKEN_FILE").is_err() {
         panic!("Azure Remote Bindings rotation/revocation qualification requires a real federated token; target-static is insufficient");
     }
+    if let Err(error) = refresh_github_azure_oidc_token().await {
+        panic!("Azure Enterprise Key token refresh failed: {error:#}");
+    }
     if let Err(error) = check_byo_key_rotation(&ctx.ctx).await {
         panic!("Azure Enterprise Key rotation checks failed: {error:#}");
+    }
+    if let Err(error) = refresh_github_azure_oidc_token().await {
+        panic!("Azure Enterprise Key token refresh failed: {error:#}");
     }
     if let Err(error) = check_byo_key_revocation(&ctx.ctx).await {
         panic!("Azure Enterprise Key revocation checks failed: {error:#}");
     }
+}
+
+async fn refresh_github_azure_oidc_token() -> anyhow::Result<()> {
+    let request_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL").ok();
+    let request_token = std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok();
+    let (Some(request_url), Some(request_token)) = (request_url, request_token) else {
+        anyhow::ensure!(
+            std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL").is_err()
+                && std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN").is_err(),
+            "GitHub OIDC refresh requires both request URL and request token"
+        );
+        return Ok(());
+    };
+    let token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+        .context("AZURE_FEDERATED_TOKEN_FILE is required for Azure workload identity")?;
+    let separator = if request_url.contains('?') { '&' } else { '?' };
+    let response = Client::new()
+        .get(format!(
+            "{request_url}{separator}audience=api%3A%2F%2FAzureADTokenExchange"
+        ))
+        .bearer_auth(request_token)
+        .send()
+        .await
+        .context("request a fresh GitHub OIDC assertion")?
+        .error_for_status()
+        .context("GitHub rejected the OIDC assertion request")?;
+    let body: Value = response
+        .json()
+        .await
+        .context("parse the GitHub OIDC assertion response")?;
+    let assertion = body
+        .get("value")
+        .and_then(Value::as_str)
+        .context("GitHub OIDC assertion response has no value")?;
+    tokio::fs::write(token_file, assertion)
+        .await
+        .context("write the refreshed Azure federated token")?;
+    Ok(())
 }
 
 distribution_test_context!(
