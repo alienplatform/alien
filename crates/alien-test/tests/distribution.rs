@@ -945,6 +945,28 @@ async fn rotate_provider_key(key: &KeyOutputs, env: &[(String, String)]) -> anyh
             key_name,
             lineage_version_id,
         } => {
+            let tenant = env_value(env, "ARM_TENANT_ID")?;
+            let client = env_value(env, "ARM_CLIENT_ID")?;
+            let secret = env_value(env, "ARM_CLIENT_SECRET")?;
+            let subscription = env_value(env, "ARM_SUBSCRIPTION_ID")?;
+            let mut login = Command::new("az");
+            login.args([
+                "login",
+                "--service-principal",
+                "--username",
+                client,
+                "--password",
+                secret,
+                "--tenant",
+                tenant,
+                "--output",
+                "none",
+            ]);
+            run_test_command(login, "Azure lifecycle test operator login").await?;
+            let mut select = Command::new("az");
+            select.args(["account", "set", "--subscription", subscription]);
+            run_test_command(select, "Azure lifecycle test subscription selection").await?;
+
             let vault_name = vault_resource_id
                 .rsplit('/')
                 .next()
