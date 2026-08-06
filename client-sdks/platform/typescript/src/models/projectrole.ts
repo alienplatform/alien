@@ -12,6 +12,7 @@ export const ProjectRole = {
   ProjectViewer: "project.viewer",
   ProjectDeveloper: "project.developer",
   ProjectEncryption: "project.encryption",
+  ProjectAiGateway: "project.ai-gateway",
 } as const;
 /**
  * Role for project-scoped service accounts
