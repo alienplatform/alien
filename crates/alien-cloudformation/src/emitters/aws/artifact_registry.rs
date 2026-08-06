@@ -7,7 +7,8 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, ArtifactRegistry, Result, ServiceAccount};
+use alien_core::{import::EmitContext, ArtifactRegistry, RemoteBindings, Result, ServiceAccount};
+use alien_error::AlienError;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsArtifactRegistryEmitter;
@@ -51,9 +52,13 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
         let mut pull_role = ecr_access_role(ctx, &pull_role_id, "registry-pull", false)?;
         let mut push_role = ecr_access_role(ctx, &push_role_id, "registry-push", true)?;
         pull_role.depends_on.push(repository_id.clone());
-        push_role.depends_on.push(repository_id);
+        push_role.depends_on.push(repository_id.clone());
 
-        Ok(vec![repository, pull_role, push_role])
+        let mut resources = vec![repository, pull_role, push_role];
+        if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
+            resources.push(remote_access_policy(ctx, &repository_id)?);
+        }
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -170,8 +175,6 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
     if push {
         repository_actions.extend([
             "ecr:CompleteLayerUpload",
-            "ecr:CreateRepository",
-            "ecr:DeleteRepository",
             "ecr:InitiateLayerUpload",
             "ecr:PutImage",
             "ecr:UploadLayerPart",
@@ -210,6 +213,83 @@ fn ecr_policy_document(ctx: &EmitContext<'_>, push: bool) -> Result<CfExpression
             ]),
         ),
     ]))
+}
+
+fn remote_access_policy(ctx: &EmitContext<'_>, repository_id: &str) -> Result<CfResource> {
+    let access_role_id = ctx
+        .stack
+        .resources()
+        .find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        })
+        .map(|id| format!("{id}Role"))
+        .ok_or_else(|| {
+            AlienError::new(alien_core::ErrorData::GenericError {
+                message: "remote ArtifactRegistry has no Remote Bindings identity".to_string(),
+            })
+        })?;
+    let permission = alien_permissions::get_permission_set("artifact-registry/remote-read-write")
+        .and_then(|set| set.platforms.aws.as_ref())
+        .ok_or_else(|| {
+            AlienError::new(alien_core::ErrorData::GenericError {
+                message: "artifact-registry/remote-read-write has no AWS permissions".to_string(),
+            })
+        })?;
+    let actions = permission
+        .iter()
+        .flat_map(|entry| entry.grant.actions.iter().flatten())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut policy = CfResource::new(
+        format!("{repository_id}RemoteRegistryPolicy"),
+        "AWS::IAM::Policy".to_string(),
+    );
+    policy.properties.insert(
+        "PolicyName".to_string(),
+        CfExpression::sub(format!(
+            "${{AWS::StackName}}-{}-registry-access",
+            ctx.resource_id
+        )),
+    );
+    policy.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(access_role_id)]),
+    );
+    policy.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([
+                    CfExpression::object([
+                        ("Effect", CfExpression::from("Allow")),
+                        ("Action", CfExpression::from("ecr:GetAuthorizationToken")),
+                        ("Resource", CfExpression::from("*")),
+                    ]),
+                    CfExpression::object([
+                        ("Effect", CfExpression::from("Allow")),
+                        (
+                            "Action",
+                            CfExpression::list(
+                                actions
+                                    .into_iter()
+                                    .filter(|action| action != "ecr:GetAuthorizationToken")
+                                    .map(CfExpression::from),
+                            ),
+                        ),
+                        (
+                            "Resource",
+                            CfExpression::sub(format!("${{{repository_id}.Arn}}-*")),
+                        ),
+                    ]),
+                ]),
+            ),
+        ]),
+    );
+    Ok(policy)
 }
 
 fn ecr_lifecycle_policy() -> CfExpression {

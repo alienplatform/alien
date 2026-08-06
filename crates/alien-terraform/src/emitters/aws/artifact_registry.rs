@@ -4,12 +4,17 @@ use crate::{
     block::{attr, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, iam_role_name_template, jsonencode, nested_block, required_label,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
+        iam_policy_name_sanitize, iam_role_name_template, jsonencode, nested_block, required_label,
         resource_prefix_template, tags,
     },
     expr,
 };
-use alien_core::{import::EmitContext, ArtifactRegistry, Result, ServiceAccount};
+use alien_core::{
+    import::EmitContext, ArtifactRegistry, PermissionSetReference, RemoteBindings, Result,
+    ServiceAccount,
+};
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -77,6 +82,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
         fragment
             .resource_blocks
             .push(ecr_role_policy(label, &push_label, /* push */ true));
+        emit_remote_access_policy(ctx, &mut fragment, label)?;
 
         Ok(fragment)
     }
@@ -170,8 +176,6 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
     if push {
         for action in [
             "ecr:CompleteLayerUpload",
-            "ecr:CreateRepository",
-            "ecr:DeleteRepository",
             "ecr:InitiateLayerUpload",
             "ecr:PutImage",
             "ecr:UploadLayerPart",
@@ -226,6 +230,45 @@ fn ecr_role_policy(repo_label: &str, role_label: &str, push: bool) -> hcl::struc
             attr("role", expr::traversal(["aws_iam_role", role_label, "id"])),
             attr("policy", policy),
         ],
+    )
+}
+
+fn emit_remote_access_policy(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    repository_label: &str,
+) -> Result<()> {
+    let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource)
+    else {
+        return Ok(());
+    };
+    let Some(access_label) = ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    }) else {
+        return Ok(());
+    };
+    let permission = PermissionSetReference::from_name(definition.permission_set);
+    let Some(permission_set) =
+        permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+    else {
+        return Ok(());
+    };
+    let context = aws_terraform_permission_context()
+        .with_resource_name(format!("${{aws_ecr_repository.{repository_label}.name}}"));
+    emit_iam_role_policy_for_target_with_label(
+        fragment,
+        access_label,
+        &permission_set,
+        &format!("{access_label}_{repository_label}_remote_registry"),
+        &format!(
+            "access-{}-{}",
+            ctx.resource_id,
+            iam_policy_name_sanitize(&permission_set.id)
+        ),
+        &context,
+        BindingTarget::Resource,
     )
 }
 

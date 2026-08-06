@@ -70,6 +70,8 @@ pub struct AppState {
     pub pull_validation_cache: Arc<registry_proxy::PullValidationCache>,
     /// Routing table mapping repo path prefixes to upstream registries.
     pub registry_routing_table: Arc<registry_proxy::RegistryRoutingTable>,
+    /// Optional private adapter for the disjoint `customer/` OCI namespace.
+    pub customer_registry_broker: Option<Arc<dyn registry_proxy::CustomerRegistryBroker>>,
     /// Registry of per-`(ResourceType, Platform)` importers used by the
     /// stack-import endpoint to translate setup-artifact payloads
     /// (CFN Custom Resource, Terraform provider, Helm chart) into typed

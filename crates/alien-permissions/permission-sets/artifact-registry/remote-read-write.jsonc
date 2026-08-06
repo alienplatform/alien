@@ -1,22 +1,23 @@
 {
-  "id": "artifact-registry/push",
-  "description": "Allows pushing and pulling container images to/from artifact registries",
+  "id": "artifact-registry/remote-read-write",
+  "description": "Allows remote OCI clients to pull and push artifacts in one setup-owned registry without repository lifecycle access",
   "platforms": {
     "aws": [
       {
+        "label": "authenticate",
+        "description": "Request a short-lived ECR registry authorization token.",
         "grant": {
           "actions": ["ecr:GetAuthorizationToken"]
         },
         "binding": {
-          "stack": {
-            "resources": ["*"]
-          },
           "resource": {
             "resources": ["*"]
           }
         }
       },
       {
+        "label": "pull-and-push-artifacts",
+        "description": "Read and write image layers and manifests inside repositories owned by this registry resource.",
         "grant": {
           "actions": [
             "ecr:BatchCheckLayerAvailability",
@@ -32,73 +33,45 @@
           ]
         },
         "binding": {
-          "stack": {
-            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${stackPrefix}-*"]
-          },
           "resource": {
             "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["sts:AssumeRole"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-push"]
-          },
-          "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-push"]
           }
         }
       }
     ],
     "gcp": [
       {
+        "label": "pull-and-push-artifacts",
+        "description": "Read and write artifacts and their OCI tags inside the selected Artifact Registry repository.",
         "grant": {
           "permissions": [
             "artifactregistry.repositories.get",
             "artifactregistry.repositories.list",
             "artifactregistry.repositories.downloadArtifacts",
+            "artifactregistry.repositories.uploadArtifacts",
             "artifactregistry.tags.get",
             "artifactregistry.tags.list",
-            "artifactregistry.versions.get",
-            "artifactregistry.versions.list",
-            "artifactregistry.repositories.uploadArtifacts",
             "artifactregistry.tags.create",
-            "artifactregistry.tags.update"
+            "artifactregistry.tags.update",
+            "artifactregistry.versions.get",
+            "artifactregistry.versions.list"
           ]
         },
         "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
-          },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
-          }
-        }
-      },
-      {
-        "grant": {
-          "permissions": ["iam.serviceAccounts.actAs", "iam.serviceAccounts.getAccessToken"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "projects/${projectName}"
           }
         }
       }
     ],
     "azure": [
       {
+        "label": "pull-and-push-artifacts",
+        "description": "Pull and push artifacts without registry control-plane or artifact deletion access.",
         "grant": {
           "predefinedRoles": ["AcrPush"]
         },
         "binding": {
-          "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
-          },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}"
           }

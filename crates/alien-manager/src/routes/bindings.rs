@@ -4,10 +4,14 @@
 //! validates the authoritative stack state before it releases the resource's
 //! binding topology together with materialized, short-lived credentials.
 
+use alien_bindings::{
+    traits::ArtifactRegistry as ArtifactRegistryApi, BindingsProvider, BindingsProviderApi,
+};
 use alien_core::{
-    Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
-    BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
-    Platform, ResourceLifecycle, ResourceStatus, Storage, StorageBinding,
+    Ai, AiBinding, ArtifactRegistry, ArtifactRegistryBinding, AwsClientConfig, AwsCredentials,
+    AzureClientConfig, AzureCredentials, BindingValue, ClientConfig, DeploymentStatus,
+    GcpClientConfig, GcpCredentials, Key, KeyBinding, Platform, ResourceLifecycle, ResourceStatus,
+    Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -19,13 +23,17 @@ use axum::{
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 
 use super::{auth, current_release_resource, load_current_release, AppState};
 use crate::credential_materialization::{
     materialize_remote_binding_lease, MaterializedCredentialLease, RemoteBindingCredentialScope,
 };
 use crate::error::ErrorData;
-use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseStore};
+use crate::traits::{
+    deployment_status_from_record, CredentialResolver, DeploymentRecord, DeploymentStore,
+    ReleaseStore,
+};
 
 /// The remote client refreshes five minutes before this server-provided hint.
 /// One hour matches the maximum supported lifetime for manager-minted cloud credentials.
@@ -686,6 +694,11 @@ async fn resolve_binding(
         alien_core::remote_bindings::RemoteBindingKind::Ai => {
             remote_ai_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Ai)
         }
+        alien_core::remote_bindings::RemoteBindingKind::ArtifactRegistry => Err(
+            ErrorData::bad_request(
+                "Remote ArtifactRegistry credentials are available only to the Manager's local OCI operation broker",
+            ),
+        ),
     };
     let binding = match binding {
         Ok(binding) => binding,
@@ -910,20 +923,248 @@ async fn require_current_release_remote_access(
             "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
         )));
     }
-    if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
-        && stack
-            .resources
-            .values()
-            .filter(|entry| entry.remote_access)
-            .count()
-            != 1
+    if matches!(
+        definition.kind,
+        alien_core::remote_bindings::RemoteBindingKind::Key
+            | alien_core::remote_bindings::RemoteBindingKind::ArtifactRegistry
+    ) && stack
+        .resources
+        .values()
+        .filter(|entry| entry.remote_access)
+        .count()
+        != 1
     {
         return Err(ErrorData::bad_request(
-            "A remotely published Key must be the deployment's only remoteAccess resource",
+            "A remotely published Key or ArtifactRegistry must be the deployment's only remoteAccess resource",
         ));
     }
 
     Ok(definition.kind)
+}
+
+/// Resolve a remote ArtifactRegistry entirely inside the Manager process.
+///
+/// This is deliberately not an HTTP response type: the returned provider owns
+/// the short-lived Access-identity lease and provider credentials never cross
+/// the Manager boundary. The expected Release prevents a stale control-plane
+/// snapshot from silently resolving a newer resource definition.
+#[derive(Clone)]
+pub struct LocalArtifactRegistryResolver {
+    deployment_store: Arc<dyn DeploymentStore>,
+    release_store: Arc<dyn ReleaseStore>,
+    credential_resolver: Arc<dyn CredentialResolver>,
+}
+
+impl LocalArtifactRegistryResolver {
+    pub fn new(
+        deployment_store: Arc<dyn DeploymentStore>,
+        release_store: Arc<dyn ReleaseStore>,
+        credential_resolver: Arc<dyn CredentialResolver>,
+    ) -> Self {
+        Self {
+            deployment_store,
+            release_store,
+            credential_resolver,
+        }
+    }
+
+    pub async fn resolve(
+        &self,
+        deployment_id: &str,
+        resource_id: &str,
+        expected_release_id: &str,
+    ) -> Result<Arc<dyn ArtifactRegistryApi>, alien_error::AlienError<ErrorData>> {
+        let deployment = self
+            .deployment_store
+            .get_deployment(&crate::auth::Subject::system(), deployment_id)
+            .await
+            .context(ErrorData::InternalError {
+                message: "Failed to load Container Registry deployment".to_string(),
+            })?
+            .ok_or_else(|| ErrorData::not_found_deployment(deployment_id))?;
+        if deployment.current_release_id.as_deref() != Some(expected_release_id) {
+            return Err(ErrorData::bad_request(
+                "Container Registry route references a stale deployment Release",
+            ));
+        }
+        if !deployment_status_allows_remote_bindings(deployment_status_from_record(
+            &deployment.status,
+        )) {
+            return Err(ErrorData::bad_request(format!(
+                "Deployment is not operational for remote bindings (status '{}')",
+                deployment.status
+            )));
+        }
+        let kind = require_current_release_remote_access(
+            self.release_store.as_ref(),
+            &deployment,
+            resource_id,
+        )
+        .await?;
+        if kind != alien_core::remote_bindings::RemoteBindingKind::ArtifactRegistry {
+            return Err(ErrorData::bad_request(format!(
+                "Resource '{resource_id}' is not an ArtifactRegistry"
+            )));
+        }
+        require_setup_owned_remote_binding(&deployment, resource_id)?;
+        let binding = remote_artifact_registry_binding(&deployment, resource_id)?;
+        let scope = match deployment.platform {
+            Platform::Aws => RemoteBindingCredentialScope::AwsArtifactRegistry,
+            Platform::Gcp => RemoteBindingCredentialScope::GcpArtifactRegistry,
+            Platform::Azure => RemoteBindingCredentialScope::AzureArtifactRegistry,
+            other => {
+                return Err(ErrorData::bad_request(format!(
+                    "Remote ArtifactRegistry is not supported for deployment platform '{other}'"
+                )))
+            }
+        };
+        let source = self
+            .credential_resolver
+            .resolve_remote_storage_source(&deployment, resource_id)
+            .await
+            .context(ErrorData::RemoteCredentialHandoffFailed {
+                deployment_id: deployment.id.clone(),
+                platform: deployment.platform,
+            })?;
+        let lease = materialize_remote_binding_lease(source, scope).await?;
+        let binding =
+            serde_json::to_value(binding)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "Failed to encode remote ArtifactRegistry binding".to_string(),
+                })?;
+        let provider = BindingsProvider::new(
+            lease.client_config,
+            HashMap::from([(resource_id.to_string(), binding)]),
+        )
+        .context(ErrorData::InternalError {
+            message: "Failed to initialize remote ArtifactRegistry binding".to_string(),
+        })?;
+        provider
+            .load_artifact_registry(resource_id)
+            .await
+            .context(ErrorData::InternalError {
+                message: "Failed to load remote ArtifactRegistry binding".to_string(),
+            })
+    }
+
+    /// Resolve the separate Management identity for explicit child repository
+    /// lifecycle operations. OCI data requests must use [`Self::resolve`]
+    /// instead, which obtains the narrower Access identity.
+    pub async fn resolve_management(
+        &self,
+        deployment_id: &str,
+        resource_id: &str,
+        expected_release_id: &str,
+    ) -> Result<Arc<dyn ArtifactRegistryApi>, alien_error::AlienError<ErrorData>> {
+        let deployment = self
+            .deployment_store
+            .get_deployment(&crate::auth::Subject::system(), deployment_id)
+            .await
+            .context(ErrorData::InternalError {
+                message: "Failed to load Container Registry deployment".to_string(),
+            })?
+            .ok_or_else(|| ErrorData::not_found_deployment(deployment_id))?;
+        if deployment.current_release_id.as_deref() != Some(expected_release_id) {
+            return Err(ErrorData::bad_request(
+                "Container Registry route references a stale deployment Release",
+            ));
+        }
+        let kind = require_current_release_remote_access(
+            self.release_store.as_ref(),
+            &deployment,
+            resource_id,
+        )
+        .await?;
+        if kind != alien_core::remote_bindings::RemoteBindingKind::ArtifactRegistry {
+            return Err(ErrorData::bad_request(format!(
+                "Resource '{resource_id}' is not an ArtifactRegistry"
+            )));
+        }
+        require_setup_owned_remote_binding(&deployment, resource_id)?;
+        let binding = remote_artifact_registry_binding(&deployment, resource_id)?;
+        let client_config = self
+            .credential_resolver
+            .resolve(&deployment)
+            .await
+            .context(ErrorData::RemoteCredentialHandoffFailed {
+                deployment_id: deployment.id.clone(),
+                platform: deployment.platform,
+            })?;
+        let binding =
+            serde_json::to_value(binding)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "Failed to encode remote ArtifactRegistry binding".to_string(),
+                })?;
+        let provider = BindingsProvider::new(
+            client_config,
+            HashMap::from([(resource_id.to_string(), binding)]),
+        )
+        .context(ErrorData::InternalError {
+            message: "Failed to initialize managed ArtifactRegistry binding".to_string(),
+        })?;
+        provider
+            .load_artifact_registry(resource_id)
+            .await
+            .context(ErrorData::InternalError {
+                message: "Failed to load managed ArtifactRegistry binding".to_string(),
+            })
+    }
+}
+
+fn remote_artifact_registry_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<ArtifactRegistryBinding, alien_error::AlienError<ErrorData>> {
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != ArtifactRegistry::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not an ArtifactRegistry"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "ArtifactRegistry resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "ArtifactRegistry resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "ArtifactRegistry resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: ArtifactRegistryBinding = serde_json::from_value(binding)
+        .into_alien_error()
+        .context(ErrorData::BadRequest {
+            reason: format!(
+                "ArtifactRegistry resource '{resource_id}' has an invalid remote binding"
+            ),
+        })?;
+    let matches_platform = matches!(
+        (deployment.platform, &binding),
+        (Platform::Aws, ArtifactRegistryBinding::Ecr(_))
+            | (Platform::Gcp, ArtifactRegistryBinding::Gar(_))
+            | (Platform::Azure, ArtifactRegistryBinding::Acr(_))
+    );
+    if !matches_platform {
+        return Err(ErrorData::bad_request(format!(
+            "ArtifactRegistry resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    Ok(binding)
 }
 
 fn remote_storage_binding(
