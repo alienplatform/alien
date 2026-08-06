@@ -16,7 +16,7 @@ export async function exerciseLongLivedKvHandle(): Promise<CredentialMintClientR
   await cache.set("key", "second")
   const second = await cache.getText("key")
 
-  return { first, second }
+  return { first: first?.value ?? null, second: second?.value ?? null }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

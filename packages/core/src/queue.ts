@@ -1,7 +1,7 @@
 import { type Queue as QueueConfig, QueueSchema, type ResourceType } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { QueueOutputs, Queue as QueueConfig } from "./generated/index.js"
+export type { Queue as QueueConfig, QueueOutputs } from "./generated/index.js"
 export { QueueSchema as QueueConfigSchema } from "./generated/index.js"
 
 /**

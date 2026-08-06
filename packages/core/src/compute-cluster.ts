@@ -7,17 +7,17 @@ import {
 import { Resource } from "./resource.js"
 
 export type {
-  ComputeCluster as ComputeClusterConfig,
   CapacityGroup,
   CapacityGroupScalePolicy,
   ComputeChoiceRange as GeneratedComputeChoiceRange,
+  ComputeCluster as ComputeClusterConfig,
   MachineProfile,
 } from "./generated/index.js"
 export {
-  ComputeClusterSchema as ComputeClusterConfigSchema,
-  CapacityGroupSchema,
   CapacityGroupScalePolicySchema,
+  CapacityGroupSchema,
   ComputeChoiceRangeSchema,
+  ComputeClusterSchema as ComputeClusterConfigSchema,
   MachineProfileSchema,
 } from "./generated/index.js"
 

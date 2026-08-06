@@ -92,6 +92,7 @@ pub async fn handle_provisioning(
     // The vault was deployed during InitialSetup and is now Running.
     // Hash check inside sync_secrets_to_vault prevents redundant cloud calls.
     let synced = crate::helpers::sync_secrets_to_vault(
+        &target_stack,
         &stack_state,
         &client_config,
         &config,

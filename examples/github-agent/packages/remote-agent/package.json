@@ -22,7 +22,7 @@
   "devDependencies": {
     "@alienplatform/testing": "^0.1.0",
     "@types/node": "^24.0.15",
-    "typescript": "^5.8.3",
+    "typescript": "~5.8.3",
     "vitest": "^3.1.4"
   }
 }

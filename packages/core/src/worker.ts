@@ -10,20 +10,20 @@ import {
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
+  HttpMethod,
+  ReadinessProbe,
   Worker as WorkerConfig,
   WorkerOutputs,
   WorkerPublicEndpoint,
   WorkerTrigger,
-  ReadinessProbe,
-  HttpMethod,
 } from "./generated/index.js"
 export {
-  WorkerSchema as WorkerConfigSchema,
+  HttpMethodSchema,
+  ReadinessProbeSchema,
   WorkerOutputsSchema,
   WorkerPublicEndpointSchema,
+  WorkerSchema as WorkerConfigSchema,
   WorkerTriggerSchema,
-  ReadinessProbeSchema,
-  HttpMethodSchema,
 } from "./generated/index.js"
 
 export interface WorkerPublicEndpointOptions {

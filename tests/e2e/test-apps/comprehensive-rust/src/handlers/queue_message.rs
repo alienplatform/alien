@@ -56,14 +56,14 @@ pub async fn get_received_queue_messages(
                 "Found keys with scan_prefix"
             );
 
-            for (key, value) in scan_result.items {
-                match serde_json::from_slice::<serde_json::Value>(&value) {
+            for entry in scan_result.items {
+                match serde_json::from_slice::<serde_json::Value>(&entry.value) {
                     Ok(parsed_message) => {
                         retrieved_messages.push(parsed_message);
-                        info!(key = %key, "Found stored queue message");
+                        info!(key = %entry.key, "Found stored queue message");
                     }
                     Err(e) => {
-                        info!(key = %key, error = %e, "Failed to parse stored message");
+                        info!(key = %entry.key, error = %e, "Failed to parse stored message");
                     }
                 }
             }

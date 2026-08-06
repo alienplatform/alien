@@ -10,8 +10,8 @@ import { execFile, spawn } from "node:child_process"
 import { existsSync, readFileSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
-import { AlienError } from "@alienplatform/core"
 import type { DevStatus } from "@alienplatform/core"
+import { AlienError } from "@alienplatform/core"
 import getPort from "get-port"
 import { Deployment } from "./deployment.js"
 import { TestingOperationFailedError, withTestingContext } from "./errors.js"
@@ -119,11 +119,11 @@ async function deployViaDev(options: DeployOptions): Promise<Deployment> {
     stdio: ["ignore", "pipe", "pipe"],
   })
 
-  let stdout = ""
+  let _stdout = ""
   let stderr = ""
 
   proc.stdout?.on("data", (data: Buffer) => {
-    stdout += data.toString()
+    _stdout += data.toString()
     if (verbose) {
       process.stdout.write(data)
     }

@@ -140,17 +140,32 @@ export type RemoteStorage = Pick<Storage, "get" | "put" | "delete" | "list" | "h
 export interface KvSetOptions {
   /** Time-to-live, in seconds. */
   ttl?: number
-  /** Only create the key if it does not already exist. */
-  ifNotExists?: boolean
+  /**
+   * Atomic write precondition. `null` means the key must be absent; an opaque
+   * version means the key must still match an earlier read. Omit for an
+   * unconditional write.
+   */
+  ifVersion?: string | null
 }
 
-/** A single key-value pair returned by a scan. */
-export interface KvScanItem {
+/** Options for {@link Kv.delete}. */
+export interface KvDeleteOptions {
+  /** Delete only when the key still matches this opaque version. */
+  ifVersion?: string
+}
+
+/** A value and its opaque version. */
+export interface KvEntry<T> {
   /** The key. */
   key: string
-  /** The raw value bytes. */
-  value: Buffer
+  /** The decoded value. */
+  value: T
+  /** Opaque version for a later conditional set or delete. */
+  version: string
 }
+
+/** A raw entry returned by a scan. */
+export type KvScanItem = KvEntry<Buffer>
 
 /** A page of scan results. */
 export interface KvScanResult {
@@ -165,25 +180,25 @@ export interface KvScanResult {
 
 /** A resolved key-value binding. */
 export interface Kv {
-  /** Get the raw value bytes for `key`, or `null` if absent/expired. */
-  get(key: string): Promise<Buffer | null>
-  /** Get the value for `key` as UTF-8 text, or `null` if absent/expired. */
-  getText(key: string): Promise<string | null>
-  /** Get the value for `key` parsed as JSON, or `null` if absent/expired. */
-  getJson<T = unknown>(key: string): Promise<T | null>
+  /** Get the raw entry for `key`, or `null` if absent/expired. */
+  get(key: string): Promise<KvEntry<Buffer> | null>
+  /** Get the entry for `key` with its value decoded as UTF-8 text. */
+  getText(key: string): Promise<KvEntry<string> | null>
+  /** Get the entry for `key` with its value parsed as JSON. */
+  getJson<T = unknown>(key: string): Promise<KvEntry<T> | null>
   /**
-   * Set `key` to the UTF-8 `value`. With `ifNotExists`, resolves `true` when
-   * created and `false` when the key already existed; otherwise `true`.
+   * Set `key` to the UTF-8 `value`. Conditional writes resolve `false` when
+   * their version precondition is not met; all applied writes resolve `true`.
    */
   set(key: string, value: string, options?: KvSetOptions): Promise<boolean>
   /**
-   * Set `key` to `value` serialized as JSON (via `JSON.stringify`). With
-   * `ifNotExists`, resolves `true` when created and `false` when the key already
-   * existed; otherwise `true`.
+   * Set `key` to `value` serialized as JSON (via `JSON.stringify`). Conditional
+   * writes resolve `false` when their version precondition is not
+   * met; all applied writes resolve `true`.
    */
   setJson(key: string, value: unknown, options?: KvSetOptions): Promise<boolean>
-  /** Delete `key` (no error if absent). */
-  delete(key: string): Promise<void>
+  /** Delete `key`, optionally only when its version still matches. */
+  delete(key: string, options?: KvDeleteOptions): Promise<boolean>
   /** Check whether `key` exists. */
   exists(key: string): Promise<boolean>
   /** Scan keys under `prefix`, with optional pagination. */

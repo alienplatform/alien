@@ -1,7 +1,7 @@
 import { type Kv as KvConfig, KvSchema, type ResourceType } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { KvOutputs, Kv as KvConfig } from "./generated/index.js"
+export type { Kv as KvConfig, KvOutputs } from "./generated/index.js"
 export { KvSchema as KvConfigSchema } from "./generated/index.js"
 
 /**
@@ -15,15 +15,15 @@ export { KvSchema as KvConfigSchema } from "./generated/index.js"
  * All operations support TTL for automatic expiration and conditional operations.
  *
  * Key Features:
- * - Universal size limits: 512B keys, 64KB values
+ * - Universal size limits: 512-byte keys, 24 KiB values
  * - TTL support with logical expiry across all platforms
- * - Conditional puts with if_not_exists support
+ * - Atomic absent and version preconditions for puts and deletes
  * - Prefix-based scanning with pagination
  * - Platform-specific optimizations while maintaining consistent API
  *
  * Size Constraints:
- * - Keys: ≤ 512 bytes with portable ASCII charset (a-z, A-Z, 0-9, -, _, :, /, .)
- * - Values: ≤ 65,536 bytes (64 KiB)
+ * - Keys: ≤ 512 bytes with portable ASCII charset (a-z, A-Z, 0-9, -, _, :, .)
+ * - Values: ≤ 24,576 bytes (24 KiB)
  *
  * TTL Behavior:
  * - Expired items appear absent on reads even if physically present

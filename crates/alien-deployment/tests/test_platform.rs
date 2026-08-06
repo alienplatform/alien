@@ -223,10 +223,12 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
     }
 }
 
-fn expected_secrets_sync_hash(snapshot_hash: &str) -> String {
+fn expected_secrets_sync_hash(secret_value: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"\0vault-sync:no-app-command-token:v2\0");
-    hasher.update(snapshot_hash.as_bytes());
+    hasher.update(b"\0vault-sync:vault-backed-consumers:v3\0");
+    hasher.update(b"SECRET_VAR\0");
+    hasher.update(secret_value.as_bytes());
+    hasher.update(b"\0");
     format!("{:x}", hasher.finalize())
 }
 
@@ -417,7 +419,7 @@ async fn test_provisioning_syncs_secrets_before_live_compute() {
             .unwrap()
             .last_synced_env_vars_hash
             .as_deref(),
-        Some(expected_secrets_sync_hash("hash_v1").as_str()),
+        Some(expected_secrets_sync_hash("secret_value").as_str()),
         "Secrets should be synced before live compute is stepped"
     );
 }
@@ -449,7 +451,7 @@ async fn test_deploy_with_secrets_reaches_running() {
             .unwrap()
             .last_synced_env_vars_hash
             .as_deref(),
-        Some(expected_secrets_sync_hash("hash_v1").as_str()),
+        Some(expected_secrets_sync_hash("secret_value").as_str()),
     );
 }
 
@@ -484,7 +486,7 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        &expected_secrets_sync_hash("hash_v1")
+        &expected_secrets_sync_hash("secret_value")
     );
 
     // Run another step with same config (should skip sync)
@@ -502,7 +504,7 @@ async fn test_provisioning_syncs_secrets_once_per_hash() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        &expected_secrets_sync_hash("hash_v1")
+        &expected_secrets_sync_hash("secret_value")
     );
 
     // Should continue progressing (no error from skipped sync)
@@ -539,11 +541,13 @@ async fn test_provisioning_resyncs_when_hash_changes() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        &expected_secrets_sync_hash("hash_v1")
+        &expected_secrets_sync_hash("secret_value")
     );
 
-    // Now change config to hash_v2
-    let config2 = create_test_config("hash_v2", true);
+    // Now change the desired secret value. Snapshot-only changes intentionally
+    // do not trigger vault writes when the desired vault contents are unchanged.
+    let mut config2 = create_test_config("hash_v2", true);
+    config2.environment_variables.variables[1].value = "secret_value_v2".to_string();
 
     // If provisioning already completed (transitioned to Running), set state
     // back to Provisioning to test the resync behavior.
@@ -566,7 +570,7 @@ async fn test_provisioning_resyncs_when_hash_changes() {
             .last_synced_env_vars_hash
             .as_ref()
             .unwrap(),
-        &expected_secrets_sync_hash("hash_v2")
+        &expected_secrets_sync_hash("secret_value_v2")
     );
 }
 

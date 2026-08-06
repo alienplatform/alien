@@ -31,68 +31,67 @@
 // behind ./worker-runtime)
 // ============================================================================
 
-export {
-  command,
-  onStorageEvent,
-  onCronEvent,
-  onQueueMessage,
-  waitUntil,
-} from "./worker-runtime/registry.js"
-
 export type {
-  StorageEvent,
-  StorageEventType,
   CronEvent,
   QueueMessage,
   QueueMessageEvent,
   ScheduledEvent,
   StandardSchema,
   StandardSchemaOutput,
+  StorageEvent,
+  StorageEventType,
   WorkerCommandContext,
+} from "./worker-runtime/registry.js"
+export {
+  command,
+  onCronEvent,
+  onQueueMessage,
+  onStorageEvent,
+  waitUntil,
 } from "./worker-runtime/registry.js"
 
 // ============================================================================
 // Binding factories — re-exported from @alienplatform/bindings
 // ============================================================================
 
-export { storage, kv, queue, vault, container, postgres } from "@alienplatform/bindings"
 export type {
-  Storage,
-  Kv,
-  Queue,
-  Vault,
   Container,
+  Kv,
   Postgres,
   PostgresConnection,
   PostgresSslMode,
+  Queue,
+  Storage,
+  Vault,
 } from "@alienplatform/bindings"
+export { container, kv, postgres, queue, storage, vault } from "@alienplatform/bindings"
 
 // ============================================================================
 // AI: re-exported from @alienplatform/ai-gateway (a spawned Rust gateway process)
 // ============================================================================
 
-export {
-  ai,
-  getAiConnection,
-  startAiGateway,
-  Ai,
-  isExternalAiBinding,
-  parseAiBinding,
-} from "@alienplatform/ai-gateway"
 export type {
   AiBinding,
-  AmbientAiBinding,
-  ExternalAiBinding,
   AiConnection,
   AiModel,
+  AmbientAiBinding,
   ChatCompletionCreateParams,
+  ExternalAiBinding,
   ResponseCreateParams,
+} from "@alienplatform/ai-gateway"
+export {
+  Ai,
+  ai,
+  getAiConnection,
+  isExternalAiBinding,
+  parseAiBinding,
+  startAiGateway,
 } from "@alienplatform/ai-gateway"
 
 // ============================================================================
 // Errors — re-exported from @alienplatform/bindings and @alienplatform/core
 // ============================================================================
 
-export { BindingNotConfiguredError } from "@alienplatform/bindings"
 export { AiTransportError, AiUpstreamError } from "@alienplatform/ai-gateway"
+export { BindingNotConfiguredError } from "@alienplatform/bindings"
 export { AlienError, BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core"

@@ -2,12 +2,12 @@ import { type Email as EmailConfig, EmailSchema, type ResourceType } from "./gen
 import { type Resource, ResourceBuilder } from "./resource.js"
 
 export type {
-  EmailOutputs,
-  EmailDomainOutputs,
-  EmailDkimToken,
-  EmailInbound,
-  EmailEvents,
   Email as EmailConfig,
+  EmailDkimToken,
+  EmailDomainOutputs,
+  EmailEvents,
+  EmailInbound,
+  EmailOutputs,
 } from "./generated/index.js"
 export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
 

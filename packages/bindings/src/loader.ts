@@ -47,6 +47,7 @@ const require = createRequire(import.meta.url)
 export interface RawKvItem {
   key: string
   value: Buffer
+  version: string
 }
 
 /** Raw napi scan result. */
@@ -113,14 +114,15 @@ export interface RawRemoteAiLease {
 
 /** Raw napi key-value handle. */
 export interface RawKvHandle {
-  get(key: string): Promise<Buffer | null>
+  get(key: string): Promise<RawKvItem | null>
   put(
     key: string,
     value: Buffer,
     ttlSecs?: number | null,
-    ifNotExists?: boolean | null,
+    condition?: "absent" | "version" | null,
+    version?: string | null,
   ): Promise<boolean>
-  delete(key: string): Promise<void>
+  delete(key: string, ifVersion?: string | null): Promise<boolean>
   exists(key: string): Promise<boolean>
   scan(prefix: string, limit?: number | null, cursor?: string | null): Promise<RawScanResult>
 }

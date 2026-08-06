@@ -1,4 +1,4 @@
-//! Shared health probe for versioned local stores (`localkv.v1`, `localqueue.v1`).
+//! Shared health probe for versioned local stores (`localkv.v2`, `localqueue.v1`).
 //!
 //! Opens the store database read-only-in-spirit (same multi-process WAL opt-in
 //! as the bindings) and verifies the `meta.format` marker, so a resource whose
@@ -145,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn missing_format_marker_is_unhealthy() {
         let (db_path, _dir) = create_store(None).await;
-        check_store_format(&db_path, "localkv.v1")
+        check_store_format(&db_path, "localkv.v2")
             .await
             .expect_err("missing format marker must fail the probe");
     }
