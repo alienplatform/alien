@@ -50,6 +50,8 @@ pub struct AlienManagerBuilder {
     /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
+    customer_registry_broker:
+        Option<Arc<dyn crate::routes::registry_proxy::CustomerRegistryBroker>>,
 }
 
 impl AlienManagerBuilder {
@@ -73,6 +75,7 @@ impl AlienManagerBuilder {
             bindings_provider_override: None,
             target_bindings_providers_override: None,
             import_registry: None,
+            customer_registry_broker: None,
         }
     }
 
@@ -176,6 +179,15 @@ impl AlienManagerBuilder {
     /// ```
     pub fn import_registry(mut self, registry: Arc<alien_infra::ImporterRegistry>) -> Self {
         self.import_registry = Some(registry);
+        self
+    }
+
+    /// Install a private authorization/routing adapter for customer OCI paths.
+    pub fn customer_registry_broker(
+        mut self,
+        broker: Arc<dyn crate::routes::registry_proxy::CustomerRegistryBroker>,
+    ) -> Self {
+        self.customer_registry_broker = Some(broker);
         self
     }
 
@@ -647,6 +659,7 @@ impl AlienManagerBuilder {
             self.platform_routes,
             self.dev_status_tx,
             self.import_registry,
+            self.customer_registry_broker,
         )
         .await
     }
@@ -701,6 +714,9 @@ async fn finalize(
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
+    customer_registry_broker: Option<
+        Arc<dyn crate::routes::registry_proxy::CustomerRegistryBroker>,
+    >,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
 
@@ -728,10 +744,21 @@ async fn finalize(
         bindings_provider: server_bindings.bindings_provider.clone(),
         target_bindings_providers: server_bindings.target_bindings_providers.clone(),
         kv: server_bindings.kv.clone(),
-        http_client: reqwest::Client::new(),
+        // Registry credentials must never follow an upstream redirect to an
+        // unvalidated host. OCI Location headers are returned to the client
+        // and rewritten separately by the proxy.
+        http_client: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| {
+                AlienError::new(ErrorData::ServerInitFailed {
+                    reason: format!("Failed to build registry HTTP client: {error}"),
+                })
+            })?,
         credential_cache: Arc::new(crate::routes::registry_proxy::CredentialCache::new()),
         pull_validation_cache: Arc::new(crate::routes::registry_proxy::PullValidationCache::new()),
         registry_routing_table: server_bindings.registry_routing_table.clone(),
+        customer_registry_broker,
         // Built-in importer registry covers every OSS `(ResourceType,
         // Platform)` pair across AWS / GCP / Azure (see
         // `alien_infra::ImporterRegistry::built_in`). Embedders that need

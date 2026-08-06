@@ -11,8 +11,8 @@ use super::helpers::render_built_ins;
 use alien_cloudformation::{generate_cloudformation_template, CfRegistry, RegistrationMode};
 use alien_core::{
     ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, ManagementPermissions,
-    Network, NetworkSettings, PermissionProfile, Platform, RemoteStackManagement,
-    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
+    Network, NetworkSettings, PermissionProfile, Platform, RemoteBindings, RemoteStackManagement,
+    ResourceLifecycle, ResourceRef, Stack, StackSettings, Worker, WorkerCode,
 };
 
 #[test]
@@ -30,6 +30,32 @@ fn aws_artifact_registry_renders_ecr_repository() {
         "aws_artifact_registry",
     );
     insta::assert_snapshot!("aws_artifact_registry", yaml);
+}
+
+#[test]
+fn aws_remote_artifact_registry_policy_is_data_only() {
+    let mut stack = Stack::new("remote-registry".to_string())
+        .add_with_remote_access(
+            ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("registry").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws_remote_artifact_registry",
+    );
+    assert!(yaml.contains("ecr:GetAuthorizationToken"));
+    assert!(yaml.contains("ecr:PutImage"));
+    assert!(!yaml.contains("ecr:CreateRepository"));
+    assert!(!yaml.contains("ecr:DeleteRepository"));
 }
 
 #[test]
