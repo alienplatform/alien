@@ -277,12 +277,18 @@ pub async fn run_operator_with_cancel_and_loops(
     // useful work left once one is gone — so we surface it as an error below
     // rather than reporting a clean exit to CLI/service callers.
     //
-    // `biased` checks the cancellation branch first: on shutdown the loops also
-    // observe the cancelled token and return, so a loop-handle branch can become
-    // ready in the same tick. Without biasing, the unbiased select could pick
-    // that branch and misreport a clean shutdown as a failure. The
-    // `is_cancelled()` guard below is the authoritative check — it catches the
-    // remaining race where a loop returns a hair before the token flips.
+    // Distinguishing a genuine loop failure from a shutdown-driven loop return
+    // is a race unless we resolve it atomically WITH the branch that wins. Two
+    // measures do that, and neither relies on re-reading the token after the
+    // select (which would reopen a window where an independent shutdown flips it
+    // between the select resolving and the read):
+    //   - `biased` polls the cancellation branch first, so when both are ready in
+    //     the same tick the clean-shutdown branch wins.
+    //   - each loop branch samples `cancel.is_cancelled()` in the same synchronous
+    //     step it wins in (no `.await` in between), so a loop that returned
+    //     BECAUSE it observed the cancelled token classifies itself as clean.
+    // A loop branch that wins with the token NOT yet cancelled is a real failure,
+    // and nothing that happens afterward can flip that verdict.
     let exited_loop: Option<&'static str> = tokio::select! {
         biased;
 
@@ -290,77 +296,50 @@ pub async fn run_operator_with_cancel_and_loops(
             info!("Shutdown signal received, waiting for loops to finish...");
             None
         },
-        _ = deployment_handle => {
-            warn!("Deployment loop exited unexpectedly");
-            Some("deployment")
-        },
+        _ = deployment_handle => loop_exit(&cancel, "deployment"),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Debug-session loop exited unexpectedly");
-            Some("debug-session")
-        },
+        } => loop_exit(&cancel, "debug-session"),
         _ = async {
             if let Some(h) = sync_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Sync loop exited unexpectedly");
-            Some("sync")
-        },
+        } => loop_exit(&cancel, "sync"),
         _ = async {
             if let Some(h) = telemetry_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Telemetry loop exited unexpectedly");
-            Some("telemetry")
-        },
+        } => loop_exit(&cancel, "telemetry"),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Commands dispatch loop exited unexpectedly");
-            Some("commands-dispatch")
-        },
+        } => loop_exit(&cancel, "commands-dispatch"),
         _ = async {
             if let Some(h) = access_request_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Access-request sync loop exited unexpectedly");
-            Some("access-request-sync")
-        },
+        } => loop_exit(&cancel, "access-request-sync"),
         _ = async {
             if let Some(h) = operations_exec_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Operations-execution loop exited unexpectedly");
-            Some("operations-execution")
-        },
+        } => loop_exit(&cancel, "operations-execution"),
     };
-
-    // Record whether shutdown was already requested BEFORE we cancel below. A
-    // loop that fell out because the token was cancelled is a clean exit, not a
-    // failure — but the idempotent `cancel.cancel()` on the next line would make
-    // `is_cancelled()` unconditionally true, so we must sample it here first.
-    let shutdown_requested = cancel.is_cancelled();
 
     // Signal all loops to stop (idempotent if already cancelled)
     cancel.cancel();
@@ -373,7 +352,7 @@ pub async fn run_operator_with_cancel_and_loops(
         local_bindings.shutdown().await;
     }
 
-    if let Some(loop_name) = loop_exit_failure(exited_loop, shutdown_requested) {
+    if let Some(loop_name) = exited_loop {
         // A core loop exited on its own — report a non-zero exit so CLI and
         // Windows-service callers don't mistake a failed loop for a clean stop.
         return Err(AlienError::new(error::ErrorData::LoopExited {
@@ -385,17 +364,20 @@ pub async fn run_operator_with_cancel_and_loops(
     Ok(())
 }
 
-/// Decide whether a supervised loop falling out of the select is a real failure.
-///
-/// A loop-handle branch only signals failure when we did NOT ask for shutdown.
-/// When cancellation was already requested, the loop returned because it was told
-/// to stop — a clean exit — so we suppress the `LoopExited` error even though a
-/// loop-branch won the (unbiased-in-the-worst-case) select race.
-fn loop_exit_failure(
-    exited_loop: Option<&'static str>,
-    shutdown_requested: bool,
-) -> Option<&'static str> {
-    exited_loop.filter(|_| !shutdown_requested)
+/// Classify a supervised loop falling out of the `select!`. Called synchronously
+/// in the winning branch (no `.await` between the branch resolving and this
+/// call), so the `is_cancelled()` read reflects the token state AT THE MOMENT the
+/// loop won — closing the race where an independent shutdown flips the token
+/// afterward. A loop that returned because shutdown was already requested is a
+/// clean exit (`None`); otherwise it is a genuine failure (`Some(name)`).
+fn loop_exit(cancel: &CancellationToken, name: &'static str) -> Option<&'static str> {
+    if cancel.is_cancelled() {
+        tracing::info!(loop = name, "Loop stopped in response to shutdown");
+        None
+    } else {
+        tracing::warn!(loop = name, "Loop exited unexpectedly");
+        Some(name)
+    }
 }
 
 fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
@@ -412,19 +394,23 @@ fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
 
 #[cfg(test)]
 mod command_loop_routing_tests {
-    use super::{loop_exit_failure, should_run_commands_loop};
+    use super::{loop_exit, should_run_commands_loop};
     use alien_core::Platform;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn loop_exit_is_a_failure_only_without_shutdown() {
-        // A loop falling out with no shutdown requested is a real failure.
-        assert_eq!(loop_exit_failure(Some("sync"), false), Some("sync"));
-        // The same loop exit during a requested shutdown is clean (it stopped
-        // because it was told to) — this is the select-race the review flagged.
-        assert_eq!(loop_exit_failure(Some("sync"), true), None);
-        // No loop exited (clean cancellation branch) → never a failure.
-        assert_eq!(loop_exit_failure(None, false), None);
-        assert_eq!(loop_exit_failure(None, true), None);
+        // A loop that falls out while the token is live is a real failure.
+        let live = CancellationToken::new();
+        assert_eq!(loop_exit(&live, "sync"), Some("sync"));
+
+        // A loop that falls out after shutdown was requested is a clean exit —
+        // it stopped because it was told to. `loop_exit` samples the token in the
+        // same step the branch wins, so an independent cancel can't later flip a
+        // real failure into a clean one (the race the review flagged).
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(loop_exit(&cancelled, "sync"), None);
     }
 
     #[test]
