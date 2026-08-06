@@ -45,8 +45,8 @@ pub fn managed_provider() -> Result<Option<Managed>> {
     Ok(Some(Arc::new(provider)))
 }
 
-/// AAD audience for an Azure AI Services / Foundry account token.
-const AZURE_AI_AUDIENCE: &str = "https://cognitiveservices.azure.com";
+/// AAD audience for the Foundry OpenAI-compatible and Anthropic endpoints.
+const AZURE_AI_AUDIENCE: &str = "https://ai.azure.com";
 
 /// The workload's resolved cloud credentials, from the runtime-less credential resolver: the
 /// native/projected identity when present, else Alien-minted short-lived credentials (the
