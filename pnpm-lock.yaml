@@ -66,8 +66,8 @@ importers:
         specifier: ^9.19.0
         version: 9.39.2(jiti@2.6.1)
       globals:
-        specifier: ^17.0.0
-        version: 17.9.0
+        specifier: ^15.14.0
+        version: 15.15.0
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -2932,6 +2932,10 @@ packages:
 
   globals@14.0.0:
     resolution: {integrity: sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==}
+    engines: {node: '>=18'}
+
+  globals@15.15.0:
+    resolution: {integrity: sha512-7ACyT3wmyp3I61S4fG682L0VA2RGD9otkqGJIwNUMF1SWUombIIk+af1unuDYgMm082aHYwD+mzJvv9Iu8dsgg==}
     engines: {node: '>=18'}
 
   globals@17.9.0:
@@ -7153,6 +7157,8 @@ snapshots:
       path-scurry: 1.11.1
 
   globals@14.0.0: {}
+
+  globals@15.15.0: {}
 
   globals@17.9.0: {}
 
