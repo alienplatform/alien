@@ -8,15 +8,12 @@ use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::azure::resource_graph::ResourceGraphQueryRequest;
 use alien_azure_clients::{
-    AzureCognitiveServicesClient, AzureKeyVaultKeysClient, AzureResourceGraphClient,
-    AzureServiceBusManagementClient, AzureTokenCache, CognitiveServicesAccountsApi,
-    KeyVaultKeysApi, ResourceGraphApi, ServiceBusManagementApi,
+    AzureCognitiveServicesClient, AzureResourceGraphClient, AzureServiceBusManagementClient,
+    AzureTokenCache, CognitiveServicesAccountsApi, ResourceGraphApi, ServiceBusManagementApi,
 };
 use alien_core::{
     import::{
-        data::{
-            AwsArtifactRegistryImportData, AwsKeyImportData, AwsKvImportData, AwsStorageImportData,
-        },
+        data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
         AzureAiImportData, AzureRemoteStackManagementImportData,
         AzureServiceBusNamespaceImportData, GcpAiImportData, GcpKeyImportData,
         GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
