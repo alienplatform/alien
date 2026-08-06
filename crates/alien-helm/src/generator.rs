@@ -4722,8 +4722,13 @@ logCollector:
         assert!(rendered
             .stdout
             .contains("verbs: [\"get\", \"list\", \"watch\"]"));
-        // The operator grants `pods/log` for the on-demand `logs` operation.
-        assert!(rendered.stdout.contains("resources: [\"pods/log\"]"));
+        // The operator grants `pods/log` for the on-demand `logs` operation. In
+        // the helm chart the operator Role folds it into the core `""`-group
+        // rule (see `role_tpl`), so it appears bundled with the other pod-level
+        // resources rather than as a standalone rule.
+        assert!(rendered
+            .stdout
+            .contains("\"pods\", \"pods/log\", \"persistentvolumeclaims\""));
         assert!(!rendered.stdout.contains("void"));
     }
 
