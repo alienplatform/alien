@@ -84,5 +84,5 @@ pub(crate) async fn proxy_vertex_anthropic(
     }
     let upstream =
         sign_and_execute(client, &route.cred, &url, "", upstream_body, &extra_headers).await?;
-    forward_response(upstream)
+    forward_response(upstream).await
 }
