@@ -317,7 +317,7 @@ async fn deployment_level_ai_selector_requires_exactly_one_remote_ai() {
             Ai::new("models".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
-        .add(storage(), ResourceLifecycle::Frozen)
+        .add_with_remote_access(storage(), ResourceLifecycle::Frozen)
         .build();
     let mut deployment = deployment(StackState::new(Platform::Aws));
     deployment.current_release_id = Some("current".to_string());
@@ -333,6 +333,12 @@ async fn deployment_level_ai_selector_requires_exactly_one_remote_ai() {
             .expect("one remote AI and an unrelated resource is unambiguous"),
         "models"
     );
+    assert!(matches!(
+        require_current_release_remote_access(&store, &deployment, "models")
+            .await
+            .expect("an unrelated remote binding does not make AI ambiguous"),
+        alien_core::remote_bindings::RemoteBindingKind::Ai
+    ));
 
     let no_ai = StubReleaseStore {
         releases: HashMap::from([(

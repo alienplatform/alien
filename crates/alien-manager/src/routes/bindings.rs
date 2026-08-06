@@ -910,19 +910,16 @@ async fn require_current_release_remote_access(
             "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
         )));
     }
-    if matches!(
-        definition.kind,
-        alien_core::remote_bindings::RemoteBindingKind::Key
-            | alien_core::remote_bindings::RemoteBindingKind::Ai
-    ) && stack
-        .resources
-        .values()
-        .filter(|entry| entry.remote_access)
-        .count()
-        != 1
+    if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
+        && stack
+            .resources
+            .values()
+            .filter(|entry| entry.remote_access)
+            .count()
+            != 1
     {
         return Err(ErrorData::bad_request(
-            "A remotely published Key or AI resource must be the deployment's only remoteAccess resource",
+            "A remotely published Key must be the deployment's only remoteAccess resource",
         ));
     }
 
