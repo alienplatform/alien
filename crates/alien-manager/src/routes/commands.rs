@@ -36,12 +36,6 @@ async fn get_command_owner(state: &AppState, command_id: &str) -> Result<String,
         })
 }
 
-/// Load a deployment for a command route.
-///
-/// Lease acquisition uses this even for commands capabilities because an
-/// empty local pending queue otherwise performs no authoritative registry
-/// operation. Sender routes authorize the signed deployment id directly and
-/// let their registry operation detect a stale manager assignment.
 async fn get_command_deployment(
     deployment_store: &dyn crate::traits::DeploymentStore,
     subject: &crate::auth::Subject,
@@ -53,21 +47,7 @@ async fn get_command_deployment(
         .map_err(|e| e.into_response())?
     {
         Some(deployment) => Ok(deployment),
-        None => Err(missing_command_deployment_response(subject, deployment_id)),
-    }
-}
-
-fn missing_command_deployment_response(
-    subject: &crate::auth::Subject,
-    deployment_id: &str,
-) -> Response {
-    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
-        ErrorData::unauthorized(
-            "Command credential is no longer valid for this manager; refresh it and retry",
-        )
-        .into_response()
-    } else {
-        ErrorData::not_found_deployment(deployment_id).into_response()
+        None => Err(ErrorData::not_found_deployment(deployment_id).into_response()),
     }
 }
 
@@ -150,6 +130,34 @@ async fn require_command_execution_access(
         Ok(())
     } else {
         Err(ErrorData::forbidden("Access denied").into_response())
+    }
+}
+
+async fn require_command_receive_access(
+    deployment_store: &dyn crate::traits::DeploymentStore,
+    authz: &dyn crate::auth::Authz,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+    target: &alien_core::CommandTarget,
+) -> Result<(), Response> {
+    if let Some(allowed) =
+        crate::auth::command_capability::receiver_request_decision(subject, deployment_id, target)
+    {
+        return if allowed {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    let deployment = get_command_deployment(deployment_store, subject, deployment_id).await?;
+    if authz.can_receive_command(subject, &deployment, target) {
+        Ok(())
+    } else {
+        Err(
+            ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
+                .into_response(),
+        )
     }
 }
 
@@ -507,23 +515,16 @@ async fn acquire_leases(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match get_command_deployment(
+    if let Err(response) = require_command_receive_access(
         state.deployment_store.as_ref(),
+        state.authz.as_ref(),
         &subject,
         &lease_request.deployment_id,
+        &lease_request.target,
     )
     .await
     {
-        Ok(deployment) => deployment,
-        Err(response) => return response,
-    };
-
-    if !state
-        .authz
-        .can_receive_command(&subject, &deployment, &lease_request.target)
-    {
-        return ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
-            .into_response();
+        return response;
     }
 
     match state
@@ -613,20 +614,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stale_manager_is_unauthorized_only_for_commands_credentials() {
-        let commands_subject = commands_sender_subject();
-
-        assert_eq!(
-            missing_command_deployment_response(&commands_subject, "deployment-1").status(),
-            StatusCode::UNAUTHORIZED,
-        );
-        assert_eq!(
-            missing_command_deployment_response(&Subject::system(), "deployment-1").status(),
-            StatusCode::NOT_FOUND,
-        );
-    }
-
     #[tokio::test]
     async fn commands_dispatch_authorization_does_not_preflight_the_deployment() {
         let mut deployment_store = MockDeploymentStore::new();
@@ -638,6 +625,73 @@ mod tests {
         )
         .await
         .expect("signed deployment scope should authorize the sender");
+
+        deployment_store.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn commands_receive_authorization_does_not_preflight_the_deployment() {
+        let mut deployment_store = MockDeploymentStore::new();
+        let target = alien_core::CommandTarget::new(
+            "container-1".to_string(),
+            alien_core::CommandTargetType::Container,
+        );
+        let subject = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "commands-receiver".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Receive {
+                    target: target.clone(),
+                },
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        };
+
+        require_command_receive_access(
+            &deployment_store,
+            &OssAuthz,
+            &subject,
+            "deployment-1",
+            &target,
+        )
+        .await
+        .expect("signed deployment and target should authorize the receiver");
+
+        let wrong_target = alien_core::CommandTarget::new(
+            "container-2".to_string(),
+            alien_core::CommandTargetType::Container,
+        );
+        assert_eq!(
+            require_command_receive_access(
+                &deployment_store,
+                &OssAuthz,
+                &subject,
+                "deployment-1",
+                &wrong_target,
+            )
+            .await
+            .expect_err("receiver capability must stay bound to its exact target")
+            .status(),
+            StatusCode::FORBIDDEN,
+        );
+        assert_eq!(
+            require_command_receive_access(
+                &deployment_store,
+                &OssAuthz,
+                &subject,
+                "deployment-2",
+                &target,
+            )
+            .await
+            .expect_err("receiver capability must stay bound to its deployment")
+            .status(),
+            StatusCode::FORBIDDEN,
+        );
 
         deployment_store.checkpoint();
     }

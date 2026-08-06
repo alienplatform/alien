@@ -33,6 +33,35 @@ pub fn sender_request_decision(subject: &Subject, deployment_id: &str) -> Option
     )
 }
 
+/// Decide receiver access from the signed deployment and target before entity lookup.
+///
+/// The short-lived capability is already bound to the manager that accepted it.
+/// Registry operations remain authoritative when a queued command exists; an
+/// idle receiver discovers reassignment when its capability refreshes.
+pub fn receiver_request_decision(
+    subject: &Subject,
+    deployment_id: &str,
+    requested_target: &CommandTarget,
+) -> Option<bool> {
+    let Scope::Commands {
+        deployment_id: scoped_deployment_id,
+        capability,
+        ..
+    } = &subject.scope
+    else {
+        return None;
+    };
+
+    Some(
+        subject.role == Role::CommandCapability
+            && matches!(
+                capability,
+                CommandCapability::Receive { target } if target == requested_target
+            )
+            && scoped_deployment_id == deployment_id,
+    )
+}
+
 /// Decide dispatch/read access when the subject carries a commands scope.
 ///
 /// `None` means the subject is not commands-scoped and the caller should apply
