@@ -219,7 +219,12 @@ pub fn cli_main_with_all_loops(
 
     #[cfg(windows)]
     if args.service {
-        windows_entry::run_as_service(init_hook);
+        windows_entry::run_as_service(
+            init_hook,
+            debug_loop_hook,
+            access_request_loop_hook,
+            operations_exec_loop_hook,
+        );
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -596,13 +601,31 @@ mod windows_entry {
 
     define_windows_service!(ffi_service_main, service_main);
 
-    /// Per-process slot holding the init hook the binary registered before
-    /// entering the service dispatcher. Only one operator runs per process so a
-    /// single static slot is sufficient.
+    /// Per-process slots holding the hooks the binary registered before entering
+    /// the service dispatcher. The Win32 service entry point (`service_main`)
+    /// takes no user arguments, so the hooks can't be threaded through as
+    /// parameters — they ride these statics instead. Only one operator runs per
+    /// process, so a single slot per hook is sufficient.
     static INIT_HOOK: std::sync::Mutex<Option<InitHook>> = std::sync::Mutex::new(None);
+    static DEBUG_LOOP_HOOK: std::sync::Mutex<Option<DebugLoopHook>> =
+        std::sync::Mutex::new(None);
+    static ACCESS_REQUEST_LOOP_HOOK: std::sync::Mutex<Option<AccessRequestSyncLoopHook>> =
+        std::sync::Mutex::new(None);
+    static OPERATIONS_EXEC_LOOP_HOOK: std::sync::Mutex<Option<OperationsExecLoopHook>> =
+        std::sync::Mutex::new(None);
 
-    pub fn run_as_service(init_hook: InitHook) -> ! {
+    pub fn run_as_service(
+        init_hook: InitHook,
+        debug_loop_hook: DebugLoopHook,
+        access_request_loop_hook: AccessRequestSyncLoopHook,
+        operations_exec_loop_hook: OperationsExecLoopHook,
+    ) -> ! {
         *INIT_HOOK.lock().expect("init hook lock") = Some(init_hook);
+        *DEBUG_LOOP_HOOK.lock().expect("debug loop hook lock") = Some(debug_loop_hook);
+        *ACCESS_REQUEST_LOOP_HOOK.lock().expect("access-request loop hook lock") =
+            Some(access_request_loop_hook);
+        *OPERATIONS_EXEC_LOOP_HOOK.lock().expect("operations-exec loop hook lock") =
+            Some(operations_exec_loop_hook);
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
             .expect("failed to start service dispatcher");
         std::process::exit(0);
@@ -638,6 +661,18 @@ mod windows_entry {
             .lock()
             .expect("init hook lock")
             .unwrap_or(super::NOOP_INIT);
+        let debug_loop_hook = DEBUG_LOOP_HOOK
+            .lock()
+            .expect("debug loop hook lock")
+            .unwrap_or(super::NOOP_DEBUG_LOOP_HOOK);
+        let access_request_loop_hook = ACCESS_REQUEST_LOOP_HOOK
+            .lock()
+            .expect("access-request loop hook lock")
+            .unwrap_or(super::NOOP_ACCESS_REQUEST_LOOP_HOOK);
+        let operations_exec_loop_hook = OPERATIONS_EXEC_LOOP_HOOK
+            .lock()
+            .expect("operations-exec loop hook lock")
+            .unwrap_or(super::NOOP_OPERATIONS_EXEC_LOOP_HOOK);
         let args = Args::parse();
         let cancel = CancellationToken::new();
         let cancel_for_stop = cancel.clone();
@@ -655,9 +690,9 @@ mod windows_entry {
         let exit_code = match rt.block_on(super::run(
             args,
             init_hook,
-            super::NOOP_DEBUG_LOOP_HOOK,
-            super::NOOP_ACCESS_REQUEST_LOOP_HOOK,
-            super::NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+            debug_loop_hook,
+            access_request_loop_hook,
+            operations_exec_loop_hook,
         )) {
             Ok(()) => 0,
             Err(e) => {

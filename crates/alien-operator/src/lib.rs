@@ -35,6 +35,7 @@ pub use db::{Approval, ApprovalStatus};
 pub use error::ErrorData;
 pub use lock::InstanceLock;
 
+use alien_error::AlienError;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -270,13 +271,19 @@ pub async fn run_operator_with_cancel_and_loops(
         _ => None,
     };
 
-    // Wait for cancellation or any loop to exit unexpectedly
-    tokio::select! {
+    // Wait for cancellation or any loop to exit unexpectedly. `exited_loop`
+    // captures which loop (if any) fell out on its own; `None` means we were
+    // cancelled cleanly. A loop exiting is never expected — the operator has no
+    // useful work left once one is gone — so we surface it as an error below
+    // rather than reporting a clean exit to CLI/service callers.
+    let exited_loop: Option<&'static str> = tokio::select! {
         _ = cancel.cancelled() => {
             info!("Shutdown signal received, waiting for loops to finish...");
+            None
         },
         _ = deployment_handle => {
             warn!("Deployment loop exited unexpectedly");
+            Some("deployment")
         },
         _ = async {
             if let Some(h) = debug_session_handle {
@@ -286,6 +293,7 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Debug-session loop exited unexpectedly");
+            Some("debug-session")
         },
         _ = async {
             if let Some(h) = sync_handle {
@@ -295,6 +303,7 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Sync loop exited unexpectedly");
+            Some("sync")
         },
         _ = async {
             if let Some(h) = telemetry_handle {
@@ -304,6 +313,7 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Telemetry loop exited unexpectedly");
+            Some("telemetry")
         },
         _ = async {
             if let Some(h) = commands_handle {
@@ -313,6 +323,7 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Commands dispatch loop exited unexpectedly");
+            Some("commands-dispatch")
         },
         _ = async {
             if let Some(h) = access_request_handle {
@@ -322,6 +333,7 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Access-request sync loop exited unexpectedly");
+            Some("access-request-sync")
         },
         _ = async {
             if let Some(h) = operations_exec_handle {
@@ -331,8 +343,9 @@ pub async fn run_operator_with_cancel_and_loops(
             }
         } => {
             warn!("Operations-execution loop exited unexpectedly");
+            Some("operations-execution")
         },
-    }
+    };
 
     // Signal all loops to stop (idempotent if already cancelled)
     cancel.cancel();
@@ -343,6 +356,14 @@ pub async fn run_operator_with_cancel_and_loops(
     if let Some(local_bindings) = local_bindings {
         info!("Stopping local runtimes...");
         local_bindings.shutdown().await;
+    }
+
+    if let Some(loop_name) = exited_loop {
+        // A core loop exited on its own — report a non-zero exit so CLI and
+        // Windows-service callers don't mistake a failed loop for a clean stop.
+        return Err(AlienError::new(error::ErrorData::LoopExited {
+            loop_name: loop_name.to_string(),
+        }));
     }
 
     info!("Operator shutdown complete");
