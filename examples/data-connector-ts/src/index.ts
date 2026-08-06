@@ -57,7 +57,7 @@ command(
     if (useCache) {
       const cached = await c.get(cacheKey)
       if (cached) {
-        return { ...JSON.parse(new TextDecoder().decode(cached)), cached: true }
+        return { ...JSON.parse(new TextDecoder().decode(cached.value)), cached: true }
       }
     }
 

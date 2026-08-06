@@ -637,30 +637,54 @@ pub trait Postgres: Binding {
     }
 }
 
-/// Represents options for put operations in KV stores.
+/// A precondition for a KV put operation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PutCondition {
+    /// Replace any current value, or create the key when it is absent.
+    #[default]
+    None,
+    /// Create the key only when it is absent or logically expired.
+    Absent,
+    /// Replace the value only when the key still has this opaque version.
+    Version(String),
+}
+
+/// Options for KV put operations.
 #[derive(Debug, Clone, Default)]
 pub struct PutOptions {
     /// Optional TTL for automatic expiration (soft hint - items MAY be deleted after expiry)
     pub ttl: Option<Duration>,
-    /// Only put if the key does not exist
-    pub if_not_exists: bool,
+    /// Optional atomic write precondition.
+    pub condition: PutCondition,
+}
+
+/// A KV entry together with its opaque version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvEntry {
+    /// Stored key.
+    pub key: String,
+    /// Stored value bytes.
+    pub value: Vec<u8>,
+    /// Provider-neutral version for conditional writes. Callers must treat it as opaque.
+    pub version: String,
 }
 
 /// Represents the result of a scan operation.
 #[derive(Debug)]
 pub struct ScanResult {
-    /// Key-value pairs found (may be ≤ limit, no guarantee to fill)
-    pub items: Vec<(String, Vec<u8>)>,
+    /// Entries found (may be ≤ limit, no guarantee to fill).
+    pub items: Vec<KvEntry>,
     /// Opaque, prefix-bound cursor for pagination. None if the traversal is complete.
     /// A non-empty cursor may lead to an empty page when records expire between pages.
     pub next_cursor: Option<String>,
 }
 
 /// A trait for key-value store bindings that provide minimal, platform-agnostic KV operations.
-/// This API is designed to work consistently across DynamoDB, Firestore, Redis, and Azure Table Storage.
+/// This API is designed to work consistently across DynamoDB, Firestore, Azure Table Storage,
+/// and the local provider.
 #[async_trait]
 pub trait Kv: Binding {
-    /// Get a value by key. Returns None if key doesn't exist or has expired.
+    /// Get an entry by key. Returns `None` if the key doesn't exist or has expired.
     ///
     /// **TTL Behavior**: TTL is a soft hint for automatic cleanup. If `now >= expires_at`,
     /// implementations SHOULD behave as if the key is absent, even if the item still exists
@@ -668,10 +692,10 @@ pub trait Kv: Binding {
     ///
     /// **Validation**: Keys are validated against MAX_KEY_BYTES and portable charset.
     /// Invalid keys return `KvError::InvalidKey` immediately.
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>>;
 
-    /// Put a value with optional options. When options.if_not_exists is true, returns true if created,
-    /// false if already exists. When options.if_not_exists is false or options is None, always returns true.
+    /// Put a value with optional options. Conditional writes return `false` when their precondition
+    /// does not match. Unconditional writes return `true`.
     ///
     /// **Size Limits**:
     /// - Keys: ≤ MAX_KEY_BYTES (512 bytes) with portable ASCII charset
@@ -684,18 +708,20 @@ pub trait Kv: Binding {
     /// item expires at `put_time + ttl`. Expired items SHOULD appear absent on subsequent
     /// reads, but physical deletion is eventual and not guaranteed.
     ///
-    /// **Conditional Logic**: The if_not_exists operation maps to backend primitives:
-    /// - Redis: SETNX
-    /// - DynamoDB: PutItem with condition_expression="attribute_not_exists(pk)"
-    /// - Firestore: create() with Precondition::DoesNotExist
-    /// - Azure Table Storage: InsertEntity (409 on conflict)
+    /// **Conditional Logic**: [`PutCondition::Absent`] uses each backend's atomic create
+    /// primitive, with a version-guarded takeover when an expired row still exists physically.
+    /// [`PutCondition::Version`] uses DynamoDB conditions, Firestore update-time preconditions,
+    /// Azure entity tags, or the local database's conditional update.
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<PutOptions>) -> Result<bool>;
 
     /// Delete a key. No error if key doesn't exist.
     ///
     /// **Validation**: Keys are validated against MAX_KEY_BYTES and portable charset.
     /// Invalid keys return `KvError::InvalidKey` immediately.
-    async fn delete(&self, key: &str) -> Result<()>;
+    /// When `if_version` is supplied, delete only if the key still has that opaque version.
+    /// Returns `false` when a conditional delete finds the key absent, expired, or changed.
+    /// Unconditional deletes return `true`, including when the key is already absent.
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool>;
 
     /// Check if a key exists without retrieving the value.
     ///
@@ -710,7 +736,7 @@ pub trait Kv: Binding {
     ///
     /// **Scan Contract**:
     /// - Returns an **arbitrary, unordered subset** in backend-natural order
-    /// - **No ordering guarantees** across backends (Redis SCAN, Azure fan-out, etc.)
+    /// - **No ordering guarantees** across backends (for example, Azure partition fan-out)
     /// - **May return ≤ limit items** (not guaranteed to fill even if more data exists)
     /// - **Clients MUST de-duplicate** keys across pages (backends may return duplicates)
     /// - **No completeness guarantee** under concurrent writes (may miss or duplicate)

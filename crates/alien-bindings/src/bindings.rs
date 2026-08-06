@@ -354,7 +354,7 @@ mod tests {
             .await
             .expect("get should succeed")
             .expect("value should exist");
-        assert_eq!(value, b"hi");
+        assert_eq!(value.value, b"hi");
     }
 
     #[tokio::test]
@@ -394,7 +394,7 @@ mod tests {
             .await
             .expect("the same long-lived handle should read")
             .expect("value should exist");
-        assert_eq!(value, b"hi");
+        assert_eq!(value.value, b"hi");
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,

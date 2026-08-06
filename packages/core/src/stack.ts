@@ -7,7 +7,7 @@ import {
   type StackInputDefinition,
   StackSchema,
 } from "./generated/index.js"
-import { type StackInputCollection, getStackInputDefinitions } from "./input.js"
+import { getStackInputDefinitions, type StackInputCollection } from "./input.js"
 import type { Resource } from "./resource.js"
 
 /**
@@ -23,14 +23,11 @@ export interface AddResourceOptions {
 }
 
 export type {
-  Stack as StackConfig,
-  StackState,
-  StackStatus,
-  StackResourceState,
-  ResourceStatus,
-  PermissionSet,
   ManagementPermissions,
+  PermissionSet,
   PermissionsConfig,
+  ResourceStatus,
+  Stack as StackConfig,
   StackInputDefaultValue,
   StackInputDefinition,
   StackInputEnvironmentMapping,
@@ -38,13 +35,16 @@ export type {
   StackInputKind,
   StackInputProvider,
   StackInputValidation,
+  StackResourceState,
+  StackState,
+  StackStatus,
 } from "./generated/index.js"
 export {
+  ResourceStatusSchema,
+  StackResourceStateSchema,
   StackSchema,
   StackStateSchema,
   StackStatusSchema,
-  StackResourceStateSchema,
-  ResourceStatusSchema,
 } from "./generated/index.js"
 
 /**

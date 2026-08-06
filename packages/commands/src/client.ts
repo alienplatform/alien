@@ -43,7 +43,7 @@ import type {
   CommandStatusResponse,
   CreateCommandResponse,
 } from "./protocol.js"
-import { type WireSchema, parseWireResponse } from "./wire.js"
+import { parseWireResponse, type WireSchema } from "./wire.js"
 
 /**
  * Configuration for {@link CommandsClient}.

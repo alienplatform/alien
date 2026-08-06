@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/commands",
-  "version": "3.3.9",
+  "version": "3.3.11",
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
@@ -10,7 +10,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=18",
     "bun": ">=1.0.23"
@@ -24,7 +26,14 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "commands", "invoke", "receiver", "deployment", "fetch"],
+  "keywords": [
+    "alien",
+    "commands",
+    "invoke",
+    "receiver",
+    "deployment",
+    "fetch"
+  ],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "description": "Pure-TypeScript command sender and pull receiver for the Alien platform, over fetch",
@@ -39,12 +48,12 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.0.0",
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
-    "typescript": "^5.8.3",
-    "vitest": "^3.1.4",
-    "zod": "4.3.2"
+    "typescript": "~5.8.3",
+    "vitest": "^4.0.0",
+    "zod": "4.4.3"
   },
   "dependencies": {
     "@alienplatform/core": "workspace:^"

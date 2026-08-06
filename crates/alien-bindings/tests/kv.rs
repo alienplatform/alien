@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use alien_bindings::{
-    traits::{BindingsProviderApi, Kv, PutOptions},
+    traits::{BindingsProviderApi, Kv, PutCondition, PutOptions},
     BindingsProvider,
 };
 
@@ -130,7 +130,7 @@ impl KvTestContext for LocalProviderTestContext {
 
 impl LocalProviderTestContext {
     async fn cleanup_key(&self, key: &str) {
-        match self.kv.delete(key).await {
+        match self.kv.delete(key, None).await {
             Ok(_) => {
                 // Successfully deleted
             }
@@ -384,7 +384,7 @@ impl AwsProviderTestContext {
     }
 
     async fn cleanup_key(&self, key: &str) {
-        match self.kv.delete(key).await {
+        match self.kv.delete(key, None).await {
             Ok(_) => {
                 // Successfully deleted
             }
@@ -689,7 +689,7 @@ impl GcpProviderTestContext {
     }
 
     async fn cleanup_key(&self, key: &str) {
-        match self.kv.delete(key).await {
+        match self.kv.delete(key, None).await {
             Ok(_) => {
                 // Successfully deleted
             }
@@ -875,7 +875,7 @@ impl AzureProviderTestContext {
     }
 
     async fn cleanup_key(&self, key: &str) {
-        match self.kv.delete(key).await {
+        match self.kv.delete(key, None).await {
             Ok(_) => {
                 // Successfully deleted
             }
@@ -964,7 +964,7 @@ impl KvTestContext for KubernetesProviderTestContext {
 #[cfg(feature = "kubernetes")]
 impl KubernetesProviderTestContext {
     async fn cleanup_key(&self, key: &str) {
-        match self.kv.delete(key).await {
+        match self.kv.delete(key, None).await {
             Ok(_) => {
                 // Successfully deleted
             }
@@ -1012,9 +1012,128 @@ async fn test_put_and_get(#[case] ctx: impl KvTestContext) {
         .unwrap_or_else(|| panic!("[{}] Value should exist after put", provider_name));
 
     assert_eq!(
-        value, retrieved_value,
+        value, retrieved_value.value,
         "[{}] Retrieved value should match original",
         provider_name
+    );
+}
+
+#[rstest]
+#[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
+#[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
+#[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
+#[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
+#[tokio::test]
+async fn test_versioned_compare_and_set(#[case] ctx: impl KvTestContext) {
+    let kv = ctx.get_kv().await;
+    let provider_name = ctx.provider_name();
+    let key = format!("test-cas-{}", Uuid::new_v4().simple());
+    let other_key = format!("test-cas-other-{}", Uuid::new_v4().simple());
+    ctx.track_key(&key);
+    ctx.track_key(&other_key);
+
+    let create = Some(PutOptions {
+        ttl: None,
+        condition: PutCondition::Absent,
+    });
+    assert!(kv
+        .put(&key, b"initial".to_vec(), create.clone())
+        .await
+        .unwrap());
+    assert!(!kv.put(&key, b"duplicate".to_vec(), create).await.unwrap());
+
+    let initial = kv.get(&key).await.unwrap().expect("entry must exist");
+    assert_eq!(initial.key, key);
+    assert_eq!(initial.value, b"initial");
+
+    let update = Some(PutOptions {
+        ttl: None,
+        condition: PutCondition::Version(initial.version.clone()),
+    });
+    assert!(kv
+        .put(&key, b"updated".to_vec(), update.clone())
+        .await
+        .unwrap());
+    assert!(
+        !kv.put(&key, b"stale".to_vec(), update).await.unwrap(),
+        "[{provider_name}] a stale version must not overwrite a newer value"
+    );
+
+    let current = kv.get(&key).await.unwrap().expect("entry must exist");
+    assert_eq!(current.value, b"updated");
+    assert_ne!(current.version, initial.version);
+    assert!(!kv.delete(&key, Some(&initial.version)).await.unwrap());
+
+    let wrong_key = kv
+        .put(
+            &other_key,
+            b"wrong-key".to_vec(),
+            Some(PutOptions {
+                ttl: None,
+                condition: PutCondition::Version(current.version.clone()),
+            }),
+        )
+        .await;
+    assert!(
+        wrong_key.is_err(),
+        "[{provider_name}] versions must be key-bound"
+    );
+
+    assert!(kv.delete(&key, Some(&current.version)).await.unwrap());
+    assert!(kv.get(&key).await.unwrap().is_none());
+}
+
+#[rstest]
+#[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
+#[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
+#[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
+#[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
+#[tokio::test]
+async fn test_concurrent_compare_and_set_has_one_winner(#[case] ctx: impl KvTestContext) {
+    let kv = ctx.get_kv().await;
+    let provider_name = ctx.provider_name();
+    let key = format!("test-cas-race-{}", Uuid::new_v4().simple());
+    ctx.track_key(&key);
+    kv.put(&key, b"initial".to_vec(), None).await.unwrap();
+    let version = kv.get(&key).await.unwrap().unwrap().version;
+
+    let left = {
+        let kv = kv.clone();
+        let key = key.clone();
+        let version = version.clone();
+        tokio::spawn(async move {
+            kv.put(
+                &key,
+                b"left".to_vec(),
+                Some(PutOptions {
+                    ttl: None,
+                    condition: PutCondition::Version(version),
+                }),
+            )
+            .await
+        })
+    };
+    let right = {
+        let kv = kv.clone();
+        let key = key.clone();
+        tokio::spawn(async move {
+            kv.put(
+                &key,
+                b"right".to_vec(),
+                Some(PutOptions {
+                    ttl: None,
+                    condition: PutCondition::Version(version),
+                }),
+            )
+            .await
+        })
+    };
+
+    let results = [left.await.unwrap().unwrap(), right.await.unwrap().unwrap()];
+    assert_eq!(
+        results.into_iter().filter(|applied| *applied).count(),
+        1,
+        "[{provider_name}] exactly one writer must win a version race"
     );
 }
 
@@ -1055,7 +1174,7 @@ async fn test_delete_operation(#[case] ctx: impl KvTestContext) {
     );
 
     // Delete the key
-    kv.delete(&key)
+    kv.delete(&key, None)
         .await
         .unwrap_or_else(|e| panic!("[{}] Failed to delete key: {:?}", provider_name, e));
 
@@ -1143,7 +1262,7 @@ async fn test_exists_operation(#[case] ctx: impl KvTestContext) {
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderTestContext::setup().await))]
 #[tokio::test]
-async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
+async fn test_put_when_absent(#[case] ctx: impl KvTestContext) {
     let kv = ctx.get_kv().await;
     let provider_name = ctx.provider_name();
     let key = format!("test-if-not-exists-{}", Uuid::new_v4().simple());
@@ -1154,7 +1273,7 @@ async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
 
     let options = Some(PutOptions {
         ttl: None,
-        if_not_exists: true,
+        condition: PutCondition::Absent,
     });
 
     // First put should succeed
@@ -1163,13 +1282,13 @@ async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
         .await
         .unwrap_or_else(|e| {
             panic!(
-                "[{}] Failed first put with if_not_exists: {:?}",
+                "[{}] Failed first put with an absent precondition: {:?}",
                 provider_name, e
             )
         });
     assert!(
         put_result1,
-        "[{}] First put with if_not_exists should succeed",
+        "[{}] First put with an absent precondition should succeed",
         provider_name
     );
 
@@ -1185,7 +1304,7 @@ async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
         })
         .unwrap_or_else(|| panic!("[{}] Value should exist after first put", provider_name));
     assert_eq!(
-        value1, retrieved_value,
+        value1, retrieved_value.value,
         "[{}] Retrieved value should match first value",
         provider_name
     );
@@ -1196,13 +1315,13 @@ async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
         .await
         .unwrap_or_else(|e| {
             panic!(
-                "[{}] Failed second put with if_not_exists: {:?}",
+                "[{}] Failed second put with an absent precondition: {:?}",
                 provider_name, e
             )
         });
     assert!(
         !put_result2,
-        "[{}] Second put with if_not_exists should fail",
+        "[{}] Second put with an absent precondition should fail",
         provider_name
     );
 
@@ -1223,8 +1342,8 @@ async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
             )
         });
     assert_eq!(
-        value1, retrieved_value2,
-        "[{}] Value should not change after failed if_not_exists",
+        value1, retrieved_value2.value,
+        "[{}] Value should not change after a failed absent precondition",
         provider_name
     );
 }
@@ -1249,7 +1368,7 @@ async fn test_ttl_expiry(#[case] ctx: impl KvTestContext) {
     // mid-test on high-latency links even though it passes on CI runners.
     let options = Some(PutOptions {
         ttl: Some(Duration::from_secs(8)),
-        if_not_exists: false,
+        condition: PutCondition::None,
     });
 
     // Put the value with TTL
@@ -1360,7 +1479,7 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
             b"expired".to_vec(),
             Some(PutOptions {
                 ttl: Some(Duration::from_secs(1)),
-                if_not_exists: false,
+                condition: PutCondition::None,
             }),
         )
         .await
@@ -1384,6 +1503,7 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
     let mut first_cursor = None;
     let mut visited_cursors = HashSet::new();
     let mut found = HashMap::new();
+    let mut found_versions = HashMap::new();
     for page_number in 0..256 {
         let scan_result = kv
             .scan_prefix(&prefix, Some(3), cursor)
@@ -1400,15 +1520,22 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
             provider_name,
             page_number
         );
-        for (key, value) in scan_result.items {
+        for entry in scan_result.items {
             assert!(
-                key.starts_with(&prefix),
+                entry.key.starts_with(&prefix),
                 "[{}] Scan returned key '{}' outside prefix '{}'",
                 provider_name,
-                key,
+                entry.key,
                 prefix
             );
-            found.insert(key, value);
+            assert!(
+                !entry.version.is_empty(),
+                "[{}] Scan returned an empty version for '{}'",
+                provider_name,
+                entry.key
+            );
+            found_versions.insert(entry.key.clone(), entry.version);
+            found.insert(entry.key, entry.value);
         }
 
         let Some(next_cursor) = scan_result.next_cursor else {
@@ -1439,6 +1566,25 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
         found, expected,
         "[{}] Following scan cursors must visit exactly the live prefix keys",
         provider_name
+    );
+
+    let scanned_key = &test_keys[0];
+    let scanned_version = found_versions
+        .get(scanned_key)
+        .expect("every scanned entry must have a version")
+        .clone();
+    assert!(
+        kv.put(
+            scanned_key,
+            b"updated-from-scan".to_vec(),
+            Some(PutOptions {
+                ttl: None,
+                condition: PutCondition::Version(scanned_version),
+            }),
+        )
+        .await
+        .unwrap(),
+        "[{provider_name}] a scan version must be valid for compare-and-set"
     );
 
     let first_cursor = first_cursor.expect("a three-item page must produce a cursor");
@@ -1580,7 +1726,7 @@ async fn test_value_validation(#[case] ctx: impl KvTestContext) {
         .unwrap_or_else(|e| panic!("[{}] Failed to get large value: {:?}", provider_name, e))
         .unwrap_or_else(|| panic!("[{}] Large value should exist", provider_name));
     assert_eq!(
-        max_value, retrieved_value,
+        max_value, retrieved_value.value,
         "[{}] Retrieved large value should match original",
         provider_name
     );
@@ -1655,7 +1801,7 @@ async fn test_overwrite_value(#[case] ctx: impl KvTestContext) {
         .unwrap_or_else(|e| panic!("[{}] Failed to get initial value: {:?}", provider_name, e))
         .unwrap_or_else(|| panic!("[{}] Initial value should exist", provider_name));
     assert_eq!(
-        value1, retrieved_value1,
+        value1, retrieved_value1.value,
         "[{}] Retrieved initial value should match",
         provider_name
     );
@@ -1677,7 +1823,7 @@ async fn test_overwrite_value(#[case] ctx: impl KvTestContext) {
         })
         .unwrap_or_else(|| panic!("[{}] Overwritten value should exist", provider_name));
     assert_eq!(
-        value2, retrieved_value2,
+        value2, retrieved_value2.value,
         "[{}] Retrieved overwritten value should match new value",
         provider_name
     );
@@ -1713,7 +1859,7 @@ async fn test_binary_data(#[case] ctx: impl KvTestContext) {
         .unwrap_or_else(|| panic!("[{}] Binary data should exist", provider_name));
 
     assert_eq!(
-        binary_data, retrieved_data,
+        binary_data, retrieved_data.value,
         "[{}] Retrieved binary data should match original",
         provider_name
     );
@@ -1748,7 +1894,7 @@ async fn test_expired_row_takeover_conditional_put(#[case] ctx: impl KvTestConte
             b"first-holder".to_vec(),
             Some(PutOptions {
                 ttl: Some(Duration::from_secs(120)),
-                if_not_exists: true,
+                condition: PutCondition::Absent,
             }),
         )
         .await
@@ -1761,7 +1907,7 @@ async fn test_expired_row_takeover_conditional_put(#[case] ctx: impl KvTestConte
             b"contender".to_vec(),
             Some(PutOptions {
                 ttl: Some(Duration::from_secs(120)),
-                if_not_exists: true,
+                condition: PutCondition::Absent,
             }),
         )
         .await
@@ -1780,20 +1926,45 @@ async fn test_expired_row_takeover_conditional_put(#[case] ctx: impl KvTestConte
         b"dead-holder".to_vec(),
         Some(PutOptions {
             ttl: Some(Duration::from_secs(2)),
-            if_not_exists: true,
+            condition: PutCondition::Absent,
         }),
     )
     .await
     .unwrap_or_else(|e| panic!("[{}] short claim failed: {:?}", provider_name, e));
+    let expired_version = kv
+        .get(&expired_key)
+        .await
+        .unwrap_or_else(|e| panic!("[{}] short claim read failed: {:?}", provider_name, e))
+        .expect("short-lived claim must initially exist")
+        .version;
 
     tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(
+        !kv.put(
+            &expired_key,
+            b"stale-holder".to_vec(),
+            Some(PutOptions {
+                ttl: Some(Duration::from_secs(120)),
+                condition: PutCondition::Version(expired_version.clone()),
+            }),
+        )
+        .await
+        .unwrap(),
+        "[{provider_name}] an expired version must not authorize an update"
+    );
+    assert!(
+        !kv.delete(&expired_key, Some(&expired_version))
+            .await
+            .unwrap(),
+        "[{provider_name}] an expired version must not authorize a delete"
+    );
     let taken = kv
         .put(
             &expired_key,
             b"second-holder".to_vec(),
             Some(PutOptions {
                 ttl: Some(Duration::from_secs(120)),
-                if_not_exists: true,
+                condition: PutCondition::Absent,
             }),
         )
         .await
@@ -1810,7 +1981,7 @@ async fn test_expired_row_takeover_conditional_put(#[case] ctx: impl KvTestConte
         .unwrap_or_else(|e| panic!("[{}] read-back failed: {:?}", provider_name, e))
         .expect("taken-over key must be readable");
     assert_eq!(
-        value, b"second-holder",
+        value.value, b"second-holder",
         "[{}] the takeover's value must be served",
         provider_name
     );

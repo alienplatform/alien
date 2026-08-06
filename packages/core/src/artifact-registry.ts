@@ -6,8 +6,8 @@ import {
 import { Resource } from "./resource.js"
 
 export type {
-  ArtifactRegistryOutputs,
   ArtifactRegistry as ArtifactRegistryConfig,
+  ArtifactRegistryOutputs,
 } from "./generated/index.js"
 export { ArtifactRegistrySchema as ArtifactRegistryConfigSchema } from "./generated/index.js"
 

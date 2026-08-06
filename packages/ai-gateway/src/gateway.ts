@@ -16,7 +16,7 @@ import type { Readable } from "node:stream"
 import { AlienError } from "@alienplatform/core"
 
 import { GatewayBinaryUnavailableError, GatewayStartFailedError } from "./errors.js"
-import { type RawAiGatewayHandle, platformTriple } from "./loader.js"
+import { platformTriple, type RawAiGatewayHandle } from "./loader.js"
 
 /** The env var a container launcher sets after starting the gateway out of band. */
 const URL_ENV = "ALIEN_AI_GATEWAY_URL"

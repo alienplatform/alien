@@ -33,7 +33,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
 
   basic-worker-rs:
@@ -49,7 +49,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -74,7 +74,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -93,7 +93,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
 
   byoc-database:
@@ -199,7 +199,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -245,7 +245,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -375,7 +375,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -406,7 +406,7 @@ importers:
         specifier: ^19.0.0
         version: 19.2.3(@types/react@19.2.15)
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
 
   remote-worker-ts:
@@ -431,7 +431,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -459,7 +459,7 @@ importers:
         specifier: ^24.0.15
         version: 24.12.0
       typescript:
-        specifier: ^5.8.3
+        specifier: ~5.8.3
         version: 5.8.3
       vitest:
         specifier: ^3.1.4
@@ -470,6 +470,11 @@ packages:
   '@alienplatform/ai-gateway@file:../packages/ai-gateway':
     resolution: {directory: ../packages/ai-gateway, type: directory}
     engines: {bun: '>=1.0.23', node: '>=18'}
+    peerDependencies:
+      openai: ^4
+    peerDependenciesMeta:
+      openai:
+        optional: true
 
   '@alienplatform/bindings@file:../packages/bindings':
     resolution: {directory: ../packages/bindings, type: directory}
@@ -491,7 +496,7 @@ packages:
       '@aws-sdk/client-ssm': ^3.0.0
       '@azure/identity': ^4.0.0
       '@azure/keyvault-secrets': ^4.0.0
-      '@google-cloud/secret-manager': ^5.0.0
+      '@google-cloud/secret-manager': ^5.0.0 || ^6.0.0
     peerDependenciesMeta:
       '@aws-sdk/client-ssm':
         optional: true
@@ -2882,7 +2887,7 @@ snapshots:
   '@alienplatform/ai-gateway@file:../packages/ai-gateway(@types/json-schema@7.0.15)(openapi-types@12.1.3)':
     dependencies:
       '@alienplatform/core': file:../packages/core(@types/json-schema@7.0.15)(openapi-types@12.1.3)
-      zod: 4.3.2
+      zod: 4.4.3
     transitivePeerDependencies:
       - '@types/json-schema'
       - openapi-types
@@ -2905,7 +2910,7 @@ snapshots:
     dependencies:
       '@openapi-contrib/json-schema-to-openapi-schema': 4.3.1(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       serialize-error: 12.0.0
-      zod: 4.3.2
+      zod: 4.4.3
     transitivePeerDependencies:
       - '@types/json-schema'
       - openapi-types
@@ -2919,9 +2924,10 @@ snapshots:
       '@grpc/grpc-js': 1.14.4
       nice-grpc: 2.1.14
       nice-grpc-common: 2.0.2
-      zod: 4.3.2
+      zod: 4.4.3
     transitivePeerDependencies:
       - '@types/json-schema'
+      - openai
       - openapi-types
 
   '@alienplatform/testing@file:../packages/testing(@aws-sdk/client-ssm@3.1004.0)(@azure/identity@4.13.0)(@azure/keyvault-secrets@4.10.0(@azure/core-client@1.10.1))(@google-cloud/secret-manager@5.6.0)(@types/json-schema@7.0.15)(openapi-types@12.1.3)':
@@ -2929,7 +2935,7 @@ snapshots:
       '@alienplatform/commands': file:../packages/commands(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       '@alienplatform/core': file:../packages/core(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       get-port: 7.1.0
-      zod: 4.3.2
+      zod: 4.4.3
     optionalDependencies:
       '@aws-sdk/client-ssm': 3.1004.0
       '@azure/identity': 4.13.0

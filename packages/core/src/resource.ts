@@ -1,8 +1,8 @@
 import type { BaseResource, ResourceRef } from "./generated/index.js"
 import type { StackInputRef } from "./input.js"
 
-export { ResourceTypeSchema } from "./generated/index.js"
 export type { ResourceType } from "./generated/index.js"
+export { ResourceTypeSchema } from "./generated/index.js"
 
 /**
  * Represents a generic cloud resource within the Alien framework.

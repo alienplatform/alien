@@ -9,9 +9,9 @@ export {
   TestingUnsupportedPlatformError,
 } from "./errors.js"
 export type {
-  DeployOptions,
   DeploymentInfo,
-  UpgradeOptions,
-  Platform,
+  DeployOptions,
   EnvironmentVariable,
+  Platform,
+  UpgradeOptions,
 } from "./types.js"

@@ -8,7 +8,7 @@ const workflow = readFileSync(resolve(process.cwd(), ".github/workflows/release.
 function parseJobs(source) {
   const jobs = new Map()
   const lines = source.split("\n")
-  const jobsIndex = lines.findIndex(line => line === "jobs:")
+  const jobsIndex = lines.indexOf("jobs:")
   assert.notEqual(jobsIndex, -1, "release workflow has jobs")
 
   let current

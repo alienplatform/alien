@@ -33,7 +33,7 @@ use crate::presigned::PresignedRequest;
 #[cfg(feature = "platform-sdk")]
 use crate::remote::RemoteStorage;
 use crate::traits::{
-    Binding, BindingsProviderApi, Kv, MessagePayload, PutOptions as KvPutOptions, Queue,
+    Binding, BindingsProviderApi, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions, Queue,
     QueueMessage, ScanResult, Storage, Vault,
 };
 
@@ -359,7 +359,7 @@ impl Binding for RefreshingKv {}
 
 #[async_trait]
 impl Kv for RefreshingKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         self.resolver.kv().await?.get(key).await
     }
 
@@ -367,8 +367,8 @@ impl Kv for RefreshingKv {
         self.resolver.kv().await?.put(key, value, options).await
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
-        self.resolver.kv().await?.delete(key).await
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
+        self.resolver.kv().await?.delete(key, if_version).await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {

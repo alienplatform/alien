@@ -8,9 +8,6 @@
 import { createHash } from "node:crypto"
 import { command, kv, onCronEvent, onQueueMessage, onStorageEvent } from "@alienplatform/sdk"
 import { Hono } from "hono"
-
-import { sanitizeKvKeyPart } from "./helpers.js"
-
 import aiRoutes from "./handlers/ai.js"
 import environmentRoutes from "./handlers/environment.js"
 import eventsRoutes from "./handlers/events.js"
@@ -23,6 +20,7 @@ import sseRoutes from "./handlers/sse.js"
 import storageRoutes from "./handlers/storage.js"
 import vaultRoutes from "./handlers/vault.js"
 import waitUntilRoutes from "./handlers/wait-until.js"
+import { sanitizeKvKeyPart } from "./helpers.js"
 
 const app = new Hono()
 

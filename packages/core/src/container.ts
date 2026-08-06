@@ -23,25 +23,25 @@ export type PublicEndpointOptions =
 
 export type {
   Container as ContainerConfig,
-  ContainerOutputs,
-  ContainerCode,
   ContainerAutoscaling,
-  ContainerPort,
-  ExposeProtocol,
-  PublicEndpoint,
+  ContainerCode,
   ContainerGpuSpec,
+  ContainerOutputs,
+  ContainerPort,
   ContainerStatus,
+  ExposeProtocol,
   HealthCheck,
   PersistentStorage,
-  ResourceSpec,
+  PublicEndpoint,
   ReplicaStatus,
+  ResourceSpec,
 } from "./generated/index.js"
 export {
-  ContainerSchema as ContainerConfigSchema,
-  ContainerPortSchema,
-  ExposeProtocolSchema,
-  ContainerCodeSchema,
   ContainerAutoscalingSchema,
+  ContainerCodeSchema,
+  ContainerPortSchema,
+  ContainerSchema as ContainerConfigSchema,
+  ExposeProtocolSchema,
 } from "./generated/index.js"
 
 export interface PersistentStorageOptions {

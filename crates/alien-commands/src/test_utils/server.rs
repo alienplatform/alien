@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 use alien_bindings::{
     providers::{kv::LocalKv, storage::LocalStorage},
-    traits::{Binding, Kv, PutOptions, ScanResult, Storage},
+    traits::{Binding, Kv, KvEntry, PutOptions, ScanResult, Storage},
     ErrorData,
 };
 
@@ -57,7 +57,7 @@ impl Binding for FaultInjectingKv {}
 
 #[async_trait]
 impl Kv for FaultInjectingKv {
-    async fn get(&self, key: &str) -> alien_bindings::Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> alien_bindings::Result<Option<KvEntry>> {
         self.inner.get(key).await
     }
 
@@ -70,8 +70,8 @@ impl Kv for FaultInjectingKv {
         self.inner.put(key, value, options).await
     }
 
-    async fn delete(&self, key: &str) -> alien_bindings::Result<()> {
-        self.inner.delete(key).await
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> alien_bindings::Result<bool> {
+        self.inner.delete(key, if_version).await
     }
 
     async fn exists(&self, key: &str) -> alien_bindings::Result<bool> {

@@ -483,7 +483,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -495,12 +495,12 @@ jobs:
       - uses: pnpm/action-setup@v6
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: oven-sh/setup-bun@v2
@@ -581,7 +581,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -593,12 +593,12 @@ jobs:
       - uses: pnpm/action-setup@v6
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: oven-sh/setup-bun@v2
@@ -681,7 +681,7 @@ jobs:
       base_image: ghcr.io/alienplatform/alien-base@${{ steps.publish_base.outputs.digest }}
       typescript_base_image: ${{ steps.publish_typescript_base.outputs.digest && format('ghcr.io/alienplatform/alien-worker-typescript@{0}', steps.publish_typescript_base.outputs.digest) || '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v7
         if: needs.build-x86_64.result == 'success'
@@ -830,7 +830,7 @@ jobs:
     outputs:
       operator_image: ghcr.io/alienplatform/alien-operator:${{ github.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v7
         if: needs.build-x86_64.result == 'success'
@@ -899,7 +899,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: hashicorp/setup-terraform@v4
         with:
@@ -1196,7 +1196,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download TypeScript bindings addon (x86_64)
         if: matrix.bindings_arch == 'x86_64'
@@ -1251,7 +1251,7 @@ jobs:
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
@@ -1274,11 +1274,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install JS dependencies and build packages
@@ -1332,7 +1332,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -1350,7 +1350,7 @@ jobs:
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
@@ -1373,11 +1373,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1437,7 +1437,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download TypeScript bindings addon (x86_64)
         if: matrix.bindings_arch == 'x86_64'
@@ -1499,7 +1499,7 @@ jobs:
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
@@ -1522,11 +1522,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: hashicorp/setup-terraform@v4
@@ -1645,7 +1645,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -1666,7 +1666,7 @@ jobs:
         with:
           platforms: arm64
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         continue-on-error: true
         with:
           version: v0.16.0
@@ -1701,11 +1701,11 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.11.0
+          version: 10.34.5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install JS dependencies and build packages
@@ -1795,7 +1795,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download .env.test
         uses: actions/download-artifact@v7
