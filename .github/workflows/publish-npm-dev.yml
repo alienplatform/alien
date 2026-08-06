@@ -52,7 +52,7 @@ jobs:
           echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=${git_sha:0:12}" >> "$GITHUB_OUTPUT"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.34.5
 
@@ -136,7 +136,7 @@ jobs:
         if: matrix.target == 'x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.34.5
 
@@ -218,7 +218,7 @@ jobs:
           ref: ${{ github.ref }}
           path: .npm-dev-tools
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.34.5
 
