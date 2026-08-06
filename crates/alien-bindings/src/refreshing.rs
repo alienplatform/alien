@@ -34,8 +34,7 @@ use crate::presigned::PresignedRequest;
 use crate::remote::RemoteStorage;
 use crate::traits::{
     Binding, BindingsProviderApi, Key, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions,
-    Queue,
-    QueueMessage, ScanResult, Storage, Vault,
+    Queue, QueueMessage, ScanResult, Storage, Vault,
 };
 
 const OBJECT_STORE_NAME: &str = "Alien binding";
