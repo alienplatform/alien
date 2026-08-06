@@ -266,6 +266,51 @@ export type ProjectDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type ProjectKeys = {
+  enabled: boolean;
+  applicationEncryption: boolean;
+};
+
+export const ProjectAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+export type ProjectAllowedProvider = ClosedEnum<typeof ProjectAllowedProvider>;
+
+export const ProjectClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type ProjectClientApi = ClosedEnum<typeof ProjectClientApi>;
+
+export type ProjectRequirement = {
+  publicModelId: string;
+  clientApis: Array<ProjectClientApi>;
+  required: boolean;
+};
+
+export type ProjectModels = {
+  enabled: boolean;
+  allowedProviders: Array<ProjectAllowedProvider>;
+  requirements: Array<ProjectRequirement>;
+};
+
+export type ProjectConnections = {
+  keys?: ProjectKeys | undefined;
+  models?: ProjectModels | undefined;
+};
+
+/**
+ * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+ */
+export type ProjectCustomerConnections = {
+  schemaVersion: number;
+  connections: ProjectConnections;
+};
+
 export type Project = {
   /**
    * Unique identifier for the project.
@@ -302,6 +347,10 @@ export type Project = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: ProjectDefaultManagers | null | undefined;
+  /**
+   * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+   */
+  customerConnections?: ProjectCustomerConnections | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -510,6 +559,109 @@ export function projectDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ProjectKeys$inboundSchema: z.ZodType<ProjectKeys, unknown> = z
+  .object({
+    enabled: z.boolean(),
+    applicationEncryption: z.boolean(),
+  });
+
+export function projectKeysFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectKeys, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectKeys$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectKeys' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof ProjectAllowedProvider
+> = z.enum(ProjectAllowedProvider);
+
+/** @internal */
+export const ProjectClientApi$inboundSchema: z.ZodEnum<
+  typeof ProjectClientApi
+> = z.enum(ProjectClientApi);
+
+/** @internal */
+export const ProjectRequirement$inboundSchema: z.ZodType<
+  ProjectRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(ProjectClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function projectRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectModels$inboundSchema: z.ZodType<ProjectModels, unknown> = z
+  .object({
+    enabled: z.boolean(),
+    allowedProviders: z.array(ProjectAllowedProvider$inboundSchema),
+    requirements: z.array(z.lazy(() => ProjectRequirement$inboundSchema)),
+  });
+
+export function projectModelsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectModels, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectModels$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectModels' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectConnections$inboundSchema: z.ZodType<
+  ProjectConnections,
+  unknown
+> = z.object({
+  keys: z.lazy(() => ProjectKeys$inboundSchema).optional(),
+  models: z.lazy(() => ProjectModels$inboundSchema).optional(),
+});
+
+export function projectConnectionsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectConnections, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectConnections$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectConnections' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectCustomerConnections$inboundSchema: z.ZodType<
+  ProjectCustomerConnections,
+  unknown
+> = z.object({
+  schemaVersion: z.number(),
+  connections: z.lazy(() => ProjectConnections$inboundSchema),
+});
+
+export function projectCustomerConnectionsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectCustomerConnections, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectCustomerConnections$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectCustomerConnections' from JSON`,
+  );
+}
+
+/** @internal */
 export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   id: z.string(),
   name: z.string(),
@@ -524,6 +676,9 @@ export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   domainId: z.nullable(z.string()).optional(),
   defaultManagers: z.nullable(
     z.lazy(() => ProjectDefaultManagers$inboundSchema),
+  ).optional(),
+  customerConnections: z.nullable(
+    z.lazy(() => ProjectCustomerConnections$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),

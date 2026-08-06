@@ -11,6 +11,10 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  DeploymentPurpose,
+  DeploymentPurpose$inboundSchema,
+} from "./deploymentpurpose.js";
+import {
   EnvironmentVariableConfig,
   EnvironmentVariableConfig$inboundSchema,
 } from "./environmentvariableconfig.js";
@@ -5057,6 +5061,10 @@ export type SyncListResponseDeployment = {
    * ID of deployment group this deployment belongs to
    */
   deploymentGroupId: string;
+  /**
+   * Operational purpose of this deployment within its customer environment.
+   */
+  purpose: DeploymentPurpose;
   /**
    * Cloud environment information
    */
@@ -12698,6 +12706,7 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   region: z.nullable(z.string()).optional(),
   deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
+  purpose: DeploymentPurpose$inboundSchema,
   environmentInfo: z.nullable(
     z.union([
       z.lazy(() => SyncListResponseEnvironmentInfoGcp$inboundSchema),

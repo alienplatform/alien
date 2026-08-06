@@ -8131,7 +8131,7 @@ export type SourceEvent10 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion10 = SourceEvent10 | any;
+export type EventSourceUnion10 = SourceEvent10 | any;
 
 export type SyncReconcileRequestEvent13 = {
   count?: number | null | undefined;
@@ -10780,7 +10780,7 @@ export type SourceEvent9 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = SourceEvent9 | any;
+export type EventSourceUnion9 = SourceEvent9 | any;
 
 export type SyncReconcileRequestEvent12 = {
   count?: number | null | undefined;
@@ -12131,7 +12131,7 @@ export type SourceEvent8 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = SourceEvent8 | any;
+export type EventSourceUnion8 = SourceEvent8 | any;
 
 export type SyncReconcileRequestEvent10 = {
   count?: number | null | undefined;
@@ -12391,7 +12391,7 @@ export type SourceEvent7 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = SourceEvent7 | any;
+export type EventSourceUnion7 = SourceEvent7 | any;
 
 export type SyncReconcileRequestEvent9 = {
   count?: number | null | undefined;
@@ -12555,7 +12555,7 @@ export type SourceEvent6 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = SourceEvent6 | any;
+export type EventSourceUnion6 = SourceEvent6 | any;
 
 export type SyncReconcileRequestEvent8 = {
   count?: number | null | undefined;
@@ -12719,7 +12719,7 @@ export type SourceEvent5 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = SourceEvent5 | any;
+export type EventSourceUnion5 = SourceEvent5 | any;
 
 export type SyncReconcileRequestEvent7 = {
   count?: number | null | undefined;
@@ -12883,7 +12883,7 @@ export type SourceEvent4 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = SourceEvent4 | any;
+export type EventSourceUnion4 = SourceEvent4 | any;
 
 export type SyncReconcileRequestEvent6 = {
   count?: number | null | undefined;
@@ -13216,7 +13216,7 @@ export type SourceEvent3 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = SourceEvent3 | any;
+export type EventSourceUnion3 = SourceEvent3 | any;
 
 export type SyncReconcileRequestEvent4 = {
   count?: number | null | undefined;
@@ -13445,7 +13445,7 @@ export type SourceEvent2 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = SourceEvent2 | any;
+export type EventSourceUnion2 = SourceEvent2 | any;
 
 export type SyncReconcileRequestEvent3 = {
   count?: number | null | undefined;
@@ -13847,7 +13847,7 @@ export type SourceEvent1 = {
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = SourceEvent1 | any;
+export type EventSourceUnion1 = SourceEvent1 | any;
 
 export type SyncReconcileRequestEvent1 = {
   count?: number | null | undefined;
@@ -29428,16 +29428,20 @@ export function sourceEvent10ToJSON(sourceEvent10: SourceEvent10): string {
 }
 
 /** @internal */
-export type SourceUnion10$Outbound = SourceEvent10$Outbound | any;
+export type EventSourceUnion10$Outbound = SourceEvent10$Outbound | any;
 
 /** @internal */
-export const SourceUnion10$outboundSchema: z.ZodType<
-  SourceUnion10$Outbound,
-  SourceUnion10
+export const EventSourceUnion10$outboundSchema: z.ZodType<
+  EventSourceUnion10$Outbound,
+  EventSourceUnion10
 > = z.union([z.lazy(() => SourceEvent10$outboundSchema), z.any()]);
 
-export function sourceUnion10ToJSON(sourceUnion10: SourceUnion10): string {
-  return JSON.stringify(SourceUnion10$outboundSchema.parse(sourceUnion10));
+export function eventSourceUnion10ToJSON(
+  eventSourceUnion10: EventSourceUnion10,
+): string {
+  return JSON.stringify(
+    EventSourceUnion10$outboundSchema.parse(eventSourceUnion10),
+  );
 }
 
 /** @internal */
@@ -34338,16 +34342,20 @@ export function sourceEvent9ToJSON(sourceEvent9: SourceEvent9): string {
 }
 
 /** @internal */
-export type SourceUnion9$Outbound = SourceEvent9$Outbound | any;
+export type EventSourceUnion9$Outbound = SourceEvent9$Outbound | any;
 
 /** @internal */
-export const SourceUnion9$outboundSchema: z.ZodType<
-  SourceUnion9$Outbound,
-  SourceUnion9
+export const EventSourceUnion9$outboundSchema: z.ZodType<
+  EventSourceUnion9$Outbound,
+  EventSourceUnion9
 > = z.union([z.lazy(() => SourceEvent9$outboundSchema), z.any()]);
 
-export function sourceUnion9ToJSON(sourceUnion9: SourceUnion9): string {
-  return JSON.stringify(SourceUnion9$outboundSchema.parse(sourceUnion9));
+export function eventSourceUnion9ToJSON(
+  eventSourceUnion9: EventSourceUnion9,
+): string {
+  return JSON.stringify(
+    EventSourceUnion9$outboundSchema.parse(eventSourceUnion9),
+  );
 }
 
 /** @internal */
@@ -37665,16 +37673,20 @@ export function sourceEvent8ToJSON(sourceEvent8: SourceEvent8): string {
 }
 
 /** @internal */
-export type SourceUnion8$Outbound = SourceEvent8$Outbound | any;
+export type EventSourceUnion8$Outbound = SourceEvent8$Outbound | any;
 
 /** @internal */
-export const SourceUnion8$outboundSchema: z.ZodType<
-  SourceUnion8$Outbound,
-  SourceUnion8
+export const EventSourceUnion8$outboundSchema: z.ZodType<
+  EventSourceUnion8$Outbound,
+  EventSourceUnion8
 > = z.union([z.lazy(() => SourceEvent8$outboundSchema), z.any()]);
 
-export function sourceUnion8ToJSON(sourceUnion8: SourceUnion8): string {
-  return JSON.stringify(SourceUnion8$outboundSchema.parse(sourceUnion8));
+export function eventSourceUnion8ToJSON(
+  eventSourceUnion8: EventSourceUnion8,
+): string {
+  return JSON.stringify(
+    EventSourceUnion8$outboundSchema.parse(eventSourceUnion8),
+  );
 }
 
 /** @internal */
@@ -38335,16 +38347,20 @@ export function sourceEvent7ToJSON(sourceEvent7: SourceEvent7): string {
 }
 
 /** @internal */
-export type SourceUnion7$Outbound = SourceEvent7$Outbound | any;
+export type EventSourceUnion7$Outbound = SourceEvent7$Outbound | any;
 
 /** @internal */
-export const SourceUnion7$outboundSchema: z.ZodType<
-  SourceUnion7$Outbound,
-  SourceUnion7
+export const EventSourceUnion7$outboundSchema: z.ZodType<
+  EventSourceUnion7$Outbound,
+  EventSourceUnion7
 > = z.union([z.lazy(() => SourceEvent7$outboundSchema), z.any()]);
 
-export function sourceUnion7ToJSON(sourceUnion7: SourceUnion7): string {
-  return JSON.stringify(SourceUnion7$outboundSchema.parse(sourceUnion7));
+export function eventSourceUnion7ToJSON(
+  eventSourceUnion7: EventSourceUnion7,
+): string {
+  return JSON.stringify(
+    EventSourceUnion7$outboundSchema.parse(eventSourceUnion7),
+  );
 }
 
 /** @internal */
@@ -38738,16 +38754,20 @@ export function sourceEvent6ToJSON(sourceEvent6: SourceEvent6): string {
 }
 
 /** @internal */
-export type SourceUnion6$Outbound = SourceEvent6$Outbound | any;
+export type EventSourceUnion6$Outbound = SourceEvent6$Outbound | any;
 
 /** @internal */
-export const SourceUnion6$outboundSchema: z.ZodType<
-  SourceUnion6$Outbound,
-  SourceUnion6
+export const EventSourceUnion6$outboundSchema: z.ZodType<
+  EventSourceUnion6$Outbound,
+  EventSourceUnion6
 > = z.union([z.lazy(() => SourceEvent6$outboundSchema), z.any()]);
 
-export function sourceUnion6ToJSON(sourceUnion6: SourceUnion6): string {
-  return JSON.stringify(SourceUnion6$outboundSchema.parse(sourceUnion6));
+export function eventSourceUnion6ToJSON(
+  eventSourceUnion6: EventSourceUnion6,
+): string {
+  return JSON.stringify(
+    EventSourceUnion6$outboundSchema.parse(eventSourceUnion6),
+  );
 }
 
 /** @internal */
@@ -39141,16 +39161,20 @@ export function sourceEvent5ToJSON(sourceEvent5: SourceEvent5): string {
 }
 
 /** @internal */
-export type SourceUnion5$Outbound = SourceEvent5$Outbound | any;
+export type EventSourceUnion5$Outbound = SourceEvent5$Outbound | any;
 
 /** @internal */
-export const SourceUnion5$outboundSchema: z.ZodType<
-  SourceUnion5$Outbound,
-  SourceUnion5
+export const EventSourceUnion5$outboundSchema: z.ZodType<
+  EventSourceUnion5$Outbound,
+  EventSourceUnion5
 > = z.union([z.lazy(() => SourceEvent5$outboundSchema), z.any()]);
 
-export function sourceUnion5ToJSON(sourceUnion5: SourceUnion5): string {
-  return JSON.stringify(SourceUnion5$outboundSchema.parse(sourceUnion5));
+export function eventSourceUnion5ToJSON(
+  eventSourceUnion5: EventSourceUnion5,
+): string {
+  return JSON.stringify(
+    EventSourceUnion5$outboundSchema.parse(eventSourceUnion5),
+  );
 }
 
 /** @internal */
@@ -39542,16 +39566,20 @@ export function sourceEvent4ToJSON(sourceEvent4: SourceEvent4): string {
 }
 
 /** @internal */
-export type SourceUnion4$Outbound = SourceEvent4$Outbound | any;
+export type EventSourceUnion4$Outbound = SourceEvent4$Outbound | any;
 
 /** @internal */
-export const SourceUnion4$outboundSchema: z.ZodType<
-  SourceUnion4$Outbound,
-  SourceUnion4
+export const EventSourceUnion4$outboundSchema: z.ZodType<
+  EventSourceUnion4$Outbound,
+  EventSourceUnion4
 > = z.union([z.lazy(() => SourceEvent4$outboundSchema), z.any()]);
 
-export function sourceUnion4ToJSON(sourceUnion4: SourceUnion4): string {
-  return JSON.stringify(SourceUnion4$outboundSchema.parse(sourceUnion4));
+export function eventSourceUnion4ToJSON(
+  eventSourceUnion4: EventSourceUnion4,
+): string {
+  return JSON.stringify(
+    EventSourceUnion4$outboundSchema.parse(eventSourceUnion4),
+  );
 }
 
 /** @internal */
@@ -40328,16 +40356,20 @@ export function sourceEvent3ToJSON(sourceEvent3: SourceEvent3): string {
 }
 
 /** @internal */
-export type SourceUnion3$Outbound = SourceEvent3$Outbound | any;
+export type EventSourceUnion3$Outbound = SourceEvent3$Outbound | any;
 
 /** @internal */
-export const SourceUnion3$outboundSchema: z.ZodType<
-  SourceUnion3$Outbound,
-  SourceUnion3
+export const EventSourceUnion3$outboundSchema: z.ZodType<
+  EventSourceUnion3$Outbound,
+  EventSourceUnion3
 > = z.union([z.lazy(() => SourceEvent3$outboundSchema), z.any()]);
 
-export function sourceUnion3ToJSON(sourceUnion3: SourceUnion3): string {
-  return JSON.stringify(SourceUnion3$outboundSchema.parse(sourceUnion3));
+export function eventSourceUnion3ToJSON(
+  eventSourceUnion3: EventSourceUnion3,
+): string {
+  return JSON.stringify(
+    EventSourceUnion3$outboundSchema.parse(eventSourceUnion3),
+  );
 }
 
 /** @internal */
@@ -40883,16 +40915,20 @@ export function sourceEvent2ToJSON(sourceEvent2: SourceEvent2): string {
 }
 
 /** @internal */
-export type SourceUnion2$Outbound = SourceEvent2$Outbound | any;
+export type EventSourceUnion2$Outbound = SourceEvent2$Outbound | any;
 
 /** @internal */
-export const SourceUnion2$outboundSchema: z.ZodType<
-  SourceUnion2$Outbound,
-  SourceUnion2
+export const EventSourceUnion2$outboundSchema: z.ZodType<
+  EventSourceUnion2$Outbound,
+  EventSourceUnion2
 > = z.union([z.lazy(() => SourceEvent2$outboundSchema), z.any()]);
 
-export function sourceUnion2ToJSON(sourceUnion2: SourceUnion2): string {
-  return JSON.stringify(SourceUnion2$outboundSchema.parse(sourceUnion2));
+export function eventSourceUnion2ToJSON(
+  eventSourceUnion2: EventSourceUnion2,
+): string {
+  return JSON.stringify(
+    EventSourceUnion2$outboundSchema.parse(eventSourceUnion2),
+  );
 }
 
 /** @internal */
@@ -41836,16 +41872,20 @@ export function sourceEvent1ToJSON(sourceEvent1: SourceEvent1): string {
 }
 
 /** @internal */
-export type SourceUnion1$Outbound = SourceEvent1$Outbound | any;
+export type EventSourceUnion1$Outbound = SourceEvent1$Outbound | any;
 
 /** @internal */
-export const SourceUnion1$outboundSchema: z.ZodType<
-  SourceUnion1$Outbound,
-  SourceUnion1
+export const EventSourceUnion1$outboundSchema: z.ZodType<
+  EventSourceUnion1$Outbound,
+  EventSourceUnion1
 > = z.union([z.lazy(() => SourceEvent1$outboundSchema), z.any()]);
 
-export function sourceUnion1ToJSON(sourceUnion1: SourceUnion1): string {
-  return JSON.stringify(SourceUnion1$outboundSchema.parse(sourceUnion1));
+export function eventSourceUnion1ToJSON(
+  eventSourceUnion1: EventSourceUnion1,
+): string {
+  return JSON.stringify(
+    EventSourceUnion1$outboundSchema.parse(eventSourceUnion1),
+  );
 }
 
 /** @internal */

@@ -336,6 +336,8 @@ run();
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+* [configureCustomerModels](docs/sdks/projects/README.md#configurecustomermodels) - Configure customer-owned model providers without requiring an application Release.
+* [configureCustomerKey](docs/sdks/projects/README.md#configurecustomerkey) - Enable customer-owned application encryption without requiring an application Release.
 
 ### [ReleaseChannels](docs/sdks/releasechannels/README.md)
 
@@ -363,6 +365,10 @@ run();
 * [listOverview](docs/sdks/resources/README.md#listoverview)
 * [listDeployments](docs/sdks/resources/README.md#listdeployments)
 * [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
+
+### [SetupLinks](docs/sdks/setuplinks/README.md)
+
+* [create](docs/sdks/setuplinks/README.md#create) - Create a customer setup link
 
 ### [SlackIntegration](docs/sdks/slackintegration/README.md)
 
@@ -542,6 +548,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
 - [`packagesRebuild`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
+- [`projectsConfigureCustomerKey`](docs/sdks/projects/README.md#configurecustomerkey) - Enable customer-owned application encryption without requiring an application Release.
+- [`projectsConfigureCustomerModels`](docs/sdks/projects/README.md#configurecustomermodels) - Configure customer-owned model providers without requiring an application Release.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
@@ -574,6 +582,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`revokeWorkspaceInvitation`](docs/sdks/alien/README.md#revokeworkspaceinvitation)
 - [`revokeWorkspaceInviteLink`](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
 - [`rotateAwsVirtualKeyCredential`](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
+- [`setupLinksCreate`](docs/sdks/setuplinks/README.md#create) - Create a customer setup link
 - [`slackIntegrationInstallUrl`](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
 - [`slackIntegrationListChannels`](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
 - [`slackIntegrationSetNotificationChannel`](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.

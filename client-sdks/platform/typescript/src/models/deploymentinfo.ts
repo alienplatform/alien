@@ -16,6 +16,10 @@ import {
 } from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  SetupItemStatus,
+  SetupItemStatus$inboundSchema,
+} from "./setupitemstatus.js";
+import {
   SupportedCloudRegions,
   SupportedCloudRegions$inboundSchema,
 } from "./supportedcloudregions.js";
@@ -845,6 +849,7 @@ export type DeploymentInfo = {
   installContext: DeploymentInfoInstallContext;
   supportedRegions: SupportedCloudRegions;
   modelAvailabilitySources: Array<ModelAvailabilitySource>;
+  setupItems?: Array<SetupItemStatus> | undefined;
   setupConfig?: DeploymentInfoSetupConfig | undefined;
   readiness?: Readiness | undefined;
 };
@@ -1771,6 +1776,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     modelAvailabilitySources: z.array(
       z.lazy(() => ModelAvailabilitySource$inboundSchema),
     ),
+    setupItems: z.array(SetupItemStatus$inboundSchema).optional(),
     setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
     readiness: z.lazy(() => Readiness$inboundSchema).optional(),
   });

@@ -36,11 +36,23 @@ let value: ListAPIKeysResponse = {
           ],
         },
         environmentVariables: [],
+        items: [
+          {
+            item: "models",
+            source: {
+              type: "built-in",
+              definitionId: "customer-key",
+              version: "<value>",
+              sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+            },
+            required: false,
+          },
+        ],
       },
       createdByUser: {
         id: "<id>",
-        email: "Rhianna90@hotmail.com",
-        image: "https://picsum.photos/seed/UEmR2Mt/3119/3794",
+        email: "Sydnee_Fahey-Satterfield@gmail.com",
+        image: "https://picsum.photos/seed/MtBCj/2624/1426",
       },
     },
   ],

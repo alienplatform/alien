@@ -36,6 +36,18 @@ let value: CreateAPIKeyResponse = {
         ],
       },
       environmentVariables: [],
+      items: [
+        {
+          item: "models",
+          source: {
+            type: "built-in",
+            definitionId: "customer-key",
+            version: "<value>",
+            sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+          },
+          required: false,
+        },
+      ],
     },
   },
 };

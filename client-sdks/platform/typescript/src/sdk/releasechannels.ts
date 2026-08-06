@@ -11,9 +11,6 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class ReleaseChannels extends ClientSDK {
-  /**
-   * List system domains and workspace domains.
-   */
   async list(
     request: operations.ListReleaseChannelsRequest,
     options?: RequestOptions,
@@ -25,9 +22,6 @@ export class ReleaseChannels extends ClientSDK {
     ));
   }
 
-  /**
-   * Create a workspace domain and optional initial endpoints.
-   */
   async create(
     request: operations.CreateReleaseChannelRequest,
     options?: RequestOptions,
@@ -39,9 +33,6 @@ export class ReleaseChannels extends ClientSDK {
     ));
   }
 
-  /**
-   * Delete a workspace domain.
-   */
   async delete(
     request: operations.DeleteReleaseChannelRequest,
     options?: RequestOptions,

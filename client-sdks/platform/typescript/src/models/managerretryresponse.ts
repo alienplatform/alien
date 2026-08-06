@@ -21,6 +21,86 @@ import {
   ManagerRetryDeploymentResponse$inboundSchema,
 } from "./managerretrydeploymentresponse.js";
 
+export const ManagerRetryResponseItemEnum = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+export type ManagerRetryResponseItemEnum = ClosedEnum<
+  typeof ManagerRetryResponseItemEnum
+>;
+
+export const ManagerRetryResponseDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+} as const;
+export type ManagerRetryResponseDefinitionId = ClosedEnum<
+  typeof ManagerRetryResponseDefinitionId
+>;
+
+export type ManagerRetryResponseSourceBuiltIn = {
+  type: "built-in";
+  definitionId: ManagerRetryResponseDefinitionId;
+  version: string;
+  /**
+   * Unique identifier for the release.
+   */
+  sourceReleaseId: string;
+};
+
+export type ManagerRetryResponseSourceApplicationRelease = {
+  type: "application-release";
+  releaseChannel: string;
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type ManagerRetryResponseSourceUnion =
+  | ManagerRetryResponseSourceApplicationRelease
+  | ManagerRetryResponseSourceBuiltIn;
+
+export const ManagerRetryResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+export type ManagerRetryResponseAllowedProvider = ClosedEnum<
+  typeof ManagerRetryResponseAllowedProvider
+>;
+
+export const ManagerRetryResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type ManagerRetryResponseClientApi = ClosedEnum<
+  typeof ManagerRetryResponseClientApi
+>;
+
+export type ManagerRetryResponseModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<ManagerRetryResponseClientApi>;
+  required: boolean;
+};
+
+export type ManagerRetryResponseConfiguration = {
+  allowedProviders?: Array<ManagerRetryResponseAllowedProvider> | undefined;
+  modelRequirements?: Array<ManagerRetryResponseModelRequirement> | undefined;
+};
+
+export type ManagerRetryResponseItem = {
+  item: ManagerRetryResponseItemEnum;
+  source:
+    | ManagerRetryResponseSourceApplicationRelease
+    | ManagerRetryResponseSourceBuiltIn;
+  required: boolean;
+  configuration?: ManagerRetryResponseConfiguration | undefined;
+};
+
 export const ManagerRetryResponseEnvironmentVariableType = {
   Plain: "plain",
   Secret: "secret",
@@ -39,6 +119,10 @@ export type ManagerRetryResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Immutable setup items and exact sources captured when this setup link is created.
+   */
+  items?: Array<ManagerRetryResponseItem> | undefined;
   /**
    * Operator-pinned deployment subdomain for this setup token.
    */
@@ -3684,6 +3768,159 @@ export type ManagerRetryResponse =
   | ManagerRetryDeploymentResponse;
 
 /** @internal */
+export const ManagerRetryResponseItemEnum$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseItemEnum
+> = z.enum(ManagerRetryResponseItemEnum);
+
+/** @internal */
+export const ManagerRetryResponseDefinitionId$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseDefinitionId
+> = z.enum(ManagerRetryResponseDefinitionId);
+
+/** @internal */
+export const ManagerRetryResponseSourceBuiltIn$inboundSchema: z.ZodType<
+  ManagerRetryResponseSourceBuiltIn,
+  unknown
+> = z.object({
+  type: z.literal("built-in"),
+  definitionId: ManagerRetryResponseDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
+});
+
+export function managerRetryResponseSourceBuiltInFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseSourceBuiltIn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseSourceBuiltIn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseSourceBuiltIn' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseSourceApplicationRelease$inboundSchema:
+  z.ZodType<ManagerRetryResponseSourceApplicationRelease, unknown> = z.object({
+    type: z.literal("application-release"),
+    releaseChannel: z.string(),
+    releaseId: z.string(),
+    resourceId: z.string().optional(),
+  });
+
+export function managerRetryResponseSourceApplicationReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseSourceApplicationRelease,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseSourceApplicationRelease$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseSourceApplicationRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseSourceUnion$inboundSchema: z.ZodType<
+  ManagerRetryResponseSourceUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseSourceApplicationRelease$inboundSchema),
+  z.lazy(() => ManagerRetryResponseSourceBuiltIn$inboundSchema),
+]);
+
+export function managerRetryResponseSourceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseSourceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseSourceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseAllowedProvider
+> = z.enum(ManagerRetryResponseAllowedProvider);
+
+/** @internal */
+export const ManagerRetryResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseClientApi
+> = z.enum(ManagerRetryResponseClientApi);
+
+/** @internal */
+export const ManagerRetryResponseModelRequirement$inboundSchema: z.ZodType<
+  ManagerRetryResponseModelRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(ManagerRetryResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function managerRetryResponseModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseModelRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseModelRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseConfiguration$inboundSchema: z.ZodType<
+  ManagerRetryResponseConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(ManagerRetryResponseAllowedProvider$inboundSchema)
+    .optional(),
+  modelRequirements: z.array(
+    z.lazy(() => ManagerRetryResponseModelRequirement$inboundSchema),
+  ).optional(),
+});
+
+export function managerRetryResponseConfigurationFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseConfiguration, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseConfiguration' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseItem$inboundSchema: z.ZodType<
+  ManagerRetryResponseItem,
+  unknown
+> = z.object({
+  item: ManagerRetryResponseItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() => ManagerRetryResponseSourceApplicationRelease$inboundSchema),
+    z.lazy(() => ManagerRetryResponseSourceBuiltIn$inboundSchema),
+  ]),
+  required: z.boolean(),
+  configuration: z.lazy(() => ManagerRetryResponseConfiguration$inboundSchema)
+    .optional(),
+});
+
+export function managerRetryResponseItemFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseItem' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseEnvironmentVariableType$inboundSchema:
   z.ZodEnum<typeof ManagerRetryResponseEnvironmentVariableType> = z.enum(
     ManagerRetryResponseEnvironmentVariableType,
@@ -3723,6 +3960,8 @@ export const ManagerRetryResponseSetupConfig$inboundSchema: z.ZodType<
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
+    .optional(),
+  items: z.array(z.lazy(() => ManagerRetryResponseItem$inboundSchema))
     .optional(),
   publicSubdomain: z.string().optional(),
   environmentVariables: z.array(
