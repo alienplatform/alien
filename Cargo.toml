@@ -103,7 +103,7 @@ async-stream = "0.3"
 async-trait = "0.1.88"
 aws-config = "1.5"
 aws-credential-types = "1.2"
-aws_lambda_events = { version = "0.18", features = ["cloudwatch_events", "s3", "sqs"] }
+aws_lambda_events = { version = "1.0", features = ["cloudwatch_events", "s3", "sqs"] }
 aws-sigv4 = "1.3.2"
 backon = "1"
 base64 = "0.22"

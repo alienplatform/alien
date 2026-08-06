@@ -1190,7 +1190,7 @@ dependencies = [
  "alien-worker-protocol",
  "anyhow",
  "async-trait",
- "aws_lambda_events",
+ "aws_lambda_events 1.2.0",
  "axum 0.8.9",
  "backon",
  "base64 0.22.1",
@@ -2111,6 +2111,22 @@ name = "aws_lambda_events"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "831de96bc2c9d2e570664f4f016c8d56d86ce2a58b3a1d6268c4ba2f269684fe"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "http-serde",
+ "query_map",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aws_lambda_events"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d02c123e89527e7b424f74f52d11be0d17ef2887819323a42dcae1c7630ca53d"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5706,7 +5722,7 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c11fef0236dc427a2968c701697ae2ed3353cd6936be4d4f9ab471b0d6cf753b"
 dependencies = [
- "aws_lambda_events",
+ "aws_lambda_events 0.18.0",
  "bytes",
  "encoding_rs",
  "futures-util",
