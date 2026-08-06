@@ -403,3 +403,26 @@ fn gcp_ai_invoke_permissions_attach_to_service_account() {
     );
     assert_terraform_valid(&module, "gcp_ai_invoke_permissions");
 }
+
+#[test]
+fn gcp_remote_ai_invoke_permissions_attach_to_access_identity() {
+    let stack = Stack::new("remote-ai".to_string())
+        .add_with_remote_access(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("aiplatform.endpoints.predict"));
+    assert!(rendered.contains("google_service_account.access.email"));
+    assert_terraform_valid(&module, "gcp_remote_ai_invoke_permissions");
+}

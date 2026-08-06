@@ -1,0 +1,13 @@
+{
+  "name": "byo-ai",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@alienplatform/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@alienplatform/typescript-config": "workspace:*",
+    "typescript": "^5.7.3"
+  }
+}

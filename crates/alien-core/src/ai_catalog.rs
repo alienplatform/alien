@@ -774,7 +774,6 @@ pub const AI_CATALOG_REVISION: &str = "2026-08-05.1";
 /// is validated against the target region's model catalog at deploy time.
 static AZURE_DEPLOYMENTS: &[(&str, &str, &str)] = &[
     ("gpt-4.1", "gpt-4.1", "2025-04-14"),
-    ("gpt-4o-mini", "gpt-4o-mini", "2024-07-18"),
     ("model-router", "model-router", "2025-11-18"),
 ];
 

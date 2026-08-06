@@ -944,6 +944,7 @@ struct AiTestResponse {
     locator: Option<String>,
     model_count: Option<usize>,
     models: Option<Vec<AiModelInfo>>,
+    probe_model: Option<String>,
     results: Option<Vec<AiInvokeResult>>,
 }
 
@@ -961,10 +962,10 @@ struct AiModelInfo {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AiInvokeResult {
-    #[allow(dead_code)]
     model: String,
     ok: bool,
     #[serde(default)]
+    #[allow(dead_code)]
     detail: Option<String>,
 }
 
@@ -972,11 +973,10 @@ struct AiInvokeResult {
 ///
 /// The first call proves the runtime injected ALIEN_TEST_AI_BINDING and that it
 /// parsed to a well-formed config. The second exercises the availability contract:
-/// getAvailableModels is filtered to the models this cloud actually has enabled, and
-/// every listed model is invoked through the embedded gateway under the workload's
-/// ambient credentials. A 429 counts as available (enabled but rate-limited), so this
-/// passes on a quota-zeroed account; a 403/404 on a listed model would mean the
-/// filter is broken. Set ALIEN_E2E_AI_SKIP_INVOKE=1 to run provisioning-only.
+/// getAvailableModels returns the picker metadata and one qualified model is invoked
+/// through the embedded gateway under the workload's ambient credentials. A 429
+/// proves authorization reached the provider while keeping quota-zeroed test accounts
+/// usable. Set ALIEN_E2E_AI_SKIP_INVOKE=1 to run provisioning-only.
 pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!(binding = AI_BINDING, "Checking AI binding injection");
@@ -1067,26 +1067,25 @@ pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
         }
     }
 
-    // Every listed model must be invocable (2xx or 429). The list is
-    // availability-filtered, so a 403/404 on a listed model means the filter let a
-    // disabled model through.
+    let probe_model = data
+        .probe_model
+        .as_deref()
+        .context("AI invoke response did not name its probe model")?;
+    if !models.iter().any(|model| model.id == probe_model) {
+        bail!("probe model '{probe_model}' was not present in the advertised model list");
+    }
     let results = data.results.unwrap_or_default();
-    if results.len() != model_count {
-        bail!(
-            "modelCount {model_count} disagrees with the results list ({})",
-            results.len()
-        );
+    if results.len() != 1 || results[0].model != probe_model {
+        bail!("AI invoke response must contain exactly the named probe result");
     }
     let failed: Vec<&AiInvokeResult> = results.iter().filter(|r| !r.ok).collect();
     if !failed.is_empty() {
-        bail!(
-            "some listed models were not invocable (a listed-but-unavailable model means the availability filter is broken): {failed:?}"
-        );
+        bail!("qualified AI probe failed: {failed:?}");
     }
 
     info!(
         model_count,
-        "AI availability check passed: every enabled model listed (with provider/displayName) invoked cleanly (2xx or 429)"
+        probe_model, "AI catalog metadata and one qualified invocation passed (2xx or 429)"
     );
     Ok(())
 }

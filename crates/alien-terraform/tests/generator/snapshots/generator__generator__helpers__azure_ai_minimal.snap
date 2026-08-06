@@ -218,26 +218,6 @@ resource "azurerm_cognitive_deployment" "llm_gpt-4_1" {
   ]
 }
 
-resource "azurerm_cognitive_deployment" "llm_gpt-4o-mini" {
-  name                 = "gpt-4o-mini"
-  cognitive_account_id = azurerm_cognitive_account.llm.id
-
-  model {
-    format  = "OpenAI"
-    name    = "gpt-4o-mini"
-    version = "2024-07-18"
-  }
-
-  sku {
-    name     = "GlobalStandard"
-    capacity = 1
-  }
-
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
 resource "azurerm_cognitive_deployment" "llm_model-router" {
   name                 = "model-router"
   cognitive_account_id = azurerm_cognitive_account.llm.id
@@ -279,7 +259,6 @@ resource "terraform_data" "deployment_registration" {
     azurerm_resource_group.default_resource_group,
     azurerm_cognitive_account.llm,
     azurerm_cognitive_deployment.llm_gpt-4_1,
-    azurerm_cognitive_deployment.llm_gpt-4o-mini,
     azurerm_cognitive_deployment.llm_model-router
   ]
 }

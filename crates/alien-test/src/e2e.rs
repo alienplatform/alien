@@ -158,6 +158,9 @@ pub enum TestApp {
     /// A bindings-only Enterprise Key deployment used to qualify generated
     /// setup and real remote cryptography on each cloud.
     ByoEncryptionKey,
+    /// A bindings-only AI deployment used to qualify Manager-minted Access
+    /// credentials and one real model invocation on each cloud.
+    ByoAi,
 }
 
 impl std::fmt::Display for TestApp {
@@ -171,6 +174,7 @@ impl std::fmt::Display for TestApp {
             TestApp::RuntimeLessMixed => write!(f, "runtime-less-mixed"),
             TestApp::EnabledDemo => write!(f, "enabled-demo"),
             TestApp::ByoEncryptionKey => write!(f, "byo-encryption-key"),
+            TestApp::ByoAi => write!(f, "byo-ai"),
         }
     }
 }
@@ -388,6 +392,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::RuntimeLessMixed => "test-apps/runtime-less-mixed",
         TestApp::EnabledDemo => "test-apps/enabled-demo",
         TestApp::ByoEncryptionKey => "test-apps/byo-encryption-key",
+        TestApp::ByoAi => "test-apps/byo-ai",
     }
 }
 
@@ -406,7 +411,7 @@ fn deployment_environment_variables(
         | TestApp::ContainerRust
         | TestApp::RuntimeLessMixed
         | TestApp::EnabledDemo => None,
-        TestApp::ByoEncryptionKey => None,
+        TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
                 name: "APP_SECRET".to_string(),

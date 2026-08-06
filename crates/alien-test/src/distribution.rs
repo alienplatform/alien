@@ -8,15 +8,19 @@ use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::azure::resource_graph::ResourceGraphQueryRequest;
 use alien_azure_clients::{
-    AzureResourceGraphClient, AzureServiceBusManagementClient, AzureTokenCache, ResourceGraphApi,
-    ServiceBusManagementApi,
+    AzureCognitiveServicesClient, AzureKeyVaultKeysClient, AzureResourceGraphClient,
+    AzureServiceBusManagementClient, AzureTokenCache, CognitiveServicesAccountsApi,
+    KeyVaultKeysApi, ResourceGraphApi, ServiceBusManagementApi,
 };
 use alien_core::{
     import::{
-        data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
-        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
-        GcpKeyImportData, GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource,
-        StackImportRequest, StackImportResponse,
+        data::{
+            AwsArtifactRegistryImportData, AwsKeyImportData, AwsKvImportData, AwsStorageImportData,
+        },
+        AzureAiImportData, AzureRemoteStackManagementImportData,
+        AzureServiceBusNamespaceImportData, GcpAiImportData, GcpKeyImportData,
+        GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
+        StackImportResponse,
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
@@ -28,7 +32,7 @@ use alien_core::{
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
-use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ResourceManagerApi};
+use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ModelGardenApi, ResourceManagerApi};
 use anyhow::Context;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -2435,7 +2439,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
             anyhow::anyhow!("Deployment failed to reach running within {timeout:?}: {error}")
         })?;
     if ctx.model == DeploymentModel::Push
-        && ctx.app != TestApp::ByoEncryptionKey
+        && !matches!(ctx.app, TestApp::ByoEncryptionKey | TestApp::ByoAi)
         && matches!(
             ctx.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
@@ -2922,22 +2926,23 @@ async fn wait_for_gcp_management_permissions(
         // Probe the narrowest concrete permission this package requested.
         // A Key-only management identity intentionally has no project-wide
         // Resource Manager read access.
-        let result = if let Some(key) = optional_terraform_import_data::<GcpKeyImportData>(
-            &resources,
-            "key",
-        )? {
+        let result = if let Some(key) =
+            optional_terraform_import_data::<GcpKeyImportData>(&resources, "key")?
+        {
             alien_gcp_clients::CloudKmsClient::new(http.clone(), impersonated_config.clone())
                 .get_crypto_key(&key.crypto_key_name)
                 .await
                 .map(|_| ())
+        } else if optional_terraform_import_data::<GcpAiImportData>(&resources, "ai")?.is_some() {
+            alien_gcp_clients::ModelGardenClient::new(http.clone(), impersonated_config.clone())
+                .list_publisher_models("google")
+                .await
+                .map(|_| ())
         } else {
-            alien_gcp_clients::ResourceManagerClient::new(
-                http.clone(),
-                impersonated_config.clone(),
-            )
-            .get_project_metadata(target.project_id.clone())
-            .await
-            .map(|_| ())
+            alien_gcp_clients::ResourceManagerClient::new(http.clone(), impersonated_config.clone())
+                .get_project_metadata(target.project_id.clone())
+                .await
+                .map(|_| ())
         };
 
         match result {
@@ -2981,6 +2986,7 @@ fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error
 #[derive(Debug, PartialEq, Eq)]
 enum AzureManagementPermissionProbe {
     ServiceBus(AzureServiceBusNamespaceImportData),
+    Ai(AzureAiImportData),
     ResourceGraph,
 }
 
@@ -2992,6 +2998,9 @@ fn azure_management_permission_probe(
         "azure_service_bus_namespace",
     )? {
         return Ok(AzureManagementPermissionProbe::ServiceBus(service_bus));
+    }
+    if let Some(ai) = optional_terraform_import_data::<AzureAiImportData>(resources, "ai")? {
+        return Ok(AzureManagementPermissionProbe::Ai(ai));
     }
 
     Ok(AzureManagementPermissionProbe::ResourceGraph)
@@ -3119,6 +3128,44 @@ async fn wait_for_azure_management_permissions(
                     }
                 }
 
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+        AzureManagementPermissionProbe::Ai(ai) => {
+            let client = AzureCognitiveServicesClient::new(
+                reqwest::Client::new(),
+                AzureTokenCache::new(azure_config),
+            );
+            loop {
+                attempt += 1;
+                match client
+                    .list_deployments(&ai.resource_group, &ai.account_name)
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            client_id = %management.client_id,
+                            attempts = attempt,
+                            "Azure AI management permissions are ready"
+                        );
+                        return Ok(());
+                    }
+                    Err(error) if azure_management_permission_probe_should_retry(&error) => {
+                        if started.elapsed() >= timeout {
+                            anyhow::bail!(
+                                "Azure AI management permissions did not propagate for {} within {timeout:?}: {error}",
+                                management.client_id
+                            );
+                        }
+                        warn!(
+                            client_id = %management.client_id,
+                            attempt,
+                            %error,
+                            "Azure AI management permissions are not ready yet"
+                        );
+                    }
+                    Err(error) => anyhow::bail!("Azure AI management probe failed: {error}"),
+                }
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
@@ -3880,6 +3927,22 @@ mod tests {
             .expect("probe resource should be selected");
 
         assert_eq!(probe, AzureManagementPermissionProbe::ResourceGraph);
+    }
+
+    #[test]
+    fn azure_management_probe_uses_ai_account_when_stack_emits_it() {
+        let ai = AzureAiImportData {
+            account_name: "models".to_string(),
+            endpoint: "https://models.services.ai.azure.com/".to_string(),
+            resource_group: "resource-group".to_string(),
+            location: "eastus2".to_string(),
+        };
+        let resources = vec![imported_resource("ai", &ai)];
+
+        let probe = azure_management_permission_probe(&resources)
+            .expect("AI probe resource should be selected");
+
+        assert_eq!(probe, AzureManagementPermissionProbe::Ai(ai));
     }
 
     #[test]

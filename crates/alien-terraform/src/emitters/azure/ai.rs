@@ -5,7 +5,7 @@
 //! `custom_subdomain_name` derived from the stack resource prefix and the
 //! resource id.
 //!
-//! Resource-scoped role assignments (e.g. `Cognitive Services OpenAI User` for
+//! Resource-scoped role assignments (e.g. `Cognitive Services User` for
 //! `ai/invoke`) are emitted directly by this emitter, scoped to the cognitive
 //! account, for each permission profile that references `ai/invoke` on this
 //! resource. Stack-level permissions flow through `AzureServiceAccountEmitter`
@@ -20,7 +20,9 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, Ai, ErrorData, PermissionSetReference, Result};
+use alien_core::{
+    import::EmitContext, Ai, ErrorData, PermissionSetReference, RemoteBindings, Result,
+};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
@@ -208,7 +210,78 @@ fn emit_ai_permissions(
         }
     }
 
+    if let (Some(definition), Some(access_label)) = (
+        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        remote_bindings_label(ctx),
+    ) {
+        let permission_ref = PermissionSetReference::from_name(definition.permission_set);
+        let permission_set = permission_ref
+            .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "remote AI permission set '{}' is not registered",
+                        permission_ref.id()
+                    ),
+                })
+            })?;
+        let generator = AzureRuntimePermissionsGenerator::new();
+        let perm_context = permission_context(ai_label)
+            .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Resource, &perm_context)
+            .context(ErrorData::GenericError {
+                message: format!(
+                    "failed to generate Azure remote AI grants for '{}'",
+                    permission_set.id
+                ),
+            })?;
+        for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+            let AzureRoleDefinitionRef::Predefined { role_definition_id } =
+                &binding.role_definition
+            else {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: "remote AI access requires a predefined Azure role".to_string(),
+                }));
+            };
+            let role_label = sanitize_role_label(&binding.role_name);
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_role_assignment",
+                &format!("{ai_label}_{role_label}_access_assignment_{binding_index}"),
+                [
+                    attr(
+                        "name",
+                        expr::raw(&format!(
+                            "uuidv5(\"oid\", \"deployment:azure:ai-role-assign:${{azurerm_cognitive_account.{ai_label}.id}}:{role_label}:access:{binding_index}\")"
+                        )),
+                    ),
+                    attr(
+                        "scope",
+                        expr::traversal(["azurerm_cognitive_account", ai_label, "id"]),
+                    ),
+                    attr("role_definition_id", expr::template(role_definition_id.clone())),
+                    attr(
+                        "principal_id",
+                        expr::traversal([
+                            "azurerm_user_assigned_identity",
+                            access_label,
+                            "principal_id",
+                        ]),
+                    ),
+                ],
+            ));
+        }
+    }
+
     Ok(())
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
 }
 
 /// Turn a model deployment name into a valid Terraform resource label (letters,
