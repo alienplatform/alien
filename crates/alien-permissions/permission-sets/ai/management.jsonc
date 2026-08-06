@@ -5,10 +5,7 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "bedrock:ListFoundationModels",
-            "bedrock:GetFoundationModelAvailability"
-          ]
+          "actions": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"]
         },
         "binding": {
           "stack": {

@@ -7,10 +7,7 @@
         "label": "check-bedrock-availability",
         "description": "Read Bedrock foundation model availability needed for application health checks.",
         "grant": {
-          "actions": [
-            "bedrock:ListFoundationModels",
-            "bedrock:GetFoundationModelAvailability"
-          ]
+          "actions": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"]
         },
         "binding": {
           "stack": {
