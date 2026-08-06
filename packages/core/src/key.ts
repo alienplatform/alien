@@ -1,7 +1,7 @@
 import { type Key as KeyConfig, KeySchema, type ResourceType } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { KeyFingerprint, KeyOutputs, Key as KeyConfig } from "./generated/index.js"
+export type { Key as KeyConfig, KeyFingerprint, KeyOutputs } from "./generated/index.js"
 export { KeySchema as KeyConfigSchema } from "./generated/index.js"
 
 /** A customer-managed encryption key. */
