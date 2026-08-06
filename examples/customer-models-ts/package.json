@@ -1,0 +1,12 @@
+{
+  "name": "customer-models-ts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "alien build --platform aws"
+  },
+  "dependencies": {
+    "@alienplatform/core": "^1.8.0"
+  }
+}

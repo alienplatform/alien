@@ -1,0 +1,3 @@
+name = "customer-models-ts"
+description = "Let each customer connect models from their AWS or Google Cloud account to Alien's AI Gateway."
+language = "TypeScript"
