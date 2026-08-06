@@ -17,4 +17,3 @@ const value: operations.DaemonInstanceMemory = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -17,4 +17,3 @@ const value: models.ContainerUnitCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-

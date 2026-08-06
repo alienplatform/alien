@@ -40,4 +40,3 @@ const value: models.SyncReconcileResponseExternalBindingsLocal = {
   type: "artifact_registry",
 };
 ```
-

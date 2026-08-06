@@ -16,4 +16,3 @@ const value: models.Recommendation3 = {
 ```typescript
 const value: any = "<value>";
 ```
-

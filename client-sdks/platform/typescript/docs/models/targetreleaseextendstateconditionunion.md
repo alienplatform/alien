@@ -17,4 +17,3 @@ const value: models.TargetReleaseExtendConditionState = {
 ```typescript
 const value: any = "<value>";
 ```
-

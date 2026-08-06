@@ -28,4 +28,3 @@ const value: models.SyncAcquireResponseDeploymentAccountName1 = {
   },
 };
 ```
-

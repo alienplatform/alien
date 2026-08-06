@@ -34,7 +34,7 @@ export class Resources extends ClientSDK {
   }
 
   /**
-   * List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
+   * List the project's deployments with their rollout state relative to this release.
    */
   async listDeployments(
     request: operations.ListResourceDeploymentsRequest,

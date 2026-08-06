@@ -17,4 +17,3 @@ const value: models.DeploymentDetailResponsePreviousConfig = {
 ```typescript
 const value: any = "<value>";
 ```
-

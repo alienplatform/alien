@@ -65,4 +65,3 @@ const value: models.CreateSetupRegistrationOperationRequestNetworkByoVnetAzure =
 ```typescript
 const value: any = "<value>";
 ```
-

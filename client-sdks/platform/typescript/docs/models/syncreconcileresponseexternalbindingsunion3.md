@@ -49,4 +49,3 @@ const value: models.SyncReconcileResponseExternalBindingsLocalKv = {
   type: "kv",
 };
 ```
-

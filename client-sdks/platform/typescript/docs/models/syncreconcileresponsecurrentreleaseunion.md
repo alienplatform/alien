@@ -19,4 +19,3 @@ const value: models.SyncReconcileResponseCurrentRelease = {
 ```typescript
 const value: any = "<value>";
 ```
-

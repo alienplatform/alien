@@ -20,4 +20,3 @@ const value: models.SyncReconcileRequestCurrentReleaseExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

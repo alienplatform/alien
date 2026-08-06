@@ -17,4 +17,3 @@ const value: models.PreparedDeploymentStackProfileConditionResource = {
 ```typescript
 const value: any = "<value>";
 ```
-

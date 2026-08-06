@@ -16,4 +16,3 @@ const value: models.DeploymentDetailResponseGcpStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

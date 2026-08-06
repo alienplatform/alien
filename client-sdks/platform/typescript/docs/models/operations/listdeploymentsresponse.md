@@ -20,6 +20,7 @@ let value: ListDeploymentsResponse = {
       currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseChannel: "<value>",
       retryRequested: false,
       createdAt: new Date("2026-06-07T15:57:36.372Z"),
       updatedAt: new Date("2026-07-20T07:45:05.184Z"),
@@ -41,7 +42,7 @@ let value: ListDeploymentsResponse = {
           commitAuthorLogin: "johndoe",
           commitAuthorAvatarUrl: "https://github.com/johndoe.png",
         },
-        createdAt: new Date("2024-06-27T06:57:01.451Z"),
+        createdAt: new Date("2024-04-17T05:47:54.417Z"),
       },
       deploymentGroup: {
         id: "dg_r27ict8c7vcgsumpj90ackf7b",

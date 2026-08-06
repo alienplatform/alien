@@ -14,4 +14,3 @@ const value: models.DeploymentInputsResponseValidation = {};
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -14,4 +14,3 @@ const value: models.ManagerRetryResponseKubernetes2 = {};
 ```typescript
 const value: any = "<value>";
 ```
-

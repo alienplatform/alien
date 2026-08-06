@@ -50,4 +50,3 @@ const value: models.DeploymentInfoManagementConfigKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -23,4 +23,3 @@ const value: models.SyncReconcileResponseRouteGateway1 = {
   routeApi: "gateway",
 };
 ```
-

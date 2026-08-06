@@ -19,4 +19,3 @@ const value: operations.Process = {
 ```typescript
 const value: any = "<value>";
 ```
-

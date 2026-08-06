@@ -362,7 +362,6 @@ const alien = new Alien({
 async function run() {
   const result = await alien.deploymentGroups.getDeploymentGroupByExternalId({
     workspace: "my-workspace",
-    project: "my-project",
     externalId: "ext_example_01",
   });
 
@@ -389,7 +388,6 @@ const alien = new AlienCore({
 async function run() {
   const res = await deploymentGroupsGetDeploymentGroupByExternalId(alien, {
     workspace: "my-workspace",
-    project: "my-project",
     externalId: "ext_example_01",
   });
   if (res.ok) {

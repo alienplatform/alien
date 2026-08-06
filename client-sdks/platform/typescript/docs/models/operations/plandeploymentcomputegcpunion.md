@@ -16,4 +16,3 @@ const value: operations.PlanDeploymentComputeGcp = {
 ```typescript
 const value: any = "<value>";
 ```
-

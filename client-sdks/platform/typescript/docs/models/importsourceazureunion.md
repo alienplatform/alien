@@ -16,4 +16,3 @@ const value: models.ImportSourceAzure = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -21,4 +21,3 @@ const value: models.SelectedAutoscale = {
   max: 358785,
 };
 ```
-

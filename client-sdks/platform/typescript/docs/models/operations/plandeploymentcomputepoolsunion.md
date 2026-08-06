@@ -21,4 +21,3 @@ const value: operations.PlanDeploymentComputePoolsAutoscale = {
   max: 23862,
 };
 ```
-

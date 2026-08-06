@@ -26,19 +26,19 @@ let value: APIKey = {
   deploymentSetupConfig: {
     metadata: {
       "key": "<value>",
-      "key1": "<value>",
-      "key2": "<value>",
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
     },
     environmentVariables: [],
   },
   createdByUser: {
     id: "<id>",
-    email: "Rhett78@hotmail.com",
-    image: "https://picsum.photos/seed/PS5fO/2447/1335",
+    email: "Rhianna90@hotmail.com",
+    image: "https://picsum.photos/seed/UEmR2Mt/3119/3794",
   },
 };
 ```

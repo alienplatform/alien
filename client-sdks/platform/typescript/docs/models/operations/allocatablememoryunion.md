@@ -17,4 +17,3 @@ const value: operations.MemoryAllocatable = {
 ```typescript
 const value: any = "<value>";
 ```
-

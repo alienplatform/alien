@@ -14,4 +14,3 @@ const value: models.SyncReconcileResponsePreparedStackTypeEnvEnum = "secret";
 ```typescript
 const value: any = "<value>";
 ```
-

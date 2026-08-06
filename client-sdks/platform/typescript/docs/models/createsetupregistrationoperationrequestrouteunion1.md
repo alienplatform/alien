@@ -23,4 +23,3 @@ const value: models.CreateSetupRegistrationOperationRequestRouteGateway1 = {
   routeApi: "gateway",
 };
 ```
-

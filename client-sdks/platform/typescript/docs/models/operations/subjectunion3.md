@@ -16,4 +16,3 @@ const value: operations.Subject3 = {
 ```typescript
 const value: any = "<value>";
 ```
-

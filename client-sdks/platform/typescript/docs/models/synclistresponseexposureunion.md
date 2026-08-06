@@ -49,4 +49,3 @@ const value: models.SyncListResponseExposureCustom = {
 ```typescript
 const value: any = "<value>";
 ```
-

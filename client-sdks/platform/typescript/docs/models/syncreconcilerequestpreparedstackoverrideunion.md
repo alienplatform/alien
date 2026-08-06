@@ -20,4 +20,3 @@ const value: models.SyncReconcileRequestPreparedStackOverride = {
 ```typescript
 const value: string = "<value>";
 ```
-

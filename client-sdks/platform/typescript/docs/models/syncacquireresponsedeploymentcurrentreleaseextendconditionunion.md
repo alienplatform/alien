@@ -18,4 +18,3 @@ const value: models.SyncAcquireResponseDeploymentCurrentReleaseExtendCondition =
 ```typescript
 const value: any = "<value>";
 ```
-

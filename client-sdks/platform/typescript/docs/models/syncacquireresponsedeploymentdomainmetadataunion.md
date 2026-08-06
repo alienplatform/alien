@@ -26,4 +26,3 @@ const value: models.SyncAcquireResponseDeploymentDomainMetadata = {
 ```typescript
 const value: any = "<value>";
 ```
-

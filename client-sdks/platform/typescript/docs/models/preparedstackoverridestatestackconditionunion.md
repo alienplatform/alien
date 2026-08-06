@@ -17,4 +17,3 @@ const value: models.PreparedStackOverrideConditionStateStack = {
 ```typescript
 const value: any = "<value>";
 ```
-

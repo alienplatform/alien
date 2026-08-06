@@ -26,4 +26,3 @@ const value: models.SyncReconcileResponsePreparedStackManagement2 = {
 ```typescript
 const value: models.SyncReconcileResponsePreparedStackManagementEnum = "auto";
 ```
-

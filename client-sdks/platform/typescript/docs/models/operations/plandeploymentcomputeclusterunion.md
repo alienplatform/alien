@@ -16,4 +16,3 @@ const value: operations.PlanDeploymentComputeCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

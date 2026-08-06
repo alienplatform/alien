@@ -25,4 +25,3 @@ const value: models.ImportSourcePublicEndpointTargetLoadBalancer = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -41,23 +41,30 @@ const value: models.DataGcpSecretManager = {
 };
 ```
 
-### `models.DataAzureKeyVault`
+### `models.DataAzureKeyVault1`
 
 ```typescript
-const value: models.DataAzureKeyVault = {
-  accessPolicyCount: 923246,
+const value: models.DataAzureKeyVault1 = {
+  accessPolicyCount: 582917,
   name: "<value>",
-  privateEndpointConnectionCount: 319306,
+  privateEndpointConnectionCount: 112234,
   publicNetworkAccess: "<value>",
   rbacAuthorizationEnabled: true,
   secretMetadataListed: false,
-  softDeleteEnabled: false,
-  softDeleteRetentionDays: 497787,
+  softDeleteEnabled: true,
+  softDeleteRetentionDays: 457442,
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "creating",
-    partial: true,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "updating",
+    partial: false,
     stale: false,
   },
   backend: "azureKeyVault",
@@ -113,4 +120,3 @@ const value: models.DataLocal9 = {
   backend: "local",
 };
 ```
-

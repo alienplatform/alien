@@ -20,4 +20,3 @@ const value: models.SyncAcquireResponseDeploymentCurrentReleaseProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

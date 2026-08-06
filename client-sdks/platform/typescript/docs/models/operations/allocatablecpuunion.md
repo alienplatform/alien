@@ -17,4 +17,3 @@ const value: operations.CpuAllocatable = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -17,4 +17,3 @@ const value: models.OverrideConditionReleaseInfo = {
 ```typescript
 const value: any = "<value>";
 ```
-

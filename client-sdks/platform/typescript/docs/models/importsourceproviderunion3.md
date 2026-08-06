@@ -36,4 +36,3 @@ const value: models.ImportSourceProviderAzureApplicationGatewayForContainers3 =
 ```typescript
 const value: any = "<value>";
 ```
-

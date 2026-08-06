@@ -17,4 +17,3 @@ const value: operations.MemoryCapacity = {
 ```typescript
 const value: any = "<value>";
 ```
-

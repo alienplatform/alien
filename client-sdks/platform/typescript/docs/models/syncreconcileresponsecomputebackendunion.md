@@ -18,4 +18,3 @@ const value: models.SyncReconcileResponseComputeBackendHorizon = {
 ```typescript
 const value: any = "<value>";
 ```
-

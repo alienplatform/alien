@@ -14,4 +14,3 @@ const value: models.InvolvedObject8 = {};
 ```typescript
 const value: any = "<value>";
 ```
-

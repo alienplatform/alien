@@ -19,4 +19,3 @@ const value: models.SyncReconcileResponseDomainMetadata = {
 ```typescript
 const value: any = "<value>";
 ```
-

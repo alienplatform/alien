@@ -17,4 +17,3 @@ const value: operations.Memory10 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -16,4 +16,3 @@ const value: models.SyncListResponseGcpStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

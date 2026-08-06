@@ -11,10 +11,16 @@ import {
   DeploymentSetupMethod$inboundSchema,
 } from "./deploymentsetupmethod.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
-import {
-  StackByPlatform,
-  StackByPlatform$inboundSchema,
-} from "./stackbyplatform.js";
+
+export type DeploymentLinkSetupResponseStack = {
+  aws?: any | null | undefined;
+  gcp?: any | null | undefined;
+  azure?: any | null | undefined;
+  kubernetes?: any | null | undefined;
+  machines?: any | null | undefined;
+  local?: any | null | undefined;
+  test?: any | null | undefined;
+};
 
 export type ActiveRelease = {
   /**
@@ -22,7 +28,7 @@ export type ActiveRelease = {
    */
   id: string;
   version: string | null;
-  stack: StackByPlatform | null;
+  stack: DeploymentLinkSetupResponseStack | null;
 };
 
 /**
@@ -47,11 +53,37 @@ export type DeploymentLinkSetupResponse = {
 };
 
 /** @internal */
+export const DeploymentLinkSetupResponseStack$inboundSchema: z.ZodType<
+  DeploymentLinkSetupResponseStack,
+  unknown
+> = z.object({
+  aws: z.nullable(z.any()).optional(),
+  gcp: z.nullable(z.any()).optional(),
+  azure: z.nullable(z.any()).optional(),
+  kubernetes: z.nullable(z.any()).optional(),
+  machines: z.nullable(z.any()).optional(),
+  local: z.nullable(z.any()).optional(),
+  test: z.nullable(z.any()).optional(),
+});
+
+export function deploymentLinkSetupResponseStackFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentLinkSetupResponseStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentLinkSetupResponseStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentLinkSetupResponseStack' from JSON`,
+  );
+}
+
+/** @internal */
 export const ActiveRelease$inboundSchema: z.ZodType<ActiveRelease, unknown> = z
   .object({
     id: z.string(),
     version: z.nullable(z.string()),
-    stack: z.nullable(StackByPlatform$inboundSchema),
+    stack: z.nullable(
+      z.lazy(() => DeploymentLinkSetupResponseStack$inboundSchema),
+    ),
   });
 
 export function activeReleaseFromJSON(

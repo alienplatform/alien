@@ -14,4 +14,3 @@ const value: models.Counts = {};
 ```typescript
 const value: any = "<value>";
 ```
-

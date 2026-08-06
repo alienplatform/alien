@@ -17,4 +17,3 @@ const value: operations.MemoryPod2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -14,4 +14,3 @@ const value: models.SyncListResponseLifecycleStackStateEnum = "frozen";
 ```typescript
 const value: any = "<value>";
 ```
-

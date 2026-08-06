@@ -40,4 +40,3 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsLocal = {
   type: "artifact_registry",
 };
 ```
-

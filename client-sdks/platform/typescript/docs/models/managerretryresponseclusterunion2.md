@@ -16,4 +16,3 @@ const value: models.ManagerRetryResponseCluster2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -20,4 +20,3 @@ const value: models.ProfileReleaseInfo = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -49,4 +49,3 @@ const value: models.PersistImportedDeploymentRequestCertificateNone1 = {
   mode: "none",
 };
 ```
-

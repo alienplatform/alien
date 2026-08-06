@@ -25,4 +25,3 @@ const value: models.DeploymentPublicEndpointTargetLoadBalancer = {
 ```typescript
 const value: any = "<value>";
 ```
-

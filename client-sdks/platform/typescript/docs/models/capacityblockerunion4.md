@@ -18,4 +18,3 @@ const value: models.CapacityBlocker4 = {
 ```typescript
 const value: any = "<value>";
 ```
-

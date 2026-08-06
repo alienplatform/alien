@@ -17,4 +17,3 @@ const value: models.Cpu2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -17,4 +17,3 @@ const value: operations.ProcessMemory = {
 ```typescript
 const value: any = "<value>";
 ```
-

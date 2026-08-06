@@ -71,4 +71,3 @@ const value: models.OutputsTerraform = {
 ```typescript
 const value: any = "<value>";
 ```
-

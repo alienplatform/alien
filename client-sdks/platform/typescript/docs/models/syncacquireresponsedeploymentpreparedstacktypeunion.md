@@ -15,4 +15,3 @@ const value: models.SyncAcquireResponseDeploymentPreparedStackTypeEnvEnum =
 ```typescript
 const value: any = "<value>";
 ```
-
