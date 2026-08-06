@@ -7,11 +7,11 @@ Role for project-scoped service accounts
 ```typescript
 import { ProjectRole } from "@alienplatform/platform-api/models";
 
-let value: ProjectRole = "project.encryption";
+let value: ProjectRole = "project.ai-gateway";
 ```
 
 ## Values
 
 ```typescript
-"project.viewer" | "project.developer" | "project.encryption"
+"project.viewer" | "project.developer" | "project.encryption" | "project.ai-gateway"
 ```
