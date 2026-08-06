@@ -167,12 +167,15 @@ export async function uploadPresigned(
 
   if (request.backend.type === "http") {
     const fetchImpl = options.fetchImpl ?? fetch
+    // Copy into an ArrayBuffer-backed view. Callers may provide a view backed
+    // by SharedArrayBuffer, which is intentionally not accepted by BodyInit.
+    const body = new Uint8Array(bytes)
     let response: Response
     try {
       response = await fetchImpl(request.backend.url, {
         method: request.backend.method,
         headers: request.backend.headers,
-        body: bytes,
+        body,
         signal: transferSignal(options.signal),
       })
     } catch {
