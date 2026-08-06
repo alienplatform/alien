@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: bc51eaa5-3f88-4290-b64f-cae16746dd5d
 management:
-  docChecksum: 80d3e7130accc897ebe412225d786d05
+  docChecksum: cca2a21b9d5f506be511df917bed81d6
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -28530,7 +28530,7 @@ trackedFiles:
     pristine_git_object: 3e791cad7f6102a7a2aaffeddcb40990d20ff890
   docs/sdks/deploymentgroups/README.md:
     id: 5df9f1e7770b
-    last_write_checksum: sha1:fd8dbc4ab2eb1a1a8650005d135e86c4dc80cc67
+    last_write_checksum: sha1:3b2aa66242c5ff8724e6bdaeac72f6136262050b
     pristine_git_object: 3ab72dac669daa20a387032aeff49aecfdbf7c91
   docs/sdks/deployments/README.md:
     id: e7c5559ab768
@@ -28761,7 +28761,7 @@ trackedFiles:
     last_write_checksum: sha1:928c67c2de496ef83b3f830d574f5e05d193fc1d
     pristine_git_object: 614c92f68b9cb2d2ffaa0bb9c097f9296d6cdc0d
   src/funcs/deploymentGroupsDeleteDirectAnthropicBinding.ts:
-    last_write_checksum: sha1:901c205a9779976fe92c5d3b1b5c24a0e3a9611e
+    last_write_checksum: sha1:1e6614fc05dd3b9a5f02909d680a338766e564e6
   src/funcs/deploymentGroupsEnsureDeploymentGroupByExternalId.ts:
     last_write_checksum: sha1:1ee23448113a532a1789140df6f77b7dbdb0580c
   src/funcs/deploymentGroupsEnsureDeploymentGroupByName.ts:
@@ -28775,13 +28775,13 @@ trackedFiles:
   src/funcs/deploymentGroupsGetDeploymentGroupByExternalId.ts:
     last_write_checksum: sha1:719df8b9409c6be1842d5018ffd16be962dd7975
   src/funcs/deploymentGroupsGetDirectAnthropicBinding.ts:
-    last_write_checksum: sha1:285e72d3a4217cee88649bcbdc848c08d198e277
+    last_write_checksum: sha1:035f11e08b0cc2eca5f249a821c91aa5e393a364
   src/funcs/deploymentGroupsListDeploymentGroups.ts:
     id: 34292c2a1420
     last_write_checksum: sha1:7bd00ee1deebd77cdfbc47dcb4d143c04554fbf5
     pristine_git_object: 4b1e1514967cbdfc55b68380cdae431dbbb0e9c0
   src/funcs/deploymentGroupsPutDirectAnthropicBinding.ts:
-    last_write_checksum: sha1:55626e8c3cf7994134dcac1f4e030efed65ffb0c
+    last_write_checksum: sha1:4de74d116374b96ad5f75fbfaf1a80b45b96df65
   src/funcs/deploymentGroupsSetDeploymentGroupExternalId.ts:
     last_write_checksum: sha1:bb18f3ecc4c88f5b48b267d1fd250ba2c0183909
   src/funcs/deploymentGroupsUpdateDeploymentGroup.ts:
@@ -34359,6 +34359,8 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "403":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   putDirectAnthropicBinding:
     speakeasy-default-put-direct-anthropic-binding:
       parameters:
@@ -34386,5 +34388,7 @@ examples:
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "403":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
 examplesVersion: 1.0.2
