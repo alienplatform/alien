@@ -4,8 +4,8 @@ import {
   type CommandConnection,
   type CommandConnectionProvider,
   HostedCommandConnectionProvider,
-  type RefreshingConnectionProvider,
   managerCommandsUrl,
+  type RefreshingConnectionProvider,
 } from "./bootstrap.js"
 import { CommandReceiverConfigInvalidError, InvalidEnvelopeError } from "./errors.js"
 import type { CommandTargetType } from "./protocol.js"

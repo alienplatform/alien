@@ -29,13 +29,13 @@
 
 // Shared error primitives, re-exported for consumer error handling.
 export { AlienError, defineError } from "@alienplatform/core"
-// Sender
-export { CommandsClient, TargetedCommands } from "./client.js"
 export type {
   CommandsClientConfig,
   CommandsClientDeploymentConfig,
   InvokeOptions,
 } from "./client.js"
+// Sender
+export { CommandsClient, TargetedCommands } from "./client.js"
 // Error set
 export {
   CommandBootstrapConfigInvalidError,
