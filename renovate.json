@@ -16,6 +16,11 @@
       "matchUpdateTypes": ["minor"],
       "matchCurrentVersion": "/^0\\./",
       "enabled": false
+    },
+    {
+      "description": "Require explicit dashboard approval for major updates",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
     }
   ]
 }
