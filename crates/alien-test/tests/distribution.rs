@@ -77,9 +77,7 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
             }
         }
         TestApp::ByoAi => {
-            if let Err(error) =
-                common::remote_bindings::check_remote_ai(&ctx.deployment, ctx.platform).await
-            {
+            if let Err(error) = common::remote_bindings::check_remote_ai(ctx).await {
                 panic!("remote AI checks failed: {error:#}");
             }
         }

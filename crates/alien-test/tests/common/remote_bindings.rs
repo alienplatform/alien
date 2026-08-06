@@ -1,4 +1,4 @@
-//! Live-cloud verification of the public remote Storage API.
+//! Live-cloud verification of public Remote Bindings APIs.
 //!
 //! The local discovery fixture stands in only for the Platform API. It points
 //! the public client at the in-process manager that owns the real deployment;
@@ -40,6 +40,8 @@ const NATIVE_STORAGE_BINDING: &str = "encrypted-storage";
 const NATIVE_STORAGE_KEY: &str = ENTERPRISE_KEY_BINDING;
 const STORAGE_KEY_BINDING: &str = "storage-key";
 const AI_BINDING: &str = "customer-models";
+const AI_PERMISSION_PROPAGATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const AI_PERMISSION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Clone)]
 struct DiscoveryState {
@@ -53,6 +55,17 @@ struct DiscoveryState {
 struct DiscoveryServer {
     url: String,
     task: tokio::task::JoinHandle<()>,
+}
+
+struct LocalAiGateway {
+    url: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for LocalAiGateway {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 impl Drop for DiscoveryServer {
@@ -799,11 +812,12 @@ async fn run_cloud_command(
 /// Resolve the deployment's real cloud AI resource through the public Remote
 /// Bindings API, then use the Manager-minted Access credential for one real
 /// inference request through the same protocol engine as the hosted gateway.
-pub fn check_remote_ai<'a>(
-    deployment: &'a TestDeployment,
-    platform: Platform,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+pub fn check_remote_ai(
+    ctx: &TestContext,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
+        let deployment = &ctx.deployment;
+        let platform = ctx.platform;
         if platform == Platform::Azure
             && std::env::var("AZURE_FEDERATED_TOKEN_FILE")
                 .ok()
@@ -857,50 +871,254 @@ pub fn check_remote_ai<'a>(
                 tracing::error!(%error, "remote AI gateway failed");
             }
         });
+        let gateway = LocalAiGateway {
+            url: format!("http://{address}/{AI_BINDING}/v1/chat/completions"),
+            task,
+        };
 
         let client = reqwest::Client::new();
-        let url = format!("http://{address}/{AI_BINDING}/v1/chat/completions");
-        let mut outcome = None;
-        for attempt in 1..=21 {
-            let response = client
-                .post(&url)
-                .timeout(std::time::Duration::from_secs(180))
-                .json(&json!({
-                    "model": model,
-                    "max_completion_tokens": 1,
-                    "messages": [{ "role": "user", "content": "ping" }]
-                }))
-                .send()
-                .await
-                .context("invoke model through remote AI gateway")?;
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            if platform == Platform::Azure
-                && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-                && attempt < 21
-            {
-                info!(attempt, %status, "Waiting for Azure AI data-plane role propagation");
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                continue;
-            }
-            outcome = Some((status, body));
-            break;
-        }
-        task.abort();
+        wait_for_ai_access(&client, &gateway.url, model, platform, "initial setup").await?;
 
-        let (status, body) =
-            outcome.context("remote AI inference retry loop returned no result")?;
-        if !status.is_success() && status != StatusCode::TOO_MANY_REQUESTS {
-            bail!("remote AI model '{model}' returned {status}: {body}");
+        if matches!(platform, Platform::Aws | Platform::Gcp) {
+            let (workdir, env) = terraform_qualification_context(ctx)?;
+            let grant = find_ai_inference_grant(workdir, env, platform).await?;
+            set_ai_inference_grant(workdir, env, &grant, false).await?;
+            let revocation_result =
+                wait_for_ai_access_revoked(&client, &gateway.url, model, platform).await;
+            let restoration_result = set_ai_inference_grant(workdir, env, &grant, true).await;
+
+            if let Err(restoration_error) = restoration_result {
+                return match revocation_result {
+                    Ok(()) => Err(restoration_error.context(
+                        "AI inference permission was revoked but could not be restored",
+                    )),
+                    Err(revocation_error) => Err(revocation_error.context(format!(
+                        "AI revocation check failed and permission restoration also failed: {restoration_error:#}"
+                    ))),
+                };
+            }
+            revocation_result?;
+            wait_for_ai_access(
+                &client,
+                &gateway.url,
+                model,
+                platform,
+                "permission restoration",
+            )
+            .await?;
+            info!(
+                platform = %platform.as_str(),
+                model,
+                "Remote AI inference, permission revocation, and restoration checks passed"
+            );
+        } else {
+            info!(
+                platform = %platform.as_str(),
+                model,
+                "Remote AI credential and inference check passed"
+            );
         }
-        info!(
-            platform = %platform.as_str(),
-            model,
-            %status,
-            "Remote AI credential and inference check passed"
-        );
         Ok(())
     })
+}
+
+fn terraform_qualification_context(
+    ctx: &TestContext,
+) -> anyhow::Result<(&std::path::Path, &[(String, String)])> {
+    ctx.distribution_cleanups
+        .iter()
+        .find_map(|cleanup| {
+            cleanup
+                .terraform_workdir()
+                .map(|workdir| (workdir, cleanup.command_env()))
+        })
+        .context("BYO-AI qualification has no Terraform setup state")
+}
+
+async fn invoke_ai(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+) -> anyhow::Result<(StatusCode, String)> {
+    let response = client
+        .post(url)
+        .timeout(std::time::Duration::from_secs(180))
+        .json(&json!({
+            "model": model,
+            "max_completion_tokens": 1,
+            "messages": [{ "role": "user", "content": "ping" }]
+        }))
+        .send()
+        .await
+        .context("invoke model through remote AI gateway")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("read remote AI gateway response")?;
+    Ok((status, body))
+}
+
+async fn wait_for_ai_access(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    platform: Platform,
+    phase: &str,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + AI_PERMISSION_PROPAGATION_TIMEOUT;
+    loop {
+        let (status, body) = invoke_ai(client, url, model).await?;
+        if status.is_success() || status == StatusCode::TOO_MANY_REQUESTS {
+            info!(%status, phase, "Remote AI access is available");
+            return Ok(());
+        }
+        let permission_is_propagating = status == StatusCode::SERVICE_UNAVAILABLE
+            || (platform == Platform::Azure
+                && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN));
+        if permission_is_propagating && tokio::time::Instant::now() < deadline {
+            info!(%status, phase, "Waiting for AI permission propagation");
+            tokio::time::sleep(AI_PERMISSION_POLL_INTERVAL).await;
+            continue;
+        }
+        bail!("remote AI model '{model}' during {phase} returned {status}: {body}");
+    }
+}
+
+async fn wait_for_ai_access_revoked(
+    client: &reqwest::Client,
+    url: &str,
+    model: &str,
+    platform: Platform,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + AI_PERMISSION_PROPAGATION_TIMEOUT;
+    loop {
+        let (status, body) = invoke_ai(client, url, model).await?;
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            let response: serde_json::Value =
+                serde_json::from_str(&body).context("parse sanitized AI access error")?;
+            anyhow::ensure!(
+                response
+                    .pointer("/error/code")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("provider_access_unavailable"),
+                "revoked AI permission returned an unexpected response: {body}"
+            );
+            info!(
+                platform = %platform.as_str(),
+                "New AI operations stopped after provider permission revocation"
+            );
+            return Ok(());
+        }
+        if (status.is_success() || status == StatusCode::TOO_MANY_REQUESTS)
+            && tokio::time::Instant::now() < deadline
+        {
+            info!(
+                platform = %platform.as_str(),
+                %status,
+                "Waiting for revoked AI permission to reach the provider data plane"
+            );
+            tokio::time::sleep(AI_PERMISSION_POLL_INTERVAL).await;
+            continue;
+        }
+        bail!(
+            "AI permission revocation for {} did not stop new operations within {:?}; last response was {status}: {body}",
+            platform.as_str(),
+            AI_PERMISSION_PROPAGATION_TIMEOUT
+        );
+    }
+}
+
+async fn run_terraform_qualification_command(
+    workdir: &std::path::Path,
+    args: &[&str],
+    env: &[(String, String)],
+    description: &str,
+) -> anyhow::Result<()> {
+    let mut command = tokio::process::Command::new("terraform");
+    command.current_dir(workdir).args(args);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command
+        .output()
+        .await
+        .with_context(|| format!("failed to run {description}"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{description} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+async fn find_ai_inference_grant(
+    workdir: &std::path::Path,
+    env: &[(String, String)],
+    platform: Platform,
+) -> anyhow::Result<String> {
+    let mut command = tokio::process::Command::new("terraform");
+    command.current_dir(workdir).args(["state", "list"]);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command
+        .output()
+        .await
+        .context("run Terraform state list for AI qualification")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Terraform state list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let state = String::from_utf8(output.stdout).context("Terraform state is not UTF-8")?;
+    let grants = state
+        .lines()
+        .filter(|address| match platform {
+            Platform::Aws => {
+                address.starts_with("aws_iam_role_policy.")
+                    && address.contains("_ai_")
+                    && address.contains("access")
+            }
+            Platform::Gcp => {
+                address.starts_with("google_project_iam_member.gcp_role_ai_invoke_")
+                    && address.contains("access_binding")
+            }
+            _ => false,
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        grants.len() == 1,
+        "dedicated BYO-AI Terraform state must contain exactly one Access inference grant, found {grants:?}"
+    );
+    Ok(grants[0].to_string())
+}
+
+async fn set_ai_inference_grant(
+    workdir: &std::path::Path,
+    env: &[(String, String)],
+    grant: &str,
+    enabled: bool,
+) -> anyhow::Result<()> {
+    let target = format!("-target={grant}");
+    let action = if enabled { "apply" } else { "destroy" };
+    run_terraform_qualification_command(
+        workdir,
+        &[
+            action,
+            "-auto-approve",
+            "-input=false",
+            "-lock-timeout=5m",
+            &target,
+        ],
+        env,
+        if enabled {
+            "Terraform restore AI inference grant"
+        } else {
+            "Terraform revoke AI inference grant"
+        },
+    )
+    .await
 }
 
 async fn verify_before_delete(
