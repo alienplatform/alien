@@ -857,22 +857,39 @@ pub fn check_remote_ai<'a>(
             }
         });
 
-        let response = reqwest::Client::new()
-            .post(format!("http://{address}/{AI_BINDING}/v1/chat/completions"))
-            .timeout(std::time::Duration::from_secs(180))
-            .json(&json!({
-                "model": model,
-                "max_completion_tokens": 1,
-                "messages": [{ "role": "user", "content": "ping" }]
-            }))
-            .send()
-            .await
-            .context("invoke model through remote AI gateway")?;
+        let client = reqwest::Client::new();
+        let url = format!("http://{address}/{AI_BINDING}/v1/chat/completions");
+        let mut outcome = None;
+        for attempt in 1..=21 {
+            let response = client
+                .post(&url)
+                .timeout(std::time::Duration::from_secs(180))
+                .json(&json!({
+                    "model": model,
+                    "max_completion_tokens": 1,
+                    "messages": [{ "role": "user", "content": "ping" }]
+                }))
+                .send()
+                .await
+                .context("invoke model through remote AI gateway")?;
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if platform == Platform::Azure
+                && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+                && attempt < 21
+            {
+                info!(attempt, %status, "Waiting for Azure AI data-plane role propagation");
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                continue;
+            }
+            outcome = Some((status, body));
+            break;
+        }
         task.abort();
 
-        let status = response.status();
+        let (status, body) =
+            outcome.context("remote AI inference retry loop returned no result")?;
         if !status.is_success() && status != StatusCode::TOO_MANY_REQUESTS {
-            let body = response.text().await.unwrap_or_default();
             bail!("remote AI model '{model}' returned {status}: {body}");
         }
         info!(
