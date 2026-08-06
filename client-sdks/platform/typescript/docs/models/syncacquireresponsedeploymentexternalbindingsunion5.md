@@ -53,4 +53,3 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsLocalVault = {
   type: "vault",
 };
 ```
-

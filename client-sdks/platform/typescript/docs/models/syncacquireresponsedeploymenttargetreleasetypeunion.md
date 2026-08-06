@@ -15,4 +15,3 @@ const value: models.SyncAcquireResponseDeploymentTargetReleaseTypeEnvEnum =
 ```typescript
 const value: any = "<value>";
 ```
-

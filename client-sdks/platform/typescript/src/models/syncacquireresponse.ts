@@ -36,6 +36,10 @@ export type SyncAcquireResponse = {
    * List of deployments that failed during context building (locks already released)
    */
   failures: Array<Failure>;
+  /**
+   * When the provisional leases on the returned deployments lapse. Confirm them with sync/renew before starting work. Null when nothing was acquired.
+   */
+  leaseExpiresAt: Date | null;
 };
 
 /** @internal */
@@ -62,6 +66,9 @@ export const SyncAcquireResponse$inboundSchema: z.ZodType<
 > = z.object({
   deployments: z.array(SyncAcquireResponseDeployment$inboundSchema),
   failures: z.array(z.lazy(() => Failure$inboundSchema)),
+  leaseExpiresAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function syncAcquireResponseFromJSON(

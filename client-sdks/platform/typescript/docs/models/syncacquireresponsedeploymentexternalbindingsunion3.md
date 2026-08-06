@@ -50,4 +50,3 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsLocalKv = {
   type: "kv",
 };
 ```
-

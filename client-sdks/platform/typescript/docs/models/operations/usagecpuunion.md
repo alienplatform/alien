@@ -17,4 +17,3 @@ const value: operations.UsageCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-

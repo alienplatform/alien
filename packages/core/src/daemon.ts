@@ -23,8 +23,8 @@ export type {
 } from "./generated/index.js"
 export {
   DaemonCodeSchema,
-  DaemonSchema as DaemonConfigSchema,
   DaemonOutputsSchema,
+  DaemonSchema as DaemonConfigSchema,
   PublicEndpointSchema,
 } from "./generated/index.js"
 

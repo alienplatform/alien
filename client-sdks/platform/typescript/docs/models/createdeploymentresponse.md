@@ -18,6 +18,7 @@ let value: CreateDeploymentResponse = {
     currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    releaseChannel: "<value>",
     retryRequested: true,
     createdAt: new Date("2025-11-27T13:33:53.835Z"),
     updatedAt: new Date("2024-08-29T09:22:49.431Z"),

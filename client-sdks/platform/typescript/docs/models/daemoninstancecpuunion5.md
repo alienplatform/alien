@@ -17,4 +17,3 @@ const value: models.DaemonInstanceCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-

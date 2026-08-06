@@ -14,4 +14,3 @@ const value: models.DeploymentSetupStackSettingsPolicyDomains = {};
 ```typescript
 const value: any = "<value>";
 ```
-

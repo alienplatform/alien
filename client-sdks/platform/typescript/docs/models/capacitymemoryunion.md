@@ -17,4 +17,3 @@ const value: models.MemoryCapacity = {
 ```typescript
 const value: any = "<value>";
 ```
-

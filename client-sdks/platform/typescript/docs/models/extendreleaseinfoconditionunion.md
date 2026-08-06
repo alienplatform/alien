@@ -17,4 +17,3 @@ const value: models.ExtendConditionReleaseInfo = {
 ```typescript
 const value: any = "<value>";
 ```
-

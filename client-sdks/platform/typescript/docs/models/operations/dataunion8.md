@@ -76,4 +76,3 @@ const value: operations.DataLocal8 = {
   backend: "local",
 };
 ```
-

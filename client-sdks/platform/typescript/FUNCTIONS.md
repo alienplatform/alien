@@ -20,7 +20,7 @@ specific category of applications.
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { userListMemberships } from "@alienplatform/platform-api/funcs/userListMemberships.js";
+import { getWorkspaceInvitationPreview } from "@alienplatform/platform-api/funcs/getWorkspaceInvitationPreview.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -29,12 +29,14 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await userListMemberships(alien);
+  const res = await getWorkspaceInvitationPreview(alien, {
+    token: "<value>",
+  });
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("userListMemberships failed:", res.error);
+    console.log("getWorkspaceInvitationPreview failed:", res.error);
   }
 }
 

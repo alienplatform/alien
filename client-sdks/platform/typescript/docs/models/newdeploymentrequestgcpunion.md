@@ -16,4 +16,3 @@ const value: models.NewDeploymentRequestGcp = {
 ```typescript
 const value: any = "<value>";
 ```
-

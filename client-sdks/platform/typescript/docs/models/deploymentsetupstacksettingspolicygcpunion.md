@@ -16,4 +16,3 @@ const value: models.DeploymentSetupStackSettingsPolicyGcp = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -6,8 +6,8 @@
  * - API mode: manages a deployment via platform API (cloud platforms)
  */
 
-import { execFile } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
+import { execFile } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { promisify } from "node:util"

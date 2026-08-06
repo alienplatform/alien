@@ -52,7 +52,33 @@ export type CreateSetupRegistrationOperationRequestPlatform = ClosedEnum<
   typeof CreateSetupRegistrationOperationRequestPlatform
 >;
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateSetupRegistrationOperationRequestFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateSetupRegistrationOperationRequestFailureDomainsUnion2 =
+  | CreateSetupRegistrationOperationRequestFailureDomains2
+  | any;
+
 export type CreateSetupRegistrationOperationRequestPoolsAutoscale = {
+  failureDomains?:
+    | CreateSetupRegistrationOperationRequestFailureDomains2
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -68,7 +94,33 @@ export type CreateSetupRegistrationOperationRequestPoolsAutoscale = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateSetupRegistrationOperationRequestFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateSetupRegistrationOperationRequestFailureDomainsUnion1 =
+  | CreateSetupRegistrationOperationRequestFailureDomains1
+  | any;
+
 export type CreateSetupRegistrationOperationRequestPoolsFixed = {
+  failureDomains?:
+    | CreateSetupRegistrationOperationRequestFailureDomains1
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1407,7 +1459,66 @@ export const CreateSetupRegistrationOperationRequestPlatform$outboundSchema:
   );
 
 /** @internal */
+export type CreateSetupRegistrationOperationRequestFailureDomains2$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestFailureDomains2$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestFailureDomains2$Outbound,
+    CreateSetupRegistrationOperationRequestFailureDomains2
+  > = z.object({
+    selectedFailureDomains: z.array(z.string()).optional(),
+    spread: z.int(),
+  });
+
+export function createSetupRegistrationOperationRequestFailureDomains2ToJSON(
+  createSetupRegistrationOperationRequestFailureDomains2:
+    CreateSetupRegistrationOperationRequestFailureDomains2,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestFailureDomains2$outboundSchema.parse(
+      createSetupRegistrationOperationRequestFailureDomains2,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestFailureDomainsUnion2$Outbound =
+  | CreateSetupRegistrationOperationRequestFailureDomains2$Outbound
+  | any;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestFailureDomainsUnion2$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion2$Outbound,
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion2
+  > = z.union([
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestFailureDomains2$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function createSetupRegistrationOperationRequestFailureDomainsUnion2ToJSON(
+  createSetupRegistrationOperationRequestFailureDomainsUnion2:
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion2,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion2$outboundSchema
+      .parse(createSetupRegistrationOperationRequestFailureDomainsUnion2),
+  );
+}
+
+/** @internal */
 export type CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound = {
+  failure_domains?:
+    | CreateSetupRegistrationOperationRequestFailureDomains2$Outbound
+    | any
+    | null
+    | undefined;
   machine?: string | null | undefined;
   max: number;
   min: number;
@@ -1420,10 +1531,22 @@ export const CreateSetupRegistrationOperationRequestPoolsAutoscale$outboundSchem
     CreateSetupRegistrationOperationRequestPoolsAutoscale$Outbound,
     CreateSetupRegistrationOperationRequestPoolsAutoscale
   > = z.object({
+    failureDomains: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestFailureDomains2$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
     machine: z.nullable(z.string()).optional(),
     max: z.int(),
     min: z.int(),
     mode: z.literal("autoscale"),
+  }).transform((v) => {
+    return remap$(v, {
+      failureDomains: "failure_domains",
+    });
   });
 
 export function createSetupRegistrationOperationRequestPoolsAutoscaleToJSON(
@@ -1438,7 +1561,66 @@ export function createSetupRegistrationOperationRequestPoolsAutoscaleToJSON(
 }
 
 /** @internal */
+export type CreateSetupRegistrationOperationRequestFailureDomains1$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestFailureDomains1$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestFailureDomains1$Outbound,
+    CreateSetupRegistrationOperationRequestFailureDomains1
+  > = z.object({
+    selectedFailureDomains: z.array(z.string()).optional(),
+    spread: z.int(),
+  });
+
+export function createSetupRegistrationOperationRequestFailureDomains1ToJSON(
+  createSetupRegistrationOperationRequestFailureDomains1:
+    CreateSetupRegistrationOperationRequestFailureDomains1,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestFailureDomains1$outboundSchema.parse(
+      createSetupRegistrationOperationRequestFailureDomains1,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestFailureDomainsUnion1$Outbound =
+  | CreateSetupRegistrationOperationRequestFailureDomains1$Outbound
+  | any;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestFailureDomainsUnion1$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion1$Outbound,
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion1
+  > = z.union([
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestFailureDomains1$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function createSetupRegistrationOperationRequestFailureDomainsUnion1ToJSON(
+  createSetupRegistrationOperationRequestFailureDomainsUnion1:
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion1,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestFailureDomainsUnion1$outboundSchema
+      .parse(createSetupRegistrationOperationRequestFailureDomainsUnion1),
+  );
+}
+
+/** @internal */
 export type CreateSetupRegistrationOperationRequestPoolsFixed$Outbound = {
+  failure_domains?:
+    | CreateSetupRegistrationOperationRequestFailureDomains1$Outbound
+    | any
+    | null
+    | undefined;
   machine?: string | null | undefined;
   machines: number;
   mode: "fixed";
@@ -1450,9 +1632,21 @@ export const CreateSetupRegistrationOperationRequestPoolsFixed$outboundSchema:
     CreateSetupRegistrationOperationRequestPoolsFixed$Outbound,
     CreateSetupRegistrationOperationRequestPoolsFixed
   > = z.object({
+    failureDomains: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestFailureDomains1$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
     machine: z.nullable(z.string()).optional(),
     machines: z.int(),
     mode: z.literal("fixed"),
+  }).transform((v) => {
+    return remap$(v, {
+      failureDomains: "failure_domains",
+    });
   });
 
 export function createSetupRegistrationOperationRequestPoolsFixedToJSON(

@@ -16,4 +16,3 @@ const value: models.PersistImportedDeploymentRequestAws = {
 ```typescript
 const value: any = "<value>";
 ```
-

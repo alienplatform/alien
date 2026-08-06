@@ -1,10 +1,95 @@
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+use crate::error::{ErrorData, Result};
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+use alien_error::{AlienError, Context, IntoAlienError};
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+use chrono::Utc;
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+use serde::{Deserialize, Serialize};
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+const VERSION_TOKEN_FORMAT: u8 = 1;
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VersionToken {
+    format: u8,
+    key: String,
+    backend_version: String,
+    expires_at_millis: Option<i64>,
+}
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+pub(crate) struct DecodedVersion {
+    pub backend_version: String,
+    pub expired: bool,
+}
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+pub(crate) fn encode_version(
+    key: &str,
+    backend_version: String,
+    expires_at_millis: Option<i64>,
+) -> Result<String> {
+    let bytes = serde_json::to_vec(&VersionToken {
+        format: VERSION_TOKEN_FORMAT,
+        key: key.to_string(),
+        backend_version,
+        expires_at_millis,
+    })
+    .into_alien_error()
+    .context(ErrorData::InvalidInput {
+        operation_context: "KV version encoding".to_string(),
+        details: "Failed to serialize the version token".to_string(),
+        field_name: Some("version".to_string()),
+    })?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+#[cfg(any(feature = "aws", feature = "azure", feature = "gcp", feature = "local"))]
+pub(crate) fn decode_version(key: &str, encoded: &str) -> Result<DecodedVersion> {
+    let bytes =
+        URL_SAFE_NO_PAD
+            .decode(encoded)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "KV version decoding".to_string(),
+                details: "Invalid version token encoding".to_string(),
+                field_name: Some("ifVersion".to_string()),
+            })?;
+    let token: VersionToken =
+        serde_json::from_slice(&bytes)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                operation_context: "KV version decoding".to_string(),
+                details: "Invalid version token data".to_string(),
+                field_name: Some("ifVersion".to_string()),
+            })?;
+    if token.format != VERSION_TOKEN_FORMAT || token.key != key {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            operation_context: "KV version validation".to_string(),
+            details: "Version token does not belong to this key".to_string(),
+            field_name: Some("ifVersion".to_string()),
+        }));
+    }
+
+    Ok(DecodedVersion {
+        backend_version: token.backend_version,
+        expired: token
+            .expires_at_millis
+            .is_some_and(|expires_at| expires_at <= Utc::now().timestamp_millis()),
+    })
+}
+
 /// Maximum value size in bytes for KV storage (24 KiB = 24,576 bytes)
 ///
 /// This limit ensures compatibility across all KV backends, accounting for encoding overhead:
 /// - **AWS DynamoDB**: 400KB item limit (much higher, not constraining)
 /// - **GCP Firestore**: 1MiB document limit (much higher, not constraining)  
 /// - **Azure Table Storage**: 64KB UTF-16 string limit, accounting for base64 + UTF-16 encoding
-/// - **Redis**: No practical limits (memory-bound)
 ///
 /// The 24KB limit accounts for Azure Table Storage's most restrictive constraint:
 /// - 24KB raw data → ~32KB base64 → ~64KB UTF-16, fitting within Azure's 64KB limit
@@ -24,7 +109,6 @@ pub const MAX_VALUE_BYTES: usize = 24_576; // 24 KiB
 /// - **AWS DynamoDB**: Sort Key ≤ 1024 bytes  
 /// - **GCP Firestore**: Document ID ≤ 1500 bytes
 /// - **Azure Table Storage**: RowKey ≤ 1024 bytes
-/// - **Redis**: No practical limits
 ///
 /// The 512-byte limit ensures:
 /// - Universal compatibility across all backends
@@ -52,7 +136,6 @@ pub const MAX_KEY_BYTES: usize = 512;
 /// - **AWS DynamoDB**: More permissive, but we follow the global restriction
 /// - **GCP Firestore**: More permissive, but we follow the global restriction  
 /// - **Azure Table Storage**: Most restrictive, sets the global standard
-/// - **Redis**: No restrictions, but we follow the global standard
 pub fn validate_key(key: &str) -> crate::error::Result<()> {
     use crate::error::ErrorData;
     use alien_error::AlienError;

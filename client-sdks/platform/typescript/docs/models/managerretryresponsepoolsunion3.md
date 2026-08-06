@@ -23,4 +23,3 @@ const value: models.ManagerRetryResponsePoolsAutoscale3 = {
   mode: "autoscale",
 };
 ```
-

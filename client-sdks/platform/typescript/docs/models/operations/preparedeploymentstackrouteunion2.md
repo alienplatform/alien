@@ -23,4 +23,3 @@ const value: operations.PrepareDeploymentStackRouteGateway2 = {
   routeApi: "gateway",
 };
 ```
-

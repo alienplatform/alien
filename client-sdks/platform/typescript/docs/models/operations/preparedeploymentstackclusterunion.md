@@ -16,4 +16,3 @@ const value: operations.PrepareDeploymentStackCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

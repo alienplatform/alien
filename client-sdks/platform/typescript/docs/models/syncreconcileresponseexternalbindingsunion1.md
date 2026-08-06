@@ -40,4 +40,3 @@ const value: models.SyncReconcileResponseExternalBindingsLocalStorage = {
   type: "storage",
 };
 ```
-

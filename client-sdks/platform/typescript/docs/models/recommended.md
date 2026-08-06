@@ -21,4 +21,3 @@ const value: models.RecommendedAutoscale = {
   max: 30048,
 };
 ```
-

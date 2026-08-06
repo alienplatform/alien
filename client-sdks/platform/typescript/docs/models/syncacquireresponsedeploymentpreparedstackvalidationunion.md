@@ -14,4 +14,3 @@ const value: models.SyncAcquireResponseDeploymentPreparedStackValidation = {};
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -82,6 +82,10 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub project: Option<String>,
 
+    /// Channel to advance after creating the release (platform mode).
+    #[arg(long, default_value = "production")]
+    pub channel: String,
+
     /// Emit structured JSON output
     #[arg(long)]
     pub json: bool,
@@ -148,6 +152,8 @@ type ReleaseResult = String;
 
 /// Main entry point for the release command.
 pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()> {
+    validate_release_channel(&args.channel, &ctx)?;
+
     if args.no_stack {
         let declared = release_declare(&args, &ctx).await?;
         if args.json {
@@ -172,6 +178,34 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
     } else {
         release_task(args, ctx).await.map(|_| ())
     }
+}
+
+fn validate_release_channel(channel: &str, ctx: &ExecutionMode) -> Result<()> {
+    if !ctx.is_platform() && channel != "production" {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "channel".to_string(),
+            message: "Named release channels currently require platform mode.".to_string(),
+        }));
+    }
+
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        parse_release_channel_name(channel)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "platform")]
+fn parse_release_channel_name(
+    channel: &str,
+) -> Result<alien_platform_api::types::ReleaseChannelName> {
+    channel.try_into().map_err(|_| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "channel".to_string(),
+            message: "Channel names must start with a letter and contain only lowercase letters, numbers, and hyphens.".to_string(),
+        })
+    })
 }
 
 /// Release task that returns JSON-serializable output
@@ -589,6 +623,7 @@ async fn release_task_core(
                 workspace_query.as_deref(),
                 stack_by_platform,
                 git_metadata,
+                &args.channel,
             )
             .await?
         }
@@ -659,6 +694,7 @@ async fn create_platform_release(
     workspace: Option<&str>,
     stack: ManagerStackByPlatform,
     git_metadata: Option<GitMetadata>,
+    channel: &str,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
 
@@ -683,9 +719,11 @@ async fn create_platform_release(
                 url: None,
             })?;
 
+    let channel = parse_release_channel_name(channel)?;
     let body = alien_platform_api::types::CreateReleaseRequest::builder()
         .project(project_id.to_string())
         .stack(platform_stack)
+        .channel(channel)
         .git_metadata(git_metadata);
 
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
@@ -785,6 +823,7 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
             workspace_query.as_deref(),
             &version,
             git_metadata,
+            &args.channel,
         )
         .await?;
         Ok(DeclaredRelease {
@@ -810,6 +849,7 @@ async fn declare_platform_release(
     workspace: Option<&str>,
     _version: &str,
     git_metadata: Option<GitMetadata>,
+    channel: &str,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
 
@@ -819,8 +859,10 @@ async fn declare_platform_release(
     let platform_client = http.sdk_client();
 
     // No `.stack(...)` — a stackless release is a version identity only.
+    let channel = parse_release_channel_name(channel)?;
     let body = alien_platform_api::types::CreateReleaseRequest::builder()
         .project(project_id.to_string())
+        .channel(channel)
         .git_metadata(git_metadata);
 
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {

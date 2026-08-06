@@ -20,4 +20,3 @@ const value: models.SyncReconcileResponseTargetReleaseProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

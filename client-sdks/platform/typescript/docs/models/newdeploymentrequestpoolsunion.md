@@ -23,4 +23,3 @@ const value: models.NewDeploymentRequestPoolsAutoscale = {
   mode: "autoscale",
 };
 ```
-

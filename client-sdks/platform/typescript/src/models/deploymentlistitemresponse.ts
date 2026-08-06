@@ -382,6 +382,7 @@ export type DeploymentListItemResponse = {
    * ID of the pinned release
    */
   pinnedReleaseId?: string | null | undefined;
+  releaseChannel: string;
   /**
    * Setup source that imported this deployment
    */
@@ -703,6 +704,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   currentReleaseId: z.nullable(z.string()).optional(),
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
+  releaseChannel: z.string(),
   importSource: z.nullable(DeploymentListItemResponseImportSource$inboundSchema)
     .optional(),
   setupMethod: z.nullable(DeploymentListItemResponseSetupMethod$inboundSchema)

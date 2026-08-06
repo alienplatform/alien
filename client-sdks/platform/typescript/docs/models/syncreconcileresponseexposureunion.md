@@ -48,4 +48,3 @@ const value: models.SyncReconcileResponseExposureCustom = {
 ```typescript
 const value: any = "<value>";
 ```
-

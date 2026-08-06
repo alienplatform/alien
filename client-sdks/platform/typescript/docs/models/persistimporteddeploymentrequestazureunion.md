@@ -16,4 +16,3 @@ const value: models.PersistImportedDeploymentRequestAzureStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -16,4 +16,3 @@ const value: models.SyncAcquireResponseDeploymentHorizonMachineImageGcp = {
 ```typescript
 const value: any = "<value>";
 ```
-

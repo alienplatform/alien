@@ -16,4 +16,3 @@ const value: models.CreateManagerResponseAzure1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

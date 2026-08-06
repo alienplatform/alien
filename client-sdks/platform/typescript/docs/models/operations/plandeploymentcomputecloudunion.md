@@ -14,4 +14,3 @@ const value: operations.PlanDeploymentComputeCloud = {};
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -18,4 +18,3 @@ const value: models.PersistImportedDeploymentRequestDomainsKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

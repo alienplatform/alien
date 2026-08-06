@@ -20,4 +20,3 @@ const value: models.PreparedDeploymentStackExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

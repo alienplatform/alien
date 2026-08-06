@@ -35,6 +35,7 @@ import type {
 import type {
   Container,
   Kv,
+  KvEntry,
   KvScanResult,
   KvSetOptions,
   Postgres,
@@ -125,13 +126,15 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
     get: key => guard(handle, raw => raw.get(key)),
     getText: key =>
       guard(handle, async raw => {
-        const value = await raw.get(key)
-        return value === null ? null : value.toString("utf8")
+        const entry = await raw.get(key)
+        return entry === null ? null : { ...entry, value: entry.value.toString("utf8") }
       }),
-    getJson: <T = unknown>(key: string): Promise<T | null> =>
+    getJson: <T = unknown>(key: string): Promise<KvEntry<T> | null> =>
       guard(handle, async raw => {
-        const value = await raw.get(key)
-        return value === null ? null : (JSON.parse(value.toString("utf8")) as T)
+        const entry = await raw.get(key)
+        return entry === null
+          ? null
+          : { ...entry, value: JSON.parse(entry.value.toString("utf8")) as T }
       }),
     set: (key, value, options?: KvSetOptions) =>
       guard(handle, raw =>
@@ -139,7 +142,12 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
           key,
           Buffer.from(value, "utf8"),
           options?.ttl ?? null,
-          options?.ifNotExists ?? null,
+          options && "ifVersion" in options
+            ? options.ifVersion === null
+              ? "absent"
+              : "version"
+            : null,
+          typeof options?.ifVersion === "string" ? options.ifVersion : null,
         ),
       ),
     setJson: (key, value, options?: KvSetOptions) =>
@@ -148,10 +156,15 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
           key,
           Buffer.from(JSON.stringify(value), "utf8"),
           options?.ttl ?? null,
-          options?.ifNotExists ?? null,
+          options && "ifVersion" in options
+            ? options.ifVersion === null
+              ? "absent"
+              : "version"
+            : null,
+          typeof options?.ifVersion === "string" ? options.ifVersion : null,
         ),
       ),
-    delete: key => guard(handle, raw => raw.delete(key)),
+    delete: (key, options) => guard(handle, raw => raw.delete(key, options?.ifVersion ?? null)),
     exists: key => guard(handle, raw => raw.exists(key)),
     // The napi scan already returns each key with its value bytes; pass them
     // straight through rather than dropping the values.

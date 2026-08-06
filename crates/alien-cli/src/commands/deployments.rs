@@ -167,6 +167,16 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Change the channel followed by an unpinned deployment
+    SetChannel {
+        /// Deployment ID
+        id: String,
+        /// Channel to follow
+        channel: String,
+        /// Print the updated deployment as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a deployment token (deployment-scoped API key)
     Token {
         /// Deployment ID
@@ -351,6 +361,43 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let client = ctx.sdk_client().await?;
             let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
             pin_deployment_task(&client, &workspace_name, &id, release_id, json).await
+        }
+        DeploymentsCmd::SetChannel { id, channel, json } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Changing release channels requires platform mode.".to_string(),
+                }));
+            }
+            let client = ctx.sdk_client().await?;
+            let workspace_name = ctx.resolve_platform_workspace_context(!json).await?.name;
+            let body = alien_platform_api::types::SetDeploymentReleaseChannelBody {
+                channel: channel.as_str().try_into().map_err(|_| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "channel".to_string(),
+                        message: "Channel names must start with a letter and contain only lowercase letters, numbers, and hyphens.".to_string(),
+                    })
+                })?,
+            };
+            let response = client
+                .set_deployment_release_channel()
+                .id(id.as_str())
+                .workspace(workspace_name.as_str())
+                .body(body)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("setting deployment '{id}' to channel '{channel}'"),
+                    url: None,
+                })?
+                .into_inner();
+            if json {
+                print_json(&response)
+            } else {
+                println!("Deployment {id} now follows {channel}.");
+                Ok(())
+            }
         }
         DeploymentsCmd::Token { id } => {
             if ctx.is_dev() {
@@ -1215,6 +1262,9 @@ async fn create_deployment_task(
         operator_permission: None,
         operator_scope: None,
         pinned_release_id: None,
+        release_channel: "production"
+            .try_into()
+            .expect("production is a valid channel"),
         environment_info: None,
         input_values: std::collections::HashMap::new(),
         public_subdomain: None,

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Real npm consumer of packed @alienplatform tarballs; run.ts fills and restores dependencies for each validation run.",
   "devDependencies": {
-    "@types/node": "24.10.4",
+    "@types/node": "24.13.3",
     "typescript": "5.8.3"
   },
   "dependencies": {},

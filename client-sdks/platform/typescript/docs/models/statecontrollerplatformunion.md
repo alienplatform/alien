@@ -14,4 +14,3 @@ const value: models.ControllerPlatformStateEnum = "kubernetes";
 ```typescript
 const value: any = "<value>";
 ```
-

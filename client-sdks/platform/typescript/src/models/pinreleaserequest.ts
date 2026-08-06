@@ -9,7 +9,7 @@ import * as z from "zod/v4";
  */
 export type PinReleaseRequest = {
   /**
-   * Release ID to pin the deployment to. Set to null to unpin and use active release.
+   * Release ID to pin the deployment to. Set to null to resume its followed channel.
    */
   releaseId?: string | null | undefined;
 };

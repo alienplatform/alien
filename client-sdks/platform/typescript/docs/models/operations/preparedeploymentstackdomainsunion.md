@@ -14,4 +14,3 @@ const value: operations.PrepareDeploymentStackDomains = {};
 ```typescript
 const value: any = "<value>";
 ```
-

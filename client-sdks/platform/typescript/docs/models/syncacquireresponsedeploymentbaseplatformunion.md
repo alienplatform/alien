@@ -14,4 +14,3 @@ const value: models.SyncAcquireResponseDeploymentBasePlatformEnum = "test";
 ```typescript
 const value: any = "<value>";
 ```
-

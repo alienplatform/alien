@@ -33,4 +33,3 @@ const value: models.SyncAcquireResponseDeploymentCurrentReleaseManagement2 = {
 const value: models.SyncAcquireResponseDeploymentCurrentReleaseManagementEnum =
   "auto";
 ```
-

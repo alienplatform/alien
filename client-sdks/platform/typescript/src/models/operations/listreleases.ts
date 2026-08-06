@@ -9,8 +9,16 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export const AllChannels = {
+  True: "true",
+  False: "false",
+} as const;
+export type AllChannels = ClosedEnum<typeof AllChannels>;
+
 export const ListReleasesInclude = {
   Project: "project",
+  Rollout: "rollout",
+  CreatedBy: "createdBy",
 } as const;
 export type ListReleasesInclude = ClosedEnum<typeof ListReleasesInclude>;
 
@@ -20,11 +28,16 @@ export type ListReleasesRequest = {
    */
   project?: string | null | undefined;
   /**
+   * Filter to releases promoted to this channel. Defaults to production.
+   */
+  channel?: string | null | undefined;
+  allChannels?: AllChannels | undefined;
+  /**
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
   /**
-   * Optional fields to include: project
+   * Optional fields to include: project, rollout
    */
   include?: Array<ListReleasesInclude> | undefined;
   /**
@@ -72,6 +85,11 @@ export type ListReleasesResponse = {
 };
 
 /** @internal */
+export const AllChannels$outboundSchema: z.ZodEnum<typeof AllChannels> = z.enum(
+  AllChannels,
+);
+
+/** @internal */
 export const ListReleasesInclude$outboundSchema: z.ZodEnum<
   typeof ListReleasesInclude
 > = z.enum(ListReleasesInclude);
@@ -79,6 +97,8 @@ export const ListReleasesInclude$outboundSchema: z.ZodEnum<
 /** @internal */
 export type ListReleasesRequest$Outbound = {
   project?: string | null | undefined;
+  channel?: string | null | undefined;
+  allChannels: string;
   workspace?: string | undefined;
   include?: Array<string> | undefined;
   search?: string | null | undefined;
@@ -96,6 +116,8 @@ export const ListReleasesRequest$outboundSchema: z.ZodType<
   ListReleasesRequest
 > = z.object({
   project: z.nullable(z.string()).optional(),
+  channel: z.nullable(z.string()).optional(),
+  allChannels: AllChannels$outboundSchema.default("false"),
   workspace: z.string().optional(),
   include: z.array(ListReleasesInclude$outboundSchema).optional(),
   search: z.nullable(z.string()).optional(),

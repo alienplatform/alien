@@ -25,7 +25,7 @@
 //!     let bindings = Bindings::from_env()?;
 //!     let cache = bindings.kv("cache").await?;
 //!     cache.put("greeting", b"hello".to_vec(), None).await?;
-//!     assert_eq!(cache.get("greeting").await?, Some(b"hello".to_vec()));
+//!     assert_eq!(cache.get("greeting").await?.unwrap().value, b"hello");
 //!     Ok(())
 //! }
 //! ```
@@ -82,7 +82,8 @@ pub mod presigned {
 /// through storage/KV/queue/vault/container calls).
 pub mod traits {
     pub use alien_bindings::traits::{
-        Kv, MessagePayload, PutOptions, QueueMessage, ScanResult, Storage, Vault,
+        Kv, KvEntry, MessagePayload, PutCondition, PutOptions, QueueMessage, ScanResult, Storage,
+        Vault,
     };
     pub use alien_bindings::{BoundQueue as Queue, Container};
 }

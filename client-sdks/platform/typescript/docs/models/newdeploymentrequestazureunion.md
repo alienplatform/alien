@@ -16,4 +16,3 @@ const value: models.NewDeploymentRequestAzure = {
 ```typescript
 const value: any = "<value>";
 ```
-

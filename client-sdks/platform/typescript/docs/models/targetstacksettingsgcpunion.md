@@ -16,4 +16,3 @@ const value: models.GcpTargetStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

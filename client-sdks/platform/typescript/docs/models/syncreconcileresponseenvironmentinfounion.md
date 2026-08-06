@@ -60,4 +60,3 @@ const value: models.SyncReconcileResponseEnvironmentInfoTest = {
 ```typescript
 const value: any = "<value>";
 ```
-

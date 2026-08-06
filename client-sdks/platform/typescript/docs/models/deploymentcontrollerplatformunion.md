@@ -14,4 +14,3 @@ const value: models.DeploymentControllerPlatformEnum = "aws";
 ```typescript
 const value: any = "<value>";
 ```
-

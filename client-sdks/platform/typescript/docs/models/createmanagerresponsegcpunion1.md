@@ -16,4 +16,3 @@ const value: models.CreateManagerResponseGcp1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -1,5 +1,5 @@
 use crate::error::{ErrorData, Result};
-use crate::traits::{Binding, Kv, PutOptions, ScanResult};
+use crate::traits::{Binding, Kv, KvEntry, PutCondition, PutOptions, ScanResult};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::firestore::{
     CollectionSelector, CompositeFilter, CompositeFilterOperator, Cursor, Direction, Document,
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
-use super::{validate_key, validate_value};
+use super::{decode_version, encode_version, validate_key, validate_value};
 
 /// Firestore document for KV storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,7 +325,7 @@ impl Binding for GcpFirestoreKv {}
 
 #[async_trait]
 impl Kv for GcpFirestoreKv {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<KvEntry>> {
         validate_key(key)?;
 
         let document_id = key;
@@ -353,7 +353,25 @@ impl Kv for GcpFirestoreKv {
                         reason: "Failed to decode base64 value".to_string(),
                     })?;
 
-                Ok(Some(value))
+                let update_time = doc.update_time.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::UnexpectedResponseFormat {
+                        provider: "gcp".to_string(),
+                        binding_name: "firestore".to_string(),
+                        field: "updateTime".to_string(),
+                        response_json: serde_json::to_string(&doc).unwrap_or_default(),
+                    })
+                })?;
+                Ok(Some(KvEntry {
+                    key: key.to_string(),
+                    value,
+                    version: encode_version(
+                        key,
+                        update_time,
+                        kv_doc
+                            .expires_at
+                            .map(|expires_at| expires_at.timestamp_millis()),
+                    )?,
+                }))
             }
             Err(e) => {
                 // Check if this is a "not found" error
@@ -386,7 +404,7 @@ impl Kv for GcpFirestoreKv {
 
         let document = self.kv_document_to_firestore(key, &kv_doc);
 
-        if options.if_not_exists {
+        if matches!(options.condition, PutCondition::Absent) {
             let document_id = key.to_string();
             match self
                 .client
@@ -424,47 +442,96 @@ impl Kv for GcpFirestoreKv {
             let document_id = key;
             let document_path = format!("{}/{}", self.collection_name, document_id);
             let document_with_name = self.kv_document_to_firestore_with_name(key, &kv_doc);
+            let current_document = match &options.condition {
+                PutCondition::Version(version) => {
+                    let expected = decode_version(key, version)?;
+                    if expected.expired {
+                        return Ok(false);
+                    }
+                    Some(alien_gcp_clients::gcp::firestore::Precondition {
+                        condition: alien_gcp_clients::gcp::firestore::PreconditionType::UpdateTime(
+                            expected.backend_version,
+                        ),
+                    })
+                }
+                PutCondition::None => None,
+                PutCondition::Absent => unreachable!("handled above"),
+            };
 
-            self.client
+            match self
+                .client
                 .patch_document(
                     self.database_id.clone(),
                     document_path,
                     document_with_name,
                     None,
                     None,
-                    None,
+                    current_document,
                 )
                 .await
-                .map_err(|e| {
-                    crate::error::map_cloud_client_error(
-                        e,
-                        "Failed to patch Firestore document".to_string(),
-                        Some(key.to_string()),
-                    )
-                })?;
-
-            Ok(true)
+            {
+                Ok(_) => Ok(true),
+                Err(error)
+                    if matches!(options.condition, PutCondition::Version(_))
+                        && matches!(
+                            error.error.as_ref(),
+                            Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                                | Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                {
+                    Ok(false)
+                }
+                Err(error) => Err(crate::error::map_cloud_client_error(
+                    error,
+                    "Failed to patch Firestore document".to_string(),
+                    Some(key.to_string()),
+                )),
+            }
         }
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
+    async fn delete(&self, key: &str, if_version: Option<&str>) -> Result<bool> {
         validate_key(key)?;
 
         let document_id = key;
         let document_path = format!("{}/{}", self.collection_name, document_id);
 
-        self.client
-            .delete_document(self.database_id.clone(), document_path, None)
-            .await
-            .map_err(|e| {
-                crate::error::map_cloud_client_error(
-                    e,
-                    "Failed to delete Firestore document".to_string(),
-                    Some(key.to_string()),
-                )
-            })?;
+        let current_document = if let Some(version) = if_version {
+            let expected = decode_version(key, version)?;
+            if expected.expired {
+                return Ok(false);
+            }
+            Some(alien_gcp_clients::gcp::firestore::Precondition {
+                condition: alien_gcp_clients::gcp::firestore::PreconditionType::UpdateTime(
+                    expected.backend_version,
+                ),
+            })
+        } else {
+            None
+        };
 
-        Ok(())
+        match self
+            .client
+            .delete_document(self.database_id.clone(), document_path, current_document)
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error)
+                if if_version.is_some()
+                    && matches!(
+                        error.error.as_ref(),
+                        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+                            | Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(crate::error::map_cloud_client_error(
+                error,
+                "Failed to delete Firestore document".to_string(),
+                Some(key.to_string()),
+            )),
+        }
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
@@ -613,7 +680,25 @@ impl Kv for GcpFirestoreKv {
                     field: "value".to_string(),
                     response_json: serde_json::to_string(document).unwrap_or_default(),
                 })?;
-            items.push((key.to_string(), value));
+            let update_time = document.update_time.clone().ok_or_else(|| {
+                AlienError::new(ErrorData::UnexpectedResponseFormat {
+                    provider: "gcp".to_string(),
+                    binding_name: "firestore".to_string(),
+                    field: "updateTime".to_string(),
+                    response_json: serde_json::to_string(document).unwrap_or_default(),
+                })
+            })?;
+            items.push(KvEntry {
+                key: key.to_string(),
+                value,
+                version: encode_version(
+                    key,
+                    update_time,
+                    kv_doc
+                        .expires_at
+                        .map(|expires_at| expires_at.timestamp_millis()),
+                )?,
+            });
         }
 
         let next_cursor = if documents.len() == limit {

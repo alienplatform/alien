@@ -18,4 +18,3 @@ const value: operations.CapacityBlocker1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

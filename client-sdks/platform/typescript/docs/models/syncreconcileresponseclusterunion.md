@@ -16,4 +16,3 @@ const value: models.SyncReconcileResponseCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

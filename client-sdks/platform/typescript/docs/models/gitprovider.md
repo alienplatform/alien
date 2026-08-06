@@ -30,4 +30,3 @@ const value: models.GitLabProvider = {
 ```typescript
 const value: any = "<value>";
 ```
-

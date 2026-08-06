@@ -31,7 +31,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 backon = { workspace = true }
 async-trait = { workspace = true }
-quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"] }
+quick-xml = { version = "0.41.0", features = ["serialize", "overlapped-lists"] }
 mockall = { workspace = true, optional = true }
 
 # AWS specific dependencies

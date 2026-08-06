@@ -25,7 +25,7 @@ import type {
 import { logSystemError } from "./system-log.js"
 
 // Re-export the canonical core event types for the facade to re-export.
-export type { StorageEvent, StorageEventType, ScheduledEvent, QueueMessage }
+export type { QueueMessage, ScheduledEvent, StorageEvent, StorageEventType }
 
 /**
  * Cron/scheduled event with schedule info.

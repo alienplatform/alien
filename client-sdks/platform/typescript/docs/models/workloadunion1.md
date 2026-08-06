@@ -21,4 +21,3 @@ const value: models.Workload1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

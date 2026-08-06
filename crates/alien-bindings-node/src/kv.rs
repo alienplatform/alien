@@ -2,7 +2,9 @@
 //! trait.
 
 use crate::error::map_alien_error;
-use alien_bindings::traits::{Kv, PutOptions, ScanResult};
+#[cfg(test)]
+use alien_bindings::traits::KvEntry;
+use alien_bindings::traits::{Kv, PutCondition, PutOptions, ScanResult};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use std::sync::Arc;
@@ -15,6 +17,8 @@ pub struct KvItemJs {
     pub key: String,
     /// The value bytes.
     pub value: Buffer,
+    /// Opaque version for a later conditional set or delete.
+    pub version: String,
 }
 
 /// A page of scan results.
@@ -32,26 +36,41 @@ fn scan_to_js(result: ScanResult) -> ScanResultJs {
         items: result
             .items
             .into_iter()
-            .map(|(key, value)| KvItemJs {
-                key,
-                value: Buffer::from(value),
+            .map(|entry| KvItemJs {
+                key: entry.key,
+                value: Buffer::from(entry.value),
+                version: entry.version,
             })
             .collect(),
         next_cursor: result.next_cursor,
     }
 }
 
-/// Build `PutOptions` from the optional JS arguments, or `None` when neither is
-/// set (so the provider takes its default unconditional-put path).
-fn put_options(ttl_secs: Option<u32>, if_not_exists: Option<bool>) -> Option<PutOptions> {
-    let if_not_exists = if_not_exists.unwrap_or(false);
-    if ttl_secs.is_none() && !if_not_exists {
-        return None;
+fn put_options(
+    ttl_secs: Option<u32>,
+    condition: Option<String>,
+    version: Option<String>,
+) -> napi::Result<Option<PutOptions>> {
+    let condition =
+        match condition.as_deref() {
+            None => PutCondition::None,
+            Some("absent") => PutCondition::Absent,
+            Some("version") => PutCondition::Version(version.ok_or_else(|| {
+                napi::Error::from_reason("a version condition requires a version")
+            })?),
+            Some(other) => {
+                return Err(napi::Error::from_reason(format!(
+                    "unsupported KV put condition '{other}'"
+                )))
+            }
+        };
+    if ttl_secs.is_none() && matches!(condition, PutCondition::None) {
+        return Ok(None);
     }
-    Some(PutOptions {
+    Ok(Some(PutOptions {
         ttl: ttl_secs.map(|secs| Duration::from_secs(u64::from(secs))),
-        if_not_exists,
-    })
+        condition,
+    }))
 }
 
 /// Handle to a resolved key-value binding.
@@ -68,38 +87,44 @@ impl KvHandle {
 
 #[napi]
 impl KvHandle {
-    /// Get the value for `key`, or `None` if absent/expired.
+    /// Get the entry for `key`, or `None` if absent/expired.
     #[napi]
-    pub async fn get(&self, key: String) -> napi::Result<Option<Buffer>> {
+    pub async fn get(&self, key: String) -> napi::Result<Option<KvItemJs>> {
         let kv = self.inner.clone();
-        let value = kv.get(&key).await.map_err(map_alien_error)?;
-        Ok(value.map(Buffer::from))
+        let entry = kv.get(&key).await.map_err(map_alien_error)?;
+        Ok(entry.map(|entry| KvItemJs {
+            key: entry.key,
+            value: Buffer::from(entry.value),
+            version: entry.version,
+        }))
     }
 
     /// Put `value` at `key`.
     ///
-    /// With `if_not_exists`, returns `true` when created and `false` when the
-    /// key already existed; otherwise always returns `true`.
+    /// Returns `false` when a supplied precondition does not match.
     #[napi]
     pub async fn put(
         &self,
         key: String,
         value: Buffer,
         ttl_secs: Option<u32>,
-        if_not_exists: Option<bool>,
+        condition: Option<String>,
+        version: Option<String>,
     ) -> napi::Result<bool> {
         let kv = self.inner.clone();
-        let options = put_options(ttl_secs, if_not_exists);
+        let options = put_options(ttl_secs, condition, version)?;
         kv.put(&key, value.to_vec(), options)
             .await
             .map_err(map_alien_error)
     }
 
-    /// Delete `key` (no error if absent).
+    /// Delete `key`, optionally only at the supplied version.
     #[napi]
-    pub async fn delete(&self, key: String) -> napi::Result<()> {
+    pub async fn delete(&self, key: String, if_version: Option<String>) -> napi::Result<bool> {
         let kv = self.inner.clone();
-        kv.delete(&key).await.map_err(map_alien_error)
+        kv.delete(&key, if_version.as_deref())
+            .await
+            .map_err(map_alien_error)
     }
 
     /// Check whether `key` exists.
@@ -131,32 +156,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn put_options_none_when_no_ttl_and_no_if_not_exists() {
-        assert!(put_options(None, None).is_none());
-        assert!(put_options(None, Some(false)).is_none());
+    fn put_options_none_when_unconditional_and_without_ttl() {
+        assert!(put_options(None, None, None).unwrap().is_none());
     }
 
     #[test]
-    fn put_options_sets_ttl_and_flag() {
-        let opts = put_options(Some(30), Some(true)).expect("options should be present");
+    fn put_options_sets_ttl_and_condition() {
+        let opts = put_options(Some(30), Some("absent".to_string()), None)
+            .unwrap()
+            .expect("options should be present");
         assert_eq!(opts.ttl, Some(Duration::from_secs(30)));
-        assert!(opts.if_not_exists);
+        assert_eq!(opts.condition, PutCondition::Absent);
 
-        let ttl_only = put_options(Some(5), None).expect("options should be present");
+        let ttl_only = put_options(Some(5), None, None)
+            .unwrap()
+            .expect("options should be present");
         assert_eq!(ttl_only.ttl, Some(Duration::from_secs(5)));
-        assert!(!ttl_only.if_not_exists);
+        assert_eq!(ttl_only.condition, PutCondition::None);
 
-        let flag_only = put_options(None, Some(true)).expect("options should be present");
-        assert_eq!(flag_only.ttl, None);
-        assert!(flag_only.if_not_exists);
+        let version = put_options(
+            None,
+            Some("version".to_string()),
+            Some("opaque".to_string()),
+        )
+        .unwrap()
+        .expect("options should be present");
+        assert_eq!(
+            version.condition,
+            PutCondition::Version("opaque".to_string())
+        );
     }
 
     #[test]
     fn scan_to_js_maps_items_and_cursor() {
         let result = ScanResult {
             items: vec![
-                ("a".to_string(), b"one".to_vec()),
-                ("b".to_string(), b"two".to_vec()),
+                KvEntry {
+                    key: "a".to_string(),
+                    value: b"one".to_vec(),
+                    version: "v1".to_string(),
+                },
+                KvEntry {
+                    key: "b".to_string(),
+                    value: b"two".to_vec(),
+                    version: "v2".to_string(),
+                },
             ],
             next_cursor: Some("next".to_string()),
         };
@@ -166,6 +210,7 @@ mod tests {
         assert_eq!(js.items.len(), 2);
         assert_eq!(js.items[0].key, "a");
         assert_eq!(js.items[0].value.as_ref(), b"one");
+        assert_eq!(js.items[0].version, "v1");
         assert_eq!(js.items[1].key, "b");
         assert_eq!(js.items[1].value.as_ref(), b"two");
         assert_eq!(js.next_cursor, Some("next".to_string()));

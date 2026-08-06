@@ -16,4 +16,3 @@ const value: models.CreateSetupRegistrationOperationRequestGcp = {
 ```typescript
 const value: any = "<value>";
 ```
-

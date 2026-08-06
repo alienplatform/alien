@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.SyncReconcileRequestSource6`
+### `models.SourceEvent6`
 
 ```typescript
-const value: models.SyncReconcileRequestSource6 = {};
+const value: models.SourceEvent6 = {};
 ```
 
 ### `any`
@@ -14,4 +14,3 @@ const value: models.SyncReconcileRequestSource6 = {};
 ```typescript
 const value: any = "<value>";
 ```
-

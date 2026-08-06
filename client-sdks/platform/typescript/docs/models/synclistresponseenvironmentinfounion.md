@@ -62,4 +62,3 @@ const value: models.SyncListResponseEnvironmentInfoTest = {
 ```typescript
 const value: any = "<value>";
 ```
-

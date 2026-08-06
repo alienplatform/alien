@@ -17,4 +17,3 @@ const value: operations.MemoryReplicaUnit = {
 ```typescript
 const value: any = "<value>";
 ```
-
