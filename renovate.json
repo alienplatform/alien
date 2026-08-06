@@ -5,7 +5,7 @@
   "platformAutomerge": false,
   "packageRules": [
     {
-      "description": "Automerge stable non-major updates independently",
+      "description": "Automerge stable non-major updates independently after CI passes",
       "matchUpdateTypes": ["minor", "patch"],
       "matchCurrentVersion": "!/^0/",
       "automerge": true,
