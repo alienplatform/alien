@@ -27,6 +27,10 @@
         "description": "Read Vertex AI model and endpoint metadata needed for application health checks.",
         "grant": {
           "permissions": [
+            // Frozen resources give the generated Management identity this
+            // heartbeat set. Deployment uses it to resolve the numeric project
+            // number before compiling project-scoped IAM conditions.
+            "resourcemanager.projects.get",
             "aiplatform.models.list",
             "aiplatform.endpoints.list",
             "aiplatform.endpoints.get"
