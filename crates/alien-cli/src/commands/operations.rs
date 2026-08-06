@@ -42,6 +42,10 @@ pub struct OperationsArgs {
     #[command(subcommand)]
     pub action: OperationsAction,
 
+    /// Project ID or name. Defaults to the linked project.
+    #[arg(long, global = true)]
+    pub project: Option<String>,
+
     /// Emit machine-readable JSON.
     #[arg(long, global = true)]
     pub json: bool,
@@ -83,12 +87,17 @@ struct PublishRequest {
 pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
     let auth = ctx.auth_http().await?;
     let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
+    // The operations catalog is project-scoped: the platform requires a
+    // `project` alongside `workspace`. Resolve the linked project (or the
+    // `--project` override) the same way the other project-scoped commands do.
+    let (_, project_link) = ctx.resolve_project(args.project.as_deref(), !args.json).await?;
+    let project = project_link.project_id;
 
     match args.action {
         OperationsAction::Publish { bundle } => {
-            publish_task(&auth, &workspace, &bundle, args.json).await
+            publish_task(&auth, &workspace, &project, &bundle, args.json).await
         }
-        OperationsAction::List => list_task(&auth, &workspace, args.json).await,
+        OperationsAction::List => list_task(&auth, &workspace, &project, args.json).await,
     }
 }
 
@@ -97,6 +106,7 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
 async fn publish_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
+    project: &str,
     bundle_path: &PathBuf,
     json: bool,
 ) -> Result<()> {
@@ -117,7 +127,7 @@ async fn publish_task(
         bundle_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
     };
 
-    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace)?;
+    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
     let response = auth
         .reqwest_client()
         .request(Method::POST, url.clone())
@@ -154,9 +164,10 @@ async fn publish_task(
 async fn list_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
+    project: &str,
     json: bool,
 ) -> Result<()> {
-    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace)?;
+    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
     let response = auth
         .reqwest_client()
         .request(Method::GET, url.clone())
@@ -232,14 +243,16 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, BundleMe
     Ok((value, metadata))
 }
 
-fn api_url(base_url: &str, path: &str, workspace: &str) -> Result<reqwest::Url> {
+fn api_url(base_url: &str, path: &str, workspace: &str, project: &str) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(base_url)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: "platform base URL is invalid".to_string(),
         })?;
     url.set_path(path);
-    url.query_pairs_mut().append_pair("workspace", workspace);
+    url.query_pairs_mut()
+        .append_pair("workspace", workspace)
+        .append_pair("project", project);
     Ok(url)
 }
 
