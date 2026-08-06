@@ -133,6 +133,10 @@ export type StackSummary = {
    * Whether the stack contains resources that require cloud VPC networking
    */
   requiresNetwork: boolean;
+  /**
+   * Whether this release offers one remotely accessible AI resource
+   */
+  customerModels: boolean;
   resourceCounts: ResourceCounts;
   /**
    * Public endpoints declared by the active release stack
@@ -868,6 +872,7 @@ export const StackSummary$inboundSchema: z.ZodType<StackSummary, unknown> = z
   .object({
     platforms: z.array(StackSummaryPlatform$inboundSchema),
     requiresNetwork: z.boolean(),
+    customerModels: z.boolean(),
     resourceCounts: z.lazy(() => ResourceCounts$inboundSchema),
     publicEndpoints: z.array(z.lazy(() => PublicEndpoint$inboundSchema)),
   });
