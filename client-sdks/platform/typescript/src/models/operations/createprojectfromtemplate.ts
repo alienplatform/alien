@@ -14,6 +14,7 @@ import * as models from "../index.js";
  * Template root directory inside alienplatform/alien
  */
 export const TemplatePathRequest = {
+  ExamplesCustomerModelsTs: "examples/customer-models-ts",
   ExamplesRemoteWorkerTs: "examples/remote-worker-ts",
   ExamplesGithubAgentPackagesRemoteAgent:
     "examples/github-agent/packages/remote-agent",
@@ -500,6 +501,7 @@ export type SourceRepository = ClosedEnum<typeof SourceRepository>;
  * Template root directory inside alienplatform/alien
  */
 export const TemplatePathResponse = {
+  ExamplesCustomerModelsTs: "examples/customer-models-ts",
   ExamplesRemoteWorkerTs: "examples/remote-worker-ts",
   ExamplesGithubAgentPackagesRemoteAgent:
     "examples/github-agent/packages/remote-agent",
