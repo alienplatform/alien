@@ -15,6 +15,29 @@ fn test_ai_permission_sets_resolve_via_registry() {
 }
 
 #[test]
+fn test_ai_heartbeat_can_resolve_gcp_project_number() {
+    let heartbeat = get_permission_set("ai/heartbeat").expect("ai/heartbeat must resolve");
+    let gcp = heartbeat
+        .platforms
+        .gcp
+        .as_ref()
+        .expect("ai/heartbeat must have GCP platform");
+
+    assert!(
+        gcp.iter().any(|entry| {
+            entry
+                .grant
+                .permissions
+                .as_ref()
+                .is_some_and(|permissions| {
+                    permissions.contains(&"resourcemanager.projects.get".to_string())
+                })
+        }),
+        "AI heartbeat must read project metadata so frozen-resource management can compile project-number IAM conditions"
+    );
+}
+
+#[test]
 fn test_ai_invoke_is_inference_only() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
 
