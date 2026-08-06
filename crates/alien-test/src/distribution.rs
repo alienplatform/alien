@@ -98,6 +98,15 @@ impl DistributionArtifactCleanup {
         }
     }
 
+    /// Terraform state directory for focused qualification operations.
+    pub fn terraform_workdir(&self) -> Option<&Path> {
+        match self {
+            DistributionArtifactCleanup::Terraform { workdir, .. } => Some(workdir.path()),
+            DistributionArtifactCleanup::CloudFormation { .. }
+            | DistributionArtifactCleanup::Helm { .. } => None,
+        }
+    }
+
     /// Preserve local state and return a credential-free recovery description.
     /// Used when live-resource deletion never reached a safe setup handoff.
     pub(crate) fn preserve_for_recovery(self) -> String {
