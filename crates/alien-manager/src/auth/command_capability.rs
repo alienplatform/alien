@@ -11,6 +11,28 @@ use alien_core::CommandTarget;
 use crate::auth::{CommandCapability, Role, Scope, Subject};
 use crate::traits::deployment_store::DeploymentRecord;
 
+/// Decide sender access from the signed deployment id before entity lookup.
+///
+/// Commands capabilities are minted for exactly one deployment. The command
+/// registry remains authoritative for whether that deployment or command is
+/// still served by this manager.
+pub fn sender_request_decision(subject: &Subject, deployment_id: &str) -> Option<bool> {
+    let Scope::Commands {
+        deployment_id: scoped_deployment_id,
+        capability,
+        ..
+    } = &subject.scope
+    else {
+        return None;
+    };
+
+    Some(
+        subject.role == Role::CommandCapability
+            && matches!(capability, CommandCapability::Send)
+            && scoped_deployment_id == deployment_id,
+    )
+}
+
 /// Decide dispatch/read access when the subject carries a commands scope.
 ///
 /// `None` means the subject is not commands-scoped and the caller should apply

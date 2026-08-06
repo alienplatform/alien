@@ -282,6 +282,38 @@ describe("hosted command receiver bootstrap", () => {
     expect(server.requests.at(-1)?.headers.authorization).toBe("Bearer receiver-token")
   })
 
+  it("aborts a stalled bootstrap when the receiver stops", async () => {
+    let bootstrapStarted = () => {}
+    const started = new Promise<void>(resolve => {
+      bootstrapStarted = resolve
+    })
+    const fetchImpl: typeof fetch = (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        bootstrapStarted()
+        const signal = init?.signal
+        const abort = () => reject(new Error("bootstrap aborted"))
+        if (signal?.aborted) {
+          abort()
+        } else {
+          signal?.addEventListener("abort", abort, { once: true })
+        }
+      })
+
+    const receiver = createCommandReceiver({
+      deploymentId: "dep_1",
+      apiKey: "api-key",
+      target: "agent",
+      fetch: fetchImpl,
+      pollIntervalMs: 1,
+      pollJitter: 0,
+    })
+    const running = receiver.run()
+    await started
+    receiver.stop()
+
+    await expect(running).resolves.toBeUndefined()
+  })
+
   it("rejects a receiver bootstrap response without an inferred target", async () => {
     server = await startStubServer(req => {
       if (req.path === "/v1/commands/bootstrap") {

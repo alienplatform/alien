@@ -11,6 +11,7 @@ import { parseWireResponse } from "./wire.js"
 
 const DEFAULT_PLATFORM_URL = "https://api.alien.dev"
 const BOOTSTRAP_PATH = "/v1/commands/bootstrap"
+const BOOTSTRAP_TIMEOUT_MS = 30_000
 const REFRESH_SKEW_MS = 30_000
 
 const BootstrapConnectionSchema = z.object({
@@ -67,12 +68,12 @@ type BootstrapRequest =
   | { deploymentId: string; role: "receiver"; target: string }
 
 export interface RefreshingConnectionProvider<Connection> {
-  get(): Promise<Connection>
+  get(signal?: AbortSignal): Promise<Connection>
   /**
    * Refresh credentials after an authentication failure. Returns `undefined`
    * when this connection is fixed and the request must not be retried.
    */
-  refresh(): Promise<Connection | undefined>
+  refresh(signal?: AbortSignal): Promise<Connection | undefined>
 }
 
 export type CommandConnectionProvider = RefreshingConnectionProvider<CommandConnection>
@@ -87,11 +88,12 @@ export async function requestWithRefreshingConnection<
 >(
   provider: RefreshingConnectionProvider<Connection>,
   request: (connection: Connection) => Promise<Result>,
+  signal?: AbortSignal,
 ): Promise<Result> {
-  let result = await request(await provider.get())
+  let result = await request(await provider.get(signal))
   if (result.response.status !== 401) return result
 
-  const refreshed = await provider.refresh()
+  const refreshed = await provider.refresh(signal)
   if (refreshed === undefined) return result
 
   result = await request(refreshed)
@@ -141,22 +143,22 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
     this.fetchImpl = options.fetch ?? globalThis.fetch
   }
 
-  async get(): Promise<CommandConnection> {
+  async get(signal?: AbortSignal): Promise<CommandConnection> {
     if (
       this.current !== undefined &&
       this.current.expiresAt.getTime() - Date.now() > REFRESH_SKEW_MS
     ) {
       return this.current
     }
-    return this.refresh()
+    return this.refresh(signal)
   }
 
-  async refresh(): Promise<CommandConnection> {
+  async refresh(signal?: AbortSignal): Promise<CommandConnection> {
     if (this.refreshInFlight !== undefined) {
       return this.refreshInFlight
     }
 
-    const refresh = this.bootstrap()
+    const refresh = this.bootstrap(signal)
     this.refreshInFlight = refresh
     try {
       const connection = await refresh
@@ -169,8 +171,16 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
     }
   }
 
-  private async bootstrap(): Promise<CommandConnection> {
+  private async bootstrap(signal?: AbortSignal): Promise<CommandConnection> {
     const url = buildBootstrapUrl(this.platformUrl)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), BOOTSTRAP_TIMEOUT_MS)
+    const abort = () => controller.abort(signal?.reason)
+    if (signal?.aborted) {
+      abort()
+    } else {
+      signal?.addEventListener("abort", abort, { once: true })
+    }
 
     let response: Response
     try {
@@ -181,6 +191,7 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
           "Content-Type": "application/json",
         },
         body: JSON.stringify(this.request),
+        signal: controller.signal,
       })
     } catch (error) {
       throw (await AlienError.from(error)).withContext(
@@ -190,6 +201,9 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
           reason: error instanceof Error ? error.message : String(error),
         }),
       )
+    } finally {
+      clearTimeout(timeout)
+      signal?.removeEventListener("abort", abort)
     }
 
     if (!response.ok) {

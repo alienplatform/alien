@@ -330,6 +330,7 @@ class PullCommandReceiver implements CommandReceiver {
             nextPollMs = this.nextBackoff(nextPollMs)
           }
         } catch (error) {
+          if (this.shutdown.signal.aborted) break
           if (error instanceof AlienError && !error.retryable) {
             terminalError = error
             break
@@ -449,16 +450,20 @@ class PullCommandReceiver implements CommandReceiver {
       init: RequestInit
     },
   ): Promise<{ response: Response; endpoint: string; connection: ReceiverConnection }> {
-    return requestWithRefreshingConnection(this.connectionProvider, async connection => {
-      const { endpoint, init } = buildRequest(connection)
-      const headers = new Headers(init.headers)
-      headers.set("Authorization", `Bearer ${connection.token}`)
-      return {
-        response: await this.fetchImpl(endpoint, { ...init, headers }),
-        endpoint,
-        connection,
-      }
-    })
+    return requestWithRefreshingConnection(
+      this.connectionProvider,
+      async connection => {
+        const { endpoint, init } = buildRequest(connection)
+        const headers = new Headers(init.headers)
+        headers.set("Authorization", `Bearer ${connection.token}`)
+        return {
+          response: await this.fetchImpl(endpoint, { ...init, headers }),
+          endpoint,
+          connection,
+        }
+      },
+      this.shutdown.signal,
+    )
   }
 
   /**

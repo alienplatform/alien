@@ -384,12 +384,12 @@ class HostedReceiverConnectionProvider implements ReceiverConnectionProvider {
     private readonly deploymentId: string,
   ) {}
 
-  async get(): Promise<ReceiverConnection> {
-    return this.receiverConnection(await this.provider.get())
+  async get(signal?: AbortSignal): Promise<ReceiverConnection> {
+    return this.receiverConnection(await this.provider.get(signal))
   }
 
-  async refresh(): Promise<ReceiverConnection | undefined> {
-    const connection = await this.provider.refresh()
+  async refresh(signal?: AbortSignal): Promise<ReceiverConnection | undefined> {
+    const connection = await this.provider.refresh(signal)
     return connection === undefined ? undefined : this.receiverConnection(connection)
   }
 

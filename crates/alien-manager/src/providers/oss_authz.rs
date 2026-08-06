@@ -44,10 +44,11 @@ impl Authz for OssAuthz {
         }
     }
 
-    fn can_read_release(&self, _s: &Subject, _release: &ReleaseRecord) -> bool {
+    fn can_read_release(&self, s: &Subject, _release: &ReleaseRecord) -> bool {
         // OSS single-tenant: any valid token reads any release. Deployment
-        // tokens included — agents need their target release to deploy.
-        true
+        // tokens included — agents need their target release to deploy. A
+        // commands capability is deliberately inert outside command routes.
+        !matches!(s.scope, Scope::Commands { .. }) && s.role != Role::CommandCapability
     }
 
     fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
@@ -279,6 +280,8 @@ impl Authz for OssAuthz {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::auth::{CommandCapability, SubjectKind};
     use chrono::Utc;
@@ -394,10 +397,32 @@ mod tests {
         }
     }
 
+    fn release() -> ReleaseRecord {
+        ReleaseRecord {
+            id: "release-1".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            stacks: HashMap::new(),
+            git_commit_sha: None,
+            git_commit_ref: None,
+            git_commit_message: None,
+            created_at: Utc::now(),
+        }
+    }
+
     #[test]
     fn admin_reads_any_deployment() {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_read_deployment(&admin(), &dep));
+    }
+
+    #[test]
+    fn commands_capabilities_cannot_read_or_export_releases() {
+        let release = release();
+        let subject = command_sender("d1");
+
+        assert!(!OssAuthz.can_read_release(&subject, &release));
+        assert!(!OssAuthz.can_export_release(&subject, &release));
     }
 
     #[test]
