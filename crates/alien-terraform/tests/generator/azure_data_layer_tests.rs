@@ -14,10 +14,10 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
-    PermissionProfile, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, ServiceAccount,
-    Stack, StackSettings, Storage, Vault,
+    PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
+    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
-use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
+use alien_terraform::{TerraformOptions, TerraformTarget, TfRegistry, generate_terraform_module};
 
 fn resource_group() -> AzureResourceGroup {
     AzureResourceGroup::new("default-resource-group".to_string()).build()
@@ -497,4 +497,45 @@ fn azure_remote_ai_invoke_permissions_attach_to_access_identity() {
     assert!(rendered.contains("a97b65f3-24c7-4388-baec-2e87135dc908"));
     assert!(rendered.contains("azurerm_user_assigned_identity.access.principal_id"));
     assert_terraform_valid(&module, "azure_remote_ai_invoke_permissions");
+}
+
+#[test]
+fn azure_remote_ai_setup_does_not_request_application_vnet_access() {
+    let stack = Stack::new("remote-ai-setup".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add_with_remote_access(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        network: Some(alien_core::NetworkSettings::ByoVnetAzure {
+            vnet_resource_id:
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/shared/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+                    .to_string(),
+            public_subnet_name: "public".to_string(),
+            private_subnet_name: "private".to_string(),
+            application_gateway_subnet_name: None,
+            private_endpoint_subnet_name: None,
+        }),
+        ..StackSettings::default()
+    };
+
+    let module = render(&stack, TerraformTarget::Azure, settings);
+    let management = module
+        .get("management.tf")
+        .expect("remote AI setup management artifact");
+    assert!(
+        !management.contains("existing_vnet_reader"),
+        "a bindings-only setup must not grant its management identity access to the application VNet"
+    );
+    assert_terraform_valid(&module, "azure_remote_ai_setup_without_vnet_reader");
 }
