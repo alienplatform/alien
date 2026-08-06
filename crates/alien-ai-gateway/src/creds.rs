@@ -412,7 +412,7 @@ impl BearerTokenCred {
         }
     }
 
-    /// `resource` is the audience, e.g. `https://cognitiveservices.azure.com`.
+    /// `resource` is the provider's Entra audience, e.g. `https://ai.azure.com`.
     pub fn azure(resource: impl Into<String>) -> Self {
         Self {
             source: BearerSource::Azure {
