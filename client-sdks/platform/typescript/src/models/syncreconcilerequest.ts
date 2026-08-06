@@ -7002,21 +7002,25 @@ export type DataKey = {
   resourceType: "key";
 };
 
-export const AccessTest4 = {
+export const SyncReconcileRequestAccessTest4 = {
   Verified: "verified",
   Failed: "failed",
   NotChecked: "not-checked",
 } as const;
-export type AccessTest4 = ClosedEnum<typeof AccessTest4>;
+export type SyncReconcileRequestAccessTest4 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest4
+>;
 
-export const AvailabilityEnum4 = {
+export const SyncReconcileRequestAvailabilityEnum4 = {
   Available: "available",
   Blocked: "blocked",
   Unknown: "unknown",
 } as const;
-export type AvailabilityEnum4 = ClosedEnum<typeof AvailabilityEnum4>;
+export type SyncReconcileRequestAvailabilityEnum4 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilityEnum4
+>;
 
-export const BlockerEnum4 = {
+export const SyncReconcileRequestBlockerEnum4 = {
   AgreementRequired: "agreement-required",
   EntitlementRequired: "entitlement-required",
   ModelActivationRequired: "model-activation-required",
@@ -7026,12 +7030,14 @@ export const BlockerEnum4 = {
   AccessDenied: "access-denied",
   ObservationFailed: "observation-failed",
 } as const;
-export type BlockerEnum4 = ClosedEnum<typeof BlockerEnum4>;
+export type SyncReconcileRequestBlockerEnum4 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum4
+>;
 
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi4 = {
+export const SyncReconcileRequestClientApi4 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -7039,13 +7045,15 @@ export const ClientApi4 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi4 = ClosedEnum<typeof ClientApi4>;
+export type SyncReconcileRequestClientApi4 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi4
+>;
 
-export type Model4 = {
-  accessTest: AccessTest4;
-  availability: AvailabilityEnum4;
-  blockers: Array<BlockerEnum4>;
-  clientApis: Array<ClientApi4>;
+export type SyncReconcileRequestModel4 = {
+  accessTest: SyncReconcileRequestAccessTest4;
+  availability: SyncReconcileRequestAvailabilityEnum4;
+  blockers: Array<SyncReconcileRequestBlockerEnum4>;
+  clientApis: Array<SyncReconcileRequestClientApi4>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -7057,7 +7065,7 @@ export type Model4 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const AvailabilitySource4 = {
+export const SyncReconcileRequestAvailabilitySource4 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -7069,22 +7077,24 @@ export const AvailabilitySource4 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type AvailabilitySource4 = ClosedEnum<typeof AvailabilitySource4>;
+export type SyncReconcileRequestAvailabilitySource4 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource4
+>;
 
-export type Availability4 = {
+export type SyncReconcileRequestAvailability4 = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model4>;
+  models: Array<SyncReconcileRequestModel4>;
   /**
    * Provider control plane used to observe model availability without invoking
    *
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: AvailabilitySource4;
+  source: SyncReconcileRequestAvailabilitySource4;
 };
 
-export type AvailabilityUnion = Availability4 | any;
+export type Availability = SyncReconcileRequestAvailability4 | any;
 
 export const DataReason69 = {
   Forbidden: "forbidden",
@@ -7141,7 +7151,7 @@ export type ResourceHeartbeatStatus69 = {
 };
 
 export type DataExternal = {
-  availability?: Availability4 | any | null | undefined;
+  availability?: SyncReconcileRequestAvailability4 | any | null | undefined;
   /**
    * The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
    *
@@ -7153,21 +7163,25 @@ export type DataExternal = {
   backend: "external";
 };
 
-export const AccessTest3 = {
+export const SyncReconcileRequestAccessTest3 = {
   Verified: "verified",
   Failed: "failed",
   NotChecked: "not-checked",
 } as const;
-export type AccessTest3 = ClosedEnum<typeof AccessTest3>;
+export type SyncReconcileRequestAccessTest3 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest3
+>;
 
-export const AvailabilityEnum3 = {
+export const SyncReconcileRequestAvailabilityEnum3 = {
   Available: "available",
   Blocked: "blocked",
   Unknown: "unknown",
 } as const;
-export type AvailabilityEnum3 = ClosedEnum<typeof AvailabilityEnum3>;
+export type SyncReconcileRequestAvailabilityEnum3 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilityEnum3
+>;
 
-export const BlockerEnum3 = {
+export const SyncReconcileRequestBlockerEnum3 = {
   AgreementRequired: "agreement-required",
   EntitlementRequired: "entitlement-required",
   ModelActivationRequired: "model-activation-required",
@@ -7177,12 +7191,14 @@ export const BlockerEnum3 = {
   AccessDenied: "access-denied",
   ObservationFailed: "observation-failed",
 } as const;
-export type BlockerEnum3 = ClosedEnum<typeof BlockerEnum3>;
+export type SyncReconcileRequestBlockerEnum3 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum3
+>;
 
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi3 = {
+export const SyncReconcileRequestClientApi3 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -7190,13 +7206,15 @@ export const ClientApi3 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi3 = ClosedEnum<typeof ClientApi3>;
+export type SyncReconcileRequestClientApi3 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi3
+>;
 
-export type Model3 = {
-  accessTest: AccessTest3;
-  availability: AvailabilityEnum3;
-  blockers: Array<BlockerEnum3>;
-  clientApis: Array<ClientApi3>;
+export type SyncReconcileRequestModel3 = {
+  accessTest: SyncReconcileRequestAccessTest3;
+  availability: SyncReconcileRequestAvailabilityEnum3;
+  blockers: Array<SyncReconcileRequestBlockerEnum3>;
+  clientApis: Array<SyncReconcileRequestClientApi3>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -7208,7 +7226,7 @@ export type Model3 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const AvailabilitySource3 = {
+export const SyncReconcileRequestAvailabilitySource3 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -7220,19 +7238,21 @@ export const AvailabilitySource3 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type AvailabilitySource3 = ClosedEnum<typeof AvailabilitySource3>;
+export type SyncReconcileRequestAvailabilitySource3 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource3
+>;
 
-export type Availability3 = {
+export type SyncReconcileRequestAvailability3 = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model3>;
+  models: Array<SyncReconcileRequestModel3>;
   /**
    * Provider control plane used to observe model availability without invoking
    *
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: AvailabilitySource3;
+  source: SyncReconcileRequestAvailabilitySource3;
 };
 
 export const DataReason68 = {
@@ -7291,7 +7311,7 @@ export type ResourceHeartbeatStatus68 = {
 
 export type DataAzureFoundry = {
   accountName: string;
-  availability: Availability3;
+  availability: SyncReconcileRequestAvailability3;
   endpoint?: string | null | undefined;
   location?: string | null | undefined;
   resourceGroup?: string | null | undefined;
@@ -7299,21 +7319,25 @@ export type DataAzureFoundry = {
   backend: "azureFoundry";
 };
 
-export const AccessTest2 = {
+export const SyncReconcileRequestAccessTest2 = {
   Verified: "verified",
   Failed: "failed",
   NotChecked: "not-checked",
 } as const;
-export type AccessTest2 = ClosedEnum<typeof AccessTest2>;
+export type SyncReconcileRequestAccessTest2 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest2
+>;
 
-export const AvailabilityEnum2 = {
+export const SyncReconcileRequestAvailabilityEnum2 = {
   Available: "available",
   Blocked: "blocked",
   Unknown: "unknown",
 } as const;
-export type AvailabilityEnum2 = ClosedEnum<typeof AvailabilityEnum2>;
+export type SyncReconcileRequestAvailabilityEnum2 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilityEnum2
+>;
 
-export const BlockerEnum2 = {
+export const SyncReconcileRequestBlockerEnum2 = {
   AgreementRequired: "agreement-required",
   EntitlementRequired: "entitlement-required",
   ModelActivationRequired: "model-activation-required",
@@ -7323,12 +7347,14 @@ export const BlockerEnum2 = {
   AccessDenied: "access-denied",
   ObservationFailed: "observation-failed",
 } as const;
-export type BlockerEnum2 = ClosedEnum<typeof BlockerEnum2>;
+export type SyncReconcileRequestBlockerEnum2 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum2
+>;
 
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi2 = {
+export const SyncReconcileRequestClientApi2 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -7336,13 +7362,15 @@ export const ClientApi2 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi2 = ClosedEnum<typeof ClientApi2>;
+export type SyncReconcileRequestClientApi2 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi2
+>;
 
-export type Model2 = {
-  accessTest: AccessTest2;
-  availability: AvailabilityEnum2;
-  blockers: Array<BlockerEnum2>;
-  clientApis: Array<ClientApi2>;
+export type SyncReconcileRequestModel2 = {
+  accessTest: SyncReconcileRequestAccessTest2;
+  availability: SyncReconcileRequestAvailabilityEnum2;
+  blockers: Array<SyncReconcileRequestBlockerEnum2>;
+  clientApis: Array<SyncReconcileRequestClientApi2>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -7354,7 +7382,7 @@ export type Model2 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const AvailabilitySource2 = {
+export const SyncReconcileRequestAvailabilitySource2 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -7366,19 +7394,21 @@ export const AvailabilitySource2 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type AvailabilitySource2 = ClosedEnum<typeof AvailabilitySource2>;
+export type SyncReconcileRequestAvailabilitySource2 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource2
+>;
 
-export type Availability2 = {
+export type SyncReconcileRequestAvailability2 = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model2>;
+  models: Array<SyncReconcileRequestModel2>;
   /**
    * Provider control plane used to observe model availability without invoking
    *
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: AvailabilitySource2;
+  source: SyncReconcileRequestAvailabilitySource2;
 };
 
 export const DataReason67 = {
@@ -7436,28 +7466,32 @@ export type ResourceHeartbeatStatus67 = {
 };
 
 export type DataGcpVertex = {
-  availability: Availability2;
+  availability: SyncReconcileRequestAvailability2;
   location: string;
   project: string;
   status: ResourceHeartbeatStatus67;
   backend: "gcpVertex";
 };
 
-export const AccessTest1 = {
+export const SyncReconcileRequestAccessTest1 = {
   Verified: "verified",
   Failed: "failed",
   NotChecked: "not-checked",
 } as const;
-export type AccessTest1 = ClosedEnum<typeof AccessTest1>;
+export type SyncReconcileRequestAccessTest1 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest1
+>;
 
-export const AvailabilityEnum1 = {
+export const SyncReconcileRequestAvailabilityEnum1 = {
   Available: "available",
   Blocked: "blocked",
   Unknown: "unknown",
 } as const;
-export type AvailabilityEnum1 = ClosedEnum<typeof AvailabilityEnum1>;
+export type SyncReconcileRequestAvailabilityEnum1 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilityEnum1
+>;
 
-export const BlockerEnum1 = {
+export const SyncReconcileRequestBlockerEnum1 = {
   AgreementRequired: "agreement-required",
   EntitlementRequired: "entitlement-required",
   ModelActivationRequired: "model-activation-required",
@@ -7467,12 +7501,14 @@ export const BlockerEnum1 = {
   AccessDenied: "access-denied",
   ObservationFailed: "observation-failed",
 } as const;
-export type BlockerEnum1 = ClosedEnum<typeof BlockerEnum1>;
+export type SyncReconcileRequestBlockerEnum1 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum1
+>;
 
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi1 = {
+export const SyncReconcileRequestClientApi1 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -7480,13 +7516,15 @@ export const ClientApi1 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi1 = ClosedEnum<typeof ClientApi1>;
+export type SyncReconcileRequestClientApi1 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi1
+>;
 
-export type Model1 = {
-  accessTest: AccessTest1;
-  availability: AvailabilityEnum1;
-  blockers: Array<BlockerEnum1>;
-  clientApis: Array<ClientApi1>;
+export type SyncReconcileRequestModel1 = {
+  accessTest: SyncReconcileRequestAccessTest1;
+  availability: SyncReconcileRequestAvailabilityEnum1;
+  blockers: Array<SyncReconcileRequestBlockerEnum1>;
+  clientApis: Array<SyncReconcileRequestClientApi1>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -7498,7 +7536,7 @@ export type Model1 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export const AvailabilitySource1 = {
+export const SyncReconcileRequestAvailabilitySource1 = {
   AwsBedrock: "aws-bedrock",
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
@@ -7510,19 +7548,21 @@ export const AvailabilitySource1 = {
  * @remarks
  * a model, spending customer quota, or accepting provider terms.
  */
-export type AvailabilitySource1 = ClosedEnum<typeof AvailabilitySource1>;
+export type SyncReconcileRequestAvailabilitySource1 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource1
+>;
 
-export type Availability1 = {
+export type SyncReconcileRequestAvailability1 = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model1>;
+  models: Array<SyncReconcileRequestModel1>;
   /**
    * Provider control plane used to observe model availability without invoking
    *
    * @remarks
    * a model, spending customer quota, or accepting provider terms.
    */
-  source: AvailabilitySource1;
+  source: SyncReconcileRequestAvailabilitySource1;
 };
 
 export const DataReason66 = {
@@ -7580,7 +7620,7 @@ export type ResourceHeartbeatStatus66 = {
 };
 
 export type DataAwsBedrock = {
-  availability: Availability1;
+  availability: SyncReconcileRequestAvailability1;
   region: string;
   status: ResourceHeartbeatStatus66;
   backend: "awsBedrock";
@@ -27517,26 +27557,27 @@ export function dataKeyToJSON(dataKey: DataKey): string {
 }
 
 /** @internal */
-export const AccessTest4$outboundSchema: z.ZodEnum<typeof AccessTest4> = z.enum(
-  AccessTest4,
-);
+export const SyncReconcileRequestAccessTest4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest4
+> = z.enum(SyncReconcileRequestAccessTest4);
 
 /** @internal */
-export const AvailabilityEnum4$outboundSchema: z.ZodEnum<
-  typeof AvailabilityEnum4
-> = z.enum(AvailabilityEnum4);
+export const SyncReconcileRequestAvailabilityEnum4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilityEnum4
+> = z.enum(SyncReconcileRequestAvailabilityEnum4);
 
 /** @internal */
-export const BlockerEnum4$outboundSchema: z.ZodEnum<typeof BlockerEnum4> = z
-  .enum(BlockerEnum4);
+export const SyncReconcileRequestBlockerEnum4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum4
+> = z.enum(SyncReconcileRequestBlockerEnum4);
 
 /** @internal */
-export const ClientApi4$outboundSchema: z.ZodEnum<typeof ClientApi4> = z.enum(
-  ClientApi4,
-);
+export const SyncReconcileRequestClientApi4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi4
+> = z.enum(SyncReconcileRequestClientApi4);
 
 /** @internal */
-export type Model4$Outbound = {
+export type SyncReconcileRequestModel4$Outbound = {
   accessTest: string;
   availability: string;
   blockers: Array<string>;
@@ -27547,64 +27588,77 @@ export type Model4$Outbound = {
 };
 
 /** @internal */
-export const Model4$outboundSchema: z.ZodType<Model4$Outbound, Model4> = z
-  .object({
-    accessTest: AccessTest4$outboundSchema,
-    availability: AvailabilityEnum4$outboundSchema,
-    blockers: z.array(BlockerEnum4$outboundSchema),
-    clientApis: z.array(ClientApi4$outboundSchema),
-    errorCode: z.nullable(z.string()).optional(),
-    publicModelId: z.string(),
-    testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  });
+export const SyncReconcileRequestModel4$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel4$Outbound,
+  SyncReconcileRequestModel4
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest4$outboundSchema,
+  availability: SyncReconcileRequestAvailabilityEnum4$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum4$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi4$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
 
-export function model4ToJSON(model4: Model4): string {
-  return JSON.stringify(Model4$outboundSchema.parse(model4));
+export function syncReconcileRequestModel4ToJSON(
+  syncReconcileRequestModel4: SyncReconcileRequestModel4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel4$outboundSchema.parse(syncReconcileRequestModel4),
+  );
 }
 
 /** @internal */
-export const AvailabilitySource4$outboundSchema: z.ZodEnum<
-  typeof AvailabilitySource4
-> = z.enum(AvailabilitySource4);
+export const SyncReconcileRequestAvailabilitySource4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource4
+> = z.enum(SyncReconcileRequestAvailabilitySource4);
 
 /** @internal */
-export type Availability4$Outbound = {
+export type SyncReconcileRequestAvailability4$Outbound = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model4$Outbound>;
+  models: Array<SyncReconcileRequestModel4$Outbound>;
   source: string;
 };
 
 /** @internal */
-export const Availability4$outboundSchema: z.ZodType<
-  Availability4$Outbound,
-  Availability4
+export const SyncReconcileRequestAvailability4$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability4$Outbound,
+  SyncReconcileRequestAvailability4
 > = z.object({
   catalogRevision: z.string(),
   location: z.nullable(z.string()).optional(),
-  models: z.array(z.lazy(() => Model4$outboundSchema)),
-  source: AvailabilitySource4$outboundSchema,
+  models: z.array(z.lazy(() => SyncReconcileRequestModel4$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource4$outboundSchema,
 });
 
-export function availability4ToJSON(availability4: Availability4): string {
-  return JSON.stringify(Availability4$outboundSchema.parse(availability4));
+export function syncReconcileRequestAvailability4ToJSON(
+  syncReconcileRequestAvailability4: SyncReconcileRequestAvailability4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability4$outboundSchema.parse(
+      syncReconcileRequestAvailability4,
+    ),
+  );
 }
 
 /** @internal */
-export type AvailabilityUnion$Outbound = Availability4$Outbound | any;
+export type Availability$Outbound =
+  | SyncReconcileRequestAvailability4$Outbound
+  | any;
 
 /** @internal */
-export const AvailabilityUnion$outboundSchema: z.ZodType<
-  AvailabilityUnion$Outbound,
-  AvailabilityUnion
-> = z.union([z.lazy(() => Availability4$outboundSchema), z.any()]);
+export const Availability$outboundSchema: z.ZodType<
+  Availability$Outbound,
+  Availability
+> = z.union([
+  z.lazy(() => SyncReconcileRequestAvailability4$outboundSchema),
+  z.any(),
+]);
 
-export function availabilityUnionToJSON(
-  availabilityUnion: AvailabilityUnion,
-): string {
-  return JSON.stringify(
-    AvailabilityUnion$outboundSchema.parse(availabilityUnion),
-  );
+export function availabilityToJSON(availability: Availability): string {
+  return JSON.stringify(Availability$outboundSchema.parse(availability));
 }
 
 /** @internal */
@@ -27685,7 +27739,11 @@ export function resourceHeartbeatStatus69ToJSON(
 
 /** @internal */
 export type DataExternal$Outbound = {
-  availability?: Availability4$Outbound | any | null | undefined;
+  availability?:
+    | SyncReconcileRequestAvailability4$Outbound
+    | any
+    | null
+    | undefined;
   provider: string;
   status: ResourceHeartbeatStatus69$Outbound;
   backend: "external";
@@ -27697,7 +27755,10 @@ export const DataExternal$outboundSchema: z.ZodType<
   DataExternal
 > = z.object({
   availability: z.nullable(
-    z.union([z.lazy(() => Availability4$outboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileRequestAvailability4$outboundSchema),
+      z.any(),
+    ]),
   ).optional(),
   provider: z.string(),
   status: z.lazy(() => ResourceHeartbeatStatus69$outboundSchema),
@@ -27709,26 +27770,27 @@ export function dataExternalToJSON(dataExternal: DataExternal): string {
 }
 
 /** @internal */
-export const AccessTest3$outboundSchema: z.ZodEnum<typeof AccessTest3> = z.enum(
-  AccessTest3,
-);
+export const SyncReconcileRequestAccessTest3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest3
+> = z.enum(SyncReconcileRequestAccessTest3);
 
 /** @internal */
-export const AvailabilityEnum3$outboundSchema: z.ZodEnum<
-  typeof AvailabilityEnum3
-> = z.enum(AvailabilityEnum3);
+export const SyncReconcileRequestAvailabilityEnum3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilityEnum3
+> = z.enum(SyncReconcileRequestAvailabilityEnum3);
 
 /** @internal */
-export const BlockerEnum3$outboundSchema: z.ZodEnum<typeof BlockerEnum3> = z
-  .enum(BlockerEnum3);
+export const SyncReconcileRequestBlockerEnum3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum3
+> = z.enum(SyncReconcileRequestBlockerEnum3);
 
 /** @internal */
-export const ClientApi3$outboundSchema: z.ZodEnum<typeof ClientApi3> = z.enum(
-  ClientApi3,
-);
+export const SyncReconcileRequestClientApi3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi3
+> = z.enum(SyncReconcileRequestClientApi3);
 
 /** @internal */
-export type Model3$Outbound = {
+export type SyncReconcileRequestModel3$Outbound = {
   accessTest: string;
   availability: string;
   blockers: Array<string>;
@@ -27739,47 +27801,59 @@ export type Model3$Outbound = {
 };
 
 /** @internal */
-export const Model3$outboundSchema: z.ZodType<Model3$Outbound, Model3> = z
-  .object({
-    accessTest: AccessTest3$outboundSchema,
-    availability: AvailabilityEnum3$outboundSchema,
-    blockers: z.array(BlockerEnum3$outboundSchema),
-    clientApis: z.array(ClientApi3$outboundSchema),
-    errorCode: z.nullable(z.string()).optional(),
-    publicModelId: z.string(),
-    testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  });
+export const SyncReconcileRequestModel3$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel3$Outbound,
+  SyncReconcileRequestModel3
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest3$outboundSchema,
+  availability: SyncReconcileRequestAvailabilityEnum3$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum3$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi3$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
 
-export function model3ToJSON(model3: Model3): string {
-  return JSON.stringify(Model3$outboundSchema.parse(model3));
+export function syncReconcileRequestModel3ToJSON(
+  syncReconcileRequestModel3: SyncReconcileRequestModel3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel3$outboundSchema.parse(syncReconcileRequestModel3),
+  );
 }
 
 /** @internal */
-export const AvailabilitySource3$outboundSchema: z.ZodEnum<
-  typeof AvailabilitySource3
-> = z.enum(AvailabilitySource3);
+export const SyncReconcileRequestAvailabilitySource3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource3
+> = z.enum(SyncReconcileRequestAvailabilitySource3);
 
 /** @internal */
-export type Availability3$Outbound = {
+export type SyncReconcileRequestAvailability3$Outbound = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model3$Outbound>;
+  models: Array<SyncReconcileRequestModel3$Outbound>;
   source: string;
 };
 
 /** @internal */
-export const Availability3$outboundSchema: z.ZodType<
-  Availability3$Outbound,
-  Availability3
+export const SyncReconcileRequestAvailability3$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability3$Outbound,
+  SyncReconcileRequestAvailability3
 > = z.object({
   catalogRevision: z.string(),
   location: z.nullable(z.string()).optional(),
-  models: z.array(z.lazy(() => Model3$outboundSchema)),
-  source: AvailabilitySource3$outboundSchema,
+  models: z.array(z.lazy(() => SyncReconcileRequestModel3$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource3$outboundSchema,
 });
 
-export function availability3ToJSON(availability3: Availability3): string {
-  return JSON.stringify(Availability3$outboundSchema.parse(availability3));
+export function syncReconcileRequestAvailability3ToJSON(
+  syncReconcileRequestAvailability3: SyncReconcileRequestAvailability3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability3$outboundSchema.parse(
+      syncReconcileRequestAvailability3,
+    ),
+  );
 }
 
 /** @internal */
@@ -27861,7 +27935,7 @@ export function resourceHeartbeatStatus68ToJSON(
 /** @internal */
 export type DataAzureFoundry$Outbound = {
   accountName: string;
-  availability: Availability3$Outbound;
+  availability: SyncReconcileRequestAvailability3$Outbound;
   endpoint?: string | null | undefined;
   location?: string | null | undefined;
   resourceGroup?: string | null | undefined;
@@ -27875,7 +27949,7 @@ export const DataAzureFoundry$outboundSchema: z.ZodType<
   DataAzureFoundry
 > = z.object({
   accountName: z.string(),
-  availability: z.lazy(() => Availability3$outboundSchema),
+  availability: z.lazy(() => SyncReconcileRequestAvailability3$outboundSchema),
   endpoint: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
   resourceGroup: z.nullable(z.string()).optional(),
@@ -27892,26 +27966,27 @@ export function dataAzureFoundryToJSON(
 }
 
 /** @internal */
-export const AccessTest2$outboundSchema: z.ZodEnum<typeof AccessTest2> = z.enum(
-  AccessTest2,
-);
+export const SyncReconcileRequestAccessTest2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest2
+> = z.enum(SyncReconcileRequestAccessTest2);
 
 /** @internal */
-export const AvailabilityEnum2$outboundSchema: z.ZodEnum<
-  typeof AvailabilityEnum2
-> = z.enum(AvailabilityEnum2);
+export const SyncReconcileRequestAvailabilityEnum2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilityEnum2
+> = z.enum(SyncReconcileRequestAvailabilityEnum2);
 
 /** @internal */
-export const BlockerEnum2$outboundSchema: z.ZodEnum<typeof BlockerEnum2> = z
-  .enum(BlockerEnum2);
+export const SyncReconcileRequestBlockerEnum2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum2
+> = z.enum(SyncReconcileRequestBlockerEnum2);
 
 /** @internal */
-export const ClientApi2$outboundSchema: z.ZodEnum<typeof ClientApi2> = z.enum(
-  ClientApi2,
-);
+export const SyncReconcileRequestClientApi2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi2
+> = z.enum(SyncReconcileRequestClientApi2);
 
 /** @internal */
-export type Model2$Outbound = {
+export type SyncReconcileRequestModel2$Outbound = {
   accessTest: string;
   availability: string;
   blockers: Array<string>;
@@ -27922,47 +27997,59 @@ export type Model2$Outbound = {
 };
 
 /** @internal */
-export const Model2$outboundSchema: z.ZodType<Model2$Outbound, Model2> = z
-  .object({
-    accessTest: AccessTest2$outboundSchema,
-    availability: AvailabilityEnum2$outboundSchema,
-    blockers: z.array(BlockerEnum2$outboundSchema),
-    clientApis: z.array(ClientApi2$outboundSchema),
-    errorCode: z.nullable(z.string()).optional(),
-    publicModelId: z.string(),
-    testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  });
+export const SyncReconcileRequestModel2$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel2$Outbound,
+  SyncReconcileRequestModel2
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest2$outboundSchema,
+  availability: SyncReconcileRequestAvailabilityEnum2$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum2$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi2$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
 
-export function model2ToJSON(model2: Model2): string {
-  return JSON.stringify(Model2$outboundSchema.parse(model2));
+export function syncReconcileRequestModel2ToJSON(
+  syncReconcileRequestModel2: SyncReconcileRequestModel2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel2$outboundSchema.parse(syncReconcileRequestModel2),
+  );
 }
 
 /** @internal */
-export const AvailabilitySource2$outboundSchema: z.ZodEnum<
-  typeof AvailabilitySource2
-> = z.enum(AvailabilitySource2);
+export const SyncReconcileRequestAvailabilitySource2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource2
+> = z.enum(SyncReconcileRequestAvailabilitySource2);
 
 /** @internal */
-export type Availability2$Outbound = {
+export type SyncReconcileRequestAvailability2$Outbound = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model2$Outbound>;
+  models: Array<SyncReconcileRequestModel2$Outbound>;
   source: string;
 };
 
 /** @internal */
-export const Availability2$outboundSchema: z.ZodType<
-  Availability2$Outbound,
-  Availability2
+export const SyncReconcileRequestAvailability2$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability2$Outbound,
+  SyncReconcileRequestAvailability2
 > = z.object({
   catalogRevision: z.string(),
   location: z.nullable(z.string()).optional(),
-  models: z.array(z.lazy(() => Model2$outboundSchema)),
-  source: AvailabilitySource2$outboundSchema,
+  models: z.array(z.lazy(() => SyncReconcileRequestModel2$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource2$outboundSchema,
 });
 
-export function availability2ToJSON(availability2: Availability2): string {
-  return JSON.stringify(Availability2$outboundSchema.parse(availability2));
+export function syncReconcileRequestAvailability2ToJSON(
+  syncReconcileRequestAvailability2: SyncReconcileRequestAvailability2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability2$outboundSchema.parse(
+      syncReconcileRequestAvailability2,
+    ),
+  );
 }
 
 /** @internal */
@@ -28043,7 +28130,7 @@ export function resourceHeartbeatStatus67ToJSON(
 
 /** @internal */
 export type DataGcpVertex$Outbound = {
-  availability: Availability2$Outbound;
+  availability: SyncReconcileRequestAvailability2$Outbound;
   location: string;
   project: string;
   status: ResourceHeartbeatStatus67$Outbound;
@@ -28055,7 +28142,7 @@ export const DataGcpVertex$outboundSchema: z.ZodType<
   DataGcpVertex$Outbound,
   DataGcpVertex
 > = z.object({
-  availability: z.lazy(() => Availability2$outboundSchema),
+  availability: z.lazy(() => SyncReconcileRequestAvailability2$outboundSchema),
   location: z.string(),
   project: z.string(),
   status: z.lazy(() => ResourceHeartbeatStatus67$outboundSchema),
@@ -28067,26 +28154,27 @@ export function dataGcpVertexToJSON(dataGcpVertex: DataGcpVertex): string {
 }
 
 /** @internal */
-export const AccessTest1$outboundSchema: z.ZodEnum<typeof AccessTest1> = z.enum(
-  AccessTest1,
-);
+export const SyncReconcileRequestAccessTest1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest1
+> = z.enum(SyncReconcileRequestAccessTest1);
 
 /** @internal */
-export const AvailabilityEnum1$outboundSchema: z.ZodEnum<
-  typeof AvailabilityEnum1
-> = z.enum(AvailabilityEnum1);
+export const SyncReconcileRequestAvailabilityEnum1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilityEnum1
+> = z.enum(SyncReconcileRequestAvailabilityEnum1);
 
 /** @internal */
-export const BlockerEnum1$outboundSchema: z.ZodEnum<typeof BlockerEnum1> = z
-  .enum(BlockerEnum1);
+export const SyncReconcileRequestBlockerEnum1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum1
+> = z.enum(SyncReconcileRequestBlockerEnum1);
 
 /** @internal */
-export const ClientApi1$outboundSchema: z.ZodEnum<typeof ClientApi1> = z.enum(
-  ClientApi1,
-);
+export const SyncReconcileRequestClientApi1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi1
+> = z.enum(SyncReconcileRequestClientApi1);
 
 /** @internal */
-export type Model1$Outbound = {
+export type SyncReconcileRequestModel1$Outbound = {
   accessTest: string;
   availability: string;
   blockers: Array<string>;
@@ -28097,47 +28185,59 @@ export type Model1$Outbound = {
 };
 
 /** @internal */
-export const Model1$outboundSchema: z.ZodType<Model1$Outbound, Model1> = z
-  .object({
-    accessTest: AccessTest1$outboundSchema,
-    availability: AvailabilityEnum1$outboundSchema,
-    blockers: z.array(BlockerEnum1$outboundSchema),
-    clientApis: z.array(ClientApi1$outboundSchema),
-    errorCode: z.nullable(z.string()).optional(),
-    publicModelId: z.string(),
-    testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  });
+export const SyncReconcileRequestModel1$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel1$Outbound,
+  SyncReconcileRequestModel1
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest1$outboundSchema,
+  availability: SyncReconcileRequestAvailabilityEnum1$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum1$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi1$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
 
-export function model1ToJSON(model1: Model1): string {
-  return JSON.stringify(Model1$outboundSchema.parse(model1));
+export function syncReconcileRequestModel1ToJSON(
+  syncReconcileRequestModel1: SyncReconcileRequestModel1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel1$outboundSchema.parse(syncReconcileRequestModel1),
+  );
 }
 
 /** @internal */
-export const AvailabilitySource1$outboundSchema: z.ZodEnum<
-  typeof AvailabilitySource1
-> = z.enum(AvailabilitySource1);
+export const SyncReconcileRequestAvailabilitySource1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource1
+> = z.enum(SyncReconcileRequestAvailabilitySource1);
 
 /** @internal */
-export type Availability1$Outbound = {
+export type SyncReconcileRequestAvailability1$Outbound = {
   catalogRevision: string;
   location?: string | null | undefined;
-  models: Array<Model1$Outbound>;
+  models: Array<SyncReconcileRequestModel1$Outbound>;
   source: string;
 };
 
 /** @internal */
-export const Availability1$outboundSchema: z.ZodType<
-  Availability1$Outbound,
-  Availability1
+export const SyncReconcileRequestAvailability1$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability1$Outbound,
+  SyncReconcileRequestAvailability1
 > = z.object({
   catalogRevision: z.string(),
   location: z.nullable(z.string()).optional(),
-  models: z.array(z.lazy(() => Model1$outboundSchema)),
-  source: AvailabilitySource1$outboundSchema,
+  models: z.array(z.lazy(() => SyncReconcileRequestModel1$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource1$outboundSchema,
 });
 
-export function availability1ToJSON(availability1: Availability1): string {
-  return JSON.stringify(Availability1$outboundSchema.parse(availability1));
+export function syncReconcileRequestAvailability1ToJSON(
+  syncReconcileRequestAvailability1: SyncReconcileRequestAvailability1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability1$outboundSchema.parse(
+      syncReconcileRequestAvailability1,
+    ),
+  );
 }
 
 /** @internal */
@@ -28218,7 +28318,7 @@ export function resourceHeartbeatStatus66ToJSON(
 
 /** @internal */
 export type DataAwsBedrock$Outbound = {
-  availability: Availability1$Outbound;
+  availability: SyncReconcileRequestAvailability1$Outbound;
   region: string;
   status: ResourceHeartbeatStatus66$Outbound;
   backend: "awsBedrock";
@@ -28229,7 +28329,7 @@ export const DataAwsBedrock$outboundSchema: z.ZodType<
   DataAwsBedrock$Outbound,
   DataAwsBedrock
 > = z.object({
-  availability: z.lazy(() => Availability1$outboundSchema),
+  availability: z.lazy(() => SyncReconcileRequestAvailability1$outboundSchema),
   region: z.string(),
   status: z.lazy(() => ResourceHeartbeatStatus66$outboundSchema),
   backend: z.literal("awsBedrock"),

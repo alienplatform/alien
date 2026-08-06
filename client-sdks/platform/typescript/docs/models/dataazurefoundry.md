@@ -13,26 +13,21 @@ let value: DataAzureFoundry = {
       {
         accessTest: "verified",
         availability: "available",
-        blockers: [],
+        blockers: [
+          "quota-configuration-required",
+        ],
         clientApis: [
-          "anthropic-messages",
+          "open-ai-responses",
         ],
         publicModelId: "<id>",
       },
     ],
-    source: "azure-foundry",
+    source: "aws-bedrock",
   },
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "unknown",
-    lifecycle: "stopping",
+    lifecycle: "stopped",
     partial: false,
     stale: false,
   },
@@ -42,12 +37,12 @@ let value: DataAzureFoundry = {
 
 ## Fields
 
-| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `accountName`                                                              | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `availability`                                                             | [models.Availability3](../models/availability3.md)                         | :heavy_check_mark:                                                         | N/A                                                                        |
-| `endpoint`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `location`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `resourceGroup`                                                            | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus68](../models/resourceheartbeatstatus68.md) | :heavy_check_mark:                                                         | N/A                                                                        |
-| `backend`                                                                  | *"azureFoundry"*                                                           | :heavy_check_mark:                                                         | N/A                                                                        |
+| Field                                                                                      | Type                                                                                       | Required                                                                                   | Description                                                                                |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `accountName`                                                                              | *string*                                                                                   | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `availability`                                                                             | [models.SyncReconcileRequestAvailability3](../models/syncreconcilerequestavailability3.md) | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `endpoint`                                                                                 | *string*                                                                                   | :heavy_minus_sign:                                                                         | N/A                                                                                        |
+| `location`                                                                                 | *string*                                                                                   | :heavy_minus_sign:                                                                         | N/A                                                                                        |
+| `resourceGroup`                                                                            | *string*                                                                                   | :heavy_minus_sign:                                                                         | N/A                                                                                        |
+| `status`                                                                                   | [models.ResourceHeartbeatStatus68](../models/resourceheartbeatstatus68.md)                 | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `backend`                                                                                  | *"azureFoundry"*                                                                           | :heavy_check_mark:                                                                         | N/A                                                                                        |

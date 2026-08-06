@@ -5,11 +5,11 @@
 ```typescript
 import { GetResourceDeploymentDetailArea } from "@alienplatform/platform-api/models/operations";
 
-let value: GetResourceDeploymentDetailArea = "container";
+let value: GetResourceDeploymentDetailArea = "worker";
 ```
 
 ## Values
 
 ```typescript
-"container" | "worker" | "daemon"
+"container" | "worker" | "daemon" | "ai"
 ```

@@ -558,10 +558,12 @@ const value: models.DataAi = {
       catalogRevision: "<value>",
       models: [
         {
-          accessTest: "not-checked",
-          availability: "unknown",
+          accessTest: "failed",
+          availability: "blocked",
           blockers: [],
-          clientApis: [],
+          clientApis: [
+            "open-ai-chat-completions",
+          ],
           publicModelId: "<id>",
         },
       ],

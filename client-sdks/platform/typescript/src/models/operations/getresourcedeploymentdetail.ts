@@ -12,6 +12,7 @@ export const GetResourceDeploymentDetailArea = {
   Container: "container",
   Worker: "worker",
   Daemon: "daemon",
+  Ai: "ai",
 } as const;
 export type GetResourceDeploymentDetailArea = ClosedEnum<
   typeof GetResourceDeploymentDetailArea
@@ -8000,7 +8001,7 @@ export type HeartbeatAvailable = {
 export type HeartbeatUnion = HeartbeatAvailable | HeartbeatMissing;
 
 /**
- * Latest heartbeat detail for one compute resource deployment.
+ * Latest heartbeat detail for one resource deployment.
  */
 export type GetResourceDeploymentDetailResponse = {
   deployment: GetResourceDeploymentDetailDeployment;

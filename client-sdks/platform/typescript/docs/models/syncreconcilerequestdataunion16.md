@@ -39,10 +39,12 @@ const value: models.DataGcpVertex = {
     catalogRevision: "<value>",
     models: [
       {
-        accessTest: "not-checked",
-        availability: "unknown",
+        accessTest: "failed",
+        availability: "blocked",
         blockers: [],
-        clientApis: [],
+        clientApis: [
+          "open-ai-chat-completions",
+        ],
         publicModelId: "<id>",
       },
     ],
@@ -72,26 +74,21 @@ const value: models.DataAzureFoundry = {
       {
         accessTest: "verified",
         availability: "available",
-        blockers: [],
+        blockers: [
+          "quota-configuration-required",
+        ],
         clientApis: [
-          "anthropic-messages",
+          "open-ai-responses",
         ],
         publicModelId: "<id>",
       },
     ],
-    source: "azure-foundry",
+    source: "aws-bedrock",
   },
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "unknown",
-    lifecycle: "stopping",
+    lifecycle: "stopped",
     partial: false,
     stale: false,
   },

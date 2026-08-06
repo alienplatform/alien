@@ -38,6 +38,7 @@ let value: DeploymentInfo = {
       "<value 2>",
     ],
   },
+  modelAvailabilitySources: [],
 };
 ```
 
@@ -53,5 +54,6 @@ let value: DeploymentInfo = {
 | `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `supportedRegions`                                                                 | [models.SupportedCloudRegions](../models/supportedcloudregions.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `modelAvailabilitySources`                                                         | [models.ModelAvailabilitySource](../models/modelavailabilitysource.md)[]           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `setupConfig`                                                                      | [models.DeploymentInfoSetupConfig](../models/deploymentinfosetupconfig.md)         | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `readiness`                                                                        | [models.Readiness](../models/readiness.md)                                         | :heavy_minus_sign:                                                                 | N/A                                                                                |
