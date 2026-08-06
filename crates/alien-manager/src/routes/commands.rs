@@ -43,12 +43,11 @@ async fn get_command_owner(state: &AppState, command_id: &str) -> Result<String,
 /// bootstrap connection and retry against the new manager. Other callers keep
 /// the ordinary deployment-not-found response.
 async fn get_command_deployment(
-    state: &AppState,
+    deployment_store: &dyn crate::traits::DeploymentStore,
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<crate::traits::DeploymentRecord, Response> {
-    match state
-        .deployment_store
+    match deployment_store
         .get_deployment(subject, deployment_id)
         .await
         .map_err(|e| e.into_response())?
@@ -79,7 +78,8 @@ async fn require_command_access(
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    let deployment = get_command_deployment(state, subject, deployment_id).await?;
+    let deployment =
+        get_command_deployment(state.deployment_store.as_ref(), subject, deployment_id).await?;
     if state.authz.can_read_command(subject, &deployment) {
         Ok(())
     } else {
@@ -92,67 +92,82 @@ async fn require_command_access(
 /// because group ownership is not duplicated on command records.
 async fn require_command_read_access(
     state: &AppState,
-    subject: &crate::auth::Subject,
+    auth: &CommandRequestAuth,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
-    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
-        require_current_command_deployment(state, subject, &command.deployment_id).await?;
-    }
-    if !matches!(subject.scope, crate::auth::Scope::DeploymentGroup { .. }) {
-        return if state.authz.can_read_command_context(subject, command) {
+    if !matches!(
+        &auth.subject.scope,
+        crate::auth::Scope::DeploymentGroup { .. }
+    ) {
+        return if state.authz.can_read_command_context(&auth.subject, command) {
             Ok(())
         } else {
             Err(ErrorData::forbidden("Access denied").into_response())
         };
     }
 
-    require_command_access(state, subject, &command.deployment_id).await
+    require_command_access(state, &auth.subject, &command.deployment_id).await
 }
 
-/// Require the command's deployment to still belong to this manager.
+struct CommandRequestAuth {
+    subject: crate::auth::Subject,
+    commands_deployment: Option<crate::traits::DeploymentRecord>,
+}
+
+/// Authenticate a command request and retain the commands-scoped deployment.
 ///
-/// Hosted command credentials are manager-bound and short-lived, but a
-/// reassignment can happen before expiry. The injected deployment store is
-/// the current ownership source, so commands-only access must re-check it
-/// before authorizing a canonical command record left on the old manager.
-async fn require_current_command_deployment(
-    state: &AppState,
-    subject: &crate::auth::Subject,
-    deployment_id: &str,
-) -> Result<(), Response> {
-    get_command_deployment(state, subject, deployment_id)
-        .await
-        .map(|_| ())
+/// The ownership lookup must happen before local command or lease lookup so a
+/// stale manager returns 401 instead of a misleading 404. Retaining the record
+/// also prevents a second Platform lookup during authorization.
+async fn prepare_command_auth(
+    deployment_store: &dyn crate::traits::DeploymentStore,
+    subject: crate::auth::Subject,
+) -> Result<CommandRequestAuth, Response> {
+    let commands_deployment =
+        if let crate::auth::Scope::Commands { deployment_id, .. } = &subject.scope {
+            Some(get_command_deployment(deployment_store, &subject, deployment_id).await?)
+        } else {
+            None
+        };
+
+    Ok(CommandRequestAuth {
+        subject,
+        commands_deployment,
+    })
 }
 
-/// Before an assignment-filtered command/lease lookup, verify the deployment
-/// encoded in a commands-only credential still belongs to this manager.
-///
-/// Without this preflight, a stale manager can hide the command context first
-/// and incorrectly return 404, preventing hosted clients from refreshing on
-/// the 401 reassignment signal.
-async fn preflight_commands_scope_deployment(
-    state: &AppState,
-    subject: &crate::auth::Subject,
-) -> Result<(), Response> {
-    if let crate::auth::Scope::Commands { deployment_id, .. } = &subject.scope {
-        require_current_command_deployment(state, subject, deployment_id).await?;
-    }
-    Ok(())
-}
-
-/// Authenticate a command request and run the manager-assignment preflight
-/// before any assignment-filtered command or lease lookup can turn a stale
-/// capability into a misleading 404.
 async fn require_command_auth(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<crate::auth::Subject, Response> {
+) -> Result<CommandRequestAuth, Response> {
     let subject = auth::require_auth(state, headers)
         .await
         .map_err(IntoResponse::into_response)?;
-    preflight_commands_scope_deployment(state, &subject).await?;
-    Ok(subject)
+    prepare_command_auth(state.deployment_store.as_ref(), subject).await
+}
+
+async fn require_command_dispatch_access(
+    deployment_store: &dyn crate::traits::DeploymentStore,
+    authz: &dyn crate::auth::Authz,
+    auth: &CommandRequestAuth,
+    deployment_id: &str,
+) -> Result<(), Response> {
+    if let Some(deployment) = &auth.commands_deployment {
+        return if deployment.id == deployment_id
+            && authz.can_dispatch_command(&auth.subject, deployment)
+        {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    let deployment = get_command_deployment(deployment_store, &auth.subject, deployment_id).await?;
+    if authz.can_dispatch_command(&auth.subject, &deployment) {
+        Ok(())
+    } else {
+        Err(ErrorData::forbidden("Access denied").into_response())
+    }
 }
 
 async fn require_command_execution_access(
@@ -160,7 +175,8 @@ async fn require_command_execution_access(
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    let deployment = get_command_deployment(state, subject, deployment_id).await?;
+    let deployment =
+        get_command_deployment(state.deployment_store.as_ref(), subject, deployment_id).await?;
     if state.authz.can_execute_command(subject, &deployment) {
         Ok(())
     } else {
@@ -173,19 +189,21 @@ async fn require_command_execution_access(
 /// existing admin/deployment/group callers retain the deployment-level path.
 async fn require_command_execution_context(
     state: &AppState,
-    subject: &crate::auth::Subject,
+    auth: &CommandRequestAuth,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
-    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
-        require_current_command_deployment(state, subject, &command.deployment_id).await?;
-        return if state.authz.can_execute_command_context(subject, command) {
+    if auth.commands_deployment.is_some() {
+        return if state
+            .authz
+            .can_execute_command_context(&auth.subject, command)
+        {
             Ok(())
         } else {
             Err(ErrorData::forbidden("Access denied").into_response())
         };
     }
 
-    require_command_execution_access(state, subject, &command.deployment_id).await
+    require_command_execution_access(state, &auth.subject, &command.deployment_id).await
 }
 
 // --- Router ---
@@ -234,7 +252,13 @@ async fn create_command(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match get_command_deployment(&state, &subject, &request.deployment_id).await {
+    let deployment = match get_command_deployment(
+        state.deployment_store.as_ref(),
+        &subject,
+        &request.deployment_id,
+    )
+    .await
+    {
         Ok(deployment) => deployment,
         Err(response) => return response,
     };
@@ -257,8 +281,8 @@ async fn get_command_status(
     headers: HeaderMap,
     Path(command_id): Path<String>,
 ) -> Response {
-    let subject = match require_command_auth(&state, &headers).await {
-        Ok(subject) => subject,
+    let auth = match require_command_auth(&state, &headers).await {
+        Ok(auth) => auth,
         Err(response) => return response,
     };
     let command = match state
@@ -278,7 +302,7 @@ async fn get_command_status(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = require_command_read_access(&state, &subject, &command).await {
+    if let Err(e) = require_command_read_access(&state, &auth, &command).await {
         return e;
     }
 
@@ -297,8 +321,8 @@ async fn upload_complete(
     Path(command_id): Path<String>,
     Json(upload_request): Json<UploadCompleteRequest>,
 ) -> Response {
-    let subject = match require_command_auth(&state, &headers).await {
-        Ok(subject) => subject,
+    let auth = match require_command_auth(&state, &headers).await {
+        Ok(auth) => auth,
         Err(response) => return response,
     };
     let deployment_id = match get_command_owner(&state, &command_id).await {
@@ -306,13 +330,15 @@ async fn upload_complete(
         Err(e) => return e,
     };
 
-    let deployment = match get_command_deployment(&state, &subject, &deployment_id).await {
-        Ok(deployment) => deployment,
-        Err(response) => return response,
-    };
-
-    if !state.authz.can_dispatch_command(&subject, &deployment) {
-        return ErrorData::forbidden("Access denied").into_response();
+    if let Err(response) = require_command_dispatch_access(
+        state.deployment_store.as_ref(),
+        state.authz.as_ref(),
+        &auth,
+        &deployment_id,
+    )
+    .await
+    {
+        return response;
     }
 
     match state
@@ -352,9 +378,10 @@ async fn submit_response(
     };
 
     if let Some(subject) = bearer_auth {
-        if let Err(response) = preflight_commands_scope_deployment(&state, &subject).await {
-            return response;
-        }
+        let auth = match prepare_command_auth(state.deployment_store.as_ref(), subject).await {
+            Ok(auth) => auth,
+            Err(response) => return response,
+        };
         // Standard Bearer auth path — commands-only receiver credentials are
         // bound to the exact command target, while legacy/admin credentials
         // retain deployment-level authorization.
@@ -374,7 +401,7 @@ async fn submit_response(
             }
             Err(e) => return e.into_response(),
         };
-        if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
+        if let Err(e) = require_command_execution_context(&state, &auth, &command).await {
             return e;
         }
     } else {
@@ -410,8 +437,8 @@ async fn get_command_payload(
     headers: HeaderMap,
     Path(command_id): Path<String>,
 ) -> Response {
-    let subject = match require_command_auth(&state, &headers).await {
-        Ok(subject) => subject,
+    let auth = match require_command_auth(&state, &headers).await {
+        Ok(auth) => auth,
         Err(response) => return response,
     };
     // Verify the caller has access to this command's deployment via Authz.
@@ -426,16 +453,16 @@ async fn get_command_payload(
         .await
     {
         Ok(Some(command)) => {
-            if let Err(e) = require_command_read_access(&state, &subject, &command).await {
+            if let Err(e) = require_command_read_access(&state, &auth, &command).await {
                 return e;
             }
         }
         Ok(None) => {
             // No canonical owner in the local registry — only workspace-wide
             // writers may inspect such payloads.
-            if !matches!(subject.scope, crate::auth::Scope::Workspace)
+            if !matches!(&auth.subject.scope, crate::auth::Scope::Workspace)
                 || !matches!(
-                    subject.role,
+                    auth.subject.role,
                     crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
                 )
             {
@@ -522,11 +549,16 @@ async fn acquire_leases(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment =
-        match get_command_deployment(&state, &subject, &lease_request.deployment_id).await {
-            Ok(deployment) => deployment,
-            Err(response) => return response,
-        };
+    let deployment = match get_command_deployment(
+        state.deployment_store.as_ref(),
+        &subject,
+        &lease_request.deployment_id,
+    )
+    .await
+    {
+        Ok(deployment) => deployment,
+        Err(response) => return response,
+    };
 
     if !state
         .authz
@@ -557,8 +589,8 @@ async fn release_lease(
     headers: HeaderMap,
     Path(lease_id): Path<String>,
 ) -> Response {
-    let subject = match require_command_auth(&state, &headers).await {
-        Ok(subject) => subject,
+    let auth = match require_command_auth(&state, &headers).await {
+        Ok(auth) => auth,
         Err(response) => return response,
     };
 
@@ -572,7 +604,7 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
-    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+    if auth.commands_deployment.is_some() {
         let command = match state
             .command_server
             .get_command_access_context(&command_id)
@@ -587,10 +619,10 @@ async fn release_lease(
             }
             Err(e) => return e.into_response(),
         };
-        if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
+        if let Err(e) = require_command_execution_context(&state, &auth, &command).await {
             return e;
         }
-    } else if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
+    } else if let Err(e) = require_command_execution_access(&state, &auth.subject, &owner).await {
         return e;
     }
 
@@ -604,10 +636,11 @@ async fn release_lease(
 mod tests {
     use super::*;
     use crate::auth::{CommandCapability, Role, Scope, Subject, SubjectKind};
+    use crate::providers::OssAuthz;
+    use crate::traits::deployment_store::MockDeploymentStore;
 
-    #[test]
-    fn stale_manager_is_unauthorized_only_for_commands_credentials() {
-        let commands_subject = Subject {
+    fn commands_sender_subject() -> Subject {
+        Subject {
             kind: SubjectKind::ServiceAccount {
                 id: "commands-sender".to_string(),
             },
@@ -619,7 +652,28 @@ mod tests {
             },
             role: Role::CommandCapability,
             bearer_token: "bearer".to_string(),
-        };
+        }
+    }
+
+    fn command_deployment() -> crate::traits::DeploymentRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": "deployment-1",
+            "workspaceId": "workspace-1",
+            "projectId": "project-1",
+            "name": "deployment-1",
+            "deploymentGroupId": "group-1",
+            "platform": "local",
+            "deploymentProtocolVersion": 1,
+            "status": "running",
+            "retryRequested": false,
+            "createdAt": "2026-01-01T00:00:00Z",
+        }))
+        .expect("test deployment should deserialize")
+    }
+
+    #[test]
+    fn stale_manager_is_unauthorized_only_for_commands_credentials() {
+        let commands_subject = commands_sender_subject();
 
         assert_eq!(
             missing_command_deployment_response(&commands_subject, "deployment-1").status(),
@@ -629,5 +683,26 @@ mod tests {
             missing_command_deployment_response(&Subject::system(), "deployment-1").status(),
             StatusCode::NOT_FOUND,
         );
+    }
+
+    #[tokio::test]
+    async fn commands_dispatch_authorization_reuses_the_preflight_deployment_lookup() {
+        let mut deployment_store = MockDeploymentStore::new();
+        deployment_store
+            .expect_get_deployment()
+            .withf(|subject, deployment_id| {
+                matches!(subject.scope, Scope::Commands { .. }) && deployment_id == "deployment-1"
+            })
+            .times(1)
+            .return_once(|_, _| Ok(Some(command_deployment())));
+
+        let auth = prepare_command_auth(&deployment_store, commands_sender_subject())
+            .await
+            .expect("commands preflight should load the assigned deployment");
+        require_command_dispatch_access(&deployment_store, &OssAuthz, &auth, "deployment-1")
+            .await
+            .expect("cached deployment should authorize the sender");
+
+        deployment_store.checkpoint();
     }
 }

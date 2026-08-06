@@ -13,38 +13,58 @@ const DEFAULT_PLATFORM_URL = "https://api.alien.dev"
 const BOOTSTRAP_PATH = "/v1/commands/bootstrap"
 const REFRESH_SKEW_MS = 30_000
 
-const BootstrapResponseSchema = z.object({
+const BootstrapConnectionSchema = z.object({
   managerUrl: z.url(),
   token: z.string().min(1),
   expiresAt: z.iso.datetime({ offset: true }),
-  target: z
-    .object({
-      resourceId: z.string().min(1),
-      resourceType: z.enum(["container", "daemon"]),
-    })
-    .optional(),
 })
 
-export type CommandBootstrapRole = "sender" | "receiver"
+const CommandTargetSchema = z.object({
+  resourceId: z.string().min(1),
+  resourceType: z.enum(["container", "daemon"]),
+})
 
-export interface CommandConnection {
+const SenderBootstrapResponseSchema = BootstrapConnectionSchema.extend({
+  target: z.undefined().optional(),
+})
+
+const ReceiverBootstrapResponseSchema = BootstrapConnectionSchema.extend({
+  target: CommandTargetSchema,
+})
+
+interface CommandConnectionBase {
   managerUrl: string
   token: string
   expiresAt: Date
-  target?: {
+}
+
+export interface SenderCommandConnection extends CommandConnectionBase {
+  role: "sender"
+}
+
+export interface ReceiverCommandConnection extends CommandConnectionBase {
+  role: "receiver"
+  target: {
     resourceId: string
     resourceType: Exclude<CommandTargetType, "worker">
   }
 }
 
-interface HostedConnectionOptions {
+export type CommandConnection = SenderCommandConnection | ReceiverCommandConnection
+
+interface HostedConnectionOptionsBase {
   deploymentId: string
   apiKey: string
-  role: CommandBootstrapRole
-  target?: string
   platformUrl?: string
   fetch?: typeof fetch
 }
+
+type HostedConnectionOptions = HostedConnectionOptionsBase &
+  ({ role: "sender"; target?: never } | { role: "receiver"; target: string })
+
+type BootstrapRequest =
+  | { deploymentId: string; role: "sender" }
+  | { deploymentId: string; role: "receiver"; target: string }
 
 export interface RefreshingConnectionProvider<Connection> {
   get(): Promise<Connection>
@@ -96,24 +116,27 @@ export class FixedCommandConnectionProvider implements CommandConnectionProvider
  * bootstrap endpoint.
  */
 export class HostedCommandConnectionProvider implements CommandConnectionProvider {
-  private readonly deploymentId: string
+  private readonly request: BootstrapRequest
   private readonly apiKey: string
-  private readonly role: CommandBootstrapRole
-  private readonly target: string | undefined
   private readonly platformUrl: string
   private readonly fetchImpl: typeof fetch
   private current: CommandConnection | undefined
   private refreshInFlight: Promise<CommandConnection> | undefined
 
   constructor(options: HostedConnectionOptions) {
-    this.deploymentId = requireNonEmpty(options.deploymentId, "deploymentId")
+    const deploymentId = requireNonEmpty(options.deploymentId, "deploymentId")
     this.apiKey = requireNonEmpty(options.apiKey, "apiKey")
-    this.role = options.role
-    this.target =
-      options.role === "receiver" ? requireNonEmpty(options.target, "target") : undefined
     if (options.role === "sender" && options.target !== undefined) {
       throw invalidConfig("target", "target is only valid for receiver bootstrap")
     }
+    this.request =
+      options.role === "sender"
+        ? { deploymentId, role: "sender" }
+        : {
+            deploymentId,
+            role: "receiver",
+            target: requireNonEmpty(options.target, "target"),
+          }
     this.platformUrl = validatePlatformUrl(options.platformUrl ?? DEFAULT_PLATFORM_URL)
     this.fetchImpl = options.fetch ?? globalThis.fetch
   }
@@ -148,10 +171,6 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
 
   private async bootstrap(): Promise<CommandConnection> {
     const url = buildBootstrapUrl(this.platformUrl)
-    const body =
-      this.role === "sender"
-        ? { deploymentId: this.deploymentId, role: this.role }
-        : { deploymentId: this.deploymentId, role: this.role, target: this.target as string }
 
     let response: Response
     try {
@@ -161,13 +180,13 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(this.request),
       })
     } catch (error) {
       throw (await AlienError.from(error)).withContext(
         CommandBootstrapFailedError.create({
-          deploymentId: this.deploymentId,
-          role: this.role,
+          deploymentId: this.request.deploymentId,
+          role: this.request.role,
           reason: error instanceof Error ? error.message : String(error),
         }),
       )
@@ -203,27 +222,19 @@ export class HostedCommandConnectionProvider implements CommandConnectionProvide
         }),
       )
     }
-    const parsed = parseWireResponse(BootstrapResponseSchema, value, "POST", url)
-    if (this.role === "receiver" && parsed.target === undefined) {
-      throw new AlienError(
-        MalformedResponseError.create({
-          method: "POST",
-          url,
-          reason: "Receiver bootstrap response is missing target",
-        }),
-      )
-    }
-    if (this.role === "sender" && parsed.target !== undefined) {
-      throw new AlienError(
-        MalformedResponseError.create({
-          method: "POST",
-          url,
-          reason: "Sender bootstrap response must not include target",
-        }),
-      )
+    if (this.request.role === "sender") {
+      const parsed = parseWireResponse(SenderBootstrapResponseSchema, value, "POST", url)
+      return {
+        role: "sender",
+        managerUrl: parsed.managerUrl,
+        token: parsed.token,
+        expiresAt: new Date(parsed.expiresAt),
+      }
     }
 
+    const parsed = parseWireResponse(ReceiverBootstrapResponseSchema, value, "POST", url)
     return {
+      role: "receiver",
       managerUrl: parsed.managerUrl,
       token: parsed.token,
       expiresAt: new Date(parsed.expiresAt),

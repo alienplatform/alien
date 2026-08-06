@@ -222,6 +222,7 @@ export class CommandsClient {
     this.allowLocalStorage = config.allowLocalStorage ?? false
     this.fetchImpl = config.fetch ?? globalThis.fetch
     this.connectionProvider = new FixedCommandConnectionProvider({
+      role: "sender",
       managerUrl: config.managerUrl,
       token: config.token,
       expiresAt: new Date(8_640_000_000_000_000),

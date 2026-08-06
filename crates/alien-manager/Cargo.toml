@@ -111,6 +111,7 @@ toml = { workspace = true }
 futures = { workspace = true }
 
 [dev-dependencies]
+mockall = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tempfile = { workspace = true }
 httpmock = { workspace = true }

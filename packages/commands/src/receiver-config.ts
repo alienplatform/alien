@@ -394,11 +394,11 @@ class HostedReceiverConnectionProvider implements ReceiverConnectionProvider {
   }
 
   private receiverConnection(connection: CommandConnection): ReceiverConnection {
-    if (connection.target === undefined) {
+    if (connection.role !== "receiver") {
       throw new AlienError(
         InvalidEnvelopeError.create({
-          field: "target",
-          reason: "Receiver bootstrap response is missing target",
+          field: "role",
+          reason: "Receiver bootstrap returned a sender connection",
         }),
       )
     }

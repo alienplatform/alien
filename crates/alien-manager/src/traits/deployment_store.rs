@@ -281,6 +281,7 @@ pub struct ReconcileData {
 ///
 /// `caller` is metadata-about-who; the per-method `params` / IDs are
 /// data-to-act-on — never conflate the two on a single struct.
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait DeploymentStore: Send + Sync {
     // --- Deployment CRUD ---

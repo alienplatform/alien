@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use alien_core::CommandTarget;
+use alien_core::{CommandTarget, CommandTargetType};
 use serde::{Deserialize, Serialize};
 
 /// The unified authenticated principal. Every
@@ -105,13 +105,41 @@ pub enum Scope {
 }
 
 /// Operation a commands-only bearer may perform.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CommandCapability {
     /// Create commands and read their status.
     Send,
     /// Lease and complete commands for one exact app-owned receiver target.
     Receive { target: CommandTarget },
+}
+
+impl<'de> Deserialize<'de> for CommandCapability {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+        enum WireCapability {
+            Send {},
+            Receive { target: WireTarget },
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct WireTarget {
+            resource_id: String,
+            resource_type: CommandTargetType,
+        }
+
+        Ok(match WireCapability::deserialize(deserializer)? {
+            WireCapability::Send {} => Self::Send,
+            WireCapability::Receive { target } => Self::Receive {
+                target: CommandTarget::new(target.resource_id, target.resource_type),
+            },
+        })
+    }
 }
 
 impl Scope {
@@ -344,6 +372,36 @@ mod tests {
             } if target
                 == CommandTarget::new("daemon-a", alien_core::CommandTargetType::Daemon)
         ));
+    }
+
+    #[test]
+    fn command_capability_rejects_fields_for_the_wrong_variant() {
+        let result = serde_json::from_value::<CommandCapability>(serde_json::json!({
+            "type": "send",
+            "target": {
+                "resourceId": "daemon-a",
+                "resourceType": "daemon",
+            },
+        }));
+
+        assert!(result.is_err(), "send capabilities must not carry a target");
+    }
+
+    #[test]
+    fn command_capability_rejects_unknown_target_fields() {
+        let result = serde_json::from_value::<CommandCapability>(serde_json::json!({
+            "type": "receive",
+            "target": {
+                "resourceId": "daemon-a",
+                "resourceType": "daemon",
+                "unexpected": true,
+            },
+        }));
+
+        assert!(
+            result.is_err(),
+            "receiver targets must use the canonical shape"
+        );
     }
 
     #[test]

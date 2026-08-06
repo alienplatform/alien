@@ -836,6 +836,7 @@ dependencies = [
  "http 1.4.2",
  "http-body-util",
  "httpmock",
+ "mockall",
  "nanoid",
  "ngrok",
  "oci-client",
