@@ -1,7 +1,8 @@
 //! The pure proxy: route a request to the model's native cloud endpoint, inject the
 //! workload's ambient credential, and stream the response back without translating
 //! the body. The only edit to the request body is rewriting the public model id to
-//! the catalog's upstream id; the response (JSON or SSE) is passed through byte-for-byte.
+//! the catalog's upstream id. Successful JSON/SSE responses stream through
+//! byte-for-byte; provider error bodies are replaced with a stable safe error.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -187,14 +188,63 @@ fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
     Ok((payload, model))
 }
 
-/// Forward an upstream reply to the client untouched: its status, content-type, and
-/// body, streamed straight through. Streaming the body works identically for a
-/// single JSON object and for an SSE stream.
-fn forward_response(upstream: reqwest::Response) -> Result<Response> {
-    let status =
+/// Stream a successful provider reply unchanged. Provider error bodies are not safe to
+/// expose: they can echo prompts, signed URLs, provider account details, or credentials.
+/// Preserve the useful HTTP class while returning one client-compatible error envelope.
+async fn forward_response(upstream: reqwest::Response) -> Result<Response> {
+    let provider_status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    if !provider_status.is_success() {
+        let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned();
+        let (status, code, message, retryable) = match provider_status {
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "provider_access_unavailable",
+                "The customer model connection is unavailable",
+                false,
+            ),
+            StatusCode::TOO_MANY_REQUESTS => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "provider_rate_limited",
+                "The customer model provider rate limit was reached",
+                true,
+            ),
+            StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => (
+                StatusCode::GATEWAY_TIMEOUT,
+                "provider_timeout",
+                "The customer model provider timed out",
+                true,
+            ),
+            status if status.is_server_error() => (
+                StatusCode::BAD_GATEWAY,
+                "provider_unavailable",
+                "The customer model provider is unavailable",
+                true,
+            ),
+            status => (
+                status,
+                "provider_request_rejected",
+                "The customer model provider rejected the request",
+                false,
+            ),
+        };
+        let mut response = (
+            status,
+            Json(json!({
+                "type": "error",
+                "error": { "type": code, "code": code, "message": message },
+                "retryable": retryable
+            })),
+        )
+            .into_response();
+        if let Some(value) = retry_after {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        return Ok(response);
+    }
+
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
-    let mut response = Response::builder().status(status);
+    let mut response = Response::builder().status(provider_status);
     if let Some(ct) = content_type {
         response = response.header(header::CONTENT_TYPE, ct);
     }
@@ -364,7 +414,7 @@ async fn proxy(
     )
     .await?;
 
-    forward_response(upstream)
+    forward_response(upstream).await
 }
 
 /// Proxy an OpenAI Responses request (`POST /<name>/v1/responses`, used by Codex).
@@ -441,7 +491,7 @@ async fn proxy_responses(
     )
     .await?;
 
-    forward_response(upstream)
+    forward_response(upstream).await
 }
 
 /// `GET /<name>/v1/models`: the qualified catalog, intersected with the bounded
@@ -545,7 +595,7 @@ async fn proxy_direct_anthropic(
         extra_headers.push(("anthropic-beta", betas.as_str()));
     }
     let upstream = sign_and_execute(client, &route.cred, &url, "", body, &extra_headers).await?;
-    forward_response(upstream)
+    forward_response(upstream).await
 }
 
 /// The error for a binding missing a field a handler needs.
@@ -1142,16 +1192,14 @@ mod tests {
         // rather than be dropped, which would truncate the reply under a 200.
         let mut decoder = EventStreamToSse::default();
         let out = decoder.push(&raw_payload_frame(
-            r#"{"message":"Model stream timed out"}"#,
+            r#"{"message":"seeded-stream-canary-62fa91"}"#,
         ));
         assert!(
             out.contains("event: error"),
             "exception frame must surface an error: {out}"
         );
-        assert!(
-            out.contains("Model stream timed out"),
-            "the upstream error message must reach the client: {out}"
-        );
+        assert!(out.contains("provider interrupted the response"));
+        assert!(!out.contains("seeded-stream-canary-62fa91"));
     }
 
     #[test]
@@ -1159,14 +1207,16 @@ mod tests {
         let mut decoder = EventStreamToSse::default();
         let mut bytes =
             eventstream_frame(r#"{"type":"content_block_delta","delta":{"text":"hi"}}"#);
-        bytes.extend_from_slice(&raw_payload_frame(r#"{"message":"throttled"}"#));
+        bytes.extend_from_slice(&raw_payload_frame(
+            r#"{"message":"seeded-trailing-canary-ef39a2"}"#,
+        ));
         let out = decoder.push(&bytes);
         assert!(
             out.contains("event: content_block_delta"),
             "the normal delta must decode: {out}"
         );
         assert!(
-            out.contains("event: error") && out.contains("throttled"),
+            out.contains("event: error") && !out.contains("seeded-trailing-canary-ef39a2"),
             "a trailing exception frame must still surface: {out}"
         );
     }
@@ -2013,5 +2063,71 @@ mod tests {
             0,
             "blocked inference must stay local"
         );
+    }
+
+    #[tokio::test]
+    async fn provider_error_body_never_reaches_the_caller() {
+        const PAYLOAD_CANARY: &str = "seeded-prompt-canary-7d84b1";
+        const PROVIDER_CANARY: &str = "seeded-provider-secret-canary-942ca0";
+
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/openai/v1/chat/completions");
+                then.status(400)
+                    .header("content-type", "application/json")
+                    .body(
+                    json!({
+                        "error": {
+                            "message": format!(
+                                "invalid prompt {PAYLOAD_CANARY}; account detail {PROVIDER_CANARY}"
+                            )
+                        }
+                    })
+                    .to_string(),
+                );
+            })
+            .await;
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({
+                "model": "gpt-oss-20b",
+                "messages": [{ "role": "user", "content": PAYLOAD_CANARY }]
+            }))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.text().await.expect("safe error body");
+        assert!(body.contains("provider_request_rejected"));
+        assert!(!body.contains(PAYLOAD_CANARY));
+        assert!(!body.contains(PROVIDER_CANARY));
+    }
+
+    #[tokio::test]
+    async fn provider_authorization_failure_is_connection_unavailable() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/openai/v1/chat/completions");
+                then.status(403)
+                    .header("content-type", "application/json")
+                    .body(r#"{"error":{"message":"provider account 123 is forbidden"}}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-oss-20b", "messages": [] }))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.text().await.expect("safe error body");
+        assert!(body.contains("provider_access_unavailable"));
+        assert!(!body.contains("account 123"));
     }
 }

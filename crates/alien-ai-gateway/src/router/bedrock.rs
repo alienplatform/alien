@@ -261,9 +261,9 @@ pub(crate) async fn proxy_bedrock_anthropic(
 
     // Only a 2xx streaming reply is event-stream framed. A non-2xx (throttling,
     // missing model access, bad request) and every non-streaming reply are plain
-    // JSON, so forward them untouched — the client sees the real status and body.
+    // JSON. The shared forwarder streams successes and sanitizes provider failures.
     if !upstream.status().is_success() || !stream {
-        return forward_response(upstream);
+        return forward_response(upstream).await;
     }
 
     // Decode the event-stream frames into Anthropic SSE as they arrive (the decoder

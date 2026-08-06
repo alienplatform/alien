@@ -80,19 +80,14 @@ impl EventStreamToSse {
 /// internalServerException) this way, with the exception body as the raw payload.
 /// Such a frame is surfaced as an Anthropic `error` SSE event rather than dropped,
 /// because dropping it would truncate the reply under an already-sent 200 with no
-/// error reaching the client.
+/// error reaching the client. Its provider body is never forwarded because it may
+/// contain customer or provider-account data.
 fn message_to_sse(message: &Message) -> String {
     let outer: Option<Value> = serde_json::from_slice(message.payload()).ok();
     if let Some(sse) = outer.as_ref().and_then(chunk_to_sse) {
         return sse;
     }
-    // Exception / error frame: forward Bedrock's own message so the client sees why.
-    let message = outer
-        .as_ref()
-        .and_then(|o| o.get("message"))
-        .and_then(Value::as_str)
-        .unwrap_or("the model returned an error mid-stream");
-    error_sse(message)
+    error_sse("The customer model provider interrupted the response")
 }
 
 /// A normal `{"bytes": base64(<anthropic event>)}` chunk rendered as its SSE line,
