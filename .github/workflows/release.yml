@@ -630,7 +630,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
+          version: 11.20.0
 
       - uses: actions/setup-node@v7
         with:
@@ -905,7 +905,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
+          version: 11.20.0
 
       - uses: actions/setup-node@v7
         with:
@@ -1012,7 +1012,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
+          version: 11.20.0
 
       - uses: actions/setup-node@v7
         with:
@@ -1077,7 +1077,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
+          version: 11.20.0
 
       - uses: actions/setup-node@v7
         with:
@@ -1214,7 +1214,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10.34.5
+          version: 11.20.0
 
       - uses: actions/setup-node@v7
         with:

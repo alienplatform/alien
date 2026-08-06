@@ -33,7 +33,7 @@
     "@changesets/cli": "^2.29.7",
     "turbo": "^2.5.8"
   },
-  "packageManager": "pnpm@10.34.5",
+  "packageManager": "pnpm@11.20.0",
   "pnpm": {
     "overrides": {
       "@alienplatform/sdk": "link:packages/sdk",
