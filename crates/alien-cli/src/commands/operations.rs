@@ -12,7 +12,6 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -72,6 +71,24 @@ struct BundleMetadata {
     tier: Option<String>,
 }
 
+/// Step 1: ask the platform for a presigned S3 URL to upload the bundle ZIP to.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadUrlRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadUrlResponse {
+    /// Presigned S3 PUT URL to upload the ZIP to.
+    upload_url: String,
+    /// Content-Type header the PUT must send (must match the presign signature).
+    content_type: String,
+}
+
+/// Step 2 (after the S3 upload): register the plugin. The bytes are already in
+/// S3; only metadata travels here.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublishRequest {
@@ -80,8 +97,6 @@ struct PublishRequest {
     tier: String,
     /// The full, verbatim metadata.json object (platform re-validates it).
     metadata: Value,
-    /// The bundle ZIP, base64-encoded.
-    bundle_base64: String,
 }
 
 pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
@@ -101,8 +116,9 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
     }
 }
 
-/// Read the bundle, extract + validate its metadata, and POST it to the
-/// platform. Base64-inlines the ZIP so no multipart handling is needed.
+/// Read + validate the bundle, upload the ZIP straight to S3 via a presigned
+/// URL the platform mints, then register the plugin. The bytes never flow
+/// through the API.
 async fn publish_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
@@ -119,25 +135,80 @@ async fn publish_task(
     let (metadata_value, metadata) = read_bundle_metadata(&bytes, bundle_path)?;
     let tier = metadata.tier.clone().unwrap_or_else(|| "destructive".to_string());
 
-    let request = PublishRequest {
-        name: metadata.name.clone(),
-        version: metadata.version.clone(),
-        tier,
-        metadata: metadata_value,
-        bundle_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
-    };
+    // Step 1: get a presigned S3 PUT URL for this plugin's bundle.
+    let upload_url_endpoint =
+        api_url(&auth.base_url, "/v1/operations/plugins/upload-url", workspace, project)?;
+    let presign_response = auth
+        .reqwest_client()
+        .request(Method::POST, upload_url_endpoint.clone())
+        .json(&UploadUrlRequest {
+            name: metadata.name.clone(),
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "requesting a bundle upload URL".to_string(),
+            url: Some(upload_url_endpoint.to_string()),
+        })?;
+    if !presign_response.status().is_success() {
+        let status = presign_response.status();
+        let body = presign_response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("could not get upload URL ({status}): {body}"),
+            url: Some(upload_url_endpoint.to_string()),
+        }));
+    }
+    let presign: UploadUrlResponse =
+        presign_response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "parsing the bundle upload URL response".to_string(),
+                url: Some(upload_url_endpoint.to_string()),
+            })?;
 
-    let url = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
+    // Step 2: PUT the ZIP directly to S3. The Content-Type MUST match what the
+    // presign was signed with, or S3 rejects the signature.
+    let put_response = auth
+        .reqwest_client()
+        .request(Method::PUT, &presign.upload_url)
+        .header("content-type", &presign.content_type)
+        .body(bytes)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "uploading the bundle to storage".to_string(),
+            url: Some(presign.upload_url.clone()),
+        })?;
+    if !put_response.status().is_success() {
+        let status = put_response.status();
+        let body = put_response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("bundle upload failed ({status}): {body}"),
+            url: Some(presign.upload_url.clone()),
+        }));
+    }
+
+    // Step 3: register the plugin now that its ZIP is in S3.
+    let publish_endpoint = api_url(&auth.base_url, "/v1/operations/plugins", workspace, project)?;
     let response = auth
         .reqwest_client()
-        .request(Method::POST, url.clone())
-        .json(&request)
+        .request(Method::POST, publish_endpoint.clone())
+        .json(&PublishRequest {
+            name: metadata.name.clone(),
+            version: metadata.version.clone(),
+            tier,
+            metadata: metadata_value,
+        })
         .send()
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
             message: "publishing operations plugin".to_string(),
-            url: Some(url.to_string()),
+            url: Some(publish_endpoint.to_string()),
         })?;
 
     if !response.status().is_success() {
@@ -145,7 +216,7 @@ async fn publish_task(
         let body = response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: format!("publish failed ({status}): {body}"),
-            url: Some(url.to_string()),
+            url: Some(publish_endpoint.to_string()),
         }));
     }
 
