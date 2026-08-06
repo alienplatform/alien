@@ -330,7 +330,7 @@ const seeded = store.set("smoke-key", "{value}")
 export default {{
   async fetch(): Promise<Response> {{
     await seeded
-    const got = await store.getText("smoke-key")
+    const got = (await store.getText("smoke-key"))?.value
     if (got !== "{value}") {{
       return new Response(`MISMATCH: got ${{JSON.stringify(got)}}`, {{ status: 500 }})
     }}

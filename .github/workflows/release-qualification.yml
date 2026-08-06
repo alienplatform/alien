@@ -20,7 +20,7 @@ jobs:
       is_release: ${{ steps.release.outputs.is_release }}
       source_ref: ${{ steps.release.outputs.source_ref }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0

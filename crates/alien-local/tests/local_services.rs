@@ -66,7 +66,10 @@ async fn test_full_local_workflow() {
             .unwrap(),
         Bytes::from("data")
     );
-    assert_eq!(kv.get("key").await.unwrap(), Some(b"value".to_vec()));
+    assert_eq!(
+        kv.get("key").await.unwrap().map(|entry| entry.value),
+        Some(b"value".to_vec())
+    );
     assert_eq!(vault.get_secret("secret").await.unwrap(), "value");
 }
 
@@ -287,7 +290,7 @@ async fn test_multiple_resources_workflow() {
 
         let kv = provider.load_kv(&format!("kv-{}", i)).await.unwrap();
         let value = kv.get("key").await.unwrap().unwrap();
-        assert_eq!(value, format!("value-{}", i).as_bytes());
+        assert_eq!(value.value, format!("value-{}", i).as_bytes());
 
         let vault = provider.load_vault(&format!("vault-{}", i)).await.unwrap();
         let secret = vault.get_secret("secret").await.unwrap();

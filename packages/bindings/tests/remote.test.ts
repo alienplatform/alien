@@ -5,7 +5,7 @@
  * fixture manager returns a structured authorization denial.
  */
 
-import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http"
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { Bindings } from "../src/index.js"
 
@@ -88,6 +88,7 @@ beforeAll(async () => {
         platform: "local",
         deploymentProtocolVersion: 1,
         deploymentGroupId,
+        releaseChannel: "production",
         stackSettings: {},
         retryRequested: false,
         createdAt: "2026-01-01T00:00:00Z",

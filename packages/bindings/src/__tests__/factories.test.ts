@@ -87,7 +87,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   const kvHandle: RawKvHandle = {
     get: async () => null,
     put: async () => true,
-    delete: async () => {},
+    delete: async () => true,
     exists: async () => false,
     scan: async () => ({ items: [] }),
   }
@@ -244,12 +244,16 @@ describe("createFactories laziness", () => {
 })
 
 describe("createFactories kv surface", () => {
-  it("kv.get returns the raw value bytes over the napi get", async () => {
-    const get = vi.fn(async () => Buffer.from("raw-bytes"))
+  it("kv.get returns the value and opaque version over the napi get", async () => {
+    const get = vi.fn(async () => ({
+      key: "k",
+      value: Buffer.from("raw-bytes"),
+      version: "opaque",
+    }))
     const kvHandle: RawKvHandle = {
       get,
       put: async () => true,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({ items: [] }),
     }
@@ -260,14 +264,15 @@ describe("createFactories kv surface", () => {
 
     expect(get).toHaveBeenCalledWith("k")
     expect(value).not.toBeNull()
-    expect((value as Buffer).toString("utf8")).toBe("raw-bytes")
+    expect(value?.value.toString("utf8")).toBe("raw-bytes")
+    expect(value?.version).toBe("opaque")
   })
 
   it("kv.get returns null when the key is absent", async () => {
     const kvHandle: RawKvHandle = {
       get: async () => null,
       put: async () => true,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({ items: [] }),
     }
@@ -281,7 +286,7 @@ describe("createFactories kv surface", () => {
     const kvHandle: RawKvHandle = {
       get: async () => null,
       put,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({ items: [] }),
     }
@@ -292,23 +297,24 @@ describe("createFactories kv surface", () => {
     expect(created).toBe(true)
     const firstCall = put.mock.calls[0]
     if (!firstCall) throw new Error("put was not called")
-    const [key, buffer, ttl, ifNotExists] = firstCall
+    const [key, buffer, ttl, condition, version] = firstCall
     expect(key).toBe("k")
     expect(buffer.toString("utf8")).toBe(JSON.stringify({ hello: "world" }))
     expect(ttl).toBe(30)
-    expect(ifNotExists).toBeNull()
+    expect(condition).toBeNull()
+    expect(version).toBeNull()
   })
 
   it("kv.scan surfaces items with both keys and values (no data discarded)", async () => {
     const kvHandle: RawKvHandle = {
       get: async () => null,
       put: async () => true,
-      delete: async () => {},
+      delete: async () => true,
       exists: async () => false,
       scan: async () => ({
         items: [
-          { key: "a", value: Buffer.from("one") },
-          { key: "b", value: Buffer.from("two") },
+          { key: "a", value: Buffer.from("one"), version: "v1" },
+          { key: "b", value: Buffer.from("two"), version: "v2" },
         ],
         nextCursor: "next",
       }),

@@ -7,14 +7,14 @@ import {
 import { Resource } from "./resource.js"
 
 export type {
+  PermissionSet,
   ServiceAccount as ServiceAccountConfig,
   ServiceAccountOutputs,
-  PermissionSet,
 } from "./generated/index.js"
 export {
-  ServiceAccountSchema as ServiceAccountConfigSchema,
-  ServiceAccountOutputsSchema,
   PermissionSetSchema,
+  ServiceAccountOutputsSchema,
+  ServiceAccountSchema as ServiceAccountConfigSchema,
 } from "./generated/index.js"
 
 /**

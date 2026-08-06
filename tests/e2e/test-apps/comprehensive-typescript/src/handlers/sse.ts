@@ -2,7 +2,7 @@ import { Hono } from "hono"
 
 const app = new Hono()
 
-app.get("/sse", c => {
+app.get("/sse", _c => {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     start(controller) {

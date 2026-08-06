@@ -18,9 +18,9 @@ import type {
 import { wrapGrpcCall } from "./grpc-utils.js"
 import {
   type CronEvent,
-  type QueueMessageEvent,
   getCommands,
   getEventHandlers,
+  type QueueMessageEvent,
   runCommand,
 } from "./registry.js"
 import type { getControlServiceDefinition } from "./service-definitions.js"

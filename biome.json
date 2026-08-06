@@ -1,29 +1,30 @@
 {
   "files": {
-    "ignore": [
-      ".wrangler/*.js",
-      ".turbo/**",
-      "**/.alien/**",
-      "**/alien-data/**",
-      "**/dist/**",
-      "client-sdks/**",
-      "**/openapi.json",
-      "**/openapi/**",
-      "**/app/.well-known/**",
-      "code-samples-overlay.json",
-      ".next/**",
-      "**/api-v1.d.ts",
-      "entrypoint.js",
-      "generated/**",
-      "shim.mjs",
-      "target/**",
-      "examples/**/github-agent/packages/dashboard/**"
+    "includes": [
+      "**",
+      "!**/.wrangler/**/*.js",
+      "!**/.turbo",
+      "!**/.alien",
+      "!**/alien-data",
+      "!**/dist",
+      "!**/client-sdks",
+      "!**/openapi.json",
+      "!**/openapi",
+      "!**/app/.well-known",
+      "!**/code-samples-overlay.json",
+      "!**/.next",
+      "!**/api-v1.d.ts",
+      "!**/entrypoint.js",
+      "!**/generated",
+      "!**/shim.mjs",
+      "!**/target",
+      "!**/examples/**/github-agent/packages/dashboard"
     ]
   },
   "formatter": {
     "enabled": true,
     "formatWithErrors": false,
-    "ignore": [],
+    "includes": ["**"],
     "attributePosition": "auto",
     "indentStyle": "space",
     "indentWidth": 2,
@@ -32,21 +33,16 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "noNonNullAssertion": "off"
       },
       "suspicious": {
         "noExplicitAny": "off"
-      },
-      "nursery": {
-        "useImportRestrictions": "off"
       }
     }
   },
-  "organizeImports": {
-    "enabled": true
-  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "javascript": {
     "formatter": {
       "arrowParentheses": "asNeeded",

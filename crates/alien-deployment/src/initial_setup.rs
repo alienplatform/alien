@@ -80,6 +80,7 @@ pub async fn handle_initial_setup(
 
     if vault_is_running {
         let synced = crate::helpers::sync_secrets_to_vault(
+            &target_stack,
             &stack_state,
             &client_config,
             &config,

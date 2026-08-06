@@ -32,11 +32,13 @@ async function main() {
   await cache.set("greeting", "hi")
   const got = await cache.getText("greeting")
 
-  if (got !== "hi") {
+  if (got?.value !== "hi") {
     throw new Error(`expected 'hi', got ${JSON.stringify(got)}`)
   }
 
-  console.log(`[smoke:${runtime}] OK: kv put/get through the prebuilt addon returned '${got}'`)
+  console.log(
+    `[smoke:${runtime}] OK: kv put/get through the prebuilt addon returned '${got.value}'`,
+  )
 }
 
 main().catch(err => {

@@ -34,7 +34,7 @@ app.get("/events/storage/:key", async c => {
     const sanitizedKey = sanitizeKvKeyPart(key)
     const data = await k.get(`storage_event:${sanitizedKey}`)
     if (!data) return c.json({ found: false })
-    return c.json({ found: true, event: JSON.parse(new TextDecoder().decode(data)) })
+    return c.json({ found: true, event: JSON.parse(new TextDecoder().decode(data.value)) })
   } catch {
     return c.json({ found: false })
   }
@@ -47,7 +47,7 @@ app.get("/events/cron/:schedule", async c => {
     const sanitizedSchedule = sanitizeKvKeyPart(schedule)
     const data = await k.get(`cron_event:${sanitizedSchedule}`)
     if (!data) return c.json({ found: false })
-    return c.json({ found: true, event: JSON.parse(new TextDecoder().decode(data)) })
+    return c.json({ found: true, event: JSON.parse(new TextDecoder().decode(data.value)) })
   } catch {
     return c.json({ found: false })
   }
@@ -60,7 +60,7 @@ app.get("/events/queue/:messageId", async c => {
     const sanitizedId = sanitizeKvKeyPart(messageId)
     const data = await k.get(`queue_message:${sanitizedId}`)
     if (!data) return c.json({ found: false })
-    return c.json({ found: true, event: JSON.parse(new TextDecoder().decode(data)) })
+    return c.json({ found: true, event: JSON.parse(new TextDecoder().decode(data.value)) })
   } catch {
     return c.json({ found: false })
   }

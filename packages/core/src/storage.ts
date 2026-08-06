@@ -6,7 +6,7 @@ import {
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
-export type { LifecycleRule, StorageOutputs, Storage as StorageConfig } from "./generated/index.js"
+export type { LifecycleRule, Storage as StorageConfig, StorageOutputs } from "./generated/index.js"
 export { StorageSchema as StorageConfigSchema } from "./generated/index.js"
 
 /**
