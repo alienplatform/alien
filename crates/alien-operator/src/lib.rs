@@ -276,7 +276,16 @@ pub async fn run_operator_with_cancel_and_loops(
     // cancelled cleanly. A loop exiting is never expected — the operator has no
     // useful work left once one is gone — so we surface it as an error below
     // rather than reporting a clean exit to CLI/service callers.
+    //
+    // `biased` checks the cancellation branch first: on shutdown the loops also
+    // observe the cancelled token and return, so a loop-handle branch can become
+    // ready in the same tick. Without biasing, the unbiased select could pick
+    // that branch and misreport a clean shutdown as a failure. The
+    // `is_cancelled()` guard below is the authoritative check — it catches the
+    // remaining race where a loop returns a hair before the token flips.
     let exited_loop: Option<&'static str> = tokio::select! {
+        biased;
+
         _ = cancel.cancelled() => {
             info!("Shutdown signal received, waiting for loops to finish...");
             None
@@ -347,6 +356,12 @@ pub async fn run_operator_with_cancel_and_loops(
         },
     };
 
+    // Record whether shutdown was already requested BEFORE we cancel below. A
+    // loop that fell out because the token was cancelled is a clean exit, not a
+    // failure — but the idempotent `cancel.cancel()` on the next line would make
+    // `is_cancelled()` unconditionally true, so we must sample it here first.
+    let shutdown_requested = cancel.is_cancelled();
+
     // Signal all loops to stop (idempotent if already cancelled)
     cancel.cancel();
 
@@ -358,7 +373,7 @@ pub async fn run_operator_with_cancel_and_loops(
         local_bindings.shutdown().await;
     }
 
-    if let Some(loop_name) = exited_loop {
+    if let Some(loop_name) = loop_exit_failure(exited_loop, shutdown_requested) {
         // A core loop exited on its own — report a non-zero exit so CLI and
         // Windows-service callers don't mistake a failed loop for a clean stop.
         return Err(AlienError::new(error::ErrorData::LoopExited {
@@ -368,6 +383,19 @@ pub async fn run_operator_with_cancel_and_loops(
 
     info!("Operator shutdown complete");
     Ok(())
+}
+
+/// Decide whether a supervised loop falling out of the select is a real failure.
+///
+/// A loop-handle branch only signals failure when we did NOT ask for shutdown.
+/// When cancellation was already requested, the loop returned because it was told
+/// to stop — a clean exit — so we suppress the `LoopExited` error even though a
+/// loop-branch won the (unbiased-in-the-worst-case) select race.
+fn loop_exit_failure(
+    exited_loop: Option<&'static str>,
+    shutdown_requested: bool,
+) -> Option<&'static str> {
+    exited_loop.filter(|_| !shutdown_requested)
 }
 
 fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
@@ -384,8 +412,20 @@ fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
 
 #[cfg(test)]
 mod command_loop_routing_tests {
-    use super::should_run_commands_loop;
+    use super::{loop_exit_failure, should_run_commands_loop};
     use alien_core::Platform;
+
+    #[test]
+    fn loop_exit_is_a_failure_only_without_shutdown() {
+        // A loop falling out with no shutdown requested is a real failure.
+        assert_eq!(loop_exit_failure(Some("sync"), false), Some("sync"));
+        // The same loop exit during a requested shutdown is clean (it stopped
+        // because it was told to) — this is the select-race the review flagged.
+        assert_eq!(loop_exit_failure(Some("sync"), true), None);
+        // No loop exited (clean cancellation branch) → never a failure.
+        assert_eq!(loop_exit_failure(None, false), None);
+        assert_eq!(loop_exit_failure(None, true), None);
+    }
 
     #[test]
     fn kubernetes_and_local_start_environment_local_command_relays() {
