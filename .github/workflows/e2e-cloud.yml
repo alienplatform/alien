@@ -1058,7 +1058,7 @@ jobs:
 
       - uses: azure/setup-helm@v5
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
         with:
           install_components: gke-gcloud-auth-plugin
 
@@ -1535,7 +1535,7 @@ jobs:
 
       - uses: azure/setup-helm@v5
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
         if: contains(matrix.test_filter, 'gke')
         with:
           install_components: gke-gcloud-auth-plugin
@@ -1816,7 +1816,7 @@ jobs:
             ./scripts/cleanup-aws-e2e-resources.sh
           done
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v3
 
       - name: Clean up GCP resources
         if: always()
