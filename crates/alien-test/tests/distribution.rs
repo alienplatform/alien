@@ -76,6 +76,13 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("native Storage encryption checks failed: {error:#}");
             }
         }
+        TestApp::ByoAi => {
+            if let Err(error) =
+                common::remote_bindings::check_remote_ai(&ctx.deployment, ctx.platform).await
+            {
+                panic!("remote AI checks failed: {error:#}");
+            }
+        }
     }
 }
 
@@ -930,6 +937,18 @@ async fn terraform_aws_push_byo_encryption_key(ctx: &mut TerraformAwsPushByoEncr
 }
 
 distribution_test_context!(
+    TerraformAwsPushByoAi,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::ByoAi
+);
+
+#[test_context(TerraformAwsPushByoAi)]
+#[tokio::test]
+async fn terraform_aws_push_byo_ai(ctx: &mut TerraformAwsPushByoAi) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     TerraformGcpPushRust,
     DistributionFlow::TerraformGcpPush,
     TestApp::ComprehensiveRust
@@ -954,6 +973,18 @@ async fn terraform_gcp_push_byo_encryption_key(ctx: &mut TerraformGcpPushByoEncr
 }
 
 distribution_test_context!(
+    TerraformGcpPushByoAi,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::ByoAi
+);
+
+#[test_context(TerraformGcpPushByoAi)]
+#[tokio::test]
+async fn terraform_gcp_push_byo_ai(ctx: &mut TerraformGcpPushByoAi) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     TerraformAzurePushRust,
     DistributionFlow::TerraformAzurePush,
     TestApp::ComprehensiveRust
@@ -974,6 +1005,18 @@ distribution_test_context!(
 #[test_context(TerraformAzurePushByoEncryptionKey)]
 #[tokio::test]
 async fn terraform_azure_push_byo_encryption_key(ctx: &mut TerraformAzurePushByoEncryptionKey) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzurePushByoAi,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::ByoAi
+);
+
+#[test_context(TerraformAzurePushByoAi)]
+#[tokio::test]
+async fn terraform_azure_push_byo_ai(ctx: &mut TerraformAzurePushByoAi) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

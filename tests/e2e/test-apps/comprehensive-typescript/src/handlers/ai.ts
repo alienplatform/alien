@@ -8,11 +8,10 @@ const app = new Hono()
 //
 // Proves that the runtime injected ALIEN_TEST_AI_BINDING and that the binding
 // parses to a well-formed config. With `?invoke=1` it additionally lists the
-// cloud's ENABLED models (getAvailableModels is availability-filtered) and invokes
-// every one through the gateway: the full app -> gateway -> cloud LLM path under the
-// workload's ambient credentials. Invoking each listed model is only sound because
-// the list is filtered to what is actually enabled; a 403/404 on a listed model
-// would mean the availability filter is broken.
+// the models advertised by the binding and invokes one cheap qualification model
+// through the full app -> gateway -> cloud LLM path under the workload's ambient
+// credentials. Catalog breadth is covered by deterministic protocol tests; a cloud
+// E2E must not fan out paid requests across every catalog entry.
 app.get("/ai-test", async c => {
   try {
     const binding = ai("test-ai")
@@ -44,36 +43,36 @@ app.get("/ai-test", async c => {
         500,
       )
     }
-    // Invoke every listed model with a one-token probe. `ok` is true on a real
-    // completion or a 429 rate-limit (the model is enabled, the account is
-    // quota-limited); anything else on a listed model is a filter bug.
-    const results = await Promise.all(
-      models.map(async model => {
-        try {
-          await binding.chat.completions.create({
-            model: model.id,
-            max_completion_tokens: 1,
-            messages: [{ role: "user", content: "ping" }],
-          })
-          return { model: model.id, ok: true }
-        } catch (error) {
-          // Classify on the live error instance: toExternal() sanitizes internal
-          // errors down to a generic message, which would hide the 429 status.
-          // toOptions() keeps the real detail for this same-process diagnostic.
-          const ok = error instanceof AlienError && error.httpStatusCode === 429
-          const detail =
-            error instanceof AlienError ? JSON.stringify(error.toOptions()) : String(error)
-          return { model: model.id, ok, detail }
-        }
-      }),
-    )
+    const preferredModel =
+      config.service === "bedrock"
+        ? "gpt-oss-20b"
+        : config.service === "vertex"
+          ? "gemini-2.5-flash"
+          : "gpt-4.1"
+    const probe = models.find(model => model.id === preferredModel) ?? models[0]
+    let result: { model: string; ok: boolean; detail?: string }
+    try {
+      await binding.chat.completions.create({
+        model: probe.id,
+        max_completion_tokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      })
+      result = { model: probe.id, ok: true }
+    } catch (error) {
+      // Classify on the live error instance: toExternal() sanitizes internal
+      // errors down to a generic message, which would hide the 429 status.
+      const ok = error instanceof AlienError && error.httpStatusCode === 429
+      const detail = error instanceof AlienError ? JSON.stringify(error.toOptions()) : String(error)
+      result = { model: probe.id, ok, detail }
+    }
     return c.json({
       injected: true,
       service: config.service,
       locator,
       modelCount: models.length,
       models: models.map(m => ({ id: m.id, provider: m.provider, displayName: m.displayName })),
-      results,
+      probeModel: probe.id,
+      results: [result],
     })
   } catch (error) {
     // toOptions(), not toExternal(): the harness reads this body to report why the

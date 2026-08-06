@@ -1046,6 +1046,7 @@ dependencies = [
 name = "alien-test"
 version = "3.3.9"
 dependencies = [
+ "alien-ai-gateway",
  "alien-aws-clients",
  "alien-azure-clients",
  "alien-bindings",

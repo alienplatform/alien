@@ -250,27 +250,6 @@ resource "azurerm_cognitive_deployment" "fixture_gpt-4_1" {
   ]
 }
 
-resource "azurerm_cognitive_deployment" "fixture_gpt-4o-mini" {
-  count                = var.input_fixture_enabled ? 1 : 0
-  name                 = "gpt-4o-mini"
-  cognitive_account_id = azurerm_cognitive_account.fixture[0].id
-
-  model {
-    format  = "OpenAI"
-    name    = "gpt-4o-mini"
-    version = "2024-07-18"
-  }
-
-  sku {
-    name     = "GlobalStandard"
-    capacity = 1
-  }
-
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
 resource "azurerm_cognitive_deployment" "fixture_model-router" {
   count                = var.input_fixture_enabled ? 1 : 0
   name                 = "model-router"
@@ -292,11 +271,11 @@ resource "azurerm_cognitive_deployment" "fixture_model-router" {
   ]
 }
 
-resource "azurerm_role_assignment" "fixture_cognitive_services_openai_user_execution_assignment_0" {
+resource "azurerm_role_assignment" "fixture_cognitive_services_user_execution_assignment_0" {
   count              = var.input_fixture_enabled ? 1 : 0
-  name               = uuidv5("oid", "deployment:azure:ai-role-assign:${azurerm_cognitive_account.fixture[0].id}:cognitive_services_openai_user:execution:0")
+  name               = uuidv5("oid", "deployment:azure:ai-role-assign:${azurerm_cognitive_account.fixture[0].id}:cognitive_services_user:execution:0")
   scope              = azurerm_cognitive_account.fixture[0].id
-  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/a97b65f3-24c7-4388-baec-2e87135dc908"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -328,9 +307,8 @@ resource "terraform_data" "deployment_registration" {
     azurerm_storage_account.default_storage_account,
     azurerm_cognitive_account.fixture,
     azurerm_cognitive_deployment.fixture_gpt-4_1,
-    azurerm_cognitive_deployment.fixture_gpt-4o-mini,
     azurerm_cognitive_deployment.fixture_model-router,
-    azurerm_role_assignment.fixture_cognitive_services_openai_user_execution_assignment_0
+    azurerm_role_assignment.fixture_cognitive_services_user_execution_assignment_0
   ]
 }
 

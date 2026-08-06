@@ -96,7 +96,9 @@ impl ModelGardenApi for ModelGardenClient {
         let mut page_token: Option<String> = None;
         let mut models = Vec::new();
         loop {
-            let mut query = vec![("pageSize", "1000".to_string())];
+            // Model Garden rejects values above 300. Keep pagination explicit so a
+            // growing catalog cannot silently truncate availability observations.
+            let mut query = vec![("pageSize", "300".to_string())];
             if let Some(token) = page_token.as_ref() {
                 query.push(("pageToken", token.clone()));
             }

@@ -2,7 +2,9 @@
 
 use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
-use alien_core::{Ai, PermissionProfile, ResourceLifecycle, ServiceAccount, Stack, StackSettings};
+use alien_core::{
+    Ai, PermissionProfile, RemoteBindings, ResourceLifecycle, ServiceAccount, Stack, StackSettings,
+};
 
 #[test]
 fn aws_ai_invoke_permissions_attach_to_service_account_role() {
@@ -80,4 +82,27 @@ fn aws_ai_without_permissions_emits_no_iam_policy() {
         !yaml.contains("AWS::IAM::Policy"),
         "expected no IAM policy without a permission profile:\n{yaml}"
     );
+}
+
+#[test]
+fn aws_remote_ai_permissions_attach_to_access_role() {
+    let stack = Stack::new("remote-ai".to_string())
+        .add_with_remote_access(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws remote ai permissions",
+    );
+    assert!(yaml.contains("bedrock:InvokeModel"));
+    assert!(yaml.contains("AccessRole"));
 }

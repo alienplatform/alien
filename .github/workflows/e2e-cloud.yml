@@ -65,6 +65,7 @@ on:
           - comprehensive-ts
           - full-stack-microservices
           - enabled-demo
+          - byo-ai
           - command-routing-ts
           - container-rust
           - runtime-less-mixed
@@ -369,6 +370,19 @@ jobs:
           if [ "$APP" = "All" ] || [ "$APP" = "enabled-demo" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-enabled-demo","test_filter":"terraform_aws_push_enabled_demo","needs_oidc":false,"resource_suffix":"tfawsed","bindings_arch":"aarch64"}]')
+            fi
+          fi
+          # BYO AI must run once on every provider because each cloud has a
+          # different Remote Bindings identity, token mint, and inference API.
+          if [ "$APP" = "All" ] || [ "$APP" = "byo-ai" ]; then
+            if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-byo-ai","test_filter":"terraform_aws_push_byo_ai","needs_oidc":false,"resource_suffix":"tfawsai"}]')
+            fi
+            if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-byo-ai","test_filter":"terraform_gcp_push_byo_ai","needs_oidc":false,"resource_suffix":"tfgcpai"}]')
+            fi
+            if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-byo-ai","test_filter":"terraform_azure_push_byo_ai","needs_oidc":true,"resource_suffix":"tfazai"}]')
             fi
           fi
           if [ "$APP" = "All" ] || [ "$APP" = "full-stack-microservices" ]; then

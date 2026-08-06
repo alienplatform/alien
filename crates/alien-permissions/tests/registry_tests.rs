@@ -153,34 +153,34 @@ fn test_ai_provision_has_deployment_writes() {
 }
 
 #[test]
-fn test_ai_invoke_uses_openai_user_role() {
+fn test_ai_invoke_uses_cognitive_services_user_role() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
     let azure = invoke
         .platforms
         .azure
         .as_ref()
         .expect("ai/invoke must have Azure platform");
-    let uses_openai_user = azure.iter().any(|entry| {
+    let uses_cognitive_services_user = azure.iter().any(|entry| {
         entry
             .grant
             .predefined_roles
             .as_ref()
-            .map(|roles| roles.contains(&"Cognitive Services OpenAI User".to_string()))
+            .map(|roles| roles.contains(&"Cognitive Services User".to_string()))
             .unwrap_or(false)
     });
     assert!(
-        uses_openai_user,
-        "ai/invoke Azure must use the least-privilege 'Cognitive Services OpenAI User' role"
+        uses_cognitive_services_user,
+        "ai/invoke Azure must use 'Cognitive Services User' so partner models are authorized"
     );
 }
 
 #[test]
-fn test_openai_user_role_id_resolves() {
+fn test_cognitive_services_user_role_id_resolves() {
     use alien_permissions::generators::azure_runtime::azure_predefined_role_id;
     assert_eq!(
-        azure_predefined_role_id("Cognitive Services OpenAI User"),
-        Some("5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"),
-        "the OpenAI-User role GUID must be registered"
+        azure_predefined_role_id("Cognitive Services User"),
+        Some("a97b65f3-24c7-4388-baec-2e87135dc908"),
+        "the Cognitive Services User role GUID must be registered"
     );
 }
 

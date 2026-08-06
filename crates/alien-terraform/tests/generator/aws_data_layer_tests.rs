@@ -362,3 +362,26 @@ fn aws_ai_invoke_permissions_attach_to_service_account_role() {
     );
     assert_terraform_valid(&module, "aws_ai_invoke_permissions");
 }
+
+#[test]
+fn aws_remote_ai_invoke_permissions_attach_to_access_role() {
+    let stack = Stack::new("remote-ai".to_string())
+        .add_with_remote_access(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("bedrock:InvokeModel"));
+    assert!(rendered.contains("aws_iam_role.access.name"));
+    assert_terraform_valid(&module, "aws_remote_ai_invoke_permissions");
+}

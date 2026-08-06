@@ -296,7 +296,7 @@ impl AzureAiController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
 
-        info!(id = %config.id, "Applying Cognitive Services OpenAI User role on AIServices account");
+        info!(id = %config.id, "Applying Cognitive Services User role on AIServices account");
 
         let account_name = self.account_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -331,7 +331,7 @@ impl AzureAiController {
         )
         .await?;
 
-        info!(id = %config.id, "Successfully applied Cognitive Services OpenAI User role");
+        info!(id = %config.id, "Successfully applied Cognitive Services User role");
 
         Ok(HandlerAction::Continue {
             state: DeployingModels,

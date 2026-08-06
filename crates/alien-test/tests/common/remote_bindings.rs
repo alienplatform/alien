@@ -38,6 +38,8 @@ const PAYLOAD: &[u8] = b"alien remote storage live-cloud e2e";
 const ENTERPRISE_KEY_BINDING: &str = "enterprise-key";
 const NATIVE_STORAGE_BINDING: &str = "encrypted-storage";
 const NATIVE_STORAGE_KEY: &str = ENTERPRISE_KEY_BINDING;
+const STORAGE_KEY_BINDING: &str = "storage-key";
+const AI_BINDING: &str = "customer-models";
 
 #[derive(Clone)]
 struct DiscoveryState {
@@ -791,6 +793,96 @@ async fn run_cloud_command(
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).with_context(|| format!("{description} returned non-UTF-8"))
+}
+
+/// Resolve the deployment's real cloud AI resource through the public Remote
+/// Bindings API, then use the Manager-minted Access credential for one real
+/// inference request through the same protocol engine as the hosted gateway.
+pub fn check_remote_ai<'a>(
+    deployment: &'a TestDeployment,
+    platform: Platform,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        if platform == Platform::Azure
+            && std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .is_none()
+        {
+            info!(
+                "Skipping Azure Remote Bindings inference locally: the local target-static resolver uses the test service principal and cannot exchange an OIDC token for the generated Access identity; the OIDC-backed CI run is the qualifying test"
+            );
+            return Ok(());
+        }
+
+        info!(
+            platform = %platform.as_str(),
+            "Checking remote AI through assigned-manager discovery"
+        );
+        let discovery = DiscoveryServer::start(deployment, platform).await?;
+        let bindings =
+            RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+                .await
+                .context("discover assigned manager for remote AI binding")?;
+        let lease = bindings
+            .ai()
+            .await
+            .context("resolve real remote AI binding")?;
+        anyhow::ensure!(
+            lease.resource_id == AI_BINDING,
+            "resolved AI resource '{}' instead of '{AI_BINDING}'",
+            lease.resource_id
+        );
+
+        let model = match platform {
+            Platform::Aws => "gpt-oss-20b",
+            Platform::Gcp => "gemini-2.5-flash",
+            Platform::Azure => "gpt-4.1",
+            other => bail!("remote AI has no qualification model for {other:?}"),
+        };
+        let route = alien_ai_gateway::route_from_remote_ai_lease(AI_BINDING, &lease)
+            .await
+            .context("build gateway route from remote AI lease")?;
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .context("bind remote AI gateway")?;
+        let address = listener
+            .local_addr()
+            .context("read remote AI gateway address")?;
+        let task = tokio::spawn(async move {
+            if let Err(error) =
+                axum::serve(listener, alien_ai_gateway::build_router(vec![route])).await
+            {
+                tracing::error!(%error, "remote AI gateway failed");
+            }
+        });
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/{AI_BINDING}/v1/chat/completions"))
+            .timeout(std::time::Duration::from_secs(180))
+            .json(&json!({
+                "model": model,
+                "max_completion_tokens": 1,
+                "messages": [{ "role": "user", "content": "ping" }]
+            }))
+            .send()
+            .await
+            .context("invoke model through remote AI gateway")?;
+        task.abort();
+
+        let status = response.status();
+        if !status.is_success() && status != StatusCode::TOO_MANY_REQUESTS {
+            let body = response.text().await.unwrap_or_default();
+            bail!("remote AI model '{model}' returned {status}: {body}");
+        }
+        info!(
+            platform = %platform.as_str(),
+            model,
+            %status,
+            "Remote AI credential and inference check passed"
+        );
+        Ok(())
+    })
 }
 
 async fn verify_before_delete(
