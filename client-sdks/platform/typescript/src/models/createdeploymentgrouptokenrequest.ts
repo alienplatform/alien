@@ -9,6 +9,11 @@ import {
   DeploymentSetupConfig$outboundSchema,
 } from "./deploymentsetupconfig.js";
 import {
+  DeploymentSetupItemSelection,
+  DeploymentSetupItemSelection$Outbound,
+  DeploymentSetupItemSelection$outboundSchema,
+} from "./deploymentsetupitemselection.js";
+import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
@@ -24,6 +29,10 @@ export type CreateDeploymentGroupTokenRequest = {
    */
   expiresAt?: Date | null | undefined;
   deploymentSetupConfig: DeploymentSetupConfig;
+  /**
+   * Customer infrastructure to include. The server snapshots its exact reviewed sources.
+   */
+  setupItems?: Array<DeploymentSetupItemSelection> | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
@@ -32,6 +41,7 @@ export type CreateDeploymentGroupTokenRequest$Outbound = {
   description?: string | undefined;
   expiresAt?: string | null | undefined;
   deploymentSetupConfig: DeploymentSetupConfig$Outbound;
+  setupItems?: Array<DeploymentSetupItemSelection$Outbound> | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
@@ -43,6 +53,7 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   deploymentSetupConfig: DeploymentSetupConfig$outboundSchema,
+  setupItems: z.array(DeploymentSetupItemSelection$outboundSchema).optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
 });

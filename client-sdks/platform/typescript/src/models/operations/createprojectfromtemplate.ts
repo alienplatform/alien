@@ -481,6 +481,55 @@ export type CreateProjectFromTemplateDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type CreateProjectFromTemplateKeys = {
+  enabled: boolean;
+  applicationEncryption: boolean;
+};
+
+export const CreateProjectFromTemplateAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+export type CreateProjectFromTemplateAllowedProvider = ClosedEnum<
+  typeof CreateProjectFromTemplateAllowedProvider
+>;
+
+export const CreateProjectFromTemplateClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type CreateProjectFromTemplateClientApi = ClosedEnum<
+  typeof CreateProjectFromTemplateClientApi
+>;
+
+export type CreateProjectFromTemplateRequirement = {
+  publicModelId: string;
+  clientApis: Array<CreateProjectFromTemplateClientApi>;
+  required: boolean;
+};
+
+export type CreateProjectFromTemplateModels = {
+  enabled: boolean;
+  allowedProviders: Array<CreateProjectFromTemplateAllowedProvider>;
+  requirements: Array<CreateProjectFromTemplateRequirement>;
+};
+
+export type CreateProjectFromTemplateConnections = {
+  keys?: CreateProjectFromTemplateKeys | undefined;
+  models?: CreateProjectFromTemplateModels | undefined;
+};
+
+/**
+ * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+ */
+export type CreateProjectFromTemplateCustomerConnections = {
+  schemaVersion: number;
+  connections: CreateProjectFromTemplateConnections;
+};
+
 export type CreateProjectFromTemplateGithubSetup = {
   /**
    * URL to the pull request with the Alien build workflow
@@ -568,6 +617,13 @@ export type CreateProjectFromTemplateResponse = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: CreateProjectFromTemplateDefaultManagers | null | undefined;
+  /**
+   * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+   */
+  customerConnections?:
+    | CreateProjectFromTemplateCustomerConnections
+    | null
+    | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -1117,6 +1173,126 @@ export function createProjectFromTemplateDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateKeys$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateKeys,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
+});
+
+export function createProjectFromTemplateKeysFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateKeys, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectFromTemplateKeys$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateKeys' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateAllowedProvider
+> = z.enum(CreateProjectFromTemplateAllowedProvider);
+
+/** @internal */
+export const CreateProjectFromTemplateClientApi$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateClientApi
+> = z.enum(CreateProjectFromTemplateClientApi);
+
+/** @internal */
+export const CreateProjectFromTemplateRequirement$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(CreateProjectFromTemplateClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function createProjectFromTemplateRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateModels$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateModels,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  allowedProviders: z.array(
+    CreateProjectFromTemplateAllowedProvider$inboundSchema,
+  ),
+  requirements: z.array(
+    z.lazy(() => CreateProjectFromTemplateRequirement$inboundSchema),
+  ),
+});
+
+export function createProjectFromTemplateModelsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateModels, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectFromTemplateModels$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateModels' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateConnections$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateConnections,
+  unknown
+> = z.object({
+  keys: z.lazy(() => CreateProjectFromTemplateKeys$inboundSchema).optional(),
+  models: z.lazy(() => CreateProjectFromTemplateModels$inboundSchema)
+    .optional(),
+});
+
+export function createProjectFromTemplateConnectionsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateConnections, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateConnections$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateConnections' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateCustomerConnections$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateCustomerConnections, unknown> = z.object({
+    schemaVersion: z.number(),
+    connections: z.lazy(() =>
+      CreateProjectFromTemplateConnections$inboundSchema
+    ),
+  });
+
+export function createProjectFromTemplateCustomerConnectionsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateCustomerConnections,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateCustomerConnections$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateCustomerConnections' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectFromTemplateGithubSetup$inboundSchema: z.ZodType<
   CreateProjectFromTemplateGithubSetup,
   unknown
@@ -1186,6 +1362,9 @@ export const CreateProjectFromTemplateResponse$inboundSchema: z.ZodType<
   domainId: z.nullable(z.string()).optional(),
   defaultManagers: z.nullable(
     z.lazy(() => CreateProjectFromTemplateDefaultManagers$inboundSchema),
+  ).optional(),
+  customerConnections: z.nullable(
+    z.lazy(() => CreateProjectFromTemplateCustomerConnections$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),

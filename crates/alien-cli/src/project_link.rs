@@ -349,6 +349,7 @@ pub async fn create_new_project(
                 .transpose()?,
             deployment_portal_appearance: None,
             packages_config: None,
+            customer_connections: None,
             default_managers: None,
             deployment_count: Some(0.0),
             latest_release: None.into(),

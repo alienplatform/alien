@@ -26,6 +26,34 @@ export type ActiveRelease = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const DeploymentLinkSetupResponseSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentLinkSetupResponseSupportedPlatform = ClosedEnum<
+  typeof DeploymentLinkSetupResponseSupportedPlatform
+>;
+
+export const DeploymentLinkSetupResponseSetupItem = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+export type DeploymentLinkSetupResponseSetupItem = ClosedEnum<
+  typeof DeploymentLinkSetupResponseSetupItem
+>;
+
+/**
  * Types of packages that can be built
  */
 export const VisiblePackageType = {
@@ -41,7 +69,9 @@ export const VisiblePackageType = {
 export type VisiblePackageType = ClosedEnum<typeof VisiblePackageType>;
 
 export type DeploymentLinkSetupResponse = {
-  activeRelease: ActiveRelease;
+  activeRelease: ActiveRelease | null;
+  supportedPlatforms: Array<DeploymentLinkSetupResponseSupportedPlatform>;
+  setupItems: Array<DeploymentLinkSetupResponseSetupItem>;
   visiblePackageTypes: Array<VisiblePackageType>;
   visibleSetupMethods: Array<DeploymentSetupMethod>;
 };
@@ -65,6 +95,17 @@ export function activeReleaseFromJSON(
 }
 
 /** @internal */
+export const DeploymentLinkSetupResponseSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof DeploymentLinkSetupResponseSupportedPlatform> = z.enum(
+    DeploymentLinkSetupResponseSupportedPlatform,
+  );
+
+/** @internal */
+export const DeploymentLinkSetupResponseSetupItem$inboundSchema: z.ZodEnum<
+  typeof DeploymentLinkSetupResponseSetupItem
+> = z.enum(DeploymentLinkSetupResponseSetupItem);
+
+/** @internal */
 export const VisiblePackageType$inboundSchema: z.ZodEnum<
   typeof VisiblePackageType
 > = z.enum(VisiblePackageType);
@@ -74,7 +115,11 @@ export const DeploymentLinkSetupResponse$inboundSchema: z.ZodType<
   DeploymentLinkSetupResponse,
   unknown
 > = z.object({
-  activeRelease: z.lazy(() => ActiveRelease$inboundSchema),
+  activeRelease: z.nullable(z.lazy(() => ActiveRelease$inboundSchema)),
+  supportedPlatforms: z.array(
+    DeploymentLinkSetupResponseSupportedPlatform$inboundSchema,
+  ),
+  setupItems: z.array(DeploymentLinkSetupResponseSetupItem$inboundSchema),
   visiblePackageTypes: z.array(VisiblePackageType$inboundSchema),
   visibleSetupMethods: z.array(DeploymentSetupMethod$inboundSchema),
 });
