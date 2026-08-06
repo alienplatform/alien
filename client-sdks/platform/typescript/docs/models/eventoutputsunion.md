@@ -16,4 +16,3 @@ const value: models.EventOutputs = {
 ```typescript
 const value: any = "<value>";
 ```
-

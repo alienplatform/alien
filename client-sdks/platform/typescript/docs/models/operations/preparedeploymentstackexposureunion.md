@@ -50,4 +50,3 @@ const value: operations.PrepareDeploymentStackExposureCustom = {
 ```typescript
 const value: any = "<value>";
 ```
-

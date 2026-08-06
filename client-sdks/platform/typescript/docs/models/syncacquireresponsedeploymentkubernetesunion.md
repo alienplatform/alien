@@ -14,4 +14,3 @@ const value: models.SyncAcquireResponseDeploymentKubernetes = {};
 ```typescript
 const value: any = "<value>";
 ```
-

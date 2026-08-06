@@ -14,4 +14,3 @@ const value: models.CreateSetupRegistrationOperationRequestCloud = {};
 ```typescript
 const value: any = "<value>";
 ```
-

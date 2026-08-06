@@ -17,4 +17,3 @@ const value: operations.Cpu3 = {
 ```typescript
 const value: any = "<value>";
 ```
-

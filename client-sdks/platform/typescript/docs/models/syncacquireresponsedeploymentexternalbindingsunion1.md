@@ -41,4 +41,3 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsLocalStorage =
     type: "storage",
   };
 ```
-

@@ -16,4 +16,3 @@ const value: models.CreateSetupRegistrationOperationRequestCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

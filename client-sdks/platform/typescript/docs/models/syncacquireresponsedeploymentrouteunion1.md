@@ -23,4 +23,3 @@ const value: models.SyncAcquireResponseDeploymentRouteGateway1 = {
   routeApi: "gateway",
 };
 ```
-

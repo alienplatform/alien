@@ -17,4 +17,3 @@ const value: operations.ContainerUnitMemory = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -14,4 +14,3 @@ const value: models.NewDeploymentRequestCompute = {};
 ```typescript
 const value: any = "<value>";
 ```
-

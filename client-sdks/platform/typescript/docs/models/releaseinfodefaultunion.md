@@ -46,4 +46,3 @@ const value: models.DefaultReleaseInfoStringList = {
 ```typescript
 const value: any = "<value>";
 ```
-

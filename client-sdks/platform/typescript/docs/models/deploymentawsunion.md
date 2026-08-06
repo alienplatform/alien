@@ -16,4 +16,3 @@ const value: models.DeploymentAws = {
 ```typescript
 const value: any = "<value>";
 ```
-

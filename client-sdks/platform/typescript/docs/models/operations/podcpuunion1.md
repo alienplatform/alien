@@ -17,4 +17,3 @@ const value: operations.CpuPod1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

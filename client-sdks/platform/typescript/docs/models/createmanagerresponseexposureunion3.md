@@ -49,4 +49,3 @@ const value: models.CreateManagerResponseExposureCustom3 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -48,4 +48,3 @@ const value: models.DeploymentDetailResponseExposureCustom = {
 ```typescript
 const value: any = "<value>";
 ```
-

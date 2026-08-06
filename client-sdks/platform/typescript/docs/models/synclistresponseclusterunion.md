@@ -16,4 +16,3 @@ const value: models.SyncListResponseCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -17,4 +17,3 @@ const value: models.SyncReconcileResponseCurrentReleaseOverrideCondition = {
 ```typescript
 const value: any = "<value>";
 ```
-

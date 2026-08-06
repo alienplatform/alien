@@ -63,4 +63,3 @@ const value: models.DeploymentDetailResponseNetworkByoVnetAzure = {
 ```typescript
 const value: any = "<value>";
 ```
-

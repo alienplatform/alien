@@ -46,4 +46,3 @@ const value: models.UpdateDeploymentInputsResponseDefaultStringList = {
 ```typescript
 const value: any = "<value>";
 ```
-

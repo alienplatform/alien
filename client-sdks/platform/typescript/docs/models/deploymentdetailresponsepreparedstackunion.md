@@ -26,4 +26,3 @@ const value: models.DeploymentDetailResponsePreparedStack = {
 ```typescript
 const value: any = "<value>";
 ```
-

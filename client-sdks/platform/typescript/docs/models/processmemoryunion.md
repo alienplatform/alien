@@ -17,4 +17,3 @@ const value: models.ProcessMemory = {
 ```typescript
 const value: any = "<value>";
 ```
-

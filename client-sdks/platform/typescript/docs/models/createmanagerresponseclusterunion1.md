@@ -16,4 +16,3 @@ const value: models.CreateManagerResponseCluster1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

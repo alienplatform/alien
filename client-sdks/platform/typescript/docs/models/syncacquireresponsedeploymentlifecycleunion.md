@@ -15,4 +15,3 @@ const value: models.SyncAcquireResponseDeploymentStackStateLifecycleEnum =
 ```typescript
 const value: any = "<value>";
 ```
-

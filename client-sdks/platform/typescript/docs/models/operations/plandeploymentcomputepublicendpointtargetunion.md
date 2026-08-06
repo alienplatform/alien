@@ -27,4 +27,3 @@ const value: operations.PlanDeploymentComputePublicEndpointTargetLoadBalancer =
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -17,4 +17,3 @@ const value: models.MemoryAllocatable = {
 ```typescript
 const value: any = "<value>";
 ```
-

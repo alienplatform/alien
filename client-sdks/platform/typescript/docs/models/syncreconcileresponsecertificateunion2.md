@@ -47,4 +47,3 @@ const value: models.SyncReconcileResponseCertificateNone2 = {
   mode: "none",
 };
 ```
-

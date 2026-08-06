@@ -17,4 +17,3 @@ const value: operations.CpuDaemonInstance2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

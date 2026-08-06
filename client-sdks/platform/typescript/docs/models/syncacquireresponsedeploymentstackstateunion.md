@@ -27,4 +27,3 @@ const value: models.SyncAcquireResponseDeploymentStackState = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -15,7 +15,7 @@ let value: CreateDomainRequestBody = {
 
 ## Fields
 
-| Field                                                | Type                                                 | Required                                             | Description                                          |
-| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
-| `domain`                                             | *string*                                             | :heavy_check_mark:                                   | N/A                                                  |
-| `setup`                                              | [operations.Setup](../../models/operations/setup.md) | :heavy_minus_sign:                                   | N/A                                                  |
+| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `domain`                                                                     | *string*                                                                     | :heavy_check_mark:                                                           | N/A                                                                          |
+| `setup`                                                                      | [operations.CreateDomainSetup](../../models/operations/createdomainsetup.md) | :heavy_minus_sign:                                                           | N/A                                                                          |

@@ -49,4 +49,3 @@ const value: models.CreateSetupRegistrationOperationRequestExposureCustom = {
 ```typescript
 const value: any = "<value>";
 ```
-

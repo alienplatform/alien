@@ -16,4 +16,3 @@ const value: models.SyncListResponseAzureStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

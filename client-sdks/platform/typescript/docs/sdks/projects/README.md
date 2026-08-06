@@ -15,7 +15,7 @@
 * [createFromTemplate](#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
-* [getActiveRelease](#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+* [getActiveRelease](#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
 
 ## list
 
@@ -901,7 +901,7 @@ run();
 
 ## getActiveRelease
 
-Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
 
 ### Example Usage
 

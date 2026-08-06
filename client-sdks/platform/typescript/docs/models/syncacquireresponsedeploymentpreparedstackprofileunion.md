@@ -20,4 +20,3 @@ const value: models.SyncAcquireResponseDeploymentPreparedStackProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

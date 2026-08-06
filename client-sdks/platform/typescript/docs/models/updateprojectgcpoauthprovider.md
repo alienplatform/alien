@@ -20,4 +20,3 @@ const value: models.UpdateProjectGcpOAuthProviderCustom = {
   clientSecret: "GOCSPX-example",
 };
 ```
-

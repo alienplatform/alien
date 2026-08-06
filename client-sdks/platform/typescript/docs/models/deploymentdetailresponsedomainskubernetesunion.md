@@ -18,4 +18,3 @@ const value: models.DeploymentDetailResponseDomainsKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

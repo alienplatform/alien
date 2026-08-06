@@ -21,4 +21,3 @@ const value: operations.PrepareDeploymentStackPoolsAutoscale = {
   max: 830349,
 };
 ```
-

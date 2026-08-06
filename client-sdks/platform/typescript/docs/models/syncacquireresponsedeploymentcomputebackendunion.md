@@ -23,4 +23,3 @@ const value: models.SyncAcquireResponseDeploymentComputeBackendHorizon = {
 ```typescript
 const value: any = "<value>";
 ```
-

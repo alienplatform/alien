@@ -20,4 +20,3 @@ const value: models.ExtendReleaseInfo = {
 ```typescript
 const value: string = "<value>";
 ```
-

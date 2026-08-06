@@ -18,4 +18,3 @@ const value: models.SyncReconcileResponseStackStateError = {
 ```typescript
 const value: any = "<value>";
 ```
-

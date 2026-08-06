@@ -47,4 +47,3 @@ const value: models.CreateManagerResponseCertificateNone3 = {
   mode: "none",
 };
 ```
-

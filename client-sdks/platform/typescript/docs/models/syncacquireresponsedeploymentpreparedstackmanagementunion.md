@@ -29,4 +29,3 @@ const value: models.SyncAcquireResponseDeploymentPreparedStackManagement2 = {
 const value: models.SyncAcquireResponseDeploymentPreparedStackManagementEnum =
   "auto";
 ```
-

@@ -19,4 +19,3 @@ const value: models.DaemonInstance5 = {
 ```typescript
 const value: any = "<value>";
 ```
-

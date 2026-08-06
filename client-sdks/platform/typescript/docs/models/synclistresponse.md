@@ -21,6 +21,7 @@ let value: SyncListResponse = {
       currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      releaseChannel: "<value>",
       retryRequested: true,
       createdAt: new Date("2026-10-15T16:14:26.325Z"),
       updatedAt: new Date("2025-12-30T11:04:55.945Z"),

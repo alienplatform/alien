@@ -16,4 +16,3 @@ const value: models.PersistImportedDeploymentRequestGcpStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

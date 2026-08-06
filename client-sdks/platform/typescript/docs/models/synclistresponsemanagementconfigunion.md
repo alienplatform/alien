@@ -50,4 +50,3 @@ const value: models.SyncListResponseManagementConfigKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

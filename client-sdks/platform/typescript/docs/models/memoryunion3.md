@@ -17,4 +17,3 @@ const value: models.Memory3 = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -18,4 +18,3 @@ const value: models.ImportSourceDomainsKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

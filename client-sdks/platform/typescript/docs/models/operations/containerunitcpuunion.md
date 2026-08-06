@@ -17,4 +17,3 @@ const value: operations.ContainerUnitCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-

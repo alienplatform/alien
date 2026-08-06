@@ -16,4 +16,3 @@ const value: models.HorizonMachineImageGcpTarget = {
 ```typescript
 const value: any = "<value>";
 ```
-

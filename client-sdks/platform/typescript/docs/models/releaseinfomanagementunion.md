@@ -28,4 +28,3 @@ const value: models.ManagementReleaseInfo2 = {
 ```typescript
 const value: models.ManagementReleaseInfoEnum = "auto";
 ```
-

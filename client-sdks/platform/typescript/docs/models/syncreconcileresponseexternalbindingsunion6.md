@@ -51,4 +51,3 @@ const value: models.SyncReconcileResponseExternalBindingsLocalPostgres = {
   type: "postgres",
 };
 ```
-

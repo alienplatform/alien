@@ -53,4 +53,3 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsLocalPostgres =
     type: "postgres",
   };
 ```
-

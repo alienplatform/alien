@@ -20,4 +20,3 @@ const value: models.SyncAcquireResponseDeploymentPreparedStackOverride = {
 ```typescript
 const value: string = "<value>";
 ```
-

@@ -16,4 +16,3 @@ const value: models.ManagerRetryResponseAws2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

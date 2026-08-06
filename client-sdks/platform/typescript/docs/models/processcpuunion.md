@@ -17,4 +17,3 @@ const value: models.ProcessCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-
