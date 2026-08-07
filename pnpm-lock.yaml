@@ -248,7 +248,7 @@ importers:
         version: 1.14.4
       nice-grpc:
         specifier: ^2.1.11
-        version: 2.1.14
+        version: 2.1.17
       nice-grpc-common:
         specifier: ^2.0.2
         version: 2.0.4
@@ -2342,8 +2342,8 @@ packages:
   '@vitest/utils@4.1.10':
     resolution: {integrity: sha512-fy9am/HWxbaGt/Sawrp90vt6Y6jQwf1RX77cz3uwoJwJVMli/e1IEwRPnMNJ7vKfPTwo0diXifkpPvwH9v7nGA==}
 
-  abort-controller-x@0.4.3:
-    resolution: {integrity: sha512-VtUwTNU8fpMwvWGn4xE93ywbogTYsuT+AUxAXOeelbXuQVIwNmC5YLeho9sH4vZ4ITW8414TTAOG1nW6uIVHCA==}
+  abort-controller-x@0.5.0:
+    resolution: {integrity: sha512-yTt9CI0x+nRfX6BFMenEGP8ooPvErGH6AbFz20C2IeOLIlDsrw/VHpgne3GsCEuTA410IiFiaLVFKmgM4bKEPQ==}
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -3368,8 +3368,8 @@ packages:
     resolution: {integrity: sha512-dkEJPVvun4FryqBmZ5KhDo0K9iDXAwn08tMLDinNdRBNPcYEDiWYysLcc6k3mjTMlbP9KyylvRpd4wFtwrT9rw==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  nanoid@3.3.17:
-    resolution: {integrity: sha512-xQLf0A3HOMlgHq0n247/LRuAOYmB7dXJ/DvAxGvsSBij45XtBSmQycu+F8ODbHwns/XyFZagyL1+J0Offw1E0g==}
+  nanoid@3.3.18:
+    resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
@@ -3382,8 +3382,8 @@ packages:
   nice-grpc-common@2.0.4:
     resolution: {integrity: sha512-gOEXlD6ShXZMZ8k+49wm/bA2j1+3IKbEFV9WYREJcvZV4kM5L1KkILYTX9VYBzZF2OuYCe1wp8c82bQkvR0fHw==}
 
-  nice-grpc@2.1.14:
-    resolution: {integrity: sha512-GK9pKNxlvnU5FAdaw7i2FFuR9CqBspcE+if2tqnKXBcE0R8525wj4BZvfcwj7FjvqbssqKxRHt2nwedalbJlww==}
+  nice-grpc@2.1.17:
+    resolution: {integrity: sha512-pu9xYPlWSeqoYQOCqb2ftQqZi/P2DaI70PSuwnxvoyIRiilaOVtktyPe6LmuXegWB4Ic1sPuDGCnCCASbwzK0w==}
 
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
@@ -6575,7 +6575,7 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
 
-  abort-controller-x@0.4.3: {}
+  abort-controller-x@0.5.0: {}
 
   acorn-jsx@5.3.2(acorn@8.15.0):
     dependencies:
@@ -7578,7 +7578,7 @@ snapshots:
 
   mute-stream@3.0.0: {}
 
-  nanoid@3.3.17: {}
+  nanoid@3.3.18: {}
 
   natural-compare@1.4.0: {}
 
@@ -7588,10 +7588,10 @@ snapshots:
     dependencies:
       ts-error: 1.0.6
 
-  nice-grpc@2.1.14:
+  nice-grpc@2.1.17:
     dependencies:
       '@grpc/grpc-js': 1.14.4
-      abort-controller-x: 0.4.3
+      abort-controller-x: 0.5.0
       nice-grpc-common: 2.0.4
 
   node-domexception@1.0.0: {}
@@ -7779,7 +7779,7 @@ snapshots:
 
   postcss@8.5.26:
     dependencies:
-      nanoid: 3.3.17
+      nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
