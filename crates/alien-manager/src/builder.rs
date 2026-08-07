@@ -690,6 +690,7 @@ fn validate_customer_registry_base_url(
     })?;
     if !matches!(parsed.scheme(), "http" | "https")
         || parsed.host_str().is_none()
+        || parsed.path() != "/"
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.query().is_some()
@@ -723,6 +724,13 @@ mod tests {
         configured.base_url = Some("https://manager.example.com".to_string());
         validate_customer_registry_base_url(&configured, true)
             .expect("an explicit HTTPS manager origin is valid");
+
+        configured.base_url = Some("https://manager.example.com/".to_string());
+        validate_customer_registry_base_url(&configured, true)
+            .expect("a trailing root slash is still an origin-only URL");
+
+        configured.base_url = Some("https://manager.example.com/path".to_string());
+        assert!(validate_customer_registry_base_url(&configured, true).is_err());
 
         configured.base_url = Some("https://user@manager.example.com/path".to_string());
         assert!(validate_customer_registry_base_url(&configured, true).is_err());
