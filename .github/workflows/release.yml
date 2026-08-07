@@ -282,7 +282,7 @@ jobs:
       # on one computed version without mutating git or publishing anything.
       - name: Upload versioned manifests for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-version-manifests
           retention-days: 30
@@ -420,7 +420,7 @@ jobs:
           OUTPUT: CHANGELOG-release.md
 
       - name: Upload changelog
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: changelog
           retention-days: 30
@@ -460,7 +460,7 @@ jobs:
 
       - name: Download qualified crates
         if: ${{ inputs.stable_action == 'publish' }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -611,7 +611,7 @@ jobs:
 
       - name: Upload qualified crates
         if: ${{ inputs.stable_action == 'qualification' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-crates
           retention-days: 30
@@ -661,7 +661,7 @@ jobs:
 
       - name: Download qualified npm packages
         if: ${{ inputs.stable_action == 'publish' }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -704,7 +704,7 @@ jobs:
 
       - name: Upload qualified npm packages
         if: ${{ inputs.stable_action == 'qualification' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-npm
           retention-days: 30
@@ -759,7 +759,7 @@ jobs:
 
       - name: Upload qualified client SDKs
         if: ${{ inputs.stable_action == 'qualification' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-client-sdks
           retention-days: 30
@@ -768,7 +768,7 @@ jobs:
 
       - name: Download qualified client SDKs
         if: ${{ inputs.stable_action == 'publish' }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -861,7 +861,7 @@ jobs:
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-version-manifests
           path: .
@@ -933,7 +933,7 @@ jobs:
         run: file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
 
       - name: Upload addon artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: addon-${{ matrix.triple }}
           retention-days: 30
@@ -956,7 +956,7 @@ jobs:
         run: file "target/${{ matrix.gateway_target }}/release/alien-ai-gateway" | grep -q "${{ matrix.expect_arch }}"
 
       - name: Upload ai-gateway binary artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ai-gateway-bin-${{ matrix.gateway_artifact }}
           retention-days: 30
@@ -995,7 +995,7 @@ jobs:
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-version-manifests
           path: .
@@ -1033,7 +1033,7 @@ jobs:
           pnpm --filter @alienplatform/bindings build
 
       - name: Download staged addon (${{ matrix.triple }})
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: addon-${{ matrix.triple }}
           path: packages/bindings/npm/${{ matrix.triple }}
@@ -1060,7 +1060,7 @@ jobs:
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-version-manifests
           path: .
@@ -1089,7 +1089,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download qualification addon artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: addon-*
           path: ./addons
@@ -1126,7 +1126,7 @@ jobs:
         run: pnpm --filter @alienplatform/bindings pack --pack-destination "$PWD/qualified/bindings"
 
       - name: Upload qualified bindings packages
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-bindings
           retention-days: 30
@@ -1150,7 +1150,7 @@ jobs:
         run: npm whoami
 
       - name: Download qualified bindings packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -1202,7 +1202,7 @@ jobs:
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-version-manifests
           path: .
@@ -1226,7 +1226,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download ai-gateway binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: ai-gateway-bin-*
           path: ./gateway-bins
@@ -1276,7 +1276,7 @@ jobs:
         run: pnpm --filter @alienplatform/ai-gateway pack --pack-destination "$PWD/qualified/ai-gateway"
 
       - name: Upload qualified ai-gateway packages
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-ai-gateway
           retention-days: 30
@@ -1301,7 +1301,7 @@ jobs:
         run: npm whoami
 
       - name: Download qualified ai-gateway packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -1392,7 +1392,7 @@ jobs:
           done
 
       - name: Upload x86_64 linux binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: binaries-x86_64-unknown-linux-musl
           retention-days: 30
@@ -1447,7 +1447,7 @@ jobs:
           done
 
       - name: Upload aarch64 linux binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: binaries-aarch64-unknown-linux-musl
           retention-days: 30
@@ -1517,7 +1517,7 @@ jobs:
           done
 
       - name: Upload aarch64 darwin binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: binaries-aarch64-apple-darwin
           retention-days: 30
@@ -1590,7 +1590,7 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/alien-operator.exe staged/x86_64-pc-windows-msvc/
 
       - name: Upload windows binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: binaries-x86_64-pc-windows-msvc
           retention-days: 30
@@ -1605,7 +1605,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ inputs.stable_action == 'publish' && needs.prepare.outputs.qualification_run_id || github.run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -1686,14 +1686,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all binary artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: binaries-*
           path: ./artifacts
           merge-multiple: false
 
       - name: Download changelog
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: changelog
           path: .
@@ -1730,7 +1730,7 @@ jobs:
           sha256sum alien-v${VERSION}-*.tar.gz alien-v${VERSION}-*.zip > "alien-v${VERSION}-checksums.txt"
 
       - name: Upload qualified GitHub release payload
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-github-release
           retention-days: 30
@@ -1752,7 +1752,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
       - name: Download linux binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ inputs.stable_action == 'publish' && needs.prepare.outputs.qualification_run_id || github.run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -1771,7 +1771,7 @@ jobs:
           done
 
       - name: Download Linux AI gateway binaries
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: ai-gateway-bin-linux-*
           path: ./gateway-bins
@@ -1788,7 +1788,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-ai-gateway
 
       - name: Download Linux Worker addons
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ inputs.stable_action == 'publish' && needs.prepare.outputs.qualification_run_id || github.run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -1955,7 +1955,7 @@ jobs:
             > qualified-image-digests.json
 
       - name: Upload qualified image digests
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-image-digests
           retention-days: 30
@@ -1976,7 +1976,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download qualified image digests
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -2041,7 +2041,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download qualified GitHub release payload
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
@@ -2402,7 +2402,7 @@ jobs:
           package-manager-cache: false
 
       - name: Download all binary artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: binaries-*
           path: ./artifacts
@@ -2416,7 +2416,7 @@ jobs:
         run: bash scripts/build-npm-packages.sh
 
       - name: Upload qualified npm CLI packages
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: qualified-npm-cli
           retention-days: 30
@@ -2445,7 +2445,7 @@ jobs:
         run: npm whoami
 
       - name: Download qualified npm CLI packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           run-id: ${{ needs.prepare.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
