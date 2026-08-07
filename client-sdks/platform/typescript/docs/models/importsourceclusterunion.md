@@ -16,4 +16,3 @@ const value: models.ImportSourceCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

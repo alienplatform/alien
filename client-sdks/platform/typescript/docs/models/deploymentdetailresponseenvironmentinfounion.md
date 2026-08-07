@@ -62,4 +62,3 @@ const value: models.DeploymentDetailResponseEnvironmentInfoTest = {
 ```typescript
 const value: any = "<value>";
 ```
-

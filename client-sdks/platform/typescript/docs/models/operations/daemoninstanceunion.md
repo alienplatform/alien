@@ -19,4 +19,3 @@ const value: operations.DaemonInstance5 = {
 ```typescript
 const value: any = "<value>";
 ```
-

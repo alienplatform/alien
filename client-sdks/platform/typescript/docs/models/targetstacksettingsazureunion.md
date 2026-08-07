@@ -16,4 +16,3 @@ const value: models.AzureTargetStackSettings = {
 ```typescript
 const value: any = "<value>";
 ```
-

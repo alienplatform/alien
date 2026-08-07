@@ -17,4 +17,3 @@ const value: models.PreparedStackProfileConditionStateStack = {
 ```typescript
 const value: any = "<value>";
 ```
-

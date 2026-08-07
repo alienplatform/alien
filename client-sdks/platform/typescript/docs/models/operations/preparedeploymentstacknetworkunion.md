@@ -65,4 +65,3 @@ const value: operations.PrepareDeploymentStackNetworkByoVnetAzure = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -6,11 +6,13 @@ import { workspacesAddMember } from "../funcs/workspacesAddMember.js";
 import { workspacesDelete } from "../funcs/workspacesDelete.js";
 import { workspacesDismissOnboarding } from "../funcs/workspacesDismissOnboarding.js";
 import { workspacesGet } from "../funcs/workspacesGet.js";
+import { workspacesGetSettings } from "../funcs/workspacesGetSettings.js";
 import { workspacesList } from "../funcs/workspacesList.js";
 import { workspacesListMembers } from "../funcs/workspacesListMembers.js";
 import { workspacesRemoveMember } from "../funcs/workspacesRemoveMember.js";
 import { workspacesUpdate } from "../funcs/workspacesUpdate.js";
 import { workspacesUpdateMember } from "../funcs/workspacesUpdateMember.js";
+import { workspacesUpdateSettings } from "../funcs/workspacesUpdateSettings.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -137,6 +139,34 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Workspace> {
     return unwrapAsync(workspacesDismissOnboarding(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
+   */
+  async getSettings(
+    request: operations.GetWorkspaceSettingsRequest,
+    options?: RequestOptions,
+  ): Promise<models.AgentSettings> {
+    return unwrapAsync(workspacesGetSettings(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
+   */
+  async updateSettings(
+    request: operations.UpdateWorkspaceSettingsRequest,
+    options?: RequestOptions,
+  ): Promise<models.AgentSettings> {
+    return unwrapAsync(workspacesUpdateSettings(
       this,
       request,
       options,

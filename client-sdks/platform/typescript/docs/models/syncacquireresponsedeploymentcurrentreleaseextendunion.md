@@ -20,4 +20,3 @@ const value: models.SyncAcquireResponseDeploymentCurrentReleaseExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

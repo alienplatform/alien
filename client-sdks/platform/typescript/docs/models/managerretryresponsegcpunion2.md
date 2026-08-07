@@ -16,4 +16,3 @@ const value: models.ManagerRetryResponseGcp2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

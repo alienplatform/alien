@@ -17,4 +17,3 @@ const value: operations.DaemonInstanceCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-

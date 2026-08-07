@@ -28,4 +28,3 @@ const value: models.SyncReconcileResponseAccountName2 = {
   },
 };
 ```
-

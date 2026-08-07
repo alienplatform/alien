@@ -147,7 +147,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["400", "404", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -173,7 +173,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, models.CreateDeploymentGroupTokenResponse$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
+    M.jsonErr([400, 404], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

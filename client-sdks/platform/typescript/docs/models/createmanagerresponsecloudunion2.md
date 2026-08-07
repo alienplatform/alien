@@ -14,4 +14,3 @@ const value: models.CreateManagerResponseCloud2 = {};
 ```typescript
 const value: any = "<value>";
 ```
-

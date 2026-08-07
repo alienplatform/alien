@@ -16,4 +16,3 @@ const value: models.DeploymentDetailResponseCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

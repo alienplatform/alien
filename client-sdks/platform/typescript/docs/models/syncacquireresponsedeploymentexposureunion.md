@@ -51,4 +51,3 @@ const value: models.SyncAcquireResponseDeploymentExposureCustom = {
 ```typescript
 const value: any = "<value>";
 ```
-

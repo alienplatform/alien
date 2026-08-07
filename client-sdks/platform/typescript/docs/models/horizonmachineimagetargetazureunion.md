@@ -20,4 +20,3 @@ const value: models.HorizonMachineImageAzureTarget = {
 ```typescript
 const value: any = "<value>";
 ```
-

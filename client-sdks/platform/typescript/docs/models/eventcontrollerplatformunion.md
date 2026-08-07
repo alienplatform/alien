@@ -14,4 +14,3 @@ const value: models.EventControllerPlatformEnum = "gcp";
 ```typescript
 const value: any = "<value>";
 ```
-

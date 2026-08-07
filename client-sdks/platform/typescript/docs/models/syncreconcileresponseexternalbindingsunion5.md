@@ -50,4 +50,3 @@ const value: models.SyncReconcileResponseExternalBindingsLocalVault = {
   type: "vault",
 };
 ```
-

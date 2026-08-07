@@ -19,6 +19,7 @@ import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
+import { deploymentsSetReleaseChannel } from "../funcs/deploymentsSetReleaseChannel.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
 import { deploymentsUpdateInputs } from "../funcs/deploymentsUpdateInputs.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -219,6 +220,17 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.PinDeploymentReleaseResponse> {
     return unwrapAsync(deploymentsPinRelease(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async setReleaseChannel(
+    request: operations.SetDeploymentReleaseChannelRequest,
+    options?: RequestOptions,
+  ): Promise<models.Deployment> {
+    return unwrapAsync(deploymentsSetReleaseChannel(
       this,
       request,
       options,

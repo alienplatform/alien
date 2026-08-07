@@ -17,4 +17,3 @@ const value: models.MemoryDaemonInstance3 = {
 ```typescript
 const value: any = "<value>";
 ```
-

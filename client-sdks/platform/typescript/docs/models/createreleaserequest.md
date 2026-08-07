@@ -32,3 +32,4 @@ let value: CreateReleaseRequest = {
 | `gitMetadata`                                          | [models.GitMetadata](../models/gitmetadata.md)         | :heavy_minus_sign:                                     | N/A                                                    |
 | `stack`                                                | [models.StackByPlatform](../models/stackbyplatform.md) | :heavy_minus_sign:                                     | N/A                                                    |
 | `rootDirectory`                                        | *string*                                               | :heavy_minus_sign:                                     | N/A                                                    |
+| `channel`                                              | *string*                                               | :heavy_minus_sign:                                     | N/A                                                    |

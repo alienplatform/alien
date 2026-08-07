@@ -11,7 +11,9 @@ let value: APIKeyDeploymentSetupConfig = {
   },
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [],
+    allowedSetupMethods: [
+      "google-oauth",
+    ],
   },
   environmentVariables: [
     {

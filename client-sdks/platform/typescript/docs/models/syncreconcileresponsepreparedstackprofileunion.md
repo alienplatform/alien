@@ -20,4 +20,3 @@ const value: models.SyncReconcileResponsePreparedStackProfile = {
 ```typescript
 const value: string = "<value>";
 ```
-

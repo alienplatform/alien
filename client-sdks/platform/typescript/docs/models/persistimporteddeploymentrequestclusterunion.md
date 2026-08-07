@@ -16,4 +16,3 @@ const value: models.PersistImportedDeploymentRequestCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

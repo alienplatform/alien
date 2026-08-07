@@ -14,4 +14,3 @@ const value: models.SyncReconcileResponseKubernetes = {};
 ```typescript
 const value: any = "<value>";
 ```
-

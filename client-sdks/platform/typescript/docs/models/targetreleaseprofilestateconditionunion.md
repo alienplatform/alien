@@ -17,4 +17,3 @@ const value: models.TargetReleaseProfileConditionState = {
 ```typescript
 const value: any = "<value>";
 ```
-

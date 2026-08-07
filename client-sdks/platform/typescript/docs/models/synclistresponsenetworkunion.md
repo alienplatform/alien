@@ -64,4 +64,3 @@ const value: models.SyncListResponseNetworkByoVnetAzure = {
 ```typescript
 const value: any = "<value>";
 ```
-

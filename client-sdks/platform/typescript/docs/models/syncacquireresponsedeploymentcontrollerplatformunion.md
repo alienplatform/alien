@@ -14,4 +14,3 @@ const value: models.SyncAcquireResponseDeploymentControllerPlatformEnum = "gcp";
 ```typescript
 const value: any = "<value>";
 ```
-

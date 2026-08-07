@@ -45,4 +45,3 @@ const value: models.SyncReconcileResponseManagementConfigKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

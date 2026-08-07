@@ -26,4 +26,3 @@ const value: models.ManagerRetryResponsePublicEndpointTargetLoadBalancer1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

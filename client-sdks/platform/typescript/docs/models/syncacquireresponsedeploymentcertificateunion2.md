@@ -49,4 +49,3 @@ const value: models.SyncAcquireResponseDeploymentCertificateNone2 = {
   mode: "none",
 };
 ```
-

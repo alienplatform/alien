@@ -17,4 +17,3 @@ const value: models.SyncReconcileResponseCurrentReleaseProfileCondition = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -50,4 +50,3 @@ const value: models.ImportSourceManagementConfigKubernetes = {
 ```typescript
 const value: any = "<value>";
 ```
-

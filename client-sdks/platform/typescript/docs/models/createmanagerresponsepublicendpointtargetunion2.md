@@ -26,4 +26,3 @@ const value: models.CreateManagerResponsePublicEndpointTargetLoadBalancer2 = {
 ```typescript
 const value: any = "<value>";
 ```
-

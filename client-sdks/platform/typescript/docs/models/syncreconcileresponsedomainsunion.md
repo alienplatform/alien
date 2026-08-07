@@ -14,4 +14,3 @@ const value: models.SyncReconcileResponseDomains = {};
 ```typescript
 const value: any = "<value>";
 ```
-

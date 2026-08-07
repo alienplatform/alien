@@ -18,4 +18,3 @@ const value: models.SyncAcquireResponseDeploymentTargetReleaseProfileCondition =
 ```typescript
 const value: any = "<value>";
 ```
-

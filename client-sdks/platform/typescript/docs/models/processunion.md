@@ -19,4 +19,3 @@ const value: models.Process = {
 ```typescript
 const value: any = "<value>";
 ```
-

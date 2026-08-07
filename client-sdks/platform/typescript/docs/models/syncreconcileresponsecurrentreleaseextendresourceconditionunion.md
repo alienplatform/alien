@@ -18,4 +18,3 @@ const value: models.SyncReconcileResponseCurrentReleaseExtendConditionResource =
 ```typescript
 const value: any = "<value>";
 ```
-

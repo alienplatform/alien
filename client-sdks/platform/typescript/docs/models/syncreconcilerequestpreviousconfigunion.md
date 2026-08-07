@@ -17,4 +17,3 @@ const value: models.SyncReconcileRequestPreviousConfig = {
 ```typescript
 const value: any = "<value>";
 ```
-

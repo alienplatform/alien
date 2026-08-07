@@ -18,4 +18,3 @@ const value: models.SyncReconcileResponsePreparedStackProfileConditionResource =
 ```typescript
 const value: any = "<value>";
 ```
-

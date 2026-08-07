@@ -19,4 +19,3 @@ const value: models.ContainerUnit = {
 ```typescript
 const value: any = "<value>";
 ```
-

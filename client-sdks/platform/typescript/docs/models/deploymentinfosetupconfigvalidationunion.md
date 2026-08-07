@@ -14,4 +14,3 @@ const value: models.DeploymentInfoSetupConfigValidation = {};
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -14,4 +14,3 @@ const value: models.ManagerRetryResponseCompute3 = {};
 ```typescript
 const value: any = "<value>";
 ```
-

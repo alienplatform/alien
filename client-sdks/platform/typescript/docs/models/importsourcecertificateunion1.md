@@ -47,4 +47,3 @@ const value: models.ImportSourceCertificateNone1 = {
   mode: "none",
 };
 ```
-

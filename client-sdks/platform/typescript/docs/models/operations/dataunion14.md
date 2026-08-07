@@ -105,4 +105,3 @@ const value: operations.DataKubernetesJob = {
   backend: "kubernetesJob",
 };
 ```
-

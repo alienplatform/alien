@@ -40,4 +40,3 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsLocalQueue = {
   type: "queue",
 };
 ```
-

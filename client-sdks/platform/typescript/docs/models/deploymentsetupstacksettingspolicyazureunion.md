@@ -16,4 +16,3 @@ const value: models.DeploymentSetupStackSettingsPolicyAzure = {
 ```typescript
 const value: any = "<value>";
 ```
-

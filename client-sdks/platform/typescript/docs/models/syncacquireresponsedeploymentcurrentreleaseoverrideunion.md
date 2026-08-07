@@ -20,4 +20,3 @@ const value: models.SyncAcquireResponseDeploymentCurrentReleaseOverride = {
 ```typescript
 const value: string = "<value>";
 ```
-

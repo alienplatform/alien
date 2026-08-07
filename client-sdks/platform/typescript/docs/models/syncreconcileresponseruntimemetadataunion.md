@@ -14,4 +14,3 @@ const value: models.SyncReconcileResponseRuntimeMetadata = {};
 ```typescript
 const value: any = "<value>";
 ```
-

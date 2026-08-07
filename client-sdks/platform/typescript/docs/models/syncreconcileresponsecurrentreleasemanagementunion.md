@@ -28,4 +28,3 @@ const value: models.SyncReconcileResponseCurrentReleaseManagement2 = {
 ```typescript
 const value: models.SyncReconcileResponseCurrentReleaseManagementEnum = "auto";
 ```
-

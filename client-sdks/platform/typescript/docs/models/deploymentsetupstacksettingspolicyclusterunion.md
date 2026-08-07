@@ -16,4 +16,3 @@ const value: models.DeploymentSetupStackSettingsPolicyCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

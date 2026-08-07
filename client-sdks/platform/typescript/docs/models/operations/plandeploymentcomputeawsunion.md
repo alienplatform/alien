@@ -16,4 +16,3 @@ const value: operations.PlanDeploymentComputeAws = {
 ```typescript
 const value: any = "<value>";
 ```
-

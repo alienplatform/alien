@@ -14,4 +14,3 @@ const value: models.DeploymentDetailResponseCloud = {};
 ```typescript
 const value: any = "<value>";
 ```
-

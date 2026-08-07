@@ -25,4 +25,3 @@ const value: models.SyncAcquireResponseDeploymentHorizonMachineImage = {
 ```typescript
 const value: any = "<value>";
 ```
-

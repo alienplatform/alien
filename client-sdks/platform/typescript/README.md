@@ -98,7 +98,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.listMemberships();
+  const result = await alien.getWorkspaceInvitationPreview({
+    token: "<value>",
+  });
 
   console.log(result);
 }
@@ -128,7 +130,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.listMemberships();
+  const result = await alien.getWorkspaceInvitationPreview({
+    token: "<value>",
+  });
 
   console.log(result);
 }
@@ -143,6 +147,26 @@ run();
 
 <details open>
 <summary>Available methods</summary>
+
+### [Alien SDK](docs/sdks/alien/README.md)
+
+* [getWorkspaceInvitationPreview](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
+* [acceptWorkspaceInvitation](docs/sdks/alien/README.md#acceptworkspaceinvitation)
+* [listWorkspaceInvitations](docs/sdks/alien/README.md#listworkspaceinvitations)
+* [createWorkspaceInvitation](docs/sdks/alien/README.md#createworkspaceinvitation)
+* [resendWorkspaceInvitation](docs/sdks/alien/README.md#resendworkspaceinvitation)
+* [revokeWorkspaceInvitation](docs/sdks/alien/README.md#revokeworkspaceinvitation)
+* [getWorkspaceInviteLink](docs/sdks/alien/README.md#getworkspaceinvitelink)
+* [createWorkspaceInviteLink](docs/sdks/alien/README.md#createworkspaceinvitelink)
+* [revokeWorkspaceInviteLink](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+
+### [AgentSessions](docs/sdks/agentsessions/README.md)
+
+* [list](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+* [get](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
+* [events](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
+* [approve](docs/sdks/agentsessions/README.md#approve) - Approve a halted ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies.
+* [stop](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running, queued, or halted ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
 
 ### [ApiKeys](docs/sdks/apikeys/README.md)
 
@@ -197,9 +221,12 @@ run();
 * [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
+* [ensureDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
+* [getDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 * [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 * [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
+* [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 
@@ -219,6 +246,7 @@ run();
 * [delete](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
+* [setReleaseChannel](docs/sdks/deployments/README.md#setreleasechannel)
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
@@ -266,6 +294,7 @@ run();
 * [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 * [listEvents](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
 * [generateManagerToken](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+* [generateManagerBindingToken](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
 * [resolveGcpOAuthProvider](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 * [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
@@ -295,7 +324,13 @@ run();
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
-* [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+* [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+
+### [ReleaseChannels](docs/sdks/releasechannels/README.md)
+
+* [list](docs/sdks/releasechannels/README.md#list)
+* [create](docs/sdks/releasechannels/README.md#create)
+* [delete](docs/sdks/releasechannels/README.md#delete)
 
 ### [Releases](docs/sdks/releases/README.md)
 
@@ -304,6 +339,8 @@ run();
 * [listBranches](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 * [listAuthors](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 * [get](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
+* [listDeployments](docs/sdks/releases/README.md#listdeployments) - List the project's deployments with their rollout state relative to this release.
+* [promote](docs/sdks/releases/README.md#promote)
 
 ### [Resolve](docs/sdks/resolve/README.md)
 
@@ -316,12 +353,21 @@ run();
 * [listDeployments](docs/sdks/resources/README.md#listdeployments)
 * [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
 
+### [SlackIntegration](docs/sdks/slackintegration/README.md)
+
+* [installUrl](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
+* [status](docs/sdks/slackintegration/README.md#status) - Return the Slack install for this workspace (if any).
+* [listChannels](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
+* [setNotificationChannel](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.
+* [uninstall](docs/sdks/slackintegration/README.md#uninstall) - Uninstall the Slack integration for this workspace. Revokes the bot token at Slack and deletes the row.
+
 ### [Sync](docs/sdks/sync/README.md)
 
 * [list](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 * [context](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 * [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
+* [renew](docs/sdks/sync/README.md#renew)
 * [release](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ### [User](docs/sdks/user/README.md)
@@ -346,6 +392,8 @@ run();
 * [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
 * [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [dismissOnboarding](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
+* [getSettings](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
+* [updateSettings](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
 </details>
 <!-- End Available Resources and Operations [operations] -->
@@ -365,6 +413,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 
 <summary>Available standalone functions</summary>
 
+- [`acceptWorkspaceInvitation`](docs/sdks/alien/README.md#acceptworkspaceinvitation)
+- [`agentSessionsApprove`](docs/sdks/agentsessions/README.md#approve) - Approve a halted ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies.
+- [`agentSessionsEvents`](docs/sdks/agentsessions/README.md#events) - Incrementally read a session's event log (steps, tool calls, report deltas, approvals, status transitions). Pass the previous response's `latestSeq` as `after` to fetch only new events.
+- [`agentSessionsGet`](docs/sdks/agentsessions/README.md#get) - Retrieve one ai-agent monitor session by id.
+- [`agentSessionsList`](docs/sdks/agentsessions/README.md#list) - List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
+- [`agentSessionsStop`](docs/sdks/agentsessions/README.md#stop) - Stop (cancel) a running, queued, or halted ai-agent monitor session. Proxies to the ai-agent service, minting a fresh CLI session for the caller so the ai-agent's own auth applies. Idempotent — stopping an already-terminal session is a 200 no-op.
 - [`apiKeysCreate`](docs/sdks/apikeys/README.md#create) - Create a new API key.
 - [`apiKeysDeleteMultiple`](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
 - [`apiKeysGet`](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
@@ -385,6 +439,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 - [`commandsResolveTarget`](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+- [`createWorkspaceInvitation`](docs/sdks/alien/README.md#createworkspaceinvitation)
+- [`createWorkspaceInviteLink`](docs/sdks/alien/README.md#createworkspaceinvitelink)
 - [`debugSessionsCreate`](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
 - [`debugSessionsGet`](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 - [`debugSessionsList`](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
@@ -394,9 +450,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsCreateFirstPartyDeploymentSession`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
+- [`deploymentGroupsEnsureDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
 - [`deploymentGroupsEnsureDeploymentGroupByName`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
+- [`deploymentGroupsGetDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
+- [`deploymentGroupsSetDeploymentGroupExternalId`](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
 - [`deploymentPrepareStack`](docs/sdks/deployment/README.md#preparestack) - Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
@@ -417,6 +476,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
+- [`deploymentsSetReleaseChannel`](docs/sdks/deployments/README.md#setreleasechannel)
 - [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 - [`deploymentsUpdateInputs`](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
 - [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
@@ -427,6 +487,9 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`getWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
+- [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
+- [`listWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
 - [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
 - [`machinesCreateJoinToken`](docs/sdks/machines/README.md#createjointoken)
 - [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
@@ -438,6 +501,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 - [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
 - [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
+- [`managersGenerateManagerBindingToken`](docs/sdks/managers/README.md#generatemanagerbindingtoken) - Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
 - [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 - [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 - [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
@@ -462,7 +526,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
-- [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+- [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
 - [`projectsGetDeploymentLinkSetup`](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
@@ -470,21 +534,35 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+- [`releaseChannelsCreate`](docs/sdks/releasechannels/README.md#create)
+- [`releaseChannelsDelete`](docs/sdks/releasechannels/README.md#delete)
+- [`releaseChannelsList`](docs/sdks/releasechannels/README.md#list)
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.
 - [`releasesGet`](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
 - [`releasesList`](docs/sdks/releases/README.md#list) - Retrieve all releases.
 - [`releasesListAuthors`](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
+- [`releasesListDeployments`](docs/sdks/releases/README.md#listdeployments) - List the project's deployments with their rollout state relative to this release.
+- [`releasesPromote`](docs/sdks/releases/README.md#promote)
+- [`resendWorkspaceInvitation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
 - [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
 - [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
+- [`revokeWorkspaceInvitation`](docs/sdks/alien/README.md#revokeworkspaceinvitation)
+- [`revokeWorkspaceInviteLink`](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+- [`slackIntegrationInstallUrl`](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
+- [`slackIntegrationListChannels`](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
+- [`slackIntegrationSetNotificationChannel`](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.
+- [`slackIntegrationStatus`](docs/sdks/slackintegration/README.md#status) - Return the Slack install for this workspace (if any).
+- [`slackIntegrationUninstall`](docs/sdks/slackintegration/README.md#uninstall) - Uninstall the Slack integration for this workspace. Revokes the bot token at Slack and deletes the row.
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 - [`syncContext`](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
+- [`syncRenew`](docs/sdks/sync/README.md#renew)
 - [`userCompleteProfileSetup`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 - [`userGetProfile`](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
@@ -497,11 +575,13 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`workspacesDelete`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 - [`workspacesDismissOnboarding`](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 - [`workspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
+- [`workspacesGetSettings`](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
 - [`workspacesList`](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 - [`workspacesListMembers`](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
 - [`workspacesRemoveMember`](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 - [`workspacesUpdate`](docs/sdks/workspaces/README.md#update) - Update a workspace.
 - [`workspacesUpdateMember`](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
+- [`workspacesUpdateSettings`](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
 </details>
 <!-- End Standalone functions [standalone-funcs] -->
@@ -520,7 +600,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.listMemberships({
+  const result = await alien.getWorkspaceInvitationPreview({
+    token: "<value>",
+  }, {
     retries: {
       strategy: "backoff",
       backoff: {
@@ -559,7 +641,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.listMemberships();
+  const result = await alien.getWorkspaceInvitationPreview({
+    token: "<value>",
+  });
 
   console.log(result);
 }
@@ -594,7 +678,9 @@ const alien = new Alien({
 
 async function run() {
   try {
-    const result = await alien.user.listMemberships();
+    const result = await alien.getWorkspaceInvitationPreview({
+      token: "<value>",
+    });
 
     console.log(result);
   } catch (error) {
@@ -661,7 +747,9 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.user.listMemberships();
+  const result = await alien.getWorkspaceInvitationPreview({
+    token: "<value>",
+  });
 
   console.log(result);
 }

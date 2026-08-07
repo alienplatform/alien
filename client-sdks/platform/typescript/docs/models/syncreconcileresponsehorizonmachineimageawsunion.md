@@ -16,4 +16,3 @@ const value: models.SyncReconcileResponseHorizonMachineImageAws = {
 ```typescript
 const value: any = "<value>";
 ```
-

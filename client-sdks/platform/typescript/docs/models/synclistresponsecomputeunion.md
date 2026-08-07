@@ -14,4 +14,3 @@ const value: models.SyncListResponseCompute = {};
 ```typescript
 const value: any = "<value>";
 ```
-

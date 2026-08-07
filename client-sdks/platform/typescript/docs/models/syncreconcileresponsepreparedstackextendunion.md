@@ -21,4 +21,3 @@ const value: models.SyncReconcileResponsePreparedStackExtend = {
 ```typescript
 const value: string = "<value>";
 ```
-

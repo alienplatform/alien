@@ -47,4 +47,3 @@ const value: models.SyncListResponseCertificateNone1 = {
   mode: "none",
 };
 ```
-

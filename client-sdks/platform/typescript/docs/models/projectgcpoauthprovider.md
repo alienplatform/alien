@@ -29,4 +29,3 @@ const value: models.ProjectGcpOAuthProviderCustom = {
   ],
 };
 ```
-

@@ -1421,6 +1421,17 @@ export type PreparedDeploymentStackResources = {
    */
   dependencies: Array<PreparedDeploymentStackDependency>;
   /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
   lifecycle: PreparedDeploymentStackLifecycle;
@@ -3583,6 +3594,7 @@ export const PreparedDeploymentStackResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => PreparedDeploymentStackDependency$inboundSchema),
   ),
+  enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: PreparedDeploymentStackLifecycle$inboundSchema,
   remoteAccess: z.boolean().optional(),
 });

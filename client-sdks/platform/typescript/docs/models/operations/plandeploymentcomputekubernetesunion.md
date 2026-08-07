@@ -14,4 +14,3 @@ const value: operations.PlanDeploymentComputeKubernetes = {};
 ```typescript
 const value: any = "<value>";
 ```
-

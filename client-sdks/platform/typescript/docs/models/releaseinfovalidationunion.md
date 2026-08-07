@@ -14,4 +14,3 @@ const value: models.ValidationReleaseInfo = {};
 ```typescript
 const value: any = "<value>";
 ```
-

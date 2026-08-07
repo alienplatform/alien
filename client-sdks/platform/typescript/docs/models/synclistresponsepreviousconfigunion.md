@@ -17,4 +17,3 @@ const value: models.SyncListResponsePreviousConfig = {
 ```typescript
 const value: any = "<value>";
 ```
-

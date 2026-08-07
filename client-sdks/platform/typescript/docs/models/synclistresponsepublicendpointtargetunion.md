@@ -25,4 +25,3 @@ const value: models.SyncListResponsePublicEndpointTargetLoadBalancer = {
 ```typescript
 const value: any = "<value>";
 ```
-

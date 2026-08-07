@@ -14,4 +14,3 @@ const value: models.SyncListResponseControllerPlatformEnum = "kubernetes";
 ```typescript
 const value: any = "<value>";
 ```
-

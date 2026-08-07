@@ -16,4 +16,3 @@ const value: models.NewDeploymentRequestCluster = {
 ```typescript
 const value: any = "<value>";
 ```
-

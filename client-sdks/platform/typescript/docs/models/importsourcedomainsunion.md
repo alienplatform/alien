@@ -14,4 +14,3 @@ const value: models.ImportSourceDomains = {};
 ```typescript
 const value: any = "<value>";
 ```
-

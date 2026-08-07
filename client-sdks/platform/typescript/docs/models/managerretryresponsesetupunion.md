@@ -46,4 +46,3 @@ const value: models.ManagerRetryResponseSetupTerraform = {
   stackSettings: {},
 };
 ```
-

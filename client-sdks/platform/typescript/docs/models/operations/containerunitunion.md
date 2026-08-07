@@ -19,4 +19,3 @@ const value: operations.ContainerUnit = {
 ```typescript
 const value: any = "<value>";
 ```
-

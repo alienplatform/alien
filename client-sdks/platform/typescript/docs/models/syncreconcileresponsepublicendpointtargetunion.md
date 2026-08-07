@@ -26,4 +26,3 @@ const value: models.SyncReconcileResponsePublicEndpointTargetLoadBalancer = {
 ```typescript
 const value: any = "<value>";
 ```
-
