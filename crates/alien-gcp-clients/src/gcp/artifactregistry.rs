@@ -55,6 +55,15 @@ pub trait ArtifactRegistryApi: Send + Sync + Debug {
         repository_id: String,
     ) -> Result<Operation>;
 
+    /// Deletes a package and all of its versions and tags.
+    async fn delete_package(
+        &self,
+        project_id: String,
+        location: String,
+        repository_id: String,
+        package_name: String,
+    ) -> Result<Operation>;
+
     /// Gets a repository.
     async fn get_repository(
         &self,
@@ -185,6 +194,29 @@ impl ArtifactRegistryApi for ArtifactRegistryClient {
                 None,
                 Option::<()>::None,
                 &repository_id,
+            )
+            .await
+    }
+
+    async fn delete_package(
+        &self,
+        project_id: String,
+        location: String,
+        repository_id: String,
+        package_name: String,
+    ) -> Result<Operation> {
+        let encoded_package = urlencoding::encode(&package_name);
+        let path = format!(
+            "projects/{project_id}/locations/{location}/repositories/{repository_id}/packages/{encoded_package}"
+        );
+
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &package_name,
             )
             .await
     }
