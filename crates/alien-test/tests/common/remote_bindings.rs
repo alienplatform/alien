@@ -136,6 +136,7 @@ async fn deployment_handler(
         "platform": state.platform.as_str(),
         "deploymentProtocolVersion": 1,
         "deploymentGroupId": DEPLOYMENT_GROUP_ID,
+        "purpose": "application",
         "releaseChannel": "production",
         "stackSettings": {},
         "retryRequested": false,
