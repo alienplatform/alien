@@ -251,7 +251,7 @@ importers:
         version: 2.1.14
       nice-grpc-common:
         specifier: ^2.0.2
-        version: 2.0.2
+        version: 2.0.4
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -3383,8 +3383,8 @@ packages:
   next-tick@1.1.0:
     resolution: {integrity: sha512-CXdUiJembsNjuToQvxayPZF9Vqht7hewsvy2sOWafLvi2awflj9mOC6bHIg50orX8IJvWKY9wYQ/zB2kogPslQ==}
 
-  nice-grpc-common@2.0.2:
-    resolution: {integrity: sha512-7RNWbls5kAL1QVUOXvBsv1uO0wPQK3lHv+cY1gwkTzirnG1Nop4cBJZubpgziNbaVc/bl9QJcyvsf/NQxa3rjQ==}
+  nice-grpc-common@2.0.4:
+    resolution: {integrity: sha512-gOEXlD6ShXZMZ8k+49wm/bA2j1+3IKbEFV9WYREJcvZV4kM5L1KkILYTX9VYBzZF2OuYCe1wp8c82bQkvR0fHw==}
 
   nice-grpc@2.1.14:
     resolution: {integrity: sha512-GK9pKNxlvnU5FAdaw7i2FFuR9CqBspcE+if2tqnKXBcE0R8525wj4BZvfcwj7FjvqbssqKxRHt2nwedalbJlww==}
@@ -7603,7 +7603,7 @@ snapshots:
 
   next-tick@1.1.0: {}
 
-  nice-grpc-common@2.0.2:
+  nice-grpc-common@2.0.4:
     dependencies:
       ts-error: 1.0.6
 
@@ -7611,7 +7611,7 @@ snapshots:
     dependencies:
       '@grpc/grpc-js': 1.14.4
       abort-controller-x: 0.4.3
-      nice-grpc-common: 2.0.2
+      nice-grpc-common: 2.0.4
 
   node-domexception@1.0.0: {}
 
