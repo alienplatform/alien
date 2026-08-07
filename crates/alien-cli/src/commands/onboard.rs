@@ -4,7 +4,7 @@ use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -17,6 +17,18 @@ pub struct OnboardArgs {
     /// Customer name
     #[arg(value_name = "NAME")]
     pub name: Option<String>,
+
+    /// Stable customer identifier used by your application. Defaults to NAME.
+    #[arg(long)]
+    pub external_id: Option<String>,
+
+    /// Customer infrastructure to include in the setup link
+    #[arg(
+        long = "setup-items",
+        value_delimiter = ',',
+        default_value = "application"
+    )]
+    pub setup_items: Vec<OnboardSetupItem>,
 
     /// Maximum number of deployments for this customer
     #[arg(long, default_value = "100")]
@@ -51,6 +63,13 @@ pub struct OnboardArgs {
     pub subdomain: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum OnboardSetupItem {
+    Application,
+    Models,
+    Keys,
+}
+
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
     let name = if let Some(ref name) = args.name {
         name.clone()
@@ -83,8 +102,18 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
     let workspace = ctx.resolve_platform_workspace_context(!args.json).await?;
     let client = ctx.sdk_client().await?;
-    let release_inputs =
-        fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?;
+    let available_setup =
+        fetch_available_setup(&client, workspace.query.as_deref(), &project_id).await?;
+    validate_setup_items(&args.setup_items, &available_setup.items)?;
+    let includes_application = args.setup_items.contains(&OnboardSetupItem::Application);
+    let release_inputs = if includes_application {
+        fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?
+    } else {
+        ActiveReleaseStackInputs {
+            supported_platforms: available_setup.supported_platforms,
+            inputs_by_platform: Vec::new(),
+        }
+    };
     let selected_platforms = select_onboard_platforms(
         &args.platforms,
         &release_inputs.supported_platforms,
@@ -103,6 +132,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         .as_deref()
         .map(validate_public_subdomain)
         .transpose()?;
+    let external_id = args.external_id.as_deref().unwrap_or(&name).to_string();
 
     if !args.json {
         let platforms_label = selected_platforms
@@ -119,27 +149,45 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     let steps = if args.json {
         None
     } else {
-        let steps = FixedSteps::new(&["Create deployment group", "Generate deployment link"]);
+        let steps = FixedSteps::new(&["Prepare customer environment", "Generate setup link"]);
         steps.activate(0, Some(name.clone()));
         Some(steps)
     };
 
-    // Create deployment group via Platform API
-    let mut create_deployment_group = client.create_deployment_group();
+    // Ensure the Project + external ID Deployment Group and issue its setup
+    // token through one retry-safe API operation. A retry reuses the same
+    // customer environment instead of creating duplicate groups.
+    let mut create_setup_link = client.create_setup_link();
     if let Some(workspace_query) = workspace.query.as_deref() {
         let workspace_param =
-            alien_platform_api::types::CreateDeploymentGroupWorkspace::try_from(workspace_query)
+            alien_platform_api::types::CreateSetupLinkWorkspace::try_from(workspace_query)
                 .map_err(|e| {
                     AlienError::new(ErrorData::ValidationError {
                         field: "workspace".to_string(),
                         message: format!("Invalid workspace: {}", e),
                     })
                 })?;
-        create_deployment_group = create_deployment_group.workspace(&workspace_param);
+        create_setup_link = create_setup_link.workspace(&workspace_param);
     }
 
-    let response = create_deployment_group
-        .body(alien_platform_api::types::CreateDeploymentGroupRequest {
+    let response = create_setup_link
+        .body(alien_platform_api::types::CreateSetupLinkRequest {
+            deployment_setup_config: platform_onboard_deployment_setup_config(
+                setup_environment_variables,
+                &selected_platforms,
+                public_subdomain.as_deref(),
+            )?,
+            description: None,
+            expires_at: None,
+            external_id: external_id.clone().try_into().map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "external-id".to_string(),
+                    message: format!("{}", e),
+                })
+            })?,
+            input_values: Some(stack_input_values),
+            max_deployments: std::num::NonZeroU64::new(args.max_deployments)
+                .unwrap_or(std::num::NonZeroU64::new(100).unwrap()),
             name: name.clone().try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "name".to_string(),
@@ -152,80 +200,44 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     message: format!("{}", e),
                 })
             })?,
-            external_id: None,
-            max_deployments: std::num::NonZeroU64::new(args.max_deployments as u64)
-                .unwrap_or(std::num::NonZeroU64::new(100).unwrap()),
+            setup_items: args
+                .setup_items
+                .iter()
+                .map(|item| alien_platform_api::types::DeploymentSetupItemSelection {
+                    item: match item {
+                        OnboardSetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::AlienStack,
+                        OnboardSetupItem::Models => alien_platform_api::types::DeploymentSetupItemSelectionItem::Models,
+                        OnboardSetupItem::Keys => alien_platform_api::types::DeploymentSetupItemSelectionItem::Keys,
+                    },
+                    release_channel: None,
+                    required: true,
+                })
+                .collect(),
         })
         .send()
         .await
         .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
-            message: "Failed to create deployment group".to_string(),
+            message: "Failed to create customer setup link".to_string(),
             url: None,
         })?;
 
-    let deployment_group_id = response.id.clone();
+    let deployment_group_id = response.deployment_group.id.clone();
 
     if let Some(steps) = &steps {
         steps.complete(0, Some(deployment_group_id.clone()));
         steps.activate(1, Some("Generating deployment link".to_string()));
     }
 
-    // Create token via Platform API — returns deploymentLink
-    let dg_id_param = alien_platform_api::types::CreateDeploymentGroupTokenId::try_from(
-        deployment_group_id.as_str(),
-    )
-    .map_err(|e| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "id".to_string(),
-            message: format!("Invalid deployment group ID: {}", e),
-        })
-    })?;
-
-    let mut create_token = client.create_deployment_group_token().id(&dg_id_param);
-    if let Some(workspace_query) = workspace.query.as_deref() {
-        let token_workspace_param =
-            alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(
-                workspace_query,
-            )
-            .map_err(|e| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "workspace".to_string(),
-                    message: format!("Invalid workspace: {}", e),
-                })
-            })?;
-        create_token = create_token.workspace(&token_workspace_param);
-    }
-
-    let token_response = create_token
-        .body(
-            alien_platform_api::types::CreateDeploymentGroupTokenRequest {
-                description: None,
-                expires_at: None,
-                deployment_setup_config: platform_onboard_deployment_setup_config(
-                    setup_environment_variables,
-                    &selected_platforms,
-                    public_subdomain.as_deref(),
-                )?,
-                input_values: Some(stack_input_values),
-            },
-        )
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to generate deployment link".to_string(),
-            url: None,
-        })?;
-
-    let deployment_link = token_response.deployment_link.clone();
+    let deployment_link = response.deployment_link.clone();
 
     if args.json {
         print_json(&serde_json::json!({
             "deploymentGroupId": deployment_group_id,
             "name": name,
+            "externalId": external_id,
             "deploymentLink": deployment_link,
-            "token": token_response.token,
+            "token": response.token,
             "maxDeployments": args.max_deployments,
             "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
             "subdomain": public_subdomain,
@@ -260,6 +272,87 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
 struct ActiveReleaseStackInputs {
     supported_platforms: Vec<Platform>,
     inputs_by_platform: Vec<(Platform, Vec<StackInputDefinition>)>,
+}
+
+#[cfg(feature = "platform")]
+struct AvailableSetup {
+    items: Vec<OnboardSetupItem>,
+    supported_platforms: Vec<Platform>,
+}
+
+#[cfg(feature = "platform")]
+async fn fetch_available_setup(
+    client: &alien_platform_api::Client,
+    workspace_query: Option<&str>,
+    project_id: &str,
+) -> Result<AvailableSetup> {
+    use alien_platform_api::types::DeploymentLinkSetupResponseSetupItemsItem;
+    use alien_platform_api::SdkResultExt;
+
+    let mut request = client
+        .get_project_deployment_link_setup()
+        .id_or_name(project_id);
+    if let Some(workspace_query) = workspace_query {
+        request = request.workspace(workspace_query);
+    }
+    let setup = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to fetch available customer infrastructure".to_string(),
+            url: None,
+        })?;
+
+    let items = setup
+        .setup_items
+        .iter()
+        .map(|item| match item {
+            DeploymentLinkSetupResponseSetupItemsItem::AlienStack => OnboardSetupItem::Application,
+            DeploymentLinkSetupResponseSetupItemsItem::Models => OnboardSetupItem::Models,
+            DeploymentLinkSetupResponseSetupItemsItem::Keys => OnboardSetupItem::Keys,
+        })
+        .collect();
+    let supported_platforms = setup
+        .supported_platforms
+        .iter()
+        .map(|platform| Platform::from_str(&platform.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|message| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "project.setup".to_string(),
+                message,
+            })
+        })?;
+    Ok(AvailableSetup {
+        items,
+        supported_platforms,
+    })
+}
+
+#[cfg(feature = "platform")]
+fn validate_setup_items(
+    requested: &[OnboardSetupItem],
+    available: &[OnboardSetupItem],
+) -> Result<()> {
+    if requested.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "setup-items".to_string(),
+            message: "Select at least one of application, models, or keys.".to_string(),
+        }));
+    }
+    for item in requested {
+        if !available.contains(item) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "setup-items".to_string(),
+                message: format!(
+                    "{} is not configured for this Project. Configure it in the Dashboard before creating the setup link.",
+                    item.to_possible_value().expect("ValueEnum variants have names").get_name()
+                ),
+            }));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "platform")]
@@ -1045,6 +1138,31 @@ mod tests {
         let selected = select_onboard_platforms(&requested, &supported, true).unwrap();
 
         assert_eq!(selected, vec![Platform::Machines]);
+    }
+
+    #[test]
+    fn setup_items_default_to_application_and_accept_composition() {
+        let default = OnboardArgs::try_parse_from(["onboard", "customer"]).unwrap();
+        assert_eq!(default.setup_items, vec![OnboardSetupItem::Application]);
+
+        let composed =
+            OnboardArgs::try_parse_from(["onboard", "customer", "--setup-items", "models,keys"])
+                .unwrap();
+        assert_eq!(
+            composed.setup_items,
+            vec![OnboardSetupItem::Models, OnboardSetupItem::Keys]
+        );
+    }
+
+    #[test]
+    fn setup_items_must_be_configured_for_the_project() {
+        let err = validate_setup_items(
+            &[OnboardSetupItem::Models, OnboardSetupItem::Keys],
+            &[OnboardSetupItem::Models],
+        )
+        .expect_err("an unavailable setup item must fail before link creation");
+
+        assert!(err.to_string().contains("keys is not configured"));
     }
 
     #[test]

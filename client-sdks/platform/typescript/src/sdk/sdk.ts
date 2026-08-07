@@ -44,6 +44,7 @@ import { ReleaseChannels } from "./releasechannels.js";
 import { Releases } from "./releases.js";
 import { Resolve } from "./resolve.js";
 import { Resources } from "./resources.js";
+import { SetupLinks } from "./setuplinks.js";
 import { SlackIntegration } from "./slackintegration.js";
 import { Sync } from "./sync.js";
 import { User } from "./user.js";
@@ -73,6 +74,11 @@ export class Alien extends ClientSDK {
   private _deploymentGroups?: DeploymentGroups;
   get deploymentGroups(): DeploymentGroups {
     return (this._deploymentGroups ??= new DeploymentGroups(this._options));
+  }
+
+  private _setupLinks?: SetupLinks;
+  get setupLinks(): SetupLinks {
+    return (this._setupLinks ??= new SetupLinks(this._options));
   }
 
   private _packages?: Packages;

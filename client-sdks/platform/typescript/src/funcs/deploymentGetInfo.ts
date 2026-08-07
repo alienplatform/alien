@@ -93,6 +93,7 @@ async function $do(
 
   const query = encodeFormQuery({
     "platform": payload?.platform,
+    "setupItem": payload?.setupItem,
     "workspace": payload?.workspace,
   });
 

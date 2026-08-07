@@ -11,19 +11,21 @@ let value: DeploymentLinkSetupResponse = {
     version: "<value>",
     stack: {},
   },
-  visiblePackageTypes: [
-    "cloudformation",
+  supportedPlatforms: [],
+  setupItems: [
+    "keys",
   ],
-  visibleSetupMethods: [
-    "manual",
-  ],
+  visiblePackageTypes: [],
+  visibleSetupMethods: [],
 };
 ```
 
 ## Fields
 
-| Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `activeRelease`                                                      | [models.ActiveRelease](../models/activerelease.md)                   | :heavy_check_mark:                                                   | N/A                                                                  |
-| `visiblePackageTypes`                                                | [models.VisiblePackageType](../models/visiblepackagetype.md)[]       | :heavy_check_mark:                                                   | N/A                                                                  |
-| `visibleSetupMethods`                                                | [models.DeploymentSetupMethod](../models/deploymentsetupmethod.md)[] | :heavy_check_mark:                                                   | N/A                                                                  |
+| Field                                                                                                              | Type                                                                                                               | Required                                                                                                           | Description                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `activeRelease`                                                                                                    | [models.ActiveRelease](../models/activerelease.md)                                                                 | :heavy_check_mark:                                                                                                 | N/A                                                                                                                |
+| `supportedPlatforms`                                                                                               | [models.DeploymentLinkSetupResponseSupportedPlatform](../models/deploymentlinksetupresponsesupportedplatform.md)[] | :heavy_check_mark:                                                                                                 | N/A                                                                                                                |
+| `setupItems`                                                                                                       | [models.DeploymentLinkSetupResponseSetupItem](../models/deploymentlinksetupresponsesetupitem.md)[]                 | :heavy_check_mark:                                                                                                 | N/A                                                                                                                |
+| `visiblePackageTypes`                                                                                              | [models.VisiblePackageType](../models/visiblepackagetype.md)[]                                                     | :heavy_check_mark:                                                                                                 | N/A                                                                                                                |
+| `visibleSetupMethods`                                                                                              | [models.DeploymentSetupMethod](../models/deploymentsetupmethod.md)[]                                               | :heavy_check_mark:                                                                                                 | N/A                                                                                                                |

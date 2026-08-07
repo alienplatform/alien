@@ -252,7 +252,7 @@ export type BlockerEnum4 = ClosedEnum<typeof BlockerEnum4>;
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi4 = {
+export const GetResourceDeploymentDetailClientApi4 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -260,13 +260,15 @@ export const ClientApi4 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi4 = ClosedEnum<typeof ClientApi4>;
+export type GetResourceDeploymentDetailClientApi4 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi4
+>;
 
 export type Model4 = {
   accessTest: AccessTest4;
   availability: AvailabilityEnum4;
   blockers: Array<BlockerEnum4>;
-  clientApis: Array<ClientApi4>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi4>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -405,7 +407,7 @@ export type BlockerEnum3 = ClosedEnum<typeof BlockerEnum3>;
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi3 = {
+export const GetResourceDeploymentDetailClientApi3 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -413,13 +415,15 @@ export const ClientApi3 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi3 = ClosedEnum<typeof ClientApi3>;
+export type GetResourceDeploymentDetailClientApi3 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi3
+>;
 
 export type Model3 = {
   accessTest: AccessTest3;
   availability: AvailabilityEnum3;
   blockers: Array<BlockerEnum3>;
-  clientApis: Array<ClientApi3>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi3>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -553,7 +557,7 @@ export type BlockerEnum2 = ClosedEnum<typeof BlockerEnum2>;
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi2 = {
+export const GetResourceDeploymentDetailClientApi2 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -561,13 +565,15 @@ export const ClientApi2 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi2 = ClosedEnum<typeof ClientApi2>;
+export type GetResourceDeploymentDetailClientApi2 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi2
+>;
 
 export type Model2 = {
   accessTest: AccessTest2;
   availability: AvailabilityEnum2;
   blockers: Array<BlockerEnum2>;
-  clientApis: Array<ClientApi2>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi2>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -699,7 +705,7 @@ export type BlockerEnum1 = ClosedEnum<typeof BlockerEnum1>;
 /**
  * A public API accepted from an application client.
  */
-export const ClientApi1 = {
+export const GetResourceDeploymentDetailClientApi1 = {
   OpenAiChatCompletions: "open-ai-chat-completions",
   OpenAiResponses: "open-ai-responses",
   AnthropicMessages: "anthropic-messages",
@@ -707,13 +713,15 @@ export const ClientApi1 = {
 /**
  * A public API accepted from an application client.
  */
-export type ClientApi1 = ClosedEnum<typeof ClientApi1>;
+export type GetResourceDeploymentDetailClientApi1 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi1
+>;
 
 export type Model1 = {
   accessTest: AccessTest1;
   availability: AvailabilityEnum1;
   blockers: Array<BlockerEnum1>;
-  clientApis: Array<ClientApi1>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi1>;
   errorCode?: string | null | undefined;
   publicModelId: string;
   testedAt?: Date | null | undefined;
@@ -8364,16 +8372,16 @@ export const BlockerEnum4$inboundSchema: z.ZodEnum<typeof BlockerEnum4> = z
   .enum(BlockerEnum4);
 
 /** @internal */
-export const ClientApi4$inboundSchema: z.ZodEnum<typeof ClientApi4> = z.enum(
-  ClientApi4,
-);
+export const GetResourceDeploymentDetailClientApi4$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi4
+> = z.enum(GetResourceDeploymentDetailClientApi4);
 
 /** @internal */
 export const Model4$inboundSchema: z.ZodType<Model4, unknown> = z.object({
   accessTest: AccessTest4$inboundSchema,
   availability: AvailabilityEnum4$inboundSchema,
   blockers: z.array(BlockerEnum4$inboundSchema),
-  clientApis: z.array(ClientApi4$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi4$inboundSchema),
   errorCode: z.nullable(z.string()).optional(),
   publicModelId: z.string(),
   testedAt: z.nullable(
@@ -8529,16 +8537,16 @@ export const BlockerEnum3$inboundSchema: z.ZodEnum<typeof BlockerEnum3> = z
   .enum(BlockerEnum3);
 
 /** @internal */
-export const ClientApi3$inboundSchema: z.ZodEnum<typeof ClientApi3> = z.enum(
-  ClientApi3,
-);
+export const GetResourceDeploymentDetailClientApi3$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi3
+> = z.enum(GetResourceDeploymentDetailClientApi3);
 
 /** @internal */
 export const Model3$inboundSchema: z.ZodType<Model3, unknown> = z.object({
   accessTest: AccessTest3$inboundSchema,
   availability: AvailabilityEnum3$inboundSchema,
   blockers: z.array(BlockerEnum3$inboundSchema),
-  clientApis: z.array(ClientApi3$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi3$inboundSchema),
   errorCode: z.nullable(z.string()).optional(),
   publicModelId: z.string(),
   testedAt: z.nullable(
@@ -8681,16 +8689,16 @@ export const BlockerEnum2$inboundSchema: z.ZodEnum<typeof BlockerEnum2> = z
   .enum(BlockerEnum2);
 
 /** @internal */
-export const ClientApi2$inboundSchema: z.ZodEnum<typeof ClientApi2> = z.enum(
-  ClientApi2,
-);
+export const GetResourceDeploymentDetailClientApi2$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi2
+> = z.enum(GetResourceDeploymentDetailClientApi2);
 
 /** @internal */
 export const Model2$inboundSchema: z.ZodType<Model2, unknown> = z.object({
   accessTest: AccessTest2$inboundSchema,
   availability: AvailabilityEnum2$inboundSchema,
   blockers: z.array(BlockerEnum2$inboundSchema),
-  clientApis: z.array(ClientApi2$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi2$inboundSchema),
   errorCode: z.nullable(z.string()).optional(),
   publicModelId: z.string(),
   testedAt: z.nullable(
@@ -8829,16 +8837,16 @@ export const BlockerEnum1$inboundSchema: z.ZodEnum<typeof BlockerEnum1> = z
   .enum(BlockerEnum1);
 
 /** @internal */
-export const ClientApi1$inboundSchema: z.ZodEnum<typeof ClientApi1> = z.enum(
-  ClientApi1,
-);
+export const GetResourceDeploymentDetailClientApi1$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi1
+> = z.enum(GetResourceDeploymentDetailClientApi1);
 
 /** @internal */
 export const Model1$inboundSchema: z.ZodType<Model1, unknown> = z.object({
   accessTest: AccessTest1$inboundSchema,
   availability: AvailabilityEnum1$inboundSchema,
   blockers: z.array(BlockerEnum1$inboundSchema),
-  clientApis: z.array(ClientApi1$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi1$inboundSchema),
   errorCode: z.nullable(z.string()).optional(),
   publicModelId: z.string(),
   testedAt: z.nullable(

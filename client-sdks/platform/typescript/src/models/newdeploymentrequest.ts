@@ -1352,6 +1352,21 @@ export const InitialDesiredRelease = {
 export type InitialDesiredRelease = ClosedEnum<typeof InitialDesiredRelease>;
 
 /**
+ * Customer setup item selected from this deployment-group token.
+ */
+export const NewDeploymentRequestSetupItem = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+/**
+ * Customer setup item selected from this deployment-group token.
+ */
+export type NewDeploymentRequestSetupItem = ClosedEnum<
+  typeof NewDeploymentRequestSetupItem
+>;
+
+/**
  * Request schema for creating a new deployment
  */
 export type NewDeploymentRequest = {
@@ -1426,6 +1441,10 @@ export type NewDeploymentRequest = {
    * Release channel followed while this deployment is not pinned.
    */
   releaseChannel?: string | undefined;
+  /**
+   * Customer setup item selected from this deployment-group token.
+   */
+  setupItem?: NewDeploymentRequestSetupItem | undefined;
 };
 
 /** @internal */
@@ -4156,6 +4175,11 @@ export const InitialDesiredRelease$outboundSchema: z.ZodEnum<
 > = z.enum(InitialDesiredRelease);
 
 /** @internal */
+export const NewDeploymentRequestSetupItem$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestSetupItem
+> = z.enum(NewDeploymentRequestSetupItem);
+
+/** @internal */
 export type NewDeploymentRequest$Outbound = {
   name: string;
   platform: string;
@@ -4186,6 +4210,7 @@ export type NewDeploymentRequest$Outbound = {
   operatorPermission?: string | undefined;
   initialDesiredRelease: string;
   releaseChannel: string;
+  setupItem?: string | undefined;
 };
 
 /** @internal */
@@ -4224,6 +4249,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   operatorPermission: z.string().optional(),
   initialDesiredRelease: InitialDesiredRelease$outboundSchema.default("active"),
   releaseChannel: z.string().default("production"),
+  setupItem: NewDeploymentRequestSetupItem$outboundSchema.optional(),
 });
 
 export function newDeploymentRequestToJSON(

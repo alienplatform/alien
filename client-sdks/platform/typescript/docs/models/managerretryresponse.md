@@ -24,6 +24,17 @@ const value: models.ManagerRetryResponseSetup = {
         "google-oauth",
       ],
     },
+    items: [
+      {
+        item: "alien-stack",
+        source: {
+          type: "application-release",
+          releaseChannel: "<value>",
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        required: false,
+      },
+    ],
     environmentVariables: [
       {
         name: "<value>",

@@ -1228,6 +1228,7 @@ async fn create_deployment_task(
     };
 
     let request = NewDeploymentRequest {
+        setup_item: None,
         name: alien_platform_api::types::NewDeploymentRequestName::try_from(name.to_string())
             .into_alien_error()
             .context(ErrorData::ValidationError {

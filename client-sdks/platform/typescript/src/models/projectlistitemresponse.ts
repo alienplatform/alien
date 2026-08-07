@@ -274,6 +274,55 @@ export type ProjectListItemResponseDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type ProjectListItemResponseKeys = {
+  enabled: boolean;
+  applicationEncryption: boolean;
+};
+
+export const ProjectListItemResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+export type ProjectListItemResponseAllowedProvider = ClosedEnum<
+  typeof ProjectListItemResponseAllowedProvider
+>;
+
+export const ProjectListItemResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type ProjectListItemResponseClientApi = ClosedEnum<
+  typeof ProjectListItemResponseClientApi
+>;
+
+export type ProjectListItemResponseRequirement = {
+  publicModelId: string;
+  clientApis: Array<ProjectListItemResponseClientApi>;
+  required: boolean;
+};
+
+export type ProjectListItemResponseModels = {
+  enabled: boolean;
+  allowedProviders: Array<ProjectListItemResponseAllowedProvider>;
+  requirements: Array<ProjectListItemResponseRequirement>;
+};
+
+export type ProjectListItemResponseConnections = {
+  keys?: ProjectListItemResponseKeys | undefined;
+  models?: ProjectListItemResponseModels | undefined;
+};
+
+/**
+ * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+ */
+export type ProjectListItemResponseCustomerConnections = {
+  schemaVersion: number;
+  connections: ProjectListItemResponseConnections;
+};
+
 export type ProjectListItemResponse = {
   /**
    * Unique identifier for the project.
@@ -310,6 +359,13 @@ export type ProjectListItemResponse = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: ProjectListItemResponseDefaultManagers | null | undefined;
+  /**
+   * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+   */
+  customerConnections?:
+    | ProjectListItemResponseCustomerConnections
+    | null
+    | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -540,6 +596,123 @@ export function projectListItemResponseDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseKeys$inboundSchema: z.ZodType<
+  ProjectListItemResponseKeys,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
+});
+
+export function projectListItemResponseKeysFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseKeys, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseKeys$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseKeys' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseAllowedProvider
+> = z.enum(ProjectListItemResponseAllowedProvider);
+
+/** @internal */
+export const ProjectListItemResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseClientApi
+> = z.enum(ProjectListItemResponseClientApi);
+
+/** @internal */
+export const ProjectListItemResponseRequirement$inboundSchema: z.ZodType<
+  ProjectListItemResponseRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(ProjectListItemResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function projectListItemResponseRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseModels$inboundSchema: z.ZodType<
+  ProjectListItemResponseModels,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  allowedProviders: z.array(
+    ProjectListItemResponseAllowedProvider$inboundSchema,
+  ),
+  requirements: z.array(
+    z.lazy(() => ProjectListItemResponseRequirement$inboundSchema),
+  ),
+});
+
+export function projectListItemResponseModelsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseModels, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseModels$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseModels' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseConnections$inboundSchema: z.ZodType<
+  ProjectListItemResponseConnections,
+  unknown
+> = z.object({
+  keys: z.lazy(() => ProjectListItemResponseKeys$inboundSchema).optional(),
+  models: z.lazy(() => ProjectListItemResponseModels$inboundSchema).optional(),
+});
+
+export function projectListItemResponseConnectionsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseConnections, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseConnections$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseConnections' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseCustomerConnections$inboundSchema:
+  z.ZodType<ProjectListItemResponseCustomerConnections, unknown> = z.object({
+    schemaVersion: z.number(),
+    connections: z.lazy(() => ProjectListItemResponseConnections$inboundSchema),
+  });
+
+export function projectListItemResponseCustomerConnectionsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ProjectListItemResponseCustomerConnections,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseCustomerConnections$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ProjectListItemResponseCustomerConnections' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponse$inboundSchema: z.ZodType<
   ProjectListItemResponse,
   unknown
@@ -561,6 +734,9 @@ export const ProjectListItemResponse$inboundSchema: z.ZodType<
   domainId: z.nullable(z.string()).optional(),
   defaultManagers: z.nullable(
     z.lazy(() => ProjectListItemResponseDefaultManagers$inboundSchema),
+  ).optional(),
+  customerConnections: z.nullable(
+    z.lazy(() => ProjectListItemResponseCustomerConnections$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),

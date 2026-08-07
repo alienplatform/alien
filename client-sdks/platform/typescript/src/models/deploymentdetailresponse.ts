@@ -19,6 +19,10 @@ import {
   DeploymentProjectInfo$inboundSchema,
 } from "./deploymentprojectinfo.js";
 import {
+  DeploymentPurpose,
+  DeploymentPurpose$inboundSchema,
+} from "./deploymentpurpose.js";
+import {
   DeploymentReleaseInfo,
   DeploymentReleaseInfo$inboundSchema,
 } from "./deploymentreleaseinfo.js";
@@ -5180,6 +5184,10 @@ export type DeploymentDetailResponse = {
    * ID of deployment group this deployment belongs to
    */
   deploymentGroupId: string;
+  /**
+   * Operational purpose of this deployment within its customer environment.
+   */
+  purpose: DeploymentPurpose;
   /**
    * Cloud environment information
    */
@@ -13233,6 +13241,7 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   region: z.nullable(z.string()).optional(),
   deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
+  purpose: DeploymentPurpose$inboundSchema,
   environmentInfo: z.nullable(
     z.union([
       z.lazy(() => DeploymentDetailResponseEnvironmentInfoGcp$inboundSchema),

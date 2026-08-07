@@ -24,6 +24,86 @@ export type CreateManagerResponseSetupStatus = ClosedEnum<
   typeof CreateManagerResponseSetupStatus
 >;
 
+export const CreateManagerResponseItemEnum = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+export type CreateManagerResponseItemEnum = ClosedEnum<
+  typeof CreateManagerResponseItemEnum
+>;
+
+export const CreateManagerResponseDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+} as const;
+export type CreateManagerResponseDefinitionId = ClosedEnum<
+  typeof CreateManagerResponseDefinitionId
+>;
+
+export type CreateManagerResponseSourceBuiltIn = {
+  type: "built-in";
+  definitionId: CreateManagerResponseDefinitionId;
+  version: string;
+  /**
+   * Unique identifier for the release.
+   */
+  sourceReleaseId: string;
+};
+
+export type CreateManagerResponseSourceApplicationRelease = {
+  type: "application-release";
+  releaseChannel: string;
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type CreateManagerResponseSourceUnion =
+  | CreateManagerResponseSourceApplicationRelease
+  | CreateManagerResponseSourceBuiltIn;
+
+export const CreateManagerResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+export type CreateManagerResponseAllowedProvider = ClosedEnum<
+  typeof CreateManagerResponseAllowedProvider
+>;
+
+export const CreateManagerResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type CreateManagerResponseClientApi = ClosedEnum<
+  typeof CreateManagerResponseClientApi
+>;
+
+export type CreateManagerResponseModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<CreateManagerResponseClientApi>;
+  required: boolean;
+};
+
+export type CreateManagerResponseConfiguration = {
+  allowedProviders?: Array<CreateManagerResponseAllowedProvider> | undefined;
+  modelRequirements?: Array<CreateManagerResponseModelRequirement> | undefined;
+};
+
+export type CreateManagerResponseItem = {
+  item: CreateManagerResponseItemEnum;
+  source:
+    | CreateManagerResponseSourceApplicationRelease
+    | CreateManagerResponseSourceBuiltIn;
+  required: boolean;
+  configuration?: CreateManagerResponseConfiguration | undefined;
+};
+
 export const CreateManagerResponseEnvironmentVariableType = {
   Plain: "plain",
   Secret: "secret",
@@ -42,6 +122,10 @@ export type CreateManagerResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Immutable setup items and exact sources captured when this setup link is created.
+   */
+  items?: Array<CreateManagerResponseItem> | undefined;
   /**
    * Operator-pinned deployment subdomain for this setup token.
    */
@@ -3730,6 +3814,161 @@ export const CreateManagerResponseSetupStatus$inboundSchema: z.ZodEnum<
 > = z.enum(CreateManagerResponseSetupStatus);
 
 /** @internal */
+export const CreateManagerResponseItemEnum$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseItemEnum
+> = z.enum(CreateManagerResponseItemEnum);
+
+/** @internal */
+export const CreateManagerResponseDefinitionId$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseDefinitionId
+> = z.enum(CreateManagerResponseDefinitionId);
+
+/** @internal */
+export const CreateManagerResponseSourceBuiltIn$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceBuiltIn,
+  unknown
+> = z.object({
+  type: z.literal("built-in"),
+  definitionId: CreateManagerResponseDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
+});
+
+export function createManagerResponseSourceBuiltInFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSourceBuiltIn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSourceBuiltIn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSourceBuiltIn' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSourceApplicationRelease$inboundSchema:
+  z.ZodType<CreateManagerResponseSourceApplicationRelease, unknown> = z.object({
+    type: z.literal("application-release"),
+    releaseChannel: z.string(),
+    releaseId: z.string(),
+    resourceId: z.string().optional(),
+  });
+
+export function createManagerResponseSourceApplicationReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseSourceApplicationRelease,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSourceApplicationRelease$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseSourceApplicationRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSourceUnion$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceUnion,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseSourceApplicationRelease$inboundSchema),
+  z.lazy(() => CreateManagerResponseSourceBuiltIn$inboundSchema),
+]);
+
+export function createManagerResponseSourceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSourceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSourceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseAllowedProvider
+> = z.enum(CreateManagerResponseAllowedProvider);
+
+/** @internal */
+export const CreateManagerResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseClientApi
+> = z.enum(CreateManagerResponseClientApi);
+
+/** @internal */
+export const CreateManagerResponseModelRequirement$inboundSchema: z.ZodType<
+  CreateManagerResponseModelRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(CreateManagerResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function createManagerResponseModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseModelRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseModelRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseConfiguration$inboundSchema: z.ZodType<
+  CreateManagerResponseConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(CreateManagerResponseAllowedProvider$inboundSchema)
+    .optional(),
+  modelRequirements: z.array(
+    z.lazy(() => CreateManagerResponseModelRequirement$inboundSchema),
+  ).optional(),
+});
+
+export function createManagerResponseConfigurationFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseConfiguration, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseConfiguration' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseItem$inboundSchema: z.ZodType<
+  CreateManagerResponseItem,
+  unknown
+> = z.object({
+  item: CreateManagerResponseItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() => CreateManagerResponseSourceApplicationRelease$inboundSchema),
+    z.lazy(() => CreateManagerResponseSourceBuiltIn$inboundSchema),
+  ]),
+  required: z.boolean(),
+  configuration: z.lazy(() => CreateManagerResponseConfiguration$inboundSchema)
+    .optional(),
+});
+
+export function createManagerResponseItemFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseItem' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseEnvironmentVariableType$inboundSchema:
   z.ZodEnum<typeof CreateManagerResponseEnvironmentVariableType> = z.enum(
     CreateManagerResponseEnvironmentVariableType,
@@ -3769,6 +4008,8 @@ export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
   metadata: z.record(z.string(), z.nullable(z.any())),
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
+    .optional(),
+  items: z.array(z.lazy(() => CreateManagerResponseItem$inboundSchema))
     .optional(),
   publicSubdomain: z.string().optional(),
   environmentVariables: z.array(
