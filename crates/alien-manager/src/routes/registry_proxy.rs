@@ -480,30 +480,40 @@ fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>)
 
 /// `GET /v2/` — OCI Distribution spec requires this endpoint to exist.
 async fn version_check(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if basic_authorization(&headers).is_some() {
-        let Some(broker) = &state.customer_registry_broker else {
-            return oci_error(
-                StatusCode::UNAUTHORIZED,
-                "UNAUTHORIZED",
-                "Customer registry credentials are not enabled",
-            );
-        };
-        return match broker
-            .authenticate_probe(
-                headers
-                    .get("authorization")
-                    .and_then(|value| value.to_str().ok()),
-            )
-            .await
-        {
-            Ok(()) => (StatusCode::OK, "{}").into_response(),
-            Err(error) => customer_registry_error(error),
-        };
+    let customer_error = if basic_authorization(&headers).is_some() {
+        if let Some(broker) = &state.customer_registry_broker {
+            match broker
+                .authenticate_probe(
+                    headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok()),
+                )
+                .await
+            {
+                Ok(()) => return (StatusCode::OK, "{}").into_response(),
+                Err(error) => Some(error),
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // Docker uses Basic auth for both ordinary Deployment-token pulls and the
+    // reserved customer registry. The version probe has no repository path to
+    // distinguish them, so accept either credential system here. Repository
+    // requests remain authorized by their exact namespace-specific path.
+    if super::auth::require_auth(&state, &headers).await.is_ok() {
+        return (StatusCode::OK, "{}").into_response();
     }
-    if let Err(e) = super::auth::require_auth(&state, &headers).await {
-        return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string());
+    if let Some(error) = customer_error {
+        return customer_registry_error(error);
     }
-    (StatusCode::OK, "{}").into_response()
+    oci_error(
+        StatusCode::UNAUTHORIZED,
+        "UNAUTHORIZED",
+        "Registry authentication failed",
+    )
 }
 
 // ---------------------------------------------------------------------------
