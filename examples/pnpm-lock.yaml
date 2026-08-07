@@ -471,7 +471,7 @@ packages:
     resolution: {directory: ../packages/ai-gateway, type: directory}
     engines: {bun: '>=1.0.23', node: '>=18'}
     peerDependencies:
-      openai: ^4
+      openai: ^4 || ^7.0.0
     peerDependenciesMeta:
       openai:
         optional: true
