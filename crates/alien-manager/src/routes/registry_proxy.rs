@@ -566,20 +566,25 @@ async fn proxy_push(
         None
     };
 
+    let unsigned_repo_name = extract_repo_name(&path);
     let repo_name = if let Some(ref session) = signed_session {
         // Signed-URL bypass: the path's repo is implied by the signature,
         // not by Bearer auth. Trust the signature's repo.
         session.repository.clone()
+    } else if is_customer_repository(&unsigned_repo_name) {
+        // The private customer broker owns authentication for its reserved
+        // namespace. An OCI Basic credential is intentionally not an Alien
+        // API token and must never be sent through the internal token store.
+        unsigned_repo_name
     } else {
         let subject = match super::auth::require_auth(&state, &headers).await {
             Ok(s) => s,
             Err(e) => return oci_error(StatusCode::UNAUTHORIZED, "UNAUTHORIZED", e.to_string()),
         };
-        let repo_name = extract_repo_name(&path);
-        if let Err(e) = require_push_auth(&state, &subject, &repo_name) {
+        if let Err(e) = require_push_auth(&state, &subject, &unsigned_repo_name) {
             return e;
         }
-        repo_name
+        unsigned_repo_name
     };
 
     if is_customer_repository(&repo_name) {
@@ -643,10 +648,11 @@ async fn proxy_push(
         let qs = query_string(&upstream_query);
         let oci_path = format!("{}{}", oci_path_str, qs);
         if signed_session.is_some() {
-            if !customer_continuation_matches_target(&oci_path_str, &target) {
-                return customer_registry_error(CustomerRegistryAccessError::Denied);
-            }
             // Axum strips the nested `/v2/` route prefix before this handler.
+            // The signed path may be provider-internal rather than the logical
+            // repository (GAR uses `pkg` for an upload session). Its HMAC and
+            // embedded customer identity bind it to this exact target, while
+            // raw forwarding remains pinned to the configured endpoint.
             let upstream_path = format!("/v2/{oci_path}");
             return forward_customer_to_upstream_raw(
                 &state,
@@ -685,10 +691,6 @@ async fn proxy_push(
         Some(&repo_name),
     )
     .await
-}
-
-fn customer_continuation_matches_target(path: &str, target: &CustomerRegistryTarget) -> bool {
-    extract_repo_name(path) == target.upstream_repository
 }
 
 /// Restore the significant trailing slash on the OCI upload-init endpoint.
@@ -2388,23 +2390,6 @@ mod tests {
             ),
             "https://attacker.example"
         );
-    }
-
-    #[test]
-    fn customer_upload_continuations_accept_only_the_pinned_upstream_repository() {
-        let target = customer_target();
-        assert!(customer_continuation_matches_target(
-            "upstream-api/blobs/uploads/session-1",
-            &target,
-        ));
-        assert!(!customer_continuation_matches_target(
-            "customer/rgw_route/api/blobs/uploads/session-1",
-            &target,
-        ));
-        assert!(!customer_continuation_matches_target(
-            "other-upstream/blobs/uploads/session-1",
-            &target,
-        ));
     }
 
     #[tokio::test]

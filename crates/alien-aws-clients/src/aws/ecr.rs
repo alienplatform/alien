@@ -44,6 +44,10 @@ pub trait EcrApi: Send + Sync + Debug {
     ) -> Result<GetAuthorizationTokenResponse>;
     async fn batch_get_image(&self, request: BatchGetImageRequest)
         -> Result<BatchGetImageResponse>;
+    async fn batch_delete_image(
+        &self,
+        request: BatchDeleteImageRequest,
+    ) -> Result<BatchDeleteImageResponse>;
     async fn get_download_url_for_layer(
         &self,
         request: GetDownloadUrlForLayerRequest,
@@ -431,6 +435,23 @@ impl EcrApi for EcrClient {
             .await
     }
 
+    async fn batch_delete_image(
+        &self,
+        request: BatchDeleteImageRequest,
+    ) -> Result<BatchDeleteImageResponse> {
+        let body = serde_json::to_string(&request).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize BatchDeleteImageRequest for repository '{}'",
+                    request.repository_name
+                ),
+            },
+        )?;
+
+        self.post_json("BatchDeleteImage", body, &request.repository_name)
+            .await
+    }
+
     async fn get_download_url_for_layer(
         &self,
         request: GetDownloadUrlForLayerRequest,
@@ -761,6 +782,28 @@ pub struct BatchGetImageRequest {
 pub struct BatchGetImageResponse {
     #[serde(default)]
     pub images: Vec<EcrImage>,
+    #[serde(default)]
+    pub failures: Vec<ImageFailure>,
+}
+
+// -------------------------------------------------------------------------
+// BatchDeleteImage
+// -------------------------------------------------------------------------
+
+#[derive(Serialize, Debug, Clone, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteImageRequest {
+    pub repository_name: String,
+    pub image_ids: Vec<ImageIdentifier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_id: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchDeleteImageResponse {
+    #[serde(default)]
+    pub image_ids: Vec<ImageIdentifier>,
     #[serde(default)]
     pub failures: Vec<ImageFailure>,
 }

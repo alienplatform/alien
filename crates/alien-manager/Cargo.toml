@@ -121,6 +121,8 @@ dockdash = { workspace = true, features = ["test-utils"] }
 sec = { workspace = true }
 oci-client = { workspace = true }
 sha2 = { workspace = true }
+tar = { workspace = true }
+olpc-cjson = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
 bollard = { workspace = true }
