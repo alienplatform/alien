@@ -646,10 +646,12 @@ async fn proxy_push(
             if !customer_continuation_matches_target(&oci_path_str, &target) {
                 return customer_registry_error(CustomerRegistryAccessError::Denied);
             }
+            // Axum strips the nested `/v2/` route prefix before this handler.
+            let upstream_path = format!("/v2/{oci_path}");
             return forward_customer_to_upstream_raw(
                 &state,
                 &method,
-                &oci_path,
+                &upstream_path,
                 &headers,
                 Some(body),
                 &target,
