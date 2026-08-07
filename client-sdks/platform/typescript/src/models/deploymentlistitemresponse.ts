@@ -15,6 +15,10 @@ import {
   DeploymentProjectInfo$inboundSchema,
 } from "./deploymentprojectinfo.js";
 import {
+  DeploymentPurpose,
+  DeploymentPurpose$inboundSchema,
+} from "./deploymentpurpose.js";
+import {
   DeploymentReleaseInfo,
   DeploymentReleaseInfo$inboundSchema,
 } from "./deploymentreleaseinfo.js";
@@ -359,6 +363,10 @@ export type DeploymentListItemResponse = {
    */
   deploymentGroupId: string;
   /**
+   * Operational purpose of this deployment within its customer environment.
+   */
+  purpose: DeploymentPurpose;
+  /**
    * Cloud environment information
    */
   environmentInfo?:
@@ -685,6 +693,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   platform: DeploymentListItemResponsePlatform$inboundSchema,
   deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
+  purpose: DeploymentPurpose$inboundSchema,
   environmentInfo: z.nullable(
     z.union([
       z.lazy(() => DeploymentListItemResponseEnvironmentInfoGcp$inboundSchema),

@@ -13,6 +13,7 @@ let value: ReleaseDeploymentItem = {
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     name: "prod-us-east-1",
+    externalId: "ext_example_01",
   },
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

@@ -215,6 +215,10 @@ export type ReleaseDeploymentItemDeploymentGroup = {
    * Deployment group name.
    */
   name: string;
+  /**
+   * Case-sensitive, URL- and header-safe identifier from the integrating application.
+   */
+  externalId: string | null;
 };
 
 /**
@@ -565,6 +569,7 @@ export const ReleaseDeploymentItemDeploymentGroup$inboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   name: z.string(),
+  externalId: z.nullable(z.string()),
 });
 
 export function releaseDeploymentItemDeploymentGroupFromJSON(

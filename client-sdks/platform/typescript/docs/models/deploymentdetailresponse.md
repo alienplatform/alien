@@ -27,24 +27,13 @@ let value: DeploymentDetailResponse = {
   release: {
     id: "rel_WbhQgksrawSKIpEN0NAssHX9",
     version: "<value>",
-    gitMetadata: {
-      commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
-      commitMessage:
-        "add method to measure Interaction to Next Paint (INP) (#36490)",
-      commitRef: "main",
-      commitDate: new Date("2026-03-16T12:00:00Z"),
-      dirty: true,
-      remoteUrl: "https://github.com/alienplatform/alien",
-      commitAuthorName: "John Doe",
-      commitAuthorEmail: "john@example.com",
-      commitAuthorLogin: "johndoe",
-      commitAuthorAvatarUrl: "https://github.com/johndoe.png",
-    },
-    createdAt: new Date("2024-04-17T05:47:54.417Z"),
+    gitMetadata: null,
+    createdAt: new Date("2024-11-28T10:04:33.372Z"),
   },
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     name: "prod-us-east-1",
+    externalId: "ext_example_01",
   },
   project: {
     id: "prj_mcytp6z3j91f7tn5ryqsfwtr",
