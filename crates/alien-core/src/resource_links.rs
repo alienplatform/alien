@@ -236,6 +236,7 @@ mod tests {
         ("network", false),
         ("service-account", false),
         ("artifact-registry", false),
+        ("key", false),
         ("service_activation", false),
         ("remote-stack-management", false),
         ("resource-access", false),

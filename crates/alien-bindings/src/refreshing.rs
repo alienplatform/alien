@@ -33,8 +33,8 @@ use crate::presigned::PresignedRequest;
 #[cfg(feature = "platform-sdk")]
 use crate::remote::RemoteStorage;
 use crate::traits::{
-    Binding, BindingsProviderApi, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions, Queue,
-    QueueMessage, ScanResult, Storage, Vault,
+    Binding, BindingsProviderApi, Key, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions,
+    Queue, QueueMessage, ScanResult, Storage, Vault,
 };
 
 const OBJECT_STORE_NAME: &str = "Alien binding";
@@ -47,6 +47,22 @@ const OBJECT_STORE_NAME: &str = "Alien binding";
 #[async_trait]
 pub(super) trait StorageProviderApi: Send + Sync + fmt::Debug {
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>>;
+}
+
+/// The smallest provider surface needed by a refreshable Key handle.
+#[async_trait]
+pub(super) trait KeyProviderApi: Send + Sync + fmt::Debug {
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>>;
+}
+
+#[async_trait]
+impl<T> KeyProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        BindingsProviderApi::load_key(self, binding_name).await
+    }
 }
 
 #[async_trait]
@@ -437,6 +453,51 @@ impl Queue for RefreshingQueue {
 
     async fn purge(&self, queue: &str) -> Result<()> {
         self.resolver.queue().await?.purge(queue).await
+    }
+}
+
+/// Key handle that resolves a fresh-enough provider for every operation.
+#[derive(Debug)]
+pub(super) struct RefreshingKey {
+    provider: Arc<dyn KeyProviderApi>,
+    binding_name: String,
+}
+
+impl RefreshingKey {
+    pub(super) fn new(provider: Arc<dyn KeyProviderApi>, binding_name: String) -> Self {
+        Self {
+            provider,
+            binding_name,
+        }
+    }
+}
+
+impl Binding for RefreshingKey {}
+
+#[async_trait]
+impl Key for RefreshingKey {
+    async fn encrypt(
+        &self,
+        plaintext: &[u8],
+        context: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<Vec<u8>> {
+        self.provider
+            .load_key(&self.binding_name)
+            .await?
+            .encrypt(plaintext, context)
+            .await
+    }
+
+    async fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        context: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<Vec<u8>> {
+        self.provider
+            .load_key(&self.binding_name)
+            .await?
+            .decrypt(ciphertext, context)
+            .await
     }
 }
 

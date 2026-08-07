@@ -209,16 +209,14 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             .and_then(|state| state.outputs.as_ref())
             .and_then(|outputs| outputs.downcast_ref::<alien_core::RemoteStackManagementOutputs>())
             .and_then(|outputs| outputs.legacy_remote_bindings_access.as_ref());
-        let outputs = first_class_outputs
-            .or(legacy_outputs)
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "Remote Bindings identity state is required for deployment {}; rerun setup",
-                        deployment.id
-                    ),
-                })
-            })?;
+        let outputs = first_class_outputs.or(legacy_outputs).ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!(
+                    "Remote Bindings identity state is required for deployment {}; rerun setup",
+                    deployment.id
+                ),
+            })
+        })?;
 
         let provider = self.provider_for_target(deployment.platform);
         let base = impersonate_management_sa(&**provider, deployment.platform).await?;

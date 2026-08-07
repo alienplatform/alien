@@ -13,6 +13,26 @@ pub fn binding_env_var(binding_name: &str) -> String {
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Plaintext or context is outside the portable Key binding limits.
+    #[error(
+        code = "KEY_INPUT_INVALID",
+        message = "Key input is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    KeyInputInvalid { reason: String },
+
+    /// Decrypted provider data is not a valid Alien Key frame.
+    #[error(
+        code = "KEY_CIPHERTEXT_INVALID",
+        message = "Key ciphertext is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    KeyCiphertextInvalid { reason: String },
+
     /// No binding configuration was found for the requested binding name (the
     /// `ALIEN_<NAME>_BINDING` environment variable was not set).
     #[error(

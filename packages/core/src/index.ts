@@ -1,6 +1,5 @@
 // ResourceBuilder is internal glue shared by the builders, not an extension
 // point. Exporting it would commit us to its shape at the next publish.
-
 export * from "./ai.js"
 export * from "./artifact-registry.js"
 export * from "./build.js"
@@ -12,6 +11,7 @@ export * from "./email.js"
 export * from "./error.js"
 export * from "./get-resource-outputs.js"
 export * from "./input.js"
+export * from "./key.js"
 export * from "./kv.js"
 export * from "./postgres.js"
 export * from "./queue.js"

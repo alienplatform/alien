@@ -1,11 +1,11 @@
-# Setup
+# CreateDomainSetup
 
 ## Example Usage
 
 ```typescript
-import { Setup } from "@alienplatform/platform-api/models/operations";
+import { CreateDomainSetup } from "@alienplatform/platform-api/models/operations";
 
-let value: Setup = {
+let value: CreateDomainSetup = {
   deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
 };
 ```

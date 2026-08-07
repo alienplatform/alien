@@ -15,8 +15,8 @@ use alien_core::{
     import::{
         data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
         AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
-        GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
-        StackImportResponse,
+        GcpKeyImportData, GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource,
+        StackImportRequest, StackImportResponse,
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
@@ -28,7 +28,7 @@ use alien_core::{
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
-use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
+use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -231,6 +231,16 @@ impl DistributionArtifactCleanup {
                     workdir = %workdir.path().display(),
                     "destroying Terraform setup artifacts"
                 );
+                let detach_script = workdir.path().join("detach-retained-keys.sh");
+                if detach_script.exists() {
+                    let mut detach = Command::new("sh");
+                    detach
+                        .current_dir(workdir.path())
+                        .arg("./detach-retained-keys.sh")
+                        .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
+                    apply_env(&mut detach, &env);
+                    run_command(detach, "detach retained Terraform keys").await?;
+                }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
                     cmd.current_dir(workdir.path()).args([
@@ -2425,6 +2435,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
             anyhow::anyhow!("Deployment failed to reach running within {timeout:?}: {error}")
         })?;
     if ctx.model == DeploymentModel::Push
+        && ctx.app != TestApp::ByoEncryptionKey
         && matches!(
             ctx.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
@@ -2908,13 +2919,26 @@ async fn wait_for_gcp_management_permissions(
             }
         };
 
-        let resource_manager = alien_gcp_clients::ResourceManagerClient::new(
-            http.clone(),
-            impersonated_config.clone(),
-        );
-        let result = resource_manager
+        // Probe the narrowest concrete permission this package requested.
+        // A Key-only management identity intentionally has no project-wide
+        // Resource Manager read access.
+        let result = if let Some(key) = optional_terraform_import_data::<GcpKeyImportData>(
+            &resources,
+            "key",
+        )? {
+            alien_gcp_clients::CloudKmsClient::new(http.clone(), impersonated_config.clone())
+                .get_crypto_key(&key.crypto_key_name)
+                .await
+                .map(|_| ())
+        } else {
+            alien_gcp_clients::ResourceManagerClient::new(
+                http.clone(),
+                impersonated_config.clone(),
+            )
             .get_project_metadata(target.project_id.clone())
-            .await;
+            .await
+            .map(|_| ())
+        };
 
         match result {
             Ok(_) => {
@@ -3334,6 +3358,8 @@ fn terraform_tfvars(
                 &mut vars,
                 azure_target,
                 prepared.config.azure_mgmt.as_ref(),
+                &std::env::var("AZURE_TARGET_RESOURCE_GROUP")
+                    .context("AZURE_TARGET_RESOURCE_GROUP is required")?,
                 target,
             );
         }
@@ -3419,6 +3445,7 @@ fn insert_azure_tfvars(
     vars: &mut serde_json::Map<String, Value>,
     azure_target: &AzureConfig,
     azure_mgmt: Option<&AzureConfig>,
+    resource_group: &str,
     target: alien_terraform::TerraformTarget,
 ) {
     vars.insert(
@@ -3437,10 +3464,7 @@ fn insert_azure_tfvars(
     );
     vars.insert(
         "azure_resource_group_name".to_string(),
-        Value::String(format!(
-            "alien-e2e-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        )),
+        Value::String(resource_group.to_string()),
     );
     if let Some(mgmt) = azure_mgmt {
         vars.insert(
@@ -4407,6 +4431,7 @@ mod tests {
             &mut vars,
             &azure_target,
             Some(&azure_mgmt),
+            "target-rg",
             alien_terraform::TerraformTarget::Azure,
         );
 
@@ -4439,6 +4464,7 @@ mod tests {
             &mut vars,
             &azure_target,
             None,
+            "target-rg",
             alien_terraform::TerraformTarget::Aks,
         );
 
@@ -4457,6 +4483,7 @@ mod tests {
             &mut vars,
             &azure_target,
             None,
+            "target-rg",
             alien_terraform::TerraformTarget::Azure,
         );
 

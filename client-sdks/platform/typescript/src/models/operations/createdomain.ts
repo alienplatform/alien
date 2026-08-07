@@ -5,7 +5,7 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 
-export type Setup = {
+export type CreateDomainSetup = {
   deploymentPortal?: boolean | undefined;
   packages?: boolean | undefined;
   /**
@@ -17,7 +17,7 @@ export type Setup = {
 
 export type CreateDomainRequestBody = {
   domain: string;
-  setup?: Setup | undefined;
+  setup?: CreateDomainSetup | undefined;
 };
 
 export type CreateDomainRequest = {
@@ -29,7 +29,7 @@ export type CreateDomainRequest = {
 };
 
 /** @internal */
-export type Setup$Outbound = {
+export type CreateDomainSetup$Outbound = {
   deploymentPortal?: boolean | undefined;
   packages?: boolean | undefined;
   deploymentUrlProjectId?: string | null | undefined;
@@ -37,21 +37,28 @@ export type Setup$Outbound = {
 };
 
 /** @internal */
-export const Setup$outboundSchema: z.ZodType<Setup$Outbound, Setup> = z.object({
+export const CreateDomainSetup$outboundSchema: z.ZodType<
+  CreateDomainSetup$Outbound,
+  CreateDomainSetup
+> = z.object({
   deploymentPortal: z.boolean().optional(),
   packages: z.boolean().optional(),
   deploymentUrlProjectId: z.nullable(z.string()).optional(),
   managerIds: z.array(z.string()).optional(),
 });
 
-export function setupToJSON(setup: Setup): string {
-  return JSON.stringify(Setup$outboundSchema.parse(setup));
+export function createDomainSetupToJSON(
+  createDomainSetup: CreateDomainSetup,
+): string {
+  return JSON.stringify(
+    CreateDomainSetup$outboundSchema.parse(createDomainSetup),
+  );
 }
 
 /** @internal */
 export type CreateDomainRequestBody$Outbound = {
   domain: string;
-  setup?: Setup$Outbound | undefined;
+  setup?: CreateDomainSetup$Outbound | undefined;
 };
 
 /** @internal */
@@ -60,7 +67,7 @@ export const CreateDomainRequestBody$outboundSchema: z.ZodType<
   CreateDomainRequestBody
 > = z.object({
   domain: z.string(),
-  setup: z.lazy(() => Setup$outboundSchema).optional(),
+  setup: z.lazy(() => CreateDomainSetup$outboundSchema).optional(),
 });
 
 export function createDomainRequestBodyToJSON(

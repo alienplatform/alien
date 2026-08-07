@@ -5,7 +5,7 @@
 
 use crate::{
     emitters::aws::{
-        AwsAiEmitter, AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsEmailEmitter,
+        AwsAiEmitter, AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsEmailEmitter, AwsKeyEmitter,
         AwsKubernetesClusterEmitter, AwsKvEmitter, AwsNetworkEmitter, AwsOpenSearchEmitter,
         AwsQueueEmitter, AwsRemoteBindingsEmitter, AwsRemoteStackManagementEmitter,
         AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter, AwsWorkerEmitter,
@@ -13,9 +13,9 @@ use crate::{
     registry::CfRegistry,
 };
 use alien_core::{
-    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, KubernetesCluster, Kv, Network, Platform,
-    Queue, RemoteBindings, RemoteStackManagement, ResourceType, ServiceAccount, Storage, Vault,
-    Worker,
+    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Key, KubernetesCluster, Kv, Network,
+    Platform, Queue, RemoteBindings, RemoteStackManagement, ResourceType, ServiceAccount, Storage,
+    Vault, Worker,
 };
 
 pub(crate) fn register_aws(registry: &mut CfRegistry) {
@@ -28,6 +28,7 @@ pub(crate) fn register_aws(registry: &mut CfRegistry) {
 
     aws(registry, Ai::RESOURCE_TYPE, AwsAiEmitter);
     aws(registry, Storage::RESOURCE_TYPE, AwsStorageEmitter);
+    aws(registry, Key::RESOURCE_TYPE, AwsKeyEmitter);
     // Experimental resources are provider-specific: AwsOpenSearch only
     // registers an AWS emitter, so other platforms fail with a typed
     // ImportRegistrationMissing error at generation time.

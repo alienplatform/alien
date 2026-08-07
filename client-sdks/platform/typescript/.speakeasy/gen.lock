@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: bc51eaa5-3f88-4290-b64f-cae16746dd5d
 management:
-  docChecksum: a56e0cc95cfbd8d2d97456c1be33f0ee
+  docChecksum: 03197fa3730203f6f2cb50649424b887
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -11004,6 +11004,14 @@ trackedFiles:
     id: 0ceea322cfd1
     last_write_checksum: sha1:6ffe5bf0795524fb9aeb6a3e568905d5d50691f1
     pristine_git_object: ba7facb6b412e974e2ce937e654d32cf263bc550
+  docs/models/operations/continueawsvirtualkeyrequest.md:
+    last_write_checksum: sha1:c7493e1b52337aa4948b431853270bd50624beea
+  docs/models/operations/continueawsvirtualkeyrequestbody.md:
+    last_write_checksum: sha1:c3f31f40fa86e49a46fbc3d4f3d13baa23c058ff
+  docs/models/operations/continueawsvirtualkeyresponse.md:
+    last_write_checksum: sha1:f6579c2876b4c80ac77e62e17c05835cbe1a61ee
+  docs/models/operations/continueawsvirtualkeystatus.md:
+    last_write_checksum: sha1:fd599b36b8d7bc37f31216c68f7c03658fca60a2
   docs/models/operations/controllerplatform.md:
     id: dcf8d4a4b417
     last_write_checksum: sha1:b9459f0288180ede85b9a4b65d5f71ae60ff3c7d
@@ -11224,6 +11232,16 @@ trackedFiles:
     id: ceeecfc4cc5f
     last_write_checksum: sha1:5857874b4514e003bf9b99eb3f57f691d965ca81
     pristine_git_object: a278e1d3043e0270397991a3759ec93a86cf1fcc
+  docs/models/operations/createawsvirtualkeyrequest.md:
+    last_write_checksum: sha1:7c8d356e8c9654243a3fbdebbd9b9550afa8a593
+  docs/models/operations/createawsvirtualkeyresponse.md:
+    last_write_checksum: sha1:17a9e6f6c1e402b4170d85489333c6193c6860fb
+  docs/models/operations/createawsvirtualkeysetup.md:
+    last_write_checksum: sha1:669673c034112cd7b4850e3e07afa28d2fffe2ca
+  docs/models/operations/createawsvirtualkeystatus.md:
+    last_write_checksum: sha1:7ec5e18108f6865a38ad0a1b725473bdbf2e7b43
+  docs/models/operations/createawsvirtualkeyvirtualkey.md:
+    last_write_checksum: sha1:db457f7e05905bd513c1340e60721dd35f9a64d8
   docs/models/operations/createcommandrequest.md:
     id: 31834dc9d505
     last_write_checksum: sha1:91b4d2a934f245f5430723f2aab060c39dbc74ae
@@ -11270,8 +11288,10 @@ trackedFiles:
     pristine_git_object: 2c9cfd8fdb3e55a93d3f87b04b91ac58393374c4
   docs/models/operations/createdomainrequestbody.md:
     id: ffa9a43bdb49
-    last_write_checksum: sha1:d3039374effa74626d9d7fffb4cc35fc65e4cce3
+    last_write_checksum: sha1:1cd0fd0a6edaf0e23d2432410ce5c937b25e17ed
     pristine_git_object: db06a31dd41e571bc718885d2c9b2fb3ae7f8a9f
+  docs/models/operations/createdomainsetup.md:
+    last_write_checksum: sha1:48834b5d5f53b6d971aa6c492d2179bfcfb0b9d4
   docs/models/operations/createfirstpartydeploymentsessionrequest.md:
     id: fa614a4db717
     last_write_checksum: sha1:9521cf368544334cf070ea873ad7e3ff8dcdfd4b
@@ -12268,6 +12288,14 @@ trackedFiles:
     id: 81de63816af2
     last_write_checksum: sha1:3c595eb0b2560acff757d4efc6ecf90bf60f38d3
     pristine_git_object: 75bcc5688122aef8dcf0c0999778e5c88d28cf6f
+  docs/models/operations/decommissionawsvirtualkeyrequest.md:
+    last_write_checksum: sha1:228769446fd28cecea0c30e90a1366e7c906fce7
+  docs/models/operations/decommissionawsvirtualkeyrequestbody.md:
+    last_write_checksum: sha1:dcc073f8b4bfba54a04d186c1142144d9cddbca6
+  docs/models/operations/decommissionawsvirtualkeyresponse.md:
+    last_write_checksum: sha1:17783b38ec665b6791ea3983a9ea4d0d3ba02030
+  docs/models/operations/decommissionawsvirtualkeystatus.md:
+    last_write_checksum: sha1:5a81ed3bb38fdc222fa9df504bfdf53fe9e84ba0
   docs/models/operations/deleteapikeysrequest.md:
     id: 8fdfd4aadbd3
     last_write_checksum: sha1:2db19c2ab93c128670a150905fcbeed18598d7e0
@@ -12452,6 +12480,14 @@ trackedFiles:
     id: cf504bf26fa5
     last_write_checksum: sha1:b1c80048aba31904ffd3eef45af62a943349d237
     pristine_git_object: 70a5101fa649125f632bb8697e0339749b89fb2b
+  docs/models/operations/finalizeawsvirtualkeydeletionrequest.md:
+    last_write_checksum: sha1:5e9d7bf8cab9e09d815e160e3ca9bc31ee4c8f89
+  docs/models/operations/finalizeawsvirtualkeydeletionrequestbody.md:
+    last_write_checksum: sha1:b62a1681e7d236e22c2fedb09579463ff215bbd2
+  docs/models/operations/finalizeawsvirtualkeydeletionresponse.md:
+    last_write_checksum: sha1:56898214c9864b5f68c903cf461ec4d7d168f09a
+  docs/models/operations/finalizeawsvirtualkeydeletionstatus.md:
+    last_write_checksum: sha1:f2b87c4a9770b4964d634f09880e366a94934db7
   docs/models/operations/format.md:
     id: 4c6808d8bb23
     last_write_checksum: sha1:4fe8bdfbec7f94270209a37d96214e4a4f640fbd
@@ -12468,6 +12504,12 @@ trackedFiles:
     id: 2ee5609f22a3
     last_write_checksum: sha1:20fc5c6da0dfa9260ee890c577d06266be55afab
     pristine_git_object: ea05dd049feb914b3624d0b519282de84f1eb82f
+  docs/models/operations/getawsvirtualkeyrequest.md:
+    last_write_checksum: sha1:92b7ab89846ad3e027a5bb051188adcb8eaf1bb2
+  docs/models/operations/getawsvirtualkeyresponse.md:
+    last_write_checksum: sha1:0f693325e40fe40720002bb9e7d968159fa4d5de
+  docs/models/operations/getawsvirtualkeystatus.md:
+    last_write_checksum: sha1:250c8db836c807928876518879b2ab1e42008fa7
   docs/models/operations/getcloudregionsrequest.md:
     id: a4f4f82dcca5
     last_write_checksum: sha1:567f46bddd7843d45d2caef07a0f51f3f0360adc
@@ -13334,6 +13376,14 @@ trackedFiles:
     id: feed1d8bc9c0
     last_write_checksum: sha1:a01ab00409e20fc19fd21b36bbd12564cf713b65
     pristine_git_object: 7b707e1f2c4f66d98066c60c585a4c042e4fcd6a
+  docs/models/operations/listawsvirtualkeysrequest.md:
+    last_write_checksum: sha1:c450c931a6d37515f175d359954dfd08743594ff
+  docs/models/operations/listawsvirtualkeysresponse.md:
+    last_write_checksum: sha1:4d13a10c783e108671805ee10207c5d90671cf3a
+  docs/models/operations/listawsvirtualkeysstatus.md:
+    last_write_checksum: sha1:357fd9e22a567a07715bcbac429a147d3696f475
+  docs/models/operations/listawsvirtualkeysvirtualkey.md:
+    last_write_checksum: sha1:c54a11cebfa3605d24e1428943194a8b1d1bc12f
   docs/models/operations/listbillingauditlogrequest.md:
     id: f07e072e247b
     last_write_checksum: sha1:8002d4f0186f4d2c6db450a4947f211a71efa288
@@ -15232,6 +15282,14 @@ trackedFiles:
     id: 0cf6f1ec298c
     last_write_checksum: sha1:c04babb22bb5440a5f1cb8724ddb939060470aed
     pristine_git_object: daea45673d605ed242507b02cfae1073844d5484
+  docs/models/operations/restoreawsvirtualkeyrequest.md:
+    last_write_checksum: sha1:dc892490ea037ae1139a4825b44a58bc711d4a76
+  docs/models/operations/restoreawsvirtualkeyrequestbody.md:
+    last_write_checksum: sha1:e359a8854318854ec1b5a28189b075904333eece
+  docs/models/operations/restoreawsvirtualkeyresponse.md:
+    last_write_checksum: sha1:8407e9f05a78841aa57cb9f33345fef24d692702
+  docs/models/operations/restoreawsvirtualkeystatus.md:
+    last_write_checksum: sha1:7b9401489abf89b328c97a68fa272a6b8003c77b
   docs/models/operations/retrydeploymentrequest.md:
     id: b19d6a8d602e
     last_write_checksum: sha1:6dd2924bd0fb07200a8c51d01e460a9d58769a5b
@@ -15260,6 +15318,18 @@ trackedFiles:
     last_write_checksum: sha1:c0795c9c7ebe47a58a0bb886eb333aaa8afe389a
   docs/models/operations/revokeworkspaceinvitelinkrequest.md:
     last_write_checksum: sha1:7bfcb214f49b439ebbbb54bfc228458a72e7bea9
+  docs/models/operations/rotateawsvirtualkeycredentialrequest.md:
+    last_write_checksum: sha1:3ea1edeced2b8ac5dc215a33d67c9202c3a48ea1
+  docs/models/operations/rotateawsvirtualkeycredentialrequestbody.md:
+    last_write_checksum: sha1:7b7be7a9c619d7bd3ba290cd0593b7959863266b
+  docs/models/operations/rotateawsvirtualkeycredentialresponse.md:
+    last_write_checksum: sha1:8d19e1082f8e66f70c95794054b82e11b5a74d5c
+  docs/models/operations/rotateawsvirtualkeycredentialsetup.md:
+    last_write_checksum: sha1:2ef3b92b1a3e74c973cf681fd40133857fab2fb6
+  docs/models/operations/rotateawsvirtualkeycredentialstatus.md:
+    last_write_checksum: sha1:9376dd82896aa57ba3dee2c245250fd32b4cc6d2
+  docs/models/operations/rotateawsvirtualkeycredentialvirtualkey.md:
+    last_write_checksum: sha1:d04af14aeeb50040b1740d55401d729195d12fb0
   docs/models/operations/rotatemachinesjointokenrequest.md:
     id: 495662a04757
     last_write_checksum: sha1:c04e0434e9401ba26be9c0aa8ce7be735db7cfc7
@@ -15272,16 +15342,18 @@ trackedFiles:
     id: bcf983fbb314
     last_write_checksum: sha1:a1b8e4ef93724071c1a4f8f85b743bc4fcf08a07
     pristine_git_object: d82694736e314191315aa77f65dcbe5b42c954d7
+  docs/models/operations/selector1.md:
+    last_write_checksum: sha1:ac3167ae7ee0b06a35013925d5676bc9873cbd5f
+  docs/models/operations/selector2.md:
+    last_write_checksum: sha1:6111eea1d6be695620e2cc9c911dc19b1a55b2be
+  docs/models/operations/selectorunion.md:
+    last_write_checksum: sha1:075629a778053337798585237d1325a762f17e66
   docs/models/operations/setdeploymentgroupexternalidrequest.md:
     last_write_checksum: sha1:840f104983e63a783d6ebd4ecfd2e64f974b157a
   docs/models/operations/setdeploymentreleasechannelrequest.md:
     last_write_checksum: sha1:5d2c9b4feb3b128c119786d78aad46371e88c965
   docs/models/operations/setdeploymentreleasechannelrequestbody.md:
     last_write_checksum: sha1:ffa6424785bacd2ddeaf69a3bfa4b32cbbbefd4a
-  docs/models/operations/setup.md:
-    id: f1a9d176014b
-    last_write_checksum: sha1:7ad92e358e31ec51bbaa3c6cb757b915bd997e0a
-    pristine_git_object: dfe63c2ba7bcb02cf6e83d24dab612cbbf6b85ff
   docs/models/operations/slackintegrationchannelsrequest.md:
     last_write_checksum: sha1:7d6bed7fd0424bd3d96cbc2ac4a58223200c888c
   docs/models/operations/slackintegrationinstallurlrequest.md:
@@ -17610,7 +17682,7 @@ trackedFiles:
     pristine_git_object: c9b7c83876f3fde4f374170a2bd63a28205f5fa8
   docs/models/projectrole.md:
     id: e7b537c5e59b
-    last_write_checksum: sha1:13a363ed224a672f59ee50773f8d2145f9c42a9a
+    last_write_checksum: sha1:4c642f7afef25b2592eb9fe1caa2d480831eef6a
     pristine_git_object: 6e63beeadb252478d821a187540f9cff139f4c7e
   docs/models/projectscope.md:
     id: b44d20cc2a33
@@ -28395,7 +28467,7 @@ trackedFiles:
   docs/sdks/agentsessions/README.md:
     last_write_checksum: sha1:8406f8c606717ef44e323f9f61808dfb88472063
   docs/sdks/alien/README.md:
-    last_write_checksum: sha1:d56a8eb5d919a0d2e69c1e727a37a315b4a9b65d
+    last_write_checksum: sha1:1c40c7e0f780db1d457c815315405596efa3baf0
   docs/sdks/apikeys/README.md:
     id: e2bd25998427
     last_write_checksum: sha1:e9209e6b7dd3328c10dcc9b055ceeb1c65243115
@@ -28512,7 +28584,7 @@ trackedFiles:
     pristine_git_object: b27d1739aa21f6dfb0a2772ceda2defdbe7bc6c9
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:d5b5c3cc5645976928a84177db5b8702c2fad50d
+    last_write_checksum: sha1:80521ed31e3d726b9863dd153ac0c3340d38eaa4
     pristine_git_object: 65db061a4e545903e4d3aa5cb5630a83fd28ce36
   src/core.ts:
     id: f431fdbcd144
@@ -28610,6 +28682,10 @@ trackedFiles:
     id: 08c09d84d2c6
     last_write_checksum: sha1:cc982bf548af5d9201881340d950baf03509ee0c
     pristine_git_object: 77b845097d249ff83c45ba4f87f7413741e3f42d
+  src/funcs/continueAwsVirtualKey.ts:
+    last_write_checksum: sha1:e9ea67e315716071edac586eebf33cb7ab6ff7c7
+  src/funcs/createAwsVirtualKey.ts:
+    last_write_checksum: sha1:114e44adaf2fde0d84248b96fa9c8fec82fa7a00
   src/funcs/createWorkspaceInvitation.ts:
     last_write_checksum: sha1:3fc3e5417b2099eae75acb16b544c644c00c4808
   src/funcs/createWorkspaceInviteLink.ts:
@@ -28630,6 +28706,8 @@ trackedFiles:
     id: 36cc51df179b
     last_write_checksum: sha1:1e7d64df22c881aeaf15111cbf48f9ad7491e927
     pristine_git_object: c5c0a800891e327b48f5c7ae3f8b42675442ca99
+  src/funcs/decommissionAwsVirtualKey.ts:
+    last_write_checksum: sha1:ca007df52f5bd50a8a874f9960c5c7284de0ef6b
   src/funcs/deploymentGetInfo.ts:
     id: 5c45d30a687b
     last_write_checksum: sha1:10a1808c5b143bc0599fee59b7d79d12c98c60a3
@@ -28790,10 +28868,16 @@ trackedFiles:
     id: 4522a8542985
     last_write_checksum: sha1:ebd7e9ca483b9daf63d9e4d010d22682e46187a2
     pristine_git_object: 9eb6232914eab09dc4edfff3ac5b1543d5b49a66
+  src/funcs/finalizeAwsVirtualKeyDeletion.ts:
+    last_write_checksum: sha1:58671f1c195dfba903faf5cffd7790dfd17df454
+  src/funcs/getAwsVirtualKey.ts:
+    last_write_checksum: sha1:6f760196e84992279f4463b656b0383516a67fa0
   src/funcs/getWorkspaceInvitationPreview.ts:
     last_write_checksum: sha1:0332d9b584d0e47f3d7ba2e6b8bf8a67ebd3016c
   src/funcs/getWorkspaceInviteLink.ts:
     last_write_checksum: sha1:dc456ba4116206daf9fd320ecc3548e86bd591a3
+  src/funcs/listAwsVirtualKeys.ts:
+    last_write_checksum: sha1:e281288eea4d129db16f1b96e4489268af0452d9
   src/funcs/listWorkspaceInvitations.ts:
     last_write_checksum: sha1:e615f9dc8c09c18276fa470dd7eb0dd36f2093ce
   src/funcs/machinesCancelMachineDrain.ts:
@@ -29022,10 +29106,14 @@ trackedFiles:
     id: 0e88bb16488e
     last_write_checksum: sha1:001a7c182daa37aaa7754710f6d67612b0130521
     pristine_git_object: bd0af0059383eedd1cb4101cc237a1aa0a975cbc
+  src/funcs/restoreAwsVirtualKey.ts:
+    last_write_checksum: sha1:9686b21fed2041c7693109d863acdd582d207dcb
   src/funcs/revokeWorkspaceInvitation.ts:
     last_write_checksum: sha1:c78022a0c191b4fb1ce3397ba70a25824fc37cdd
   src/funcs/revokeWorkspaceInviteLink.ts:
     last_write_checksum: sha1:02b35536a7a98a8a23b5d2e1d2e7bac707fb8ea5
+  src/funcs/rotateAwsVirtualKeyCredential.ts:
+    last_write_checksum: sha1:e5df3beac7b7dae4ef9aa10f240ce2c5f6b7e3d8
   src/funcs/slackIntegrationInstallUrl.ts:
     last_write_checksum: sha1:45c9210e5f0eb7e3c843f99a8d61f2767cd83868
   src/funcs/slackIntegrationListChannels.ts:
@@ -29798,10 +29886,14 @@ trackedFiles:
     id: 32e145c6ddd6
     last_write_checksum: sha1:9f566aa1f1bc92f61332c8bfa67b32858478aec3
     pristine_git_object: 27ec30fb688c7b20c7aef8b7fd005f6ec0082e2d
+  src/models/operations/continueawsvirtualkey.ts:
+    last_write_checksum: sha1:d6e68be767f39ea1ac046a6d2b98d9ffd456db93
   src/models/operations/createapikey.ts:
     id: 083db57ce11b
     last_write_checksum: sha1:509a11c092af3e66e92b9159de1831ab40353bbb
     pristine_git_object: c7515f2cd04cc6b250ce0026bb6e130b2e48c3cf
+  src/models/operations/createawsvirtualkey.ts:
+    last_write_checksum: sha1:0c2b1369738b0e6bca7f5b13944617d951e1c7e0
   src/models/operations/createcommand.ts:
     id: 076164167b99
     last_write_checksum: sha1:7b6347b558eb77e4cce35b8abefcb3ad8c1b322a
@@ -29828,7 +29920,7 @@ trackedFiles:
     pristine_git_object: 5379e31cb9ba1ddafcd6e0bf794a8d8d3e93ac60
   src/models/operations/createdomain.ts:
     id: 1f71422ebc46
-    last_write_checksum: sha1:c4972617ec582e80d8bffe2bce9e68f0e1ab2330
+    last_write_checksum: sha1:ffbb9ece6d20002e8d0179491aaceab33b65983f
     pristine_git_object: c0490eaaf2b01abe4c3f5f7ade7047639c39eeea
   src/models/operations/createdomainendpoint.ts:
     id: 6908f03e0f19
@@ -29872,6 +29964,8 @@ trackedFiles:
     last_write_checksum: sha1:59fc9b2992ac73352ad2673a2b75794ab4857952
   src/models/operations/createworkspaceinvitelink.ts:
     last_write_checksum: sha1:d1318bc49e330d7d16f8fabd28dae9304f552c5e
+  src/models/operations/decommissionawsvirtualkey.ts:
+    last_write_checksum: sha1:3849f1beaeb5779055ecc3218a5e9860296baba1
   src/models/operations/deleteapikeys.ts:
     id: b8c63a8e167c
     last_write_checksum: sha1:d8aec3d368e773693c3622198aa661a6c4aa2ca8
@@ -29920,6 +30014,8 @@ trackedFiles:
     id: edf4d8455e14
     last_write_checksum: sha1:b1eafbcfe36854a6f65e67d21f3509a557e1521e
     pristine_git_object: 3534ec931c855ad305e51267d26cdfa657f8f6be
+  src/models/operations/finalizeawsvirtualkeydeletion.ts:
+    last_write_checksum: sha1:f05d35c1125e75874406186c9d8a80e6677c4bdf
   src/models/operations/generatemanagerbindingtoken.ts:
     last_write_checksum: sha1:d4c188678bbc80d35724c227ffd77a5fc71dbec9
   src/models/operations/generatemanagertoken.ts:
@@ -29932,6 +30028,8 @@ trackedFiles:
     id: d94f7ec275cc
     last_write_checksum: sha1:35a95306004affedb589602e3b5d6ada9ade4853
     pristine_git_object: 3aeefc5e8078b39b1f418f32f2fc47c4b3d81598
+  src/models/operations/getawsvirtualkey.ts:
+    last_write_checksum: sha1:5e295b486e1f9a841d866357d57d5fad705e5b3a
   src/models/operations/getcloudregions.ts:
     id: a936514db729
     last_write_checksum: sha1:65e0d6d0be964e40788464352a1f3b0dec44331d
@@ -30058,7 +30156,7 @@ trackedFiles:
     pristine_git_object: 126e8c5c8e0b8d15c4daefcd3e2aab500207b77e
   src/models/operations/index.ts:
     id: 0d9ffaf774d2
-    last_write_checksum: sha1:b4a27d12382b50d423893cbd82ddccf25a6efea7
+    last_write_checksum: sha1:c113656df0495769dea774a084040a8173b89a41
     pristine_git_object: 4c642023437b4b27fc66f4e248cbf0fbde736860
   src/models/operations/listagentsessionevents.ts:
     last_write_checksum: sha1:e58f325055d03a0d05275512bb5d4c6b63adb81f
@@ -30068,6 +30166,8 @@ trackedFiles:
     id: f6a5b994cd87
     last_write_checksum: sha1:c880049a7a615a11ac10318062e5758af2bee946
     pristine_git_object: 8fe315fbaf3dec31eefa66483c16bc1ea1290658
+  src/models/operations/listawsvirtualkeys.ts:
+    last_write_checksum: sha1:caaabb726586fdad7c125018cac2444a34b3404d
   src/models/operations/listbillingauditlog.ts:
     id: 813f537b0a28
     last_write_checksum: sha1:5ebe6b60aeee03cf02f446424c2eb85a91d30a22
@@ -30250,6 +30350,8 @@ trackedFiles:
     id: 2f08f893067c
     last_write_checksum: sha1:b2aef601ebeaf356c8d57638818d70d1530afe5c
     pristine_git_object: f419a484f25f6f058246a6219148395a9b2263d9
+  src/models/operations/restoreawsvirtualkey.ts:
+    last_write_checksum: sha1:dc93f92dbb1af09bb692a0c6179e80cade031009
   src/models/operations/retrydeployment.ts:
     id: 4f8a70d577bb
     last_write_checksum: sha1:2af43d64b115146b5f47c9dd72f21e49aebfde16
@@ -30274,6 +30376,8 @@ trackedFiles:
     last_write_checksum: sha1:ccd348302d5f64f2a786e89b1648ddf60efdab64
   src/models/operations/revokeworkspaceinvitelink.ts:
     last_write_checksum: sha1:b49c8a7c997131493dd02f4f73bfd3b1efd6ad64
+  src/models/operations/rotateawsvirtualkeycredential.ts:
+    last_write_checksum: sha1:78973b7fa4ec42b54ae3a362f6e1dee16f548fae
   src/models/operations/rotatemachinesjointoken.ts:
     id: 7f88d810e3c7
     last_write_checksum: sha1:4df64776184c9bb569a0db60ef21d35ff0774010
@@ -30440,7 +30544,7 @@ trackedFiles:
     pristine_git_object: bba39a93d460600bb6cda70fabff380aad89ecec
   src/models/projectrole.ts:
     id: b93b1b667b4f
-    last_write_checksum: sha1:42929d2ce2c1c82df85ef65fabae5d8163e69731
+    last_write_checksum: sha1:7000023274de11c8a7ab6f0838b9968dcf9853cd
     pristine_git_object: 1f43dde16b3d7ad34e4f2ca4741e071552e60f55
   src/models/projectscope.ts:
     id: 94b9ced20495
@@ -30791,7 +30895,7 @@ trackedFiles:
     last_write_checksum: sha1:385be8f9d4dd6845a3a12aa76e7ba804c414e075
     pristine_git_object: 83cbdca96c0c28e99fe168c029bb34191db6c1ff
   src/sdk/releasechannels.ts:
-    last_write_checksum: sha1:3f8f0e3a8b1b6b1d8022b87363e5e7476e1dda8d
+    last_write_checksum: sha1:122e0e895fdc2ab5529758fa5e9933bc59481525
   src/sdk/releases.ts:
     id: 1edfaa181e13
     last_write_checksum: sha1:f08698165f15a291d671fe95553fd6e8c8c558b3
@@ -30802,11 +30906,11 @@ trackedFiles:
     pristine_git_object: 3ab8669e76561c8d1d9879fb83f1e459a98fb979
   src/sdk/resources.ts:
     id: 399cf49baf34
-    last_write_checksum: sha1:04bcfe188707e5c16ebcbbb7703add94c9e6ea1a
+    last_write_checksum: sha1:4ebc3499b2e62e8c8a3f493cc82bc7997e33c6ec
     pristine_git_object: 17427a982186e05d22ab583691eb937006f1b028
   src/sdk/sdk.ts:
     id: 784571af2f69
-    last_write_checksum: sha1:2df88dedcbc233854ba473441c3e1b3733808756
+    last_write_checksum: sha1:48af123a5e706e331e0ae43fb0e41914c5e35fa0
     pristine_git_object: 248c65603a466f7a3c3d4441a3075f8287b5b1f5
   src/sdk/slackintegration.ts:
     last_write_checksum: sha1:4010989820fbc93e866828dfdaa939cfbdfa47ac
@@ -34100,5 +34204,95 @@ examples:
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  listAwsVirtualKeys:
+    projectName:
+      parameters:
+        query:
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"virtualKeys": []}
+        "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+      responses:
+        "200":
+          application/json: {"virtualKeys": []}
+        "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  createAwsVirtualKey:
+    speakeasy-default-create-aws-virtual-key:
+      requestBody:
+        application/json: {"selector": {"deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc"}, "awsAccountId": "<id>", "awsRegion": "<value>", "idempotencyKey": "<value>", "deletionWindowDays": 30}
+      responses:
+        "200":
+          application/json: {"virtualKey": {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "deletion-pending", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": "<value>", "alias": "<value>", "description": "hence what unlike different", "deletionWindowDays": 934814, "tags": {"key": "<value>"}, "observedAt": "2026-08-10T07:38:23.276Z", "canaryPassedAt": "2026-07-15T18:09:24.788Z", "deletionScheduledAt": "2024-01-28T06:36:00.559Z", "finalDeletionObservedAt": "2024-05-03T14:41:21.287Z", "createdAt": "2025-07-08T21:44:31.323Z", "updatedAt": "2024-05-03T04:20:43.205Z"}, "setup": {"proxyUriEndpoint": "https://polished-smoke.biz", "proxyUriPath": "<value>", "accessKeyId": "<id>", "secretAccessKey": "<value>", "externalKeyId": "<id>"}}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  rotateAwsVirtualKeyCredential:
+    speakeasy-default-rotate-aws-virtual-key-credential:
+      parameters:
+        path:
+          id: "vkey_0p9nwqgtftugsoey99lqyqq"
+      responses:
+        "200":
+          application/json: {"virtualKey": {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "ready", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": "<value>", "alias": "<value>", "description": "costume upside-down provided although upon shell runway unless humiliating drowse", "deletionWindowDays": 351584, "tags": {}, "observedAt": "2025-04-29T12:24:25.817Z", "canaryPassedAt": "2025-07-26T04:39:27.503Z", "deletionScheduledAt": "2024-08-31T01:34:12.479Z", "finalDeletionObservedAt": "2026-10-07T01:57:16.939Z", "createdAt": "2024-04-09T12:29:37.596Z", "updatedAt": "2025-09-01T12:39:24.768Z"}, "setup": {"proxyUriEndpoint": "https://candid-nerve.org/", "proxyUriPath": "<value>", "accessKeyId": "<id>", "secretAccessKey": "<value>", "externalKeyId": "<id>"}}
+        "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  restoreAwsVirtualKey:
+    speakeasy-default-restore-aws-virtual-key:
+      parameters:
+        path:
+          id: "vkey_0p9nwqgtftugsoey99lqyqq"
+      responses:
+        "200":
+          application/json: {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "provisioning", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": null, "alias": "<value>", "description": "mmm from cow hydrocarbon scaffold", "deletionWindowDays": 908267, "tags": {"key": "<value>"}, "observedAt": "2024-09-27T16:39:56.961Z", "canaryPassedAt": "2024-05-13T01:24:21.588Z", "deletionScheduledAt": null, "finalDeletionObservedAt": "2026-11-02T12:49:36.109Z", "createdAt": "2026-01-20T23:22:37.996Z", "updatedAt": "2025-08-10T11:09:43.030Z"}
+        "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  finalizeAwsVirtualKeyDeletion:
+    speakeasy-default-finalize-aws-virtual-key-deletion:
+      parameters:
+        path:
+          id: "vkey_0p9nwqgtftugsoey99lqyqq"
+      responses:
+        "200":
+          application/json: {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "decommissioning", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": null, "alias": "<value>", "description": "tomography accompanist like till", "deletionWindowDays": 480945, "tags": {}, "observedAt": "2025-02-14T06:49:29.501Z", "canaryPassedAt": "2024-04-11T03:50:24.239Z", "deletionScheduledAt": "2024-07-20T13:39:05.963Z", "finalDeletionObservedAt": "2025-06-06T06:49:54.915Z", "createdAt": "2024-05-03T22:43:37.364Z", "updatedAt": "2025-08-27T02:17:09.732Z"}
+        "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  decommissionAwsVirtualKey:
+    speakeasy-default-decommission-aws-virtual-key:
+      parameters:
+        path:
+          id: "vkey_0p9nwqgtftugsoey99lqyqq"
+      responses:
+        "200":
+          application/json: {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "deletion-pending", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": "<value>", "alias": "<value>", "description": "but about skeletal", "deletionWindowDays": 963652, "tags": {"key": "<value>"}, "observedAt": "2026-11-22T23:50:20.352Z", "canaryPassedAt": null, "deletionScheduledAt": "2025-06-16T08:49:46.808Z", "finalDeletionObservedAt": "2026-03-23T12:41:33.102Z", "createdAt": "2025-05-02T02:50:12.663Z", "updatedAt": "2024-02-15T10:37:00.272Z"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+  getAwsVirtualKey:
+    speakeasy-default-get-aws-virtual-key:
+      parameters:
+        path:
+          id: "vkey_0p9nwqgtftugsoey99lqyqq"
+      responses:
+        "200":
+          application/json: {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "provisioning", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": "<value>", "alias": "<value>", "description": null, "deletionWindowDays": 787221, "tags": {"key": "<value>", "key1": "<value>"}, "observedAt": "2026-08-05T02:45:59.014Z", "canaryPassedAt": "2025-04-15T07:49:19.484Z", "deletionScheduledAt": "2025-08-03T16:34:10.532Z", "finalDeletionObservedAt": "2026-12-06T10:39:05.700Z", "createdAt": "2026-09-08T00:44:56.097Z", "updatedAt": "2026-07-05T10:07:55.575Z"}
+        "401":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+  continueAwsVirtualKey:
+    speakeasy-default-continue-aws-virtual-key:
+      parameters:
+        path:
+          id: "vkey_0p9nwqgtftugsoey99lqyqq"
+      responses:
+        "200":
+          application/json: {"id": "vkey_0p9nwqgtftugsoey99lqyqq", "projectId": "<id>", "status": "ready", "externalKeyId": "<id>", "awsAccountId": "<id>", "awsRegion": "<value>", "customKeyStoreId": "<id>", "kmsKeyArn": "<value>", "alias": "<value>", "description": "rekindle rebuff misguided cassava speedily to hotfoot shyly hm alienated", "deletionWindowDays": 842050, "tags": {}, "observedAt": "2024-03-18T15:51:37.839Z", "canaryPassedAt": "2025-11-28T08:24:57.072Z", "deletionScheduledAt": "2026-01-20T11:25:09.287Z", "finalDeletionObservedAt": "2025-11-13T22:04:11.700Z", "createdAt": "2024-10-01T07:39:17.984Z", "updatedAt": "2024-07-23T17:01:31.372Z"}
+        "400":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
 examplesVersion: 1.0.2

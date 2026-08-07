@@ -3,14 +3,22 @@
  */
 
 import { acceptWorkspaceInvitation } from "../funcs/acceptWorkspaceInvitation.js";
+import { continueAwsVirtualKey } from "../funcs/continueAwsVirtualKey.js";
+import { createAwsVirtualKey } from "../funcs/createAwsVirtualKey.js";
 import { createWorkspaceInvitation } from "../funcs/createWorkspaceInvitation.js";
 import { createWorkspaceInviteLink } from "../funcs/createWorkspaceInviteLink.js";
+import { decommissionAwsVirtualKey } from "../funcs/decommissionAwsVirtualKey.js";
+import { finalizeAwsVirtualKeyDeletion } from "../funcs/finalizeAwsVirtualKeyDeletion.js";
+import { getAwsVirtualKey } from "../funcs/getAwsVirtualKey.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
+import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
 import { resendWorkspaceInvitation } from "../funcs/resendWorkspaceInvitation.js";
+import { restoreAwsVirtualKey } from "../funcs/restoreAwsVirtualKey.js";
 import { revokeWorkspaceInvitation } from "../funcs/revokeWorkspaceInvitation.js";
 import { revokeWorkspaceInviteLink } from "../funcs/revokeWorkspaceInviteLink.js";
+import { rotateAwsVirtualKeyCredential } from "../funcs/rotateAwsVirtualKeyCredential.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -260,6 +268,94 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(revokeWorkspaceInviteLink(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async listAwsVirtualKeys(
+    request: operations.ListAwsVirtualKeysRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ListAwsVirtualKeysResponse> {
+    return unwrapAsync(listAwsVirtualKeys(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async createAwsVirtualKey(
+    request?: operations.CreateAwsVirtualKeyRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.CreateAwsVirtualKeyResponse> {
+    return unwrapAsync(createAwsVirtualKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async rotateAwsVirtualKeyCredential(
+    request: operations.RotateAwsVirtualKeyCredentialRequest,
+    options?: RequestOptions,
+  ): Promise<operations.RotateAwsVirtualKeyCredentialResponse> {
+    return unwrapAsync(rotateAwsVirtualKeyCredential(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async restoreAwsVirtualKey(
+    request: operations.RestoreAwsVirtualKeyRequest,
+    options?: RequestOptions,
+  ): Promise<operations.RestoreAwsVirtualKeyResponse> {
+    return unwrapAsync(restoreAwsVirtualKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async finalizeAwsVirtualKeyDeletion(
+    request: operations.FinalizeAwsVirtualKeyDeletionRequest,
+    options?: RequestOptions,
+  ): Promise<operations.FinalizeAwsVirtualKeyDeletionResponse> {
+    return unwrapAsync(finalizeAwsVirtualKeyDeletion(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async decommissionAwsVirtualKey(
+    request: operations.DecommissionAwsVirtualKeyRequest,
+    options?: RequestOptions,
+  ): Promise<operations.DecommissionAwsVirtualKeyResponse> {
+    return unwrapAsync(decommissionAwsVirtualKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getAwsVirtualKey(
+    request: operations.GetAwsVirtualKeyRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetAwsVirtualKeyResponse> {
+    return unwrapAsync(getAwsVirtualKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async continueAwsVirtualKey(
+    request: operations.ContinueAwsVirtualKeyRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ContinueAwsVirtualKeyResponse> {
+    return unwrapAsync(continueAwsVirtualKey(
       this,
       request,
       options,

@@ -159,6 +159,14 @@ run();
 * [getWorkspaceInviteLink](docs/sdks/alien/README.md#getworkspaceinvitelink)
 * [createWorkspaceInviteLink](docs/sdks/alien/README.md#createworkspaceinvitelink)
 * [revokeWorkspaceInviteLink](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+* [listAwsVirtualKeys](docs/sdks/alien/README.md#listawsvirtualkeys)
+* [createAwsVirtualKey](docs/sdks/alien/README.md#createawsvirtualkey)
+* [rotateAwsVirtualKeyCredential](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
+* [restoreAwsVirtualKey](docs/sdks/alien/README.md#restoreawsvirtualkey)
+* [finalizeAwsVirtualKeyDeletion](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
+* [decommissionAwsVirtualKey](docs/sdks/alien/README.md#decommissionawsvirtualkey)
+* [getAwsVirtualKey](docs/sdks/alien/README.md#getawsvirtualkey)
+* [continueAwsVirtualKey](docs/sdks/alien/README.md#continueawsvirtualkey)
 
 ### [AgentSessions](docs/sdks/agentsessions/README.md)
 
@@ -439,12 +447,15 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 - [`commandsResolveTarget`](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+- [`continueAwsVirtualKey`](docs/sdks/alien/README.md#continueawsvirtualkey)
+- [`createAwsVirtualKey`](docs/sdks/alien/README.md#createawsvirtualkey)
 - [`createWorkspaceInvitation`](docs/sdks/alien/README.md#createworkspaceinvitation)
 - [`createWorkspaceInviteLink`](docs/sdks/alien/README.md#createworkspaceinvitelink)
 - [`debugSessionsCreate`](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
 - [`debugSessionsGet`](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 - [`debugSessionsList`](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
 - [`debugSessionsUpdate`](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+- [`decommissionAwsVirtualKey`](docs/sdks/alien/README.md#decommissionawsvirtualkey)
 - [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
@@ -487,8 +498,11 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`finalizeAwsVirtualKeyDeletion`](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
+- [`getAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`getWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
+- [`listAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
 - [`listWorkspaceInvitations`](docs/sdks/alien/README.md#listworkspaceinvitations)
 - [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
 - [`machinesCreateJoinToken`](docs/sdks/machines/README.md#createjointoken)
@@ -550,8 +564,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
 - [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
+- [`restoreAwsVirtualKey`](docs/sdks/alien/README.md#restoreawsvirtualkey)
 - [`revokeWorkspaceInvitation`](docs/sdks/alien/README.md#revokeworkspaceinvitation)
 - [`revokeWorkspaceInviteLink`](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+- [`rotateAwsVirtualKeyCredential`](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
 - [`slackIntegrationInstallUrl`](docs/sdks/slackintegration/README.md#installurl) - Generate the Slack OAuth consent URL for this workspace.
 - [`slackIntegrationListChannels`](docs/sdks/slackintegration/README.md#listchannels) - List public Slack channels for this workspace's install. Used by the dashboard's notification-channel picker.
 - [`slackIntegrationSetNotificationChannel`](docs/sdks/slackintegration/README.md#setnotificationchannel) - Configure which Slack channel receives ai-agent monitor reports.

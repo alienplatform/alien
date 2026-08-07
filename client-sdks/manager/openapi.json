@@ -13903,6 +13903,24 @@
         ],
         "description": "The only AWS credential form remote binding resolution can return."
       },
+      "RemoteAwsKmsKeyBinding": {
+        "type": "object",
+        "required": [
+          "keyArn"
+        ],
+        "properties": {
+          "keyArn": {
+            "type": "string"
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteAzureClientConfig": {
         "type": "object",
         "description": "Response-safe Azure client configuration containing one storage-audience\naccess token for the stack's Remote Bindings identity.",
@@ -13958,6 +13976,18 @@
         ],
         "description": "The only Azure credential form remote binding resolution can return."
       },
+      "RemoteAzureKeyVaultKeyBinding": {
+        "type": "object",
+        "required": [
+          "keyId"
+        ],
+        "properties": {
+          "keyId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteBlobStorageBinding": {
         "type": "object",
         "description": "Concrete Azure Blob Storage topology returned to remote clients.",
@@ -14004,6 +14034,18 @@
           "region": {
             "type": "string",
             "description": "GCP region configured for the deployment."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpCloudKmsKeyBinding": {
+        "type": "object",
+        "required": [
+          "cryptoKeyName"
+        ],
+        "properties": {
+          "cryptoKeyName": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -14193,7 +14235,7 @@
           },
           "resourceId": {
             "type": "string",
-            "description": "Logical Storage resource id in the deployment's stack state."
+            "description": "Logical remote-enabled resource id in the deployment's stack state."
           }
         },
         "additionalProperties": false
@@ -14277,6 +14319,87 @@
                 "type": "string",
                 "enum": [
                   "gcs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS KMS key and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAwsKmsKeyBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "kms"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GCP Cloud KMS key and an access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteGcpCloudKmsKeyBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "cloud-kms"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Key Vault key and a vault-audience access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAzureKeyVaultKeyBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "key-vault-key"
                 ]
               }
             }

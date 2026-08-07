@@ -1,0 +1,51 @@
+{
+  "id": "key/remote-cryptography",
+  "description": "Allows encryption and decryption with one customer-managed key",
+  "platforms": {
+    "aws": [
+      {
+        "label": "encrypt-and-decrypt",
+        "description": "Encrypt and decrypt with the selected AWS KMS key.",
+        "grant": {
+          "actions": ["kms:Encrypt", "kms:Decrypt"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "encrypt-and-decrypt",
+        "description": "Encrypt and decrypt with the selected Cloud KMS key.",
+        "grant": {
+          "predefinedRoles": ["roles/cloudkms.cryptoKeyEncrypterDecrypter"]
+        },
+        "binding": {
+          "resource": {
+            "scope": "${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "encrypt-and-decrypt",
+        "description": "Encrypt and decrypt with the selected Azure Key Vault key.",
+        "grant": {
+          "dataActions": [
+            "Microsoft.KeyVault/vaults/keys/encrypt/action",
+            "Microsoft.KeyVault/vaults/keys/decrypt/action"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "scope": "${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -14,6 +14,7 @@ import { BuildHeartbeatDataSchema } from "./build-heartbeat-data-schema.js";
 import { ComputeClusterHeartbeatDataSchema } from "./compute-cluster-heartbeat-data-schema.js";
 import { ContainerHeartbeatDataSchema } from "./container-heartbeat-data-schema.js";
 import { DaemonHeartbeatDataSchema } from "./daemon-heartbeat-data-schema.js";
+import { KeyHeartbeatDataSchema } from "./key-heartbeat-data-schema.js";
 import { KubernetesClusterHeartbeatDataSchema } from "./kubernetes-cluster-heartbeat-data-schema.js";
 import { KvHeartbeatDataSchema } from "./kv-heartbeat-data-schema.js";
 import { NetworkHeartbeatDataSchema } from "./network-heartbeat-data-schema.js";
@@ -131,6 +132,11 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
                 return AiHeartbeatDataSchema
               },
 "resourceType": z.enum(["ai"])
+    }), z.object({
+    get "data"(){
+                return KeyHeartbeatDataSchema
+              },
+"resourceType": z.enum(["key"])
     })])
 
 export type ResourceHeartbeatData = z.infer<typeof ResourceHeartbeatDataSchema>

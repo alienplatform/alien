@@ -11,14 +11,14 @@ use std::sync::Arc;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 
 use crate::error::{ErrorData, Result};
 use crate::provider::BindingsProvider;
-use crate::refreshing::{RefreshingStorage, StorageProviderApi};
-use crate::traits::{BindingsProviderApi, Storage};
+use crate::refreshing::{KeyProviderApi, RefreshingKey, RefreshingStorage, StorageProviderApi};
+use crate::traits::{BindingsProviderApi, Key, Storage};
 
 mod access;
 mod manager_conversion;
@@ -48,7 +48,7 @@ impl Clock for SystemClock {
     }
 }
 
-/// App-facing provider for resource-scoped remote Storage bindings.
+/// App-facing provider for resource-scoped remote bindings.
 ///
 /// The bearer token and all returned client configurations are deliberately
 /// omitted from `Debug` output.
@@ -76,6 +76,26 @@ impl RemoteBindingsProvider {
         api_base_url: Option<&str>,
     ) -> Result<Self> {
         Self::discover(deployment_id, token, api_base_url, Arc::new(SystemClock)).await
+    }
+
+    fn from_manager_access(
+        deployment_id: &str,
+        manager_url: &str,
+        manager_token: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Self> {
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        Ok(Self {
+            source: Arc::new(RemoteBindingSource::from_manager_access(
+                deployment_id,
+                manager_url,
+                manager_token,
+                expires_at,
+                clock.clone(),
+            )?),
+            resolvers: RwLock::new(HashMap::new()),
+            clock,
+        })
     }
 
     async fn discover(
@@ -162,10 +182,14 @@ impl StorageProviderApi for RemoteBindingsProvider {
     }
 }
 
-/// Resource-scoped remote Storage bindings for an existing deployment.
-///
-/// This type intentionally exposes Storage only. Other binding kinds are not
-/// part of the remote v0 contract and therefore cannot be requested.
+#[async_trait]
+impl KeyProviderApi for RemoteBindingsProvider {
+    async fn load_key(&self, binding_name: &str) -> Result<Arc<dyn Key>> {
+        self.resolver(binding_name).await.key().await
+    }
+}
+
+/// Resource-scoped remote bindings for an existing deployment.
 #[derive(Debug)]
 pub struct RemoteBindings {
     provider: Arc<RemoteBindingsProvider>,
@@ -225,6 +249,28 @@ impl RemoteBindings {
         })
     }
 
+    /// Uses an already-issued, deployment-scoped Manager capability.
+    ///
+    /// This path does not contact Platform and cannot refresh the capability.
+    /// Construct a new instance after `expires_at`; callers should load the
+    /// required binding immediately and discard it with the returned cloud
+    /// credentials.
+    pub fn from_manager_access(
+        deployment_id: &str,
+        manager_url: &str,
+        manager_token: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Self> {
+        Ok(Self {
+            provider: Arc::new(RemoteBindingsProvider::from_manager_access(
+                deployment_id,
+                manager_url,
+                manager_token,
+                expires_at,
+            )?),
+        })
+    }
+
     #[cfg(test)]
     fn from_provider(provider: Arc<RemoteBindingsProvider>) -> Self {
         Self { provider }
@@ -237,6 +283,15 @@ impl RemoteBindings {
             self.provider.clone(),
             resource_id.to_string(),
             initial,
+        )))
+    }
+
+    /// Loads a Key binding and keeps its short-lived credential lease fresh.
+    pub async fn key(&self, resource_id: &str) -> Result<Arc<dyn Key>> {
+        self.provider.load_key(resource_id).await?;
+        Ok(Arc::new(RefreshingKey::new(
+            self.provider.clone(),
+            resource_id.to_string(),
         )))
     }
 }
@@ -262,6 +317,29 @@ enum ResolvedRemoteBinding {
         binding: alien_core::GcsStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    Kms {
+        binding: alien_core::AwsKmsKeyBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AwsClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    #[serde(rename = "cloud-kms")]
+    CloudKms {
+        binding: alien_core::GcpCloudKmsKeyBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    #[serde(rename = "key-vault-key")]
+    KeyVaultKey {
+        binding: alien_core::AzureKeyVaultKeyBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AzureClientConfig>,
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
@@ -295,7 +373,7 @@ impl ResolvedRemoteBinding {
                 validate_aws_remote_client_config(&client_config, expires_at)?;
                 (
                     alien_core::ClientConfig::Aws(client_config),
-                    alien_core::StorageBinding::S3(binding),
+                    serialize_remote_binding(alien_core::StorageBinding::S3(binding))?,
                     expires_at,
                 )
             }
@@ -307,7 +385,7 @@ impl ResolvedRemoteBinding {
                 validate_azure_remote_client_config(&client_config)?;
                 (
                     alien_core::ClientConfig::Azure(client_config),
-                    alien_core::StorageBinding::Blob(binding),
+                    serialize_remote_binding(alien_core::StorageBinding::Blob(binding))?,
                     expires_at,
                 )
             }
@@ -319,7 +397,43 @@ impl ResolvedRemoteBinding {
                 validate_gcp_remote_client_config(&client_config)?;
                 (
                     alien_core::ClientConfig::Gcp(client_config),
-                    alien_core::StorageBinding::Gcs(binding),
+                    serialize_remote_binding(alien_core::StorageBinding::Gcs(binding))?,
+                    expires_at,
+                )
+            }
+            Self::Kms {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_aws_remote_client_config(&client_config, expires_at)?;
+                (
+                    alien_core::ClientConfig::Aws(client_config),
+                    serialize_remote_binding(alien_core::KeyBinding::AwsKms(binding))?,
+                    expires_at,
+                )
+            }
+            Self::CloudKms {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_gcp_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Gcp(client_config),
+                    serialize_remote_binding(alien_core::KeyBinding::GcpCloudKms(binding))?,
+                    expires_at,
+                )
+            }
+            Self::KeyVaultKey {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_azure_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Azure(client_config),
+                    serialize_remote_binding(alien_core::KeyBinding::AzureKeyVault(binding))?,
                     expires_at,
                 )
             }
@@ -332,17 +446,20 @@ impl ResolvedRemoteBinding {
                 alien_core::ClientConfig::Local {
                     state_directory: client_config.state_directory,
                 },
-                alien_core::StorageBinding::Local(binding),
+                serialize_remote_binding(alien_core::StorageBinding::Local(binding))?,
                 expires_at,
             ),
         };
-        let binding = serde_json::to_value(binding).into_alien_error().context(
-            ErrorData::RemoteAccessFailed {
-                operation: "convert typed remote Storage lease".to_string(),
-            },
-        )?;
         Ok((client_config, binding, expires_at))
     }
+}
+
+fn serialize_remote_binding(binding: impl Serialize) -> Result<serde_json::Value> {
+    serde_json::to_value(binding)
+        .into_alien_error()
+        .context(ErrorData::RemoteAccessFailed {
+            operation: "convert typed remote binding lease".to_string(),
+        })
 }
 
 fn invalid_remote_lease(provider: &str, reason: &str) -> AlienError<ErrorData> {
@@ -506,6 +623,12 @@ struct RemoteStorageResolver {
     clock: Arc<dyn Clock>,
 }
 
+#[derive(Clone, Copy)]
+enum RequestedBindingKind {
+    Storage,
+    Key,
+}
+
 impl fmt::Debug for RemoteStorageResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RemoteStorageResolver")
@@ -518,10 +641,25 @@ impl fmt::Debug for RemoteStorageResolver {
 
 impl RemoteStorageResolver {
     async fn storage(&self) -> Result<Arc<dyn Storage>> {
-        BindingsProviderApi::load_storage(&*self.provider().await?, &self.resource_id).await
+        BindingsProviderApi::load_storage(
+            &*self.provider(RequestedBindingKind::Storage).await?,
+            &self.resource_id,
+        )
+        .await
     }
 
-    async fn provider(&self) -> Result<Arc<BindingsProvider>> {
+    async fn key(&self) -> Result<Arc<dyn Key>> {
+        BindingsProviderApi::load_key(
+            &*self.provider(RequestedBindingKind::Key).await?,
+            &self.resource_id,
+        )
+        .await
+    }
+
+    async fn provider(
+        &self,
+        requested_kind: RequestedBindingKind,
+    ) -> Result<Arc<BindingsProvider>> {
         let now = self.clock.now();
         let observed_generation = {
             let state = self.state.read().await;
@@ -562,7 +700,7 @@ impl RemoteStorageResolver {
         let result = self.source.resolve(&self.resource_id).await;
         let now = self.clock.now();
         let result = match result {
-            Ok(resolved) => self.build_cache_entry(resolved, now).await,
+            Ok(resolved) => self.build_cache_entry(resolved, now, requested_kind).await,
             Err(error) => Err(error),
         };
         let mut state = self.state.write().await;
@@ -597,6 +735,7 @@ impl RemoteStorageResolver {
         &self,
         resolved: ResolvedRemoteBinding,
         now: DateTime<Utc>,
+        requested_kind: RequestedBindingKind,
     ) -> Result<CachedRemoteBinding> {
         let (client_config, binding, expires_at) = resolved.into_provider_parts()?;
         if expires_at <= now {
@@ -614,7 +753,14 @@ impl RemoteStorageResolver {
         )?);
         // Validate the typed binding and provider feature before committing the
         // lease. An invalid response must not poison the cache until expiry.
-        BindingsProviderApi::load_storage(&*provider, &self.resource_id).await?;
+        match requested_kind {
+            RequestedBindingKind::Storage => {
+                BindingsProviderApi::load_storage(&*provider, &self.resource_id).await?;
+            }
+            RequestedBindingKind::Key => {
+                BindingsProviderApi::load_key(&*provider, &self.resource_id).await?;
+            }
+        }
         let lifetime = expires_at - now;
         let refresh_skew = std::cmp::min(
             ChronoDuration::seconds(MAX_REFRESH_SKEW_SECONDS),

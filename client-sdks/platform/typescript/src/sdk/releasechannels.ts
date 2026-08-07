@@ -12,7 +12,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class ReleaseChannels extends ClientSDK {
   /**
-   * Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
+   * Retrieve all managers.
    */
   async list(
     request: operations.ListReleaseChannelsRequest,
@@ -26,7 +26,7 @@ export class ReleaseChannels extends ClientSDK {
   }
 
   /**
-   * Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
+   * Create a new manager.
    */
   async create(
     request: operations.CreateReleaseChannelRequest,
@@ -40,7 +40,7 @@ export class ReleaseChannels extends ClientSDK {
   }
 
   /**
-   * Delete a workspace. The workspace must have no projects.
+   * Delete a manager by ID.
    */
   async delete(
     request: operations.DeleteReleaseChannelRequest,

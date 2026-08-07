@@ -7,11 +7,79 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
+    Ai, Key, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
     RemoteBindings, RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
     StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
+
+#[test]
+fn gcp_key_package_is_valid_and_retained() {
+    let mut stack = Stack::new("enterprise-key".to_string())
+        .add_with_remote_access(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack
+        .resources
+        .get_mut("customer-key")
+        .unwrap()
+        .dependencies = vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("google_kms_key_ring"));
+    assert!(rendered.contains("random_id.customer_key_ring_suffix.hex"));
+    assert!(rendered.contains("prevent_destroy = true"));
+    assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
+    let detach = module
+        .get("detach-retained-keys.sh")
+        .expect("retained Key detach operation");
+    assert!(detach.contains("google_kms_crypto_key.customer_key"));
+    assert!(detach.contains("google_kms_key_ring.customer_key_ring"));
+    assert_terraform_valid(&module, "gcp_key_package");
+}
+
+#[test]
+fn gcp_storage_uses_customer_managed_key() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("default_kms_key_name = google_kms_crypto_key.customer_key.id"));
+    assert!(rendered.contains("google_storage_project_service_account"));
+    assert!(rendered.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"));
+    assert!(rendered.contains("depends_on"));
+    assert!(rendered.contains("google_kms_crypto_key_iam_member.data_storage_encryption"));
+    assert_terraform_valid(&module, "gcp_encrypted_storage");
+}
 
 #[test]
 fn gcp_storage_minimal_renders_idiomatic_module() {
