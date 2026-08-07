@@ -1497,8 +1497,6 @@ Resources:
             - ecr:GetDownloadUrlForLayer
             - ecr:ListImages
             - ecr:CompleteLayerUpload
-            - ecr:CreateRepository
-            - ecr:DeleteRepository
             - ecr:InitiateLayerUpload
             - ecr:PutImage
             - ecr:UploadLayerPart
