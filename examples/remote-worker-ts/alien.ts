@@ -10,6 +10,7 @@ const worker = new alien.Worker("worker")
   .build()
 
 export default new alien.Stack("remote-worker")
+  .platforms(["aws", "gcp", "azure"])
   .add(files, "frozen")
   .add(worker, "live")
   .permissions({
