@@ -11,5 +11,5 @@ let value: ProjectAllowedProvider = "anthropic";
 ## Values
 
 ```typescript
-"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic"
+"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic" | "openai"
 ```

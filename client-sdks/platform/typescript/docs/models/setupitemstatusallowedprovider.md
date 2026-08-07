@@ -11,5 +11,5 @@ let value: SetupItemStatusAllowedProvider = "aws-bedrock";
 ## Values
 
 ```typescript
-"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic"
+"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic" | "openai"
 ```

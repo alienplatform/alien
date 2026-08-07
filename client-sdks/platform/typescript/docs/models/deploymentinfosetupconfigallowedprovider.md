@@ -5,11 +5,11 @@
 ```typescript
 import { DeploymentInfoSetupConfigAllowedProvider } from "@alienplatform/platform-api/models";
 
-let value: DeploymentInfoSetupConfigAllowedProvider = "anthropic";
+let value: DeploymentInfoSetupConfigAllowedProvider = "openai";
 ```
 
 ## Values
 
 ```typescript
-"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic"
+"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic" | "openai"
 ```

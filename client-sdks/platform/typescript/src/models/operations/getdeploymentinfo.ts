@@ -28,6 +28,7 @@ export const GetDeploymentInfoSetupItem = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type GetDeploymentInfoSetupItem = ClosedEnum<
   typeof GetDeploymentInfoSetupItem

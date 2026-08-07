@@ -28,6 +28,7 @@ export const CreateManagerResponseItemEnum = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type CreateManagerResponseItemEnum = ClosedEnum<
   typeof CreateManagerResponseItemEnum
@@ -36,6 +37,7 @@ export type CreateManagerResponseItemEnum = ClosedEnum<
 export const CreateManagerResponseDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
 } as const;
 export type CreateManagerResponseDefinitionId = ClosedEnum<
   typeof CreateManagerResponseDefinitionId
@@ -70,6 +72,7 @@ export const CreateManagerResponseAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type CreateManagerResponseAllowedProvider = ClosedEnum<
   typeof CreateManagerResponseAllowedProvider

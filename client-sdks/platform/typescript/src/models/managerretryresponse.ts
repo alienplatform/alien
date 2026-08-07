@@ -25,6 +25,7 @@ export const ManagerRetryResponseItemEnum = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type ManagerRetryResponseItemEnum = ClosedEnum<
   typeof ManagerRetryResponseItemEnum
@@ -33,6 +34,7 @@ export type ManagerRetryResponseItemEnum = ClosedEnum<
 export const ManagerRetryResponseDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
 } as const;
 export type ManagerRetryResponseDefinitionId = ClosedEnum<
   typeof ManagerRetryResponseDefinitionId
@@ -67,6 +69,7 @@ export const ManagerRetryResponseAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type ManagerRetryResponseAllowedProvider = ClosedEnum<
   typeof ManagerRetryResponseAllowedProvider

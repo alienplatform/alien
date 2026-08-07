@@ -39,6 +39,7 @@ export const DeploymentInfoSetupConfigItemEnum = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type DeploymentInfoSetupConfigItemEnum = ClosedEnum<
   typeof DeploymentInfoSetupConfigItemEnum
@@ -47,6 +48,7 @@ export type DeploymentInfoSetupConfigItemEnum = ClosedEnum<
 export const DeploymentInfoSetupConfigDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
 } as const;
 export type DeploymentInfoSetupConfigDefinitionId = ClosedEnum<
   typeof DeploymentInfoSetupConfigDefinitionId
@@ -81,6 +83,7 @@ export const DeploymentInfoSetupConfigAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type DeploymentInfoSetupConfigAllowedProvider = ClosedEnum<
   typeof DeploymentInfoSetupConfigAllowedProvider

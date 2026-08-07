@@ -15,6 +15,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 export const CustomerConnectionMaterializationDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
 } as const;
 export type CustomerConnectionMaterializationDefinitionId = ClosedEnum<
   typeof CustomerConnectionMaterializationDefinitionId

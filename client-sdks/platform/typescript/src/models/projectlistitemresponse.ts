@@ -284,6 +284,7 @@ export const ProjectListItemResponseAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type ProjectListItemResponseAllowedProvider = ClosedEnum<
   typeof ProjectListItemResponseAllowedProvider
@@ -310,9 +311,22 @@ export type ProjectListItemResponseModels = {
   requirements: Array<ProjectListItemResponseRequirement>;
 };
 
+export const ProjectListItemResponseAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type ProjectListItemResponseAccess = ClosedEnum<
+  typeof ProjectListItemResponseAccess
+>;
+
+export type ProjectListItemResponseStorage = {
+  enabled: boolean;
+  access: ProjectListItemResponseAccess;
+};
+
 export type ProjectListItemResponseConnections = {
   keys?: ProjectListItemResponseKeys | undefined;
   models?: ProjectListItemResponseModels | undefined;
+  storage?: ProjectListItemResponseStorage | undefined;
 };
 
 /**
@@ -670,12 +684,38 @@ export function projectListItemResponseModelsFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseAccess$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseAccess
+> = z.enum(ProjectListItemResponseAccess);
+
+/** @internal */
+export const ProjectListItemResponseStorage$inboundSchema: z.ZodType<
+  ProjectListItemResponseStorage,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  access: ProjectListItemResponseAccess$inboundSchema,
+});
+
+export function projectListItemResponseStorageFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseStorage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseStorage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseStorage' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponseConnections$inboundSchema: z.ZodType<
   ProjectListItemResponseConnections,
   unknown
 > = z.object({
   keys: z.lazy(() => ProjectListItemResponseKeys$inboundSchema).optional(),
   models: z.lazy(() => ProjectListItemResponseModels$inboundSchema).optional(),
+  storage: z.lazy(() => ProjectListItemResponseStorage$inboundSchema)
+    .optional(),
 });
 
 export function projectListItemResponseConnectionsFromJSON(

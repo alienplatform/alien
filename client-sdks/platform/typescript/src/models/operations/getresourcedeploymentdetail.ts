@@ -1883,7 +1883,7 @@ export type DataGcpArtifactRegistry = {
   backend: "gcpArtifactRegistry";
 };
 
-export type Repository = {
+export type GetResourceDeploymentDetailRepository = {
   createdAt: number;
   encryptionType?: string | null | undefined;
   imageTagMutability?: string | null | undefined;
@@ -1957,7 +1957,7 @@ export type DataAwsEcr = {
   region: string;
   registryId: string;
   registryUri: string;
-  repositories: Array<Repository>;
+  repositories: Array<GetResourceDeploymentDetailRepository>;
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
@@ -10537,26 +10537,29 @@ export function dataGcpArtifactRegistryFromJSON(
 }
 
 /** @internal */
-export const Repository$inboundSchema: z.ZodType<Repository, unknown> = z
-  .object({
-    createdAt: z.number(),
-    encryptionType: z.nullable(z.string()).optional(),
-    imageTagMutability: z.nullable(z.string()).optional(),
-    kmsKeyPresent: z.boolean(),
-    registryId: z.string(),
-    repositoryArn: z.string(),
-    repositoryName: z.string(),
-    repositoryUri: z.string(),
-    scanOnPush: z.nullable(z.boolean()).optional(),
-  });
+export const GetResourceDeploymentDetailRepository$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailRepository,
+  unknown
+> = z.object({
+  createdAt: z.number(),
+  encryptionType: z.nullable(z.string()).optional(),
+  imageTagMutability: z.nullable(z.string()).optional(),
+  kmsKeyPresent: z.boolean(),
+  registryId: z.string(),
+  repositoryArn: z.string(),
+  repositoryName: z.string(),
+  repositoryUri: z.string(),
+  scanOnPush: z.nullable(z.boolean()).optional(),
+});
 
-export function repositoryFromJSON(
+export function getResourceDeploymentDetailRepositoryFromJSON(
   jsonString: string,
-): SafeParseResult<Repository, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailRepository, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Repository$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Repository' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailRepository$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailRepository' from JSON`,
   );
 }
 
@@ -10630,7 +10633,9 @@ export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
     region: z.string(),
     registryId: z.string(),
     registryUri: z.string(),
-    repositories: z.array(z.lazy(() => Repository$inboundSchema)),
+    repositories: z.array(
+      z.lazy(() => GetResourceDeploymentDetailRepository$inboundSchema),
+    ),
     repositoriesTruncated: z.boolean(),
     repositoryCount: z.int(),
     repositoryPrefix: z.string(),

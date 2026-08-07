@@ -11,5 +11,5 @@ let value: APIKeyDeploymentSetupConfigItemEnum = "keys";
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"alien-stack" | "models" | "keys" | "storage"
 ```

@@ -237,9 +237,9 @@ run();
 * [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
-* [getDirectAnthropicBinding](docs/sdks/deploymentgroups/README.md#getdirectanthropicbinding) - Get direct Anthropic connection state
-* [putDirectAnthropicBinding](docs/sdks/deploymentgroups/README.md#putdirectanthropicbinding) - Connect or rotate a direct Anthropic workspace key
-* [deleteDirectAnthropicBinding](docs/sdks/deploymentgroups/README.md#deletedirectanthropicbinding) - Revoke the direct Anthropic connection
+* [getExternalAIBinding](docs/sdks/deploymentgroups/README.md#getexternalaibinding) - Get external AI connection state
+* [putExternalAIBinding](docs/sdks/deploymentgroups/README.md#putexternalaibinding) - Connect or rotate an external AI provider key
+* [deleteExternalAIBinding](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
@@ -331,6 +331,7 @@ run();
 * [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+* [configureSource](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
 * [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
@@ -338,6 +339,7 @@ run();
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
 * [configureCustomerModels](docs/sdks/projects/README.md#configurecustomermodels) - Configure customer-owned model providers without requiring an application Release.
 * [configureCustomerKey](docs/sdks/projects/README.md#configurecustomerkey) - Enable customer-owned application encryption without requiring an application Release.
+* [configureCustomerStorage](docs/sdks/projects/README.md#configurecustomerstorage) - Enable customer-owned storage without requiring an application Release.
 
 ### [ReleaseChannels](docs/sdks/releasechannels/README.md)
 
@@ -470,14 +472,14 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsCreateFirstPartyDeploymentSession`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
-- [`deploymentGroupsDeleteDirectAnthropicBinding`](docs/sdks/deploymentgroups/README.md#deletedirectanthropicbinding) - Revoke the direct Anthropic connection
+- [`deploymentGroupsDeleteExternalAIBinding`](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
 - [`deploymentGroupsEnsureDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
 - [`deploymentGroupsEnsureDeploymentGroupByName`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsGetDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
-- [`deploymentGroupsGetDirectAnthropicBinding`](docs/sdks/deploymentgroups/README.md#getdirectanthropicbinding) - Get direct Anthropic connection state
+- [`deploymentGroupsGetExternalAIBinding`](docs/sdks/deploymentgroups/README.md#getexternalaibinding) - Get external AI connection state
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
-- [`deploymentGroupsPutDirectAnthropicBinding`](docs/sdks/deploymentgroups/README.md#putdirectanthropicbinding) - Connect or rotate a direct Anthropic workspace key
+- [`deploymentGroupsPutExternalAIBinding`](docs/sdks/deploymentgroups/README.md#putexternalaibinding) - Connect or rotate an external AI provider key
 - [`deploymentGroupsSetDeploymentGroupExternalId`](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.
@@ -550,6 +552,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`packagesRebuild`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
 - [`projectsConfigureCustomerKey`](docs/sdks/projects/README.md#configurecustomerkey) - Enable customer-owned application encryption without requiring an application Release.
 - [`projectsConfigureCustomerModels`](docs/sdks/projects/README.md#configurecustomermodels) - Configure customer-owned model providers without requiring an application Release.
+- [`projectsConfigureCustomerStorage`](docs/sdks/projects/README.md#configurecustomerstorage) - Enable customer-owned storage without requiring an application Release.
+- [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.

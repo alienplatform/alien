@@ -4,6 +4,8 @@
 
 import { projectsConfigureCustomerKey } from "../funcs/projectsConfigureCustomerKey.js";
 import { projectsConfigureCustomerModels } from "../funcs/projectsConfigureCustomerModels.js";
+import { projectsConfigureCustomerStorage } from "../funcs/projectsConfigureCustomerStorage.js";
+import { projectsConfigureSource } from "../funcs/projectsConfigureSource.js";
 import { projectsCreate } from "../funcs/projectsCreate.js";
 import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.js";
 import { projectsDelete } from "../funcs/projectsDelete.js";
@@ -121,6 +123,20 @@ export class Projects extends ClientSDK {
   }
 
   /**
+   * Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+   */
+  async configureSource(
+    request: operations.ConfigureProjectSourceRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ConfigureProjectSourceResponse> {
+    return unwrapAsync(projectsConfigureSource(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Get the deployment portal domain binding for a project.
    */
   async getDeploymentPortalDomain(
@@ -212,6 +228,20 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CustomerConnectionMaterialization> {
     return unwrapAsync(projectsConfigureCustomerKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Enable customer-owned storage without requiring an application Release.
+   */
+  async configureCustomerStorage(
+    request: operations.ConfigureProjectCustomerStorageRequest,
+    options?: RequestOptions,
+  ): Promise<models.CustomerConnectionMaterialization> {
+    return unwrapAsync(projectsConfigureCustomerStorage(
       this,
       request,
       options,

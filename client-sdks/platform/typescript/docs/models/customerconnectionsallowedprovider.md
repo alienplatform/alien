@@ -5,11 +5,11 @@
 ```typescript
 import { CustomerConnectionsAllowedProvider } from "@alienplatform/platform-api/models";
 
-let value: CustomerConnectionsAllowedProvider = "gcp-vertex";
+let value: CustomerConnectionsAllowedProvider = "azure-foundry";
 ```
 
 ## Values
 
 ```typescript
-"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic"
+"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic" | "openai"
 ```

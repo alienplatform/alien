@@ -9,6 +9,7 @@ export const DeploymentSetupItemSelectionItem = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type DeploymentSetupItemSelectionItem = ClosedEnum<
   typeof DeploymentSetupItemSelectionItem

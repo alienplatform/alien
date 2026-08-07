@@ -12,12 +12,14 @@ export const SetupItemStatusItem = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type SetupItemStatusItem = ClosedEnum<typeof SetupItemStatusItem>;
 
 export const SetupItemStatusDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
 } as const;
 export type SetupItemStatusDefinitionId = ClosedEnum<
   typeof SetupItemStatusDefinitionId
@@ -52,6 +54,7 @@ export const SetupItemStatusAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type SetupItemStatusAllowedProvider = ClosedEnum<
   typeof SetupItemStatusAllowedProvider

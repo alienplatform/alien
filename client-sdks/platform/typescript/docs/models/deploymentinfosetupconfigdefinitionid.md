@@ -11,5 +11,5 @@ let value: DeploymentInfoSetupConfigDefinitionId = "customer-ai";
 ## Values
 
 ```typescript
-"customer-ai" | "customer-key"
+"customer-ai" | "customer-key" | "customer-storage"
 ```

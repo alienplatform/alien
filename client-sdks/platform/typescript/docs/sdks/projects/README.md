@@ -11,6 +11,7 @@
 * [delete](#delete) - Delete a project. The project must have no deployments.
 * [getGcpOAuthProvider](#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+* [configureSource](#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
 * [getDeploymentPortalDomain](#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 * [createFromTemplate](#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
@@ -18,6 +19,7 @@
 * [getActiveRelease](#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
 * [configureCustomerModels](#configurecustomermodels) - Configure customer-owned model providers without requiring an application Release.
 * [configureCustomerKey](#configurecustomerkey) - Enable customer-owned application encryption without requiring an application Release.
+* [configureCustomerStorage](#configurecustomerstorage) - Enable customer-owned storage without requiring an application Release.
 
 ## list
 
@@ -585,6 +587,97 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## configureSource
+
+Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectSource" method="post" path="/v1/projects/{idOrName}/source" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureSource({
+    idOrName: "my-project",
+    workspace: "my-workspace",
+    requestBody: {
+      mode: "repository",
+      gitRepository: {
+        type: "github",
+        repo: "alien/my-agent",
+      },
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureSource } from "@alienplatform/platform-api/funcs/projectsConfigureSource.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureSource(alien, {
+    idOrName: "my-project",
+    workspace: "my-workspace",
+    requestBody: {
+      mode: "repository",
+      gitRepository: {
+        type: "github",
+        repo: "alien/my-agent",
+      },
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureSource failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ConfigureProjectSourceRequest](../../models/operations/configureprojectsourcerequest.md)                                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.ConfigureProjectSourceResponse](../../models/operations/configureprojectsourceresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## getDeploymentPortalDomain
 
 Get the deployment portal domain binding for a project.
@@ -1116,6 +1209,83 @@ run();
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `request`                                                                                                                                                                      | [operations.ConfigureProjectCustomerKeyRequest](../../models/operations/configureprojectcustomerkeyrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.CustomerConnectionMaterialization](../../models/customerconnectionmaterialization.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## configureCustomerStorage
+
+Enable customer-owned storage without requiring an application Release.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectCustomerStorage" method="put" path="/v1/projects/{idOrName}/customer-connections/storage" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureCustomerStorage({
+    idOrName: "my-project",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureCustomerStorage } from "@alienplatform/platform-api/funcs/projectsConfigureCustomerStorage.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureCustomerStorage(alien, {
+    idOrName: "my-project",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureCustomerStorage failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ConfigureProjectCustomerStorageRequest](../../models/operations/configureprojectcustomerstoragerequest.md)                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

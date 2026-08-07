@@ -11,5 +11,5 @@ let value: DeploymentLinkSetupResponseSetupItem = "alien-stack";
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"alien-stack" | "models" | "keys" | "storage"
 ```

@@ -26,7 +26,7 @@ export type CreateProjectTypeRequest = ClosedEnum<
 /**
  * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
-export type GitRepositoryRequest = {
+export type CreateProjectGitRepositoryRequest = {
   /**
    * The Git Provider of the repository
    */
@@ -200,7 +200,7 @@ export type CreateProjectRequestBody = {
   /**
    * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
-  gitRepository?: GitRepositoryRequest | null | undefined;
+  gitRepository?: CreateProjectGitRepositoryRequest | null | undefined;
   /**
    * The name of a directory or relative path to the source code of your project. When null is used it will default to the project root
    */
@@ -479,6 +479,7 @@ export const CreateProjectAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type CreateProjectAllowedProvider = ClosedEnum<
   typeof CreateProjectAllowedProvider
@@ -503,9 +504,20 @@ export type CreateProjectModels = {
   requirements: Array<CreateProjectRequirement>;
 };
 
+export const CreateProjectAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type CreateProjectAccess = ClosedEnum<typeof CreateProjectAccess>;
+
+export type CreateProjectStorage = {
+  enabled: boolean;
+  access: CreateProjectAccess;
+};
+
 export type CreateProjectConnections = {
   keys?: CreateProjectKeys | undefined;
   models?: CreateProjectModels | undefined;
+  storage?: CreateProjectStorage | undefined;
 };
 
 /**
@@ -585,25 +597,27 @@ export const CreateProjectTypeRequest$outboundSchema: z.ZodEnum<
 > = z.enum(CreateProjectTypeRequest);
 
 /** @internal */
-export type GitRepositoryRequest$Outbound = {
+export type CreateProjectGitRepositoryRequest$Outbound = {
   type: string;
   repo: string;
 };
 
 /** @internal */
-export const GitRepositoryRequest$outboundSchema: z.ZodType<
-  GitRepositoryRequest$Outbound,
-  GitRepositoryRequest
+export const CreateProjectGitRepositoryRequest$outboundSchema: z.ZodType<
+  CreateProjectGitRepositoryRequest$Outbound,
+  CreateProjectGitRepositoryRequest
 > = z.object({
   type: CreateProjectTypeRequest$outboundSchema,
   repo: z.string(),
 });
 
-export function gitRepositoryRequestToJSON(
-  gitRepositoryRequest: GitRepositoryRequest,
+export function createProjectGitRepositoryRequestToJSON(
+  createProjectGitRepositoryRequest: CreateProjectGitRepositoryRequest,
 ): string {
   return JSON.stringify(
-    GitRepositoryRequest$outboundSchema.parse(gitRepositoryRequest),
+    CreateProjectGitRepositoryRequest$outboundSchema.parse(
+      createProjectGitRepositoryRequest,
+    ),
   );
 }
 
@@ -793,7 +807,7 @@ export function createProjectPackagesConfigRequestToJSON(
 /** @internal */
 export type CreateProjectRequestBody$Outbound = {
   name: string;
-  gitRepository?: GitRepositoryRequest$Outbound | null | undefined;
+  gitRepository?: CreateProjectGitRepositoryRequest$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
   packagesConfig?:
     | CreateProjectPackagesConfigRequest$Outbound
@@ -807,8 +821,9 @@ export const CreateProjectRequestBody$outboundSchema: z.ZodType<
   CreateProjectRequestBody
 > = z.object({
   name: z.string(),
-  gitRepository: z.nullable(z.lazy(() => GitRepositoryRequest$outboundSchema))
-    .optional(),
+  gitRepository: z.nullable(
+    z.lazy(() => CreateProjectGitRepositoryRequest$outboundSchema),
+  ).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectPackagesConfigRequest$outboundSchema),
@@ -1142,12 +1157,37 @@ export function createProjectModelsFromJSON(
 }
 
 /** @internal */
+export const CreateProjectAccess$inboundSchema: z.ZodEnum<
+  typeof CreateProjectAccess
+> = z.enum(CreateProjectAccess);
+
+/** @internal */
+export const CreateProjectStorage$inboundSchema: z.ZodType<
+  CreateProjectStorage,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  access: CreateProjectAccess$inboundSchema,
+});
+
+export function createProjectStorageFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectStorage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectStorage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectStorage' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectConnections$inboundSchema: z.ZodType<
   CreateProjectConnections,
   unknown
 > = z.object({
   keys: z.lazy(() => CreateProjectKeys$inboundSchema).optional(),
   models: z.lazy(() => CreateProjectModels$inboundSchema).optional(),
+  storage: z.lazy(() => CreateProjectStorage$inboundSchema).optional(),
 });
 
 export function createProjectConnectionsFromJSON(

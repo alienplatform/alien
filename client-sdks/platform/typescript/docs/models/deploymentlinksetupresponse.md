@@ -13,7 +13,7 @@ let value: DeploymentLinkSetupResponse = {
   },
   supportedPlatforms: [],
   setupItems: [
-    "keys",
+    "storage",
   ],
   visiblePackageTypes: [],
   visibleSetupMethods: [],
