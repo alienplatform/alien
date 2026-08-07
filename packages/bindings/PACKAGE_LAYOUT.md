@@ -108,6 +108,10 @@ Only two entry points. Every condition carries `types`. No deep imports.
   workspace source manifest (`packages/bindings/package.json`) carries no
   `optionalDependencies` — adding the per-platform packages there would pin
   unpublished versions and break `pnpm install --frozen-lockfile` before release.
+  Package managers install only the host-matching optional dependency. When
+  `alien build` cross-builds for another target, it downloads that target's
+  matching prebuild at the wrapper's exact version, verifies the npm SHA-512
+  integrity, and caches the single native asset under the Alien user cache.
 - `description` and `keywords`.
 - Support note: Bun ≥ 1.0.23 and Node ≥ 18 (Node-API / napi-rs addon).
 - `dependencies`: `@alienplatform/core` (errors) only.

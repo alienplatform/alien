@@ -293,6 +293,7 @@ dependencies = [
  "alien-error",
  "alien-preflights",
  "async-trait",
+ "base64 0.22.1",
  "dirs 5.0.1",
  "dockdash",
  "dotenvy",

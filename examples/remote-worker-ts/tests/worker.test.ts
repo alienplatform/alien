@@ -1,5 +1,10 @@
 import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { z } from "zod"
+
+const healthResponseSchema = z.object({ status: z.literal("ok") })
+const toolsResponseSchema = z.array(z.object({ name: z.string(), description: z.string() }))
+const readFileResponseSchema = z.object({ content: z.string() })
 
 describe("remote-worker-ts", () => {
   let deployment: Deployment
@@ -16,15 +21,15 @@ describe("remote-worker-ts", () => {
     const response = await fetch(`${deployment.url}/health`)
     expect(response.ok).toBe(true)
 
-    const data = await response.json()
+    const data = healthResponseSchema.parse(await response.json())
     expect(data.status).toBe("ok")
   })
 
   it("should list available tools", async () => {
-    const tools = await deployment.invokeCommand("list-tools", {})
+    const tools = toolsResponseSchema.parse(await deployment.invokeCommand("list-tools", {}))
 
     expect(Array.isArray(tools)).toBe(true)
-    const names = tools.map((t: { name: string }) => t.name)
+    const names = tools.map(tool => tool.name)
     expect(names).toContain("read-file")
     expect(names).toContain("write-file")
   })
@@ -35,10 +40,12 @@ describe("remote-worker-ts", () => {
       params: { path: "hello.txt", content: "Hello!" },
     })
 
-    const result = await deployment.invokeCommand("execute-tool", {
-      tool: "read-file",
-      params: { path: "hello.txt" },
-    })
+    const result = readFileResponseSchema.parse(
+      await deployment.invokeCommand("execute-tool", {
+        tool: "read-file",
+        params: { path: "hello.txt" },
+      }),
+    )
 
     expect(result.content).toBe("Hello!")
   })
