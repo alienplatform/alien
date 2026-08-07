@@ -237,6 +237,9 @@ run();
 * [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
+* [getDirectAnthropicBinding](docs/sdks/deploymentgroups/README.md#getdirectanthropicbinding) - Get direct Anthropic connection state
+* [putDirectAnthropicBinding](docs/sdks/deploymentgroups/README.md#putdirectanthropicbinding) - Connect or rotate a direct Anthropic workspace key
+* [deleteDirectAnthropicBinding](docs/sdks/deploymentgroups/README.md#deletedirectanthropicbinding) - Revoke the direct Anthropic connection
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
@@ -461,11 +464,14 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsCreateFirstPartyDeploymentSession`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
+- [`deploymentGroupsDeleteDirectAnthropicBinding`](docs/sdks/deploymentgroups/README.md#deletedirectanthropicbinding) - Revoke the direct Anthropic connection
 - [`deploymentGroupsEnsureDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
 - [`deploymentGroupsEnsureDeploymentGroupByName`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsGetDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
+- [`deploymentGroupsGetDirectAnthropicBinding`](docs/sdks/deploymentgroups/README.md#getdirectanthropicbinding) - Get direct Anthropic connection state
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
+- [`deploymentGroupsPutDirectAnthropicBinding`](docs/sdks/deploymentgroups/README.md#putdirectanthropicbinding) - Connect or rotate a direct Anthropic workspace key
 - [`deploymentGroupsSetDeploymentGroupExternalId`](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 - [`deploymentPlanCompute`](docs/sdks/deployment/README.md#plancompute) - Plan deployment compute for the active release before stack preparation. The response contains recommended machine and scale choices for cloud compute pools.

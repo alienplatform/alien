@@ -4,10 +4,14 @@
 */
 
 import * as z from "zod";
+import { AiAvailabilityObservationSchema } from "./ai-availability-observation-schema.js";
 import { AiHeartbeatStatusSchema } from "./ai-heartbeat-status-schema.js";
 
 export const AwsBedrockAiHeartbeatDataSchema = z.object({
-    "region": z.string(),
+    get "availability"(){
+                return AiAvailabilityObservationSchema
+              },
+"region": z.string(),
 get "status"(){
                 return AiHeartbeatStatusSchema
               }

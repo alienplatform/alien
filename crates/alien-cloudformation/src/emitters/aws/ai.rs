@@ -21,7 +21,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, Ai, ErrorData, PermissionProfile, PermissionSetReference, Result,
+    import::EmitContext, Ai, ErrorData, PermissionProfile, PermissionSetReference, RemoteBindings,
+    Result,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -129,7 +130,27 @@ fn ai_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSet
             owners.push((role_id, refs));
         }
     }
+    if let (Some(definition), Some(role_id)) = (
+        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        remote_bindings_role_id(ctx),
+    ) {
+        owners.push((
+            role_id,
+            vec![PermissionSetReference::from_name(definition.permission_set)],
+        ));
+    }
     owners
+}
+
+fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| {
+                ctx.name_for(id)
+                    .map(|logical_id| format!("{logical_id}Role"))
+            })
+            .flatten()
+    })
 }
 
 fn ai_permission_refs(

@@ -12,7 +12,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class ReleaseChannels extends ClientSDK {
   /**
-   * Retrieve all managers.
+   * List system domains and workspace domains.
    */
   async list(
     request: operations.ListReleaseChannelsRequest,
@@ -26,7 +26,7 @@ export class ReleaseChannels extends ClientSDK {
   }
 
   /**
-   * Create a new manager.
+   * Create a workspace domain and optional initial endpoints.
    */
   async create(
     request: operations.CreateReleaseChannelRequest,
@@ -40,7 +40,7 @@ export class ReleaseChannels extends ClientSDK {
   }
 
   /**
-   * Delete a manager by ID.
+   * Delete a workspace domain.
    */
   async delete(
     request: operations.DeleteReleaseChannelRequest,

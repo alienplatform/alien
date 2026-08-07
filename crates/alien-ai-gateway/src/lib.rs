@@ -6,15 +6,17 @@
 //! passes its URL to the app; routing lives in `router`, credential injection in
 //! `creds`.
 
-mod availability;
 mod config;
 mod creds;
 mod error;
 mod router;
-pub use config::{bindings_from_env, bindings_from_env_map};
-pub use creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
+pub use config::{bindings_from_env, bindings_from_env_map, route_from_remote_ai_lease};
+pub use creds::{AmbientCred, AnthropicApiKeyCred, AwsSigV4Cred, BearerTokenCred};
 pub use error::{ErrorData, Result};
-pub use router::{build_router, GatewayRoute};
+pub use router::{
+    build_router, build_router_with_availability, route_from_direct_anthropic, AvailableModels,
+    GatewayRoute, GatewayTarget,
+};
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -166,7 +168,10 @@ mod tests {
     async fn dropping_the_handle_stops_the_server() {
         let handle = start_gateway(vec![]).await.expect("gateway should start");
         let url = format!("{}/healthz/ready", handle.url);
-        assert!(reqwest::get(&url).await.is_ok(), "the gateway serves while the handle is held");
+        assert!(
+            reqwest::get(&url).await.is_ok(),
+            "the gateway serves while the handle is held"
+        );
 
         drop(handle);
         // The abort lands on the next scheduler pass.

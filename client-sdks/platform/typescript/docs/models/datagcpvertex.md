@@ -10,10 +10,12 @@ let value: DataGcpVertex = {
     catalogRevision: "<value>",
     models: [
       {
-        accessTest: "not-checked",
-        availability: "unknown",
+        accessTest: "failed",
+        availability: "blocked",
         blockers: [],
-        clientApis: [],
+        clientApis: [
+          "open-ai-chat-completions",
+        ],
         publicModelId: "<id>",
       },
     ],
@@ -34,10 +36,10 @@ let value: DataGcpVertex = {
 
 ## Fields
 
-| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `availability`                                                             | [models.Availability2](../models/availability2.md)                         | :heavy_check_mark:                                                         | N/A                                                                        |
-| `location`                                                                 | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `project`                                                                  | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus67](../models/resourceheartbeatstatus67.md) | :heavy_check_mark:                                                         | N/A                                                                        |
-| `backend`                                                                  | *"gcpVertex"*                                                              | :heavy_check_mark:                                                         | N/A                                                                        |
+| Field                                                                                      | Type                                                                                       | Required                                                                                   | Description                                                                                |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `availability`                                                                             | [models.SyncReconcileRequestAvailability2](../models/syncreconcilerequestavailability2.md) | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `location`                                                                                 | *string*                                                                                   | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `project`                                                                                  | *string*                                                                                   | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `status`                                                                                   | [models.ResourceHeartbeatStatus67](../models/resourceheartbeatstatus67.md)                 | :heavy_check_mark:                                                                         | N/A                                                                                        |
+| `backend`                                                                                  | *"gcpVertex"*                                                                              | :heavy_check_mark:                                                                         | N/A                                                                                        |

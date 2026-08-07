@@ -668,27 +668,25 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
                 if let Some(region) = config.region {
-                    aws_config.region = region
-                        .into_value(binding_name, "region")
-                        .context(ErrorData::config_invalid(
+                    aws_config.region = region.into_value(binding_name, "region").context(
+                        ErrorData::config_invalid(
                             binding_name,
                             "Failed to extract region from KMS binding",
-                        ))?;
+                        ),
+                    )?;
                 }
-                let credentials =
-                    alien_aws_clients::AwsCredentialProvider::from_config(aws_config)
-                        .await
-                        .context(ErrorData::BindingSetupFailed {
-                            binding_type: "AWS KMS key".to_string(),
-                            reason: "Failed to create credential provider".to_string(),
-                        })?;
-                let key_arn = config
-                    .key_arn
-                    .into_value(binding_name, "key_arn")
-                    .context(ErrorData::config_invalid(
+                let credentials = alien_aws_clients::AwsCredentialProvider::from_config(aws_config)
+                    .await
+                    .context(ErrorData::BindingSetupFailed {
+                        binding_type: "AWS KMS key".to_string(),
+                        reason: "Failed to create credential provider".to_string(),
+                    })?;
+                let key_arn = config.key_arn.into_value(binding_name, "key_arn").context(
+                    ErrorData::config_invalid(
                         binding_name,
                         "Failed to extract key_arn from KMS binding",
-                    ))?;
+                    ),
+                )?;
                 Arc::new(AwsKmsKey::new(
                     Arc::new(KmsClient::new(
                         crate::http_client::create_http_client(),
@@ -745,13 +743,12 @@ impl BindingsProviderApi for BindingsProvider {
                         message: "Azure config not available".to_string(),
                     })
                 })?;
-                let key_id = config
-                    .key_id
-                    .into_value(binding_name, "key_id")
-                    .context(ErrorData::config_invalid(
+                let key_id = config.key_id.into_value(binding_name, "key_id").context(
+                    ErrorData::config_invalid(
                         binding_name,
                         "Failed to extract key_id from Key Vault binding",
-                    ))?;
+                    ),
+                )?;
                 Arc::new(AzureKeyVaultKey::new(
                     Arc::new(AzureKeyVaultKeysClient::new(
                         crate::http_client::create_http_client(),

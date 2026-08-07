@@ -13,8 +13,8 @@
 
 use std::net::Ipv4Addr;
 
+use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute, GatewayTarget};
 use alien_core::Platform;
-use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
 use serde_json::{json, Value};
 
 async fn serve(router: axum::Router) -> String {
@@ -34,7 +34,7 @@ fn vertex_route() -> GatewayRoute {
         std::env::var("GCP_ACCESS_TOKEN").expect("GCP_ACCESS_TOKEN must hold a bearer token");
     GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Gcp,
+        target: GatewayTarget::Cloud(Platform::Gcp),
         region: Some("global".to_string()),
         project: Some(project),
         azure_endpoint: None,
@@ -95,10 +95,19 @@ async fn live_vertex_claude_streaming() {
         .expect("request to the gateway");
 
     let status = resp.status();
-    assert!(status.is_success(), "Vertex streaming must return 2xx; got {status}");
+    assert!(
+        status.is_success(),
+        "Vertex streaming must return 2xx; got {status}"
+    );
     let body = resp.text().await.expect("stream body");
     let head: String = body.chars().take(400).collect();
     eprintln!("live vertex claude stream head: {head}");
-    assert!(body.contains("message_start"), "SSE must open with message_start: {body}");
-    assert!(body.contains("message_stop"), "SSE must close with message_stop: {body}");
+    assert!(
+        body.contains("message_start"),
+        "SSE must open with message_start: {body}"
+    );
+    assert!(
+        body.contains("message_stop"),
+        "SSE must close with message_stop: {body}"
+    );
 }

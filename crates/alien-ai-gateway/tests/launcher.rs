@@ -16,7 +16,12 @@ fn passthrough_execs_app_without_gateway_when_no_ai_binding() {
     // gateway-spawn path. /bin/sh is an absolute path, so no PATH is needed.
     let out = Command::new(exe)
         .env_clear()
-        .args(["--", "/bin/sh", "-c", "printf '%s' \"gw=${ALIEN_AI_GATEWAY_URL:-unset}\""])
+        .args([
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf '%s' \"gw=${ALIEN_AI_GATEWAY_URL:-unset}\"",
+        ])
         .output()
         .expect("launcher should run");
     assert!(
@@ -50,7 +55,9 @@ fn gateway_serve_announces_a_reachable_ephemeral_url() {
         .and_then(|_| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
         .and_then(|v| v["aiGatewayUrl"].as_str().map(str::to_owned));
     // Probe reachability while the child is still alive.
-    let reachable = url.as_deref().map(alien_ai_gateway::wait_until_ready_blocking);
+    let reachable = url
+        .as_deref()
+        .map(alien_ai_gateway::wait_until_ready_blocking);
 
     // Reap unconditionally, before any assertion, so a broken binary (crash before
     // printing, malformed output, missing field) can't leave the `--gateway-serve`
@@ -59,9 +66,19 @@ fn gateway_serve_announces_a_reachable_ephemeral_url() {
     let _ = child.wait();
 
     let url = url.expect("gateway-serve must print a JSON line carrying aiGatewayUrl");
-    assert!(url.starts_with("http://127.0.0.1:"), "expected a loopback URL, got {url:?}");
-    assert!(!url.ends_with(":0"), "must report the OS-assigned port, not :0: {url:?}");
-    assert_eq!(reachable, Some(true), "the announced gateway URL must be reachable: {url}");
+    assert!(
+        url.starts_with("http://127.0.0.1:"),
+        "expected a loopback URL, got {url:?}"
+    );
+    assert!(
+        !url.ends_with(":0"),
+        "must report the OS-assigned port, not :0: {url:?}"
+    );
+    assert_eq!(
+        reachable,
+        Some(true),
+        "the announced gateway URL must be reachable: {url}"
+    );
 }
 
 // A malformed invocation (no `--` separator, no command) fails fast, non-zero.
@@ -81,7 +98,12 @@ fn external_binding_is_passthrough() {
     // env_clear so only the External binding under test is present.
     let out = Command::new(exe)
         .env_clear()
-        .args(["--", "/bin/sh", "-c", "printf '%s' \"gw=${ALIEN_AI_GATEWAY_URL:-unset}\""])
+        .args([
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf '%s' \"gw=${ALIEN_AI_GATEWAY_URL:-unset}\"",
+        ])
         .env(
             "ALIEN_LLM_BINDING",
             r#"{"service":"external-ai","provider":"openai","apiKey":"sk-x"}"#,
