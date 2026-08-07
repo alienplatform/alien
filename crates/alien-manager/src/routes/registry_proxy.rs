@@ -642,6 +642,20 @@ async fn proxy_push(
         }
         let qs = query_string(&upstream_query);
         let oci_path = format!("{}{}", oci_path_str, qs);
+        if signed_session.is_some() {
+            if !customer_continuation_matches_target(&oci_path_str, &target) {
+                return customer_registry_error(CustomerRegistryAccessError::Denied);
+            }
+            return forward_customer_to_upstream_raw(
+                &state,
+                &method,
+                &oci_path,
+                &headers,
+                Some(body),
+                &target,
+            )
+            .await;
+        }
         return forward_customer_to_upstream(
             &state,
             &method,
@@ -669,6 +683,10 @@ async fn proxy_push(
         Some(&repo_name),
     )
     .await
+}
+
+fn customer_continuation_matches_target(path: &str, target: &CustomerRegistryTarget) -> bool {
+    extract_repo_name(path) == target.upstream_repository
 }
 
 /// Restore the significant trailing slash on the OCI upload-init endpoint.
@@ -2375,6 +2393,23 @@ mod tests {
             ),
             "https://attacker.example"
         );
+    }
+
+    #[test]
+    fn customer_upload_continuations_accept_only_the_pinned_upstream_repository() {
+        let target = customer_target();
+        assert!(customer_continuation_matches_target(
+            "upstream-api/blobs/uploads/session-1",
+            &target,
+        ));
+        assert!(!customer_continuation_matches_target(
+            "customer/rgw_route/api/blobs/uploads/session-1",
+            &target,
+        ));
+        assert!(!customer_continuation_matches_target(
+            "other-upstream/blobs/uploads/session-1",
+            &target,
+        ));
     }
 
     #[tokio::test]
