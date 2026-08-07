@@ -18,6 +18,7 @@ export const CustomerConnectionsAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type CustomerConnectionsAllowedProvider = ClosedEnum<
   typeof CustomerConnectionsAllowedProvider
@@ -44,9 +45,22 @@ export type CustomerConnectionsModels = {
   requirements: Array<CustomerConnectionsRequirement>;
 };
 
+export const CustomerConnectionsAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type CustomerConnectionsAccess = ClosedEnum<
+  typeof CustomerConnectionsAccess
+>;
+
+export type CustomerConnectionsStorage = {
+  enabled: boolean;
+  access: CustomerConnectionsAccess;
+};
+
 export type CustomerConnectionsConnections = {
   keys?: CustomerConnectionsKeys | undefined;
   models?: CustomerConnectionsModels | undefined;
+  storage?: CustomerConnectionsStorage | undefined;
 };
 
 export type CustomerConnections = {
@@ -126,12 +140,37 @@ export function customerConnectionsModelsFromJSON(
 }
 
 /** @internal */
+export const CustomerConnectionsAccess$inboundSchema: z.ZodEnum<
+  typeof CustomerConnectionsAccess
+> = z.enum(CustomerConnectionsAccess);
+
+/** @internal */
+export const CustomerConnectionsStorage$inboundSchema: z.ZodType<
+  CustomerConnectionsStorage,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  access: CustomerConnectionsAccess$inboundSchema,
+});
+
+export function customerConnectionsStorageFromJSON(
+  jsonString: string,
+): SafeParseResult<CustomerConnectionsStorage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CustomerConnectionsStorage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CustomerConnectionsStorage' from JSON`,
+  );
+}
+
+/** @internal */
 export const CustomerConnectionsConnections$inboundSchema: z.ZodType<
   CustomerConnectionsConnections,
   unknown
 > = z.object({
   keys: z.lazy(() => CustomerConnectionsKeys$inboundSchema).optional(),
   models: z.lazy(() => CustomerConnectionsModels$inboundSchema).optional(),
+  storage: z.lazy(() => CustomerConnectionsStorage$inboundSchema).optional(),
 });
 
 export function customerConnectionsConnectionsFromJSON(

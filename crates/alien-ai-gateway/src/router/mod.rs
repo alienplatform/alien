@@ -20,7 +20,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::creds::{AmbientCred, AnthropicApiKeyCred};
+use crate::creds::{AmbientCred, AnthropicApiKeyCred, OpenAiApiKeyCred};
 use crate::error::{ErrorData, Result};
 
 mod bedrock;
@@ -79,6 +79,7 @@ where
 pub enum GatewayTarget {
     Cloud(Platform),
     DirectAnthropic,
+    DirectOpenAi,
 }
 
 pub struct GatewayRoute {
@@ -112,6 +113,24 @@ pub fn route_from_direct_anthropic(
         project: None,
         azure_endpoint: None,
         cred: AmbientCred::AnthropicApiKey(AnthropicApiKeyCred::new(api_key)?),
+        upstream_base_override: None,
+    })
+}
+
+/// Build the fixed-host OpenAI static-key route. Keeping this separate from a
+/// generic bearer route prevents a stored provider key from being forwarded to
+/// a caller-controlled host.
+pub fn route_from_direct_openai(
+    name: impl Into<String>,
+    api_key: impl Into<String>,
+) -> Result<GatewayRoute> {
+    Ok(GatewayRoute {
+        name: name.into(),
+        target: GatewayTarget::DirectOpenAi,
+        region: None,
+        project: None,
+        azure_endpoint: None,
+        cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(api_key)?),
         upstream_base_override: None,
     })
 }
@@ -338,18 +357,41 @@ async fn proxy(
 
     // Cloud-scoped resolution: Claude ids appear once per cloud, so a first-match
     // resolve would always land on another cloud's entry and fail the cloud filter.
-    if route.target == GatewayTarget::DirectAnthropic {
-        ensure_model_available(&state, &binding, &model)?;
-        if client_api != ClientApi::AnthropicMessages {
-            return Err(AlienError::new(ErrorData::InvalidRequest {
-                message: format!("direct Anthropic supports only /{binding}/v1/messages"),
-            }));
+    match route.target {
+        GatewayTarget::DirectAnthropic => {
+            ensure_model_available(&state, &binding, &model)?;
+            if client_api != ClientApi::AnthropicMessages {
+                return Err(AlienError::new(ErrorData::InvalidRequest {
+                    message: format!("direct Anthropic supports only /{binding}/v1/messages"),
+                }));
+            }
+            return proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await;
         }
-        return proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await;
+        GatewayTarget::DirectOpenAi => {
+            ensure_model_available(&state, &binding, &model)?;
+            if client_api != ClientApi::OpenAiChatCompletions {
+                return Err(AlienError::new(ErrorData::InvalidRequest {
+                    message: format!(
+                        "direct OpenAI chat completions use /{binding}/v1/chat/completions"
+                    ),
+                }));
+            }
+            return proxy_direct_openai(
+                &state.client,
+                route,
+                payload,
+                &model,
+                "/v1/chat/completions",
+            )
+            .await;
+        }
+        GatewayTarget::Cloud(_) => {}
     }
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic => unreachable!("handled above"),
+        GatewayTarget::DirectAnthropic | GatewayTarget::DirectOpenAi => {
+            unreachable!("handled above")
+        }
     };
     let cm = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
@@ -445,6 +487,11 @@ async fn proxy_responses(
                 model,
                 binding,
             }))
+        }
+        GatewayTarget::DirectOpenAi => {
+            ensure_model_available(&state, &binding, &model)?;
+            return proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses")
+                .await;
         }
     };
     let catalog_model = ai_catalog::resolve_for(&model, cloud)
@@ -543,6 +590,25 @@ async fn list_models(
                 })
             })
             .collect(),
+        GatewayTarget::DirectOpenAi => {
+            let mut models = allowed
+                .into_iter()
+                .flatten()
+                .flat_map(|models| models.iter())
+                .collect::<Vec<_>>();
+            models.sort();
+            models
+                .into_iter()
+                .map(|model| {
+                    json!({
+                        "id": model,
+                        "object": "model",
+                        "provider": "openai",
+                        "displayName": model,
+                    })
+                })
+                .collect()
+        }
     };
     Ok(Json(json!({ "object": "list", "data": data })).into_response())
 }
@@ -598,6 +664,28 @@ async fn proxy_direct_anthropic(
     forward_response(upstream).await
 }
 
+async fn proxy_direct_openai(
+    client: &reqwest::Client,
+    route: &GatewayRoute,
+    mut payload: Value,
+    model: &str,
+    path: &str,
+) -> Result<Response> {
+    payload["model"] = Value::String(model.to_string());
+    let body = serde_json::to_vec(&payload)
+        .into_alien_error()
+        .context(ErrorData::Other {
+            message: "could not serialize the OpenAI request".to_string(),
+        })?;
+    let base = route
+        .upstream_base_override
+        .as_deref()
+        .unwrap_or("https://api.openai.com");
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
+    let upstream = sign_and_execute(client, &route.cred, &url, "", body, &[]).await?;
+    forward_response(upstream).await
+}
+
 /// The error for a binding missing a field a handler needs.
 pub(crate) fn missing_field(route: &GatewayRoute, field: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::BindingConfigInvalid {
@@ -613,9 +701,9 @@ pub(crate) fn upstream_target(
 ) -> Result<(String, &'static str)> {
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic => {
+        GatewayTarget::DirectAnthropic | GatewayTarget::DirectOpenAi => {
             return Err(AlienError::new(ErrorData::Other {
-                message: "direct Anthropic does not use a cloud upstream target".to_string(),
+                message: "direct providers do not use a cloud upstream target".to_string(),
             }))
         }
     };

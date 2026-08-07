@@ -25,6 +25,12 @@ import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * List release channels
+ *
+ * @remarks
+ * List the release channels configured for a project.
+ */
 export function releaseChannelsList(
   client: AlienCore,
   request: operations.ListReleaseChannelsRequest,

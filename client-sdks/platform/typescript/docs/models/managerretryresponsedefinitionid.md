@@ -11,5 +11,5 @@ let value: ManagerRetryResponseDefinitionId = "customer-key";
 ## Values
 
 ```typescript
-"customer-ai" | "customer-key"
+"customer-ai" | "customer-key" | "customer-storage"
 ```

@@ -1358,6 +1358,7 @@ export const NewDeploymentRequestSetupItem = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 /**
  * Customer setup item selected from this deployment-group token.

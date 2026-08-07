@@ -18,7 +18,7 @@ const value: models.ManagerRetryResponseSourceApplicationRelease = {
 ```typescript
 const value: models.ManagerRetryResponseSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-key",
+  definitionId: "customer-storage",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

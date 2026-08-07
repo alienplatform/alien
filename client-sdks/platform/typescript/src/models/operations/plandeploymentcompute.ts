@@ -11,6 +11,7 @@ export const PlanDeploymentComputeSetupItem = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type PlanDeploymentComputeSetupItem = ClosedEnum<
   typeof PlanDeploymentComputeSetupItem

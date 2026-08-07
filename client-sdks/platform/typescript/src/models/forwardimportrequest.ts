@@ -29,6 +29,7 @@ export const ForwardImportRequestSetupItem = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 /**
  * Exact item selected from a tailored customer setup link.

@@ -11,11 +11,13 @@ mod creds;
 mod error;
 mod router;
 pub use config::{bindings_from_env, bindings_from_env_map, route_from_remote_ai_lease};
-pub use creds::{AmbientCred, AnthropicApiKeyCred, AwsSigV4Cred, BearerTokenCred};
+pub use creds::{
+    AmbientCred, AnthropicApiKeyCred, AwsSigV4Cred, BearerTokenCred, OpenAiApiKeyCred,
+};
 pub use error::{ErrorData, Result};
 pub use router::{
-    build_router, build_router_with_availability, route_from_direct_anthropic, AvailableModels,
-    GatewayRoute, GatewayTarget,
+    build_router, build_router_with_availability, route_from_direct_anthropic,
+    route_from_direct_openai, AvailableModels, GatewayRoute, GatewayTarget,
 };
 
 use std::net::{Ipv4Addr, SocketAddr};

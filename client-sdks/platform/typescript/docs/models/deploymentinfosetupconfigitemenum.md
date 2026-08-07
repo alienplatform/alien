@@ -11,5 +11,5 @@ let value: DeploymentInfoSetupConfigItemEnum = "alien-stack";
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"alien-stack" | "models" | "keys" | "storage"
 ```

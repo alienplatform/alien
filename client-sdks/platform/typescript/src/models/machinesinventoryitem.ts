@@ -19,7 +19,7 @@ import {
   MachinesLocalOverrideObservation$inboundSchema,
 } from "./machineslocaloverrideobservation.js";
 
-export type Storage = {
+export type MachinesInventoryItemStorage = {
   allocated: number;
   systemReserve: number;
   total: number;
@@ -32,7 +32,7 @@ export type MachinesInventoryItem = {
   zone: string;
   cpu: MachinesCapacityMetric;
   memory: MachinesCapacityMetric;
-  storage?: Storage | null | undefined;
+  storage?: MachinesInventoryItemStorage | null | undefined;
   drainBlockers: Array<MachinesDrainBlocker>;
   drainDeadlineAt?: string | null | undefined;
   drainForce: boolean;
@@ -48,19 +48,22 @@ export type MachinesInventoryItem = {
 };
 
 /** @internal */
-export const Storage$inboundSchema: z.ZodType<Storage, unknown> = z.object({
+export const MachinesInventoryItemStorage$inboundSchema: z.ZodType<
+  MachinesInventoryItemStorage,
+  unknown
+> = z.object({
   allocated: z.number(),
   systemReserve: z.number(),
   total: z.number(),
 });
 
-export function storageFromJSON(
+export function machinesInventoryItemStorageFromJSON(
   jsonString: string,
-): SafeParseResult<Storage, SDKValidationError> {
+): SafeParseResult<MachinesInventoryItemStorage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Storage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Storage' from JSON`,
+    (x) => MachinesInventoryItemStorage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MachinesInventoryItemStorage' from JSON`,
   );
 }
 
@@ -75,7 +78,8 @@ export const MachinesInventoryItem$inboundSchema: z.ZodType<
   zone: z.string(),
   cpu: MachinesCapacityMetric$inboundSchema,
   memory: MachinesCapacityMetric$inboundSchema,
-  storage: z.nullable(z.lazy(() => Storage$inboundSchema)).optional(),
+  storage: z.nullable(z.lazy(() => MachinesInventoryItemStorage$inboundSchema))
+    .optional(),
   drainBlockers: z.array(MachinesDrainBlocker$inboundSchema),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainForce: z.boolean(),

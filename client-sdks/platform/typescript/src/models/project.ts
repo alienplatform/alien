@@ -276,6 +276,7 @@ export const ProjectAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type ProjectAllowedProvider = ClosedEnum<typeof ProjectAllowedProvider>;
 
@@ -298,9 +299,20 @@ export type ProjectModels = {
   requirements: Array<ProjectRequirement>;
 };
 
+export const ProjectAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type ProjectAccess = ClosedEnum<typeof ProjectAccess>;
+
+export type ProjectStorage = {
+  enabled: boolean;
+  access: ProjectAccess;
+};
+
 export type ProjectConnections = {
   keys?: ProjectKeys | undefined;
   models?: ProjectModels | undefined;
+  storage?: ProjectStorage | undefined;
 };
 
 /**
@@ -624,12 +636,34 @@ export function projectModelsFromJSON(
 }
 
 /** @internal */
+export const ProjectAccess$inboundSchema: z.ZodEnum<typeof ProjectAccess> = z
+  .enum(ProjectAccess);
+
+/** @internal */
+export const ProjectStorage$inboundSchema: z.ZodType<ProjectStorage, unknown> =
+  z.object({
+    enabled: z.boolean(),
+    access: ProjectAccess$inboundSchema,
+  });
+
+export function projectStorageFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectStorage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectStorage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectStorage' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectConnections$inboundSchema: z.ZodType<
   ProjectConnections,
   unknown
 > = z.object({
   keys: z.lazy(() => ProjectKeys$inboundSchema).optional(),
   models: z.lazy(() => ProjectModels$inboundSchema).optional(),
+  storage: z.lazy(() => ProjectStorage$inboundSchema).optional(),
 });
 
 export function projectConnectionsFromJSON(

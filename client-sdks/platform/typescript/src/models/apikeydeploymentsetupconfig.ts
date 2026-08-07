@@ -20,6 +20,7 @@ export const APIKeyDeploymentSetupConfigItemEnum = {
   AlienStack: "alien-stack",
   Models: "models",
   Keys: "keys",
+  Storage: "storage",
 } as const;
 export type APIKeyDeploymentSetupConfigItemEnum = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigItemEnum
@@ -28,6 +29,7 @@ export type APIKeyDeploymentSetupConfigItemEnum = ClosedEnum<
 export const APIKeyDeploymentSetupConfigDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
 } as const;
 export type APIKeyDeploymentSetupConfigDefinitionId = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigDefinitionId
@@ -62,6 +64,7 @@ export const APIKeyDeploymentSetupConfigAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type APIKeyDeploymentSetupConfigAllowedProvider = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigAllowedProvider

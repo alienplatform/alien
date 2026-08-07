@@ -5,11 +5,11 @@
 ```typescript
 import { GetDeploymentInfoSetupItem } from "@alienplatform/platform-api/models/operations";
 
-let value: GetDeploymentInfoSetupItem = "models";
+let value: GetDeploymentInfoSetupItem = "keys";
 ```
 
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"alien-stack" | "models" | "keys" | "storage"
 ```

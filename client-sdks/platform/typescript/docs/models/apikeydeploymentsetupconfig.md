@@ -24,10 +24,10 @@ let value: APIKeyDeploymentSetupConfig = {
   ],
   items: [
     {
-      item: "models",
+      item: "keys",
       source: {
         type: "built-in",
-        definitionId: "customer-key",
+        definitionId: "customer-storage",
         version: "<value>",
         sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       },

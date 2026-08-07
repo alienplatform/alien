@@ -13,5 +13,5 @@ let value: ForwardImportRequestSetupItem = "alien-stack";
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"alien-stack" | "models" | "keys" | "storage"
 ```

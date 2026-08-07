@@ -10,6 +10,7 @@ export const ConfigureCustomerModelsRequestAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Openai: "openai",
 } as const;
 export type ConfigureCustomerModelsRequestAllowedProvider = ClosedEnum<
   typeof ConfigureCustomerModelsRequestAllowedProvider
