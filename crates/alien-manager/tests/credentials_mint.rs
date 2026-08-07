@@ -486,6 +486,7 @@ async fn build(
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
+        customer_registry_broker: None,
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 
