@@ -978,13 +978,14 @@ async fn forward_customer_to_upstream_raw(
     body: Option<Body>,
     target: &CustomerRegistryTarget,
 ) -> Response {
+    let upload_session_identity = customer_upload_session_identity(target);
     forward_raw_with_artifact_registry(
         state,
         method,
         raw_path,
         original_headers,
         body,
-        Some(&target.external_repository),
+        Some(&upload_session_identity),
         target.artifact_registry.clone(),
         &target.upstream_repository,
         target.admission.clone(),
@@ -1376,13 +1377,9 @@ async fn forward_request(
         .into_response();
 
     let upstream_host = upstream_endpoint.trim_end_matches('/');
-    let proxy_base = if upload_session_repo
-        .is_some_and(|repository| repository.starts_with(CUSTOMER_UPLOAD_SESSION_PREFIX))
-    {
-        state.config.base_url()
-    } else {
-        proxy_base_url(original_headers, &state.config.base_url())
-    };
+    let configured_base_url = state.config.base_url();
+    let proxy_base =
+        upload_session_proxy_base(original_headers, &configured_base_url, upload_session_repo);
     let proxy_host = proxy_base.trim_end_matches('/');
 
     for (key, value) in &resp_headers {
@@ -1435,6 +1432,20 @@ async fn forward_request(
     }
 
     response
+}
+
+fn upload_session_proxy_base(
+    original_headers: &HeaderMap,
+    configured_base_url: &str,
+    upload_session_repo: Option<&str>,
+) -> String {
+    if upload_session_repo
+        .is_some_and(|repository| repository.starts_with(CUSTOMER_UPLOAD_SESSION_PREFIX))
+    {
+        configured_base_url.to_string()
+    } else {
+        proxy_base_url(original_headers, configured_base_url)
+    }
 }
 
 fn safe_registry_response_header(name: &str) -> bool {
@@ -2332,6 +2343,27 @@ mod tests {
         assert_eq!(
             proxy_base_url(&headers, "http://localhost:8080"),
             "http://localhost:8080"
+        );
+    }
+
+    #[test]
+    fn customer_upload_continuations_ignore_forwarded_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-host", "attacker.example".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        let identity = customer_upload_session_identity(&customer_target());
+
+        assert_eq!(
+            upload_session_proxy_base(&headers, "https://manager.example.com", Some(&identity)),
+            "https://manager.example.com"
+        );
+        assert_eq!(
+            upload_session_proxy_base(
+                &headers,
+                "https://manager.example.com",
+                Some("ordinary/repository"),
+            ),
+            "https://attacker.example"
         );
     }
 
