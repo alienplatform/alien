@@ -8,8 +8,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Platform, Queue,
-    ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
-    WorkerTrigger,
+    RemoteBindings, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage,
+    Worker, WorkerCode, WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -24,6 +24,33 @@ fn gcp_artifact_registry_renders_docker_repository() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_artifact_registry", &module);
     assert_terraform_valid(&module, "gcp_artifact_registry");
+}
+
+#[test]
+fn gcp_remote_artifact_registry_has_repository_scoped_data_access() {
+    let mut stack = Stack::new("remote-registry".to_string())
+        .add_with_remote_access(
+            ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("registry").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("artifactregistry.repositories.uploadArtifacts"));
+    assert!(rendered.contains("remote_access"));
+    assert!(!rendered.contains("artifactregistry.repositories.delete"));
+    assert_terraform_valid(&module, "gcp_remote_artifact_registry");
 }
 
 #[test]

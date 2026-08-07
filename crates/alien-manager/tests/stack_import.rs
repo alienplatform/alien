@@ -192,6 +192,7 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
         ),
+        customer_registry_broker: None,
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 

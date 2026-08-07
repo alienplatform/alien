@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Platform, ResourceLifecycle,
-    Stack, StackSettings, Worker, WorkerCode,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Platform, RemoteBindings,
+    ResourceLifecycle, ResourceRef, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -23,6 +23,34 @@ fn aws_artifact_registry_renders_ecr_repository() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_artifact_registry", &module);
     assert_terraform_valid(&module, "aws_artifact_registry");
+}
+
+#[test]
+fn aws_remote_artifact_registry_has_data_access_without_repository_lifecycle() {
+    let mut stack = Stack::new("remote-registry".to_string())
+        .add_with_remote_access(
+            ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack.resources.get_mut("registry").unwrap().dependencies =
+        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("ecr:GetAuthorizationToken"));
+    assert!(rendered.contains("ecr:PutImage"));
+    assert!(!rendered.contains("ecr:CreateRepository"));
+    assert!(!rendered.contains("ecr:DeleteRepository"));
+    assert_terraform_valid(&module, "aws_remote_artifact_registry");
 }
 
 #[test]
