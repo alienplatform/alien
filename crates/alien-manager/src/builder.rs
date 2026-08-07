@@ -610,6 +610,8 @@ impl AlienManagerBuilder {
     /// or via a convenience method like `with_standalone_defaults()`). Missing
     /// providers produce a clear error.
     pub async fn build(self) -> crate::error::Result<AlienManager> {
+        validate_customer_registry_base_url(&self.config, self.customer_registry_broker.is_some())?;
+
         macro_rules! require_provider {
             ($field:expr, $name:literal) => {
                 $field.ok_or_else(|| {
@@ -662,6 +664,68 @@ impl AlienManagerBuilder {
             self.customer_registry_broker,
         )
         .await
+    }
+}
+
+fn validate_customer_registry_base_url(
+    config: &ManagerConfig,
+    customer_registry_enabled: bool,
+) -> crate::error::Result<()> {
+    if !customer_registry_enabled {
+        return Ok(());
+    }
+
+    let base_url = config.base_url.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ServerInitFailed {
+            reason:
+                "base_url must be explicitly configured when customer registry routing is enabled"
+                    .to_string(),
+        })
+    })?;
+    let parsed = reqwest::Url::parse(base_url).map_err(|_| {
+        AlienError::new(ErrorData::ServerInitFailed {
+            reason: "base_url must be an absolute HTTP or HTTPS URL when customer registry routing is enabled"
+                .to_string(),
+        })
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(AlienError::new(ErrorData::ServerInitFailed {
+            reason: "base_url must be an origin-only HTTP or HTTPS URL when customer registry routing is enabled"
+                .to_string(),
+        }));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_customer_registry_base_url;
+    use crate::config::ManagerConfig;
+
+    #[test]
+    fn customer_registry_requires_an_explicit_origin() {
+        let config = ManagerConfig::default();
+        assert!(validate_customer_registry_base_url(&config, false).is_ok());
+
+        let error = validate_customer_registry_base_url(&config, true)
+            .expect_err("customer registry must not advertise the localhost fallback");
+        assert!(error
+            .to_string()
+            .contains("base_url must be explicitly configured"));
+
+        let mut configured = config;
+        configured.base_url = Some("https://manager.example.com".to_string());
+        validate_customer_registry_base_url(&configured, true)
+            .expect("an explicit HTTPS manager origin is valid");
+
+        configured.base_url = Some("https://user@manager.example.com/path".to_string());
+        assert!(validate_customer_registry_base_url(&configured, true).is_err());
     }
 }
 
