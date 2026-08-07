@@ -4,11 +4,13 @@
 
 ### Available Operations
 
-* [list](#list)
-* [create](#create)
-* [delete](#delete)
+* [list](#list) - List release channels
+* [create](#create) - Create a release channel
+* [delete](#delete) - Delete a release channel
 
 ## list
+
+List the release channels configured for a project.
 
 ### Example Usage
 
@@ -83,6 +85,8 @@ run();
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## create
+
+Create a release channel for a project.
 
 ### Example Usage
 
@@ -165,6 +169,8 @@ run();
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## delete
+
+Delete a release channel from a project.
 
 ### Example Usage
 

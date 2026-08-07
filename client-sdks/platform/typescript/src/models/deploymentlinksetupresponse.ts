@@ -74,12 +74,29 @@ export const VisiblePackageType = {
  */
 export type VisiblePackageType = ClosedEnum<typeof VisiblePackageType>;
 
+/**
+ * Whether at least one complete automated setup package is ready across all selected setup items.
+ */
+export const SetupPackagesStatus = {
+  Preparing: "preparing",
+  Ready: "ready",
+  Failed: "failed",
+} as const;
+/**
+ * Whether at least one complete automated setup package is ready across all selected setup items.
+ */
+export type SetupPackagesStatus = ClosedEnum<typeof SetupPackagesStatus>;
+
 export type DeploymentLinkSetupResponse = {
   activeRelease: ActiveRelease | null;
   supportedPlatforms: Array<DeploymentLinkSetupResponseSupportedPlatform>;
   setupItems: Array<DeploymentLinkSetupResponseSetupItem>;
   visiblePackageTypes: Array<VisiblePackageType>;
   visibleSetupMethods: Array<DeploymentSetupMethod>;
+  /**
+   * Whether at least one complete automated setup package is ready across all selected setup items.
+   */
+  setupPackagesStatus: SetupPackagesStatus;
 };
 
 /** @internal */
@@ -143,6 +160,11 @@ export const VisiblePackageType$inboundSchema: z.ZodEnum<
 > = z.enum(VisiblePackageType);
 
 /** @internal */
+export const SetupPackagesStatus$inboundSchema: z.ZodEnum<
+  typeof SetupPackagesStatus
+> = z.enum(SetupPackagesStatus);
+
+/** @internal */
 export const DeploymentLinkSetupResponse$inboundSchema: z.ZodType<
   DeploymentLinkSetupResponse,
   unknown
@@ -154,6 +176,7 @@ export const DeploymentLinkSetupResponse$inboundSchema: z.ZodType<
   setupItems: z.array(DeploymentLinkSetupResponseSetupItem$inboundSchema),
   visiblePackageTypes: z.array(VisiblePackageType$inboundSchema),
   visibleSetupMethods: z.array(DeploymentSetupMethod$inboundSchema),
+  setupPackagesStatus: SetupPackagesStatus$inboundSchema,
 });
 
 export function deploymentLinkSetupResponseFromJSON(

@@ -11,6 +11,12 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class ReleaseChannels extends ClientSDK {
+  /**
+   * List release channels
+   *
+   * @remarks
+   * List the release channels configured for a project.
+   */
   async list(
     request: operations.ListReleaseChannelsRequest,
     options?: RequestOptions,
@@ -22,6 +28,12 @@ export class ReleaseChannels extends ClientSDK {
     ));
   }
 
+  /**
+   * Create a release channel
+   *
+   * @remarks
+   * Create a release channel for a project.
+   */
   async create(
     request: operations.CreateReleaseChannelRequest,
     options?: RequestOptions,
@@ -33,6 +45,12 @@ export class ReleaseChannels extends ClientSDK {
     ));
   }
 
+  /**
+   * Delete a release channel
+   *
+   * @remarks
+   * Delete a release channel from a project.
+   */
   async delete(
     request: operations.DeleteReleaseChannelRequest,
     options?: RequestOptions,

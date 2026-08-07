@@ -341,9 +341,9 @@ run();
 
 ### [ReleaseChannels](docs/sdks/releasechannels/README.md)
 
-* [list](docs/sdks/releasechannels/README.md#list)
-* [create](docs/sdks/releasechannels/README.md#create)
-* [delete](docs/sdks/releasechannels/README.md#delete)
+* [list](docs/sdks/releasechannels/README.md#list) - List release channels
+* [create](docs/sdks/releasechannels/README.md#create) - Create a release channel
+* [delete](docs/sdks/releasechannels/README.md#delete) - Delete a release channel
 
 ### [Releases](docs/sdks/releases/README.md)
 
@@ -562,9 +562,9 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
-- [`releaseChannelsCreate`](docs/sdks/releasechannels/README.md#create)
-- [`releaseChannelsDelete`](docs/sdks/releasechannels/README.md#delete)
-- [`releaseChannelsList`](docs/sdks/releasechannels/README.md#list)
+- [`releaseChannelsCreate`](docs/sdks/releasechannels/README.md#create) - Create a release channel
+- [`releaseChannelsDelete`](docs/sdks/releasechannels/README.md#delete) - Delete a release channel
+- [`releaseChannelsList`](docs/sdks/releasechannels/README.md#list) - List release channels
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.
 - [`releasesGet`](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
 - [`releasesList`](docs/sdks/releases/README.md#list) - Retrieve all releases.

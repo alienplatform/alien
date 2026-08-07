@@ -26,6 +26,12 @@ import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * Delete a release channel
+ *
+ * @remarks
+ * Delete a release channel from a project.
+ */
 export function releaseChannelsDelete(
   client: AlienCore,
   request: operations.DeleteReleaseChannelRequest,
