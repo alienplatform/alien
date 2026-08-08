@@ -5,6 +5,7 @@ use crate::ui::{accent, command, contextual_heading, dim_label, success_line, Fi
 use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -18,7 +19,7 @@ pub struct OnboardArgs {
     #[arg(value_name = "NAME")]
     pub name: Option<String>,
 
-    /// Stable customer identifier used by your application. Defaults to NAME.
+    /// Stable customer identifier used by your application. Defaults to a URL-safe form of NAME.
     #[arg(long)]
     pub external_id: Option<String>,
 
@@ -134,7 +135,11 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         .as_deref()
         .map(validate_public_subdomain)
         .transpose()?;
-    let external_id = args.external_id.as_deref().unwrap_or(&name).to_string();
+    let deployment_group_name = customer_environment_name(&name);
+    let external_id = args
+        .external_id
+        .clone()
+        .unwrap_or_else(|| deployment_group_name.clone());
 
     if !args.json {
         let platforms_label = selected_platforms
@@ -178,6 +183,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 setup_environment_variables,
                 &selected_platforms,
                 public_subdomain.as_deref(),
+                &name,
             )?,
             description: None,
             expires_at: None,
@@ -190,7 +196,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             input_values: Some(stack_input_values),
             max_deployments: std::num::NonZeroU64::new(args.max_deployments)
                 .unwrap_or(std::num::NonZeroU64::new(100).unwrap()),
-            name: name.clone().try_into().map_err(|e| {
+            name: deployment_group_name.try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "name".to_string(),
                     message: format!("{}", e),
@@ -344,7 +350,8 @@ fn validate_setup_items(
     if requested.is_empty() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "setup-items".to_string(),
-            message: "Select at least one of application, models, or keys.".to_string(),
+            message: "Select at least one of application, models, keys, storage, or registry."
+                .to_string(),
         }));
     }
     for item in requested {
@@ -366,6 +373,7 @@ fn platform_onboard_deployment_setup_config(
     environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
     platforms: &[Platform],
     public_subdomain: Option<&str>,
+    customer_name: &str,
 ) -> Result<alien_platform_api::types::DeploymentSetupConfig> {
     use alien_platform_api::types;
 
@@ -399,8 +407,14 @@ fn platform_onboard_deployment_setup_config(
             .expect("selected onboarding platforms are validated before setup config creation")
     };
 
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "customerName".to_string(),
+        serde_json::Value::String(customer_name.to_string()),
+    );
+
     Ok(types::DeploymentSetupConfig {
-        metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
+        metadata: types::DeploymentSetupMetadata(metadata),
         public_subdomain,
         policy: types::DeploymentSetupPolicy {
             allow_release_pinning: None,
@@ -1008,11 +1022,12 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
         Some(steps)
     };
 
+    let deployment_group_name = customer_environment_name(&name);
     let response = mgr
         .client
         .create_deployment_group()
         .body(CreateDeploymentGroupRequest {
-            name: name.clone(),
+            name: deployment_group_name,
             max_deployments: Some(args.max_deployments as i64),
         })
         .send()
@@ -1085,6 +1100,46 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     Ok(())
 }
 
+/// Turn a customer-facing name into the stable internal Deployment Group name.
+///
+/// The CLI intentionally accepts friendly names such as `Acme Corp`. Platform
+/// Deployment Group names are URL-safe identifiers, so exposing that storage
+/// constraint in the command's primary argument would make onboarding needlessly
+/// awkward. The explicit `--external-id` remains untouched.
+fn customer_environment_name(display_name: &str) -> String {
+    let mut name = display_name
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .fold(String::new(), |mut value, character| {
+            if character.is_ascii_alphanumeric() {
+                value.push(character);
+            } else if !value.ends_with('-') {
+                value.push('-');
+            }
+            value
+        })
+        .trim_matches('-')
+        .chars()
+        .take(100)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string();
+
+    if name.is_empty() {
+        let digest = Sha256::digest(display_name.as_bytes());
+        name = format!("customer-{}", hex::encode(&digest[..6]));
+    } else if name.len() == 1 {
+        name.push_str("-customer");
+    } else if name.starts_with("dg-") || name.starts_with("dg_") {
+        name = format!("customer-{name}");
+        name.truncate(100);
+        name = name.trim_end_matches('-').to_string();
+    }
+
+    name
+}
+
 #[cfg(all(test, feature = "platform"))]
 mod tests {
     use super::*;
@@ -1151,12 +1206,49 @@ mod tests {
         let default = OnboardArgs::try_parse_from(["onboard", "customer"]).unwrap();
         assert_eq!(default.setup_items, vec![OnboardSetupItem::Application]);
 
-        let composed =
-            OnboardArgs::try_parse_from(["onboard", "customer", "--setup-items", "models,keys"])
-                .unwrap();
+        let composed = OnboardArgs::try_parse_from([
+            "onboard",
+            "customer",
+            "--setup-items",
+            "models,keys,storage,registry",
+        ])
+        .unwrap();
         assert_eq!(
             composed.setup_items,
-            vec![OnboardSetupItem::Models, OnboardSetupItem::Keys]
+            vec![
+                OnboardSetupItem::Models,
+                OnboardSetupItem::Keys,
+                OnboardSetupItem::Storage,
+                OnboardSetupItem::Registry,
+            ]
+        );
+    }
+
+    #[test]
+    fn customer_names_become_safe_internal_environment_names() {
+        assert_eq!(customer_environment_name("Acme Corp"), "acme-corp");
+        assert_eq!(customer_environment_name("  A  "), "a-customer");
+        assert_eq!(customer_environment_name("dg-admin"), "customer-dg-admin");
+        assert_eq!(
+            customer_environment_name("客户"),
+            customer_environment_name("客户")
+        );
+        assert!(customer_environment_name("客户").starts_with("customer-"));
+    }
+
+    #[test]
+    fn setup_portal_keeps_the_customer_facing_name() {
+        let config = platform_onboard_deployment_setup_config(
+            Vec::new(),
+            &[Platform::Aws],
+            None,
+            "Acme Corp",
+        )
+        .expect("setup config should be valid");
+
+        assert_eq!(
+            config.metadata.0.get("customerName"),
+            Some(&serde_json::Value::String("Acme Corp".to_string()))
         );
     }
 
