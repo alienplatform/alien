@@ -176,7 +176,7 @@ jobs:
           file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" \
             | grep -q "${{ matrix.expect_arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-dev-addon-${{ matrix.triple }}
           retention-days: 1
@@ -198,7 +198,7 @@ jobs:
       - name: Assert ai-gateway binary architecture
         run: file "target/${{ matrix.gateway_target }}/release/alien-ai-gateway" | grep -q "${{ matrix.expect_arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-dev-gateway-${{ matrix.gateway_artifact }}
           retention-days: 1
@@ -237,7 +237,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
 
       - name: Restore native addons
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: npm-dev-addon-*
           path: addons
@@ -252,7 +252,7 @@ jobs:
           done
 
       - name: Restore gateway binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: npm-dev-gateway-*
           path: gateway-bins
@@ -443,7 +443,7 @@ jobs:
           fi
 
       - name: Upload package evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-dev-packages-${{ needs.prepare.outputs.short_sha }}
           retention-days: 7
