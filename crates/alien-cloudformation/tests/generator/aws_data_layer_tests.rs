@@ -3,9 +3,9 @@
 use super::helpers::{custom_resource_registration, render_built_ins, render_built_ins_template};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Key, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, RemoteStackManagement,
-    ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault, Worker,
-    WorkerCode, WorkerTrigger,
+    Key, Kv, LifecycleRule, PermissionProfile, PermissionSetReference, Queue, RemoteBindings,
+    RemoteStackManagement, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
+    Storage, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 #[test]
@@ -16,10 +16,19 @@ fn aws_key_template_is_valid_and_retained() {
             ResourceLifecycle::Frozen,
         )
         .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
             RemoteBindings::new("access".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
+    stack.permissions.management =
+        alien_core::ManagementPermissions::Extend(PermissionProfile::new().resource(
+            "customer-key",
+            [PermissionSetReference::from_name("key/management")],
+        ));
     stack
         .resources
         .get_mut("customer-key")
@@ -44,6 +53,39 @@ fn aws_key_template_is_valid_and_retained() {
     assert_eq!(key.update_replace_policy.as_deref(), Some("Retain"));
     assert!(yaml.contains("kms:Encrypt"));
     assert!(yaml.contains("kms:Decrypt"));
+    assert!(yaml.contains("kms:DescribeKey"));
+
+    let metadata_policy = template
+        .resources
+        .values()
+        .find(|resource| resource.logical_id == "CustomerKeyManagementMetadataPolicy")
+        .expect("key metadata policy should render");
+    let metadata_policy_json =
+        serde_json::to_value(&metadata_policy.properties).expect("serialize metadata policy");
+    assert_eq!(
+        metadata_policy_json["Roles"],
+        serde_json::json!([{ "Ref": "ManagementRole" }])
+    );
+    assert_eq!(
+        metadata_policy_json["PolicyDocument"]["Statement"][0]["Action"],
+        "kms:DescribeKey"
+    );
+    assert_eq!(
+        metadata_policy_json["PolicyDocument"]["Statement"][0]["Resource"],
+        serde_json::json!({ "Fn::GetAtt": ["CustomerKey", "Arn"] })
+    );
+
+    let cryptography_policy = template
+        .resources
+        .values()
+        .find(|resource| resource.logical_id == "CustomerKeyRemoteCryptographyPolicy")
+        .expect("key cryptography policy should render");
+    let cryptography_policy_json = serde_json::to_value(&cryptography_policy.properties)
+        .expect("serialize cryptography policy");
+    assert_eq!(
+        cryptography_policy_json["Roles"],
+        serde_json::json!([{ "Ref": "AccessRole" }])
+    );
 }
 
 #[test]

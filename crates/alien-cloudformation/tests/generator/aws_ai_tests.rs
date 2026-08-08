@@ -3,7 +3,8 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Ai, PermissionProfile, RemoteBindings, ResourceLifecycle, ServiceAccount, Stack, StackSettings,
+    Ai, PermissionProfile, PermissionSetReference, RemoteBindings, RemoteStackManagement,
+    ResourceLifecycle, ServiceAccount, Stack, StackSettings,
 };
 
 #[test]
@@ -86,9 +87,13 @@ fn aws_ai_without_permissions_emits_no_iam_policy() {
 
 #[test]
 fn aws_remote_ai_permissions_attach_to_access_role() {
-    let stack = Stack::new("remote-ai".to_string())
+    let mut stack = Stack::new("remote-ai".to_string())
         .add_with_remote_access(
             Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -96,6 +101,9 @@ fn aws_remote_ai_permissions_attach_to_access_role() {
             ResourceLifecycle::Frozen,
         )
         .build();
+    stack.permissions.management = alien_core::ManagementPermissions::Extend(
+        PermissionProfile::new().global([PermissionSetReference::from_name("ai/heartbeat")]),
+    );
 
     let yaml = render_built_ins(
         &stack,
@@ -105,4 +113,12 @@ fn aws_remote_ai_permissions_attach_to_access_role() {
     );
     assert!(yaml.contains("bedrock:InvokeModel"));
     assert!(yaml.contains("AccessRole"));
+    assert!(yaml.contains("ManagementRole"));
+    assert!(yaml.contains("bedrock:GetFoundationModelAvailability"));
+
+    let management_policy = yaml
+        .split("ModelsManagementRoleAiPermission")
+        .nth(1)
+        .expect("management AI policy");
+    assert!(management_policy.contains("bedrock:GetFoundationModelAvailability"));
 }
