@@ -22,6 +22,9 @@ use serde_json::{json, Value};
 
 use crate::creds::{AmbientCred, AnthropicApiKeyCred, OpenAiApiKeyCred};
 use crate::error::{ErrorData, Result};
+use crate::usage::{
+    observe_response, AiUsageClientApi, AiUsageContext, AiUsageObserver, AiUsageProvider,
+};
 
 mod bedrock;
 mod eventstream;
@@ -79,7 +82,6 @@ where
 pub enum GatewayTarget {
     Cloud(Platform),
     DirectAnthropic,
-    DirectOpenAi,
 }
 
 pub struct GatewayRoute {
@@ -117,30 +119,13 @@ pub fn route_from_direct_anthropic(
     })
 }
 
-/// Build the fixed-host OpenAI static-key route. Keeping this separate from a
-/// generic bearer route prevents a stored provider key from being forwarded to
-/// a caller-controlled host.
-pub fn route_from_direct_openai(
-    name: impl Into<String>,
-    api_key: impl Into<String>,
-) -> Result<GatewayRoute> {
-    Ok(GatewayRoute {
-        name: name.into(),
-        target: GatewayTarget::DirectOpenAi,
-        region: None,
-        project: None,
-        azure_endpoint: None,
-        cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(api_key)?),
-        upstream_base_override: None,
-    })
-}
-
 struct AppState {
     routes: HashMap<String, GatewayRoute>,
     client: reqwest::Client,
     /// Account-specific, read-only control-plane observations supplied by the
     /// hosted route resolver. `None` keeps embedded gateways catalog-only.
     available_models: Option<AvailableModels>,
+    usage_observer: Option<Arc<dyn AiUsageObserver>>,
 }
 
 /// Available public model IDs keyed by binding name.
@@ -150,7 +135,15 @@ pub type AvailableModels = HashMap<String, HashSet<String>>;
 /// `POST /<name>/v1/chat/completions` (OpenAI), `POST /<name>/v1/messages`
 /// (Anthropic), and `GET /<name>/v1/models`.
 pub fn build_router(routes: Vec<GatewayRoute>) -> Router {
-    build_router_inner(routes, None)
+    build_router_inner(routes, None, None)
+}
+
+/// Build a router that reports completed requests to a non-blocking observer.
+pub fn build_router_with_observer(
+    routes: Vec<GatewayRoute>,
+    usage_observer: Arc<dyn AiUsageObserver>,
+) -> Router {
+    build_router_inner(routes, None, Some(usage_observer))
 }
 
 /// Build a router whose model listing and inference paths are restricted by a
@@ -159,12 +152,22 @@ pub fn build_router_with_availability(
     routes: Vec<GatewayRoute>,
     available_models: AvailableModels,
 ) -> Router {
-    build_router_inner(routes, Some(available_models))
+    build_router_inner(routes, Some(available_models), None)
+}
+
+/// Build a hosted router with both bounded model availability and usage observation.
+pub fn build_router_with_availability_and_observer(
+    routes: Vec<GatewayRoute>,
+    available_models: AvailableModels,
+    usage_observer: Arc<dyn AiUsageObserver>,
+) -> Router {
+    build_router_inner(routes, Some(available_models), Some(usage_observer))
 }
 
 fn build_router_inner(
     routes: Vec<GatewayRoute>,
     available_models: Option<AvailableModels>,
+    usage_observer: Option<Arc<dyn AiUsageObserver>>,
 ) -> Router {
     let routes: HashMap<String, GatewayRoute> =
         routes.into_iter().map(|r| (r.name.clone(), r)).collect();
@@ -172,6 +175,7 @@ fn build_router_inner(
         routes,
         client: reqwest::Client::new(),
         available_models,
+        usage_observer,
     });
     Router::new()
         .route(
@@ -275,6 +279,23 @@ async fn forward_response(upstream: reqwest::Response) -> Result<Response> {
         })
 }
 
+fn usage_client_api(client_api: ClientApi) -> AiUsageClientApi {
+    match client_api {
+        ClientApi::OpenAiChatCompletions => AiUsageClientApi::OpenAiChatCompletions,
+        ClientApi::OpenAiResponses => AiUsageClientApi::OpenAiResponses,
+        ClientApi::AnthropicMessages => AiUsageClientApi::AnthropicMessages,
+    }
+}
+
+fn cloud_usage_provider(cloud: Platform) -> AiUsageProvider {
+    match cloud {
+        Platform::Aws => AiUsageProvider::AwsBedrock,
+        Platform::Gcp => AiUsageProvider::GcpVertex,
+        Platform::Azure => AiUsageProvider::AzureFoundry,
+        _ => unreachable!("AI cloud routes are available only on AWS, GCP, and Azure"),
+    }
+}
+
 /// Build a JSON POST to `url`, sign it with the ambient credential for `service`,
 /// and execute it. The handlers differ only in URL, signing service, body, and any
 /// protocol-required header, so the build + sign + execute + upstream-error
@@ -365,7 +386,24 @@ async fn proxy(
                     message: format!("direct Anthropic supports only /{binding}/v1/messages"),
                 }));
             }
-            return proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await;
+            let provider_model = ai_catalog::resolve_direct_anthropic(&model)
+                .map(|resolved| resolved.upstream_id)
+                .unwrap_or(model.as_str());
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::Anthropic,
+                &model,
+                provider_model,
+                usage_client_api(client_api),
+                None,
+            );
+            let response =
+                proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await?;
+            return Ok(observe_response(
+                response,
+                state.usage_observer.as_ref(),
+                descriptor,
+            ));
         }
         GatewayTarget::DirectOpenAi => {
             ensure_model_available(&state, &binding, &model)?;
@@ -376,22 +414,33 @@ async fn proxy(
                     ),
                 }));
             }
-            return proxy_direct_openai(
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::OpenAi,
+                &model,
+                &model,
+                usage_client_api(client_api),
+                None,
+            );
+            let response = proxy_direct_openai(
                 &state.client,
                 route,
                 payload,
                 &model,
                 "/v1/chat/completions",
             )
-            .await;
+            .await?;
+            return Ok(observe_response(
+                response,
+                state.usage_observer.as_ref(),
+                descriptor,
+            ));
         }
         GatewayTarget::Cloud(_) => {}
     }
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic | GatewayTarget::DirectOpenAi => {
-            unreachable!("handled above")
-        }
+        GatewayTarget::DirectAnthropic => unreachable!("handled above"),
     };
     let cm = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
@@ -400,6 +449,15 @@ async fn proxy(
         })
     })?;
     ensure_model_available(&state, &binding, &model)?;
+
+    let descriptor = AiUsageContext::new(
+        &binding,
+        cloud_usage_provider(cloud),
+        &model,
+        cm.upstream_id,
+        usage_client_api(client_api),
+        route.region.clone(),
+    );
 
     if !cm.client_apis.contains(&client_api) {
         let expected_path = match cm.client_apis.first() {
@@ -419,21 +477,38 @@ async fn proxy(
     // endpoint: the model id travels in the URL and the streamed reply is AWS
     // event-stream framing, so it needs its own request/response shape.
     if cloud == Platform::Aws && cm.provider_api == ProviderApi::Anthropic {
-        return proxy_bedrock_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
-            .await;
+        let response =
+            proxy_bedrock_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
+                .await?;
+        return Ok(observe_response(
+            response,
+            state.usage_observer.as_ref(),
+            descriptor,
+        ));
     }
     // GCP serves Claude through Vertex rawPredict: the model id travels in the URL
     // and streaming is chosen by the URL verb, but the reply is native Anthropic
     // JSON/SSE — no decoder needed, unlike Bedrock.
     if cloud == Platform::Gcp && cm.provider_api == ProviderApi::Anthropic {
-        return proxy_vertex_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
-            .await;
+        let response =
+            proxy_vertex_anthropic(&state.client, route, cm.upstream_id, payload, &headers).await?;
+        return Ok(observe_response(
+            response,
+            state.usage_observer.as_ref(),
+            descriptor,
+        ));
     }
     // Azure serves Claude through Foundry's Anthropic endpoint: standard Messages
     // in both directions, on the `/anthropic/v1` path with the version header.
     if cloud == Platform::Azure && cm.provider_api == ProviderApi::Anthropic {
-        return proxy_foundry_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
-            .await;
+        let response =
+            proxy_foundry_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
+                .await?;
+        return Ok(observe_response(
+            response,
+            state.usage_observer.as_ref(),
+            descriptor,
+        ));
     }
 
     payload["model"] = Value::String(cm.upstream_id.to_string());
@@ -456,7 +531,12 @@ async fn proxy(
     )
     .await?;
 
-    forward_response(upstream).await
+    let response = forward_response(upstream).await?;
+    Ok(observe_response(
+        response,
+        state.usage_observer.as_ref(),
+        descriptor,
+    ))
 }
 
 /// Proxy an OpenAI Responses request (`POST /<name>/v1/responses`, used by Codex).
@@ -490,8 +570,21 @@ async fn proxy_responses(
         }
         GatewayTarget::DirectOpenAi => {
             ensure_model_available(&state, &binding, &model)?;
-            return proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses")
-                .await;
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::OpenAi,
+                &model,
+                &model,
+                AiUsageClientApi::OpenAiResponses,
+                None,
+            );
+            let response =
+                proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await?;
+            return Ok(observe_response(
+                response,
+                state.usage_observer.as_ref(),
+                descriptor,
+            ));
         }
     };
     let catalog_model = ai_catalog::resolve_for(&model, cloud)
@@ -509,6 +602,14 @@ async fn proxy_responses(
             binding: binding.clone(),
         })
     })?;
+    let descriptor = AiUsageContext::new(
+        &binding,
+        cloud_usage_provider(cloud),
+        &model,
+        target.upstream_id,
+        AiUsageClientApi::OpenAiResponses,
+        route.region.clone(),
+    );
 
     payload["model"] = Value::String(target.upstream_id.to_string());
     let upstream_body =
@@ -538,7 +639,12 @@ async fn proxy_responses(
     )
     .await?;
 
-    forward_response(upstream).await
+    let response = forward_response(upstream).await?;
+    Ok(observe_response(
+        response,
+        state.usage_observer.as_ref(),
+        descriptor,
+    ))
 }
 
 /// `GET /<name>/v1/models`: the qualified catalog, intersected with the bounded
@@ -590,25 +696,6 @@ async fn list_models(
                 })
             })
             .collect(),
-        GatewayTarget::DirectOpenAi => {
-            let mut models = allowed
-                .into_iter()
-                .flatten()
-                .flat_map(|models| models.iter())
-                .collect::<Vec<_>>();
-            models.sort();
-            models
-                .into_iter()
-                .map(|model| {
-                    json!({
-                        "id": model,
-                        "object": "model",
-                        "provider": "openai",
-                        "displayName": model,
-                    })
-                })
-                .collect()
-        }
     };
     Ok(Json(json!({ "object": "list", "data": data })).into_response())
 }
@@ -664,28 +751,6 @@ async fn proxy_direct_anthropic(
     forward_response(upstream).await
 }
 
-async fn proxy_direct_openai(
-    client: &reqwest::Client,
-    route: &GatewayRoute,
-    mut payload: Value,
-    model: &str,
-    path: &str,
-) -> Result<Response> {
-    payload["model"] = Value::String(model.to_string());
-    let body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not serialize the OpenAI request".to_string(),
-        })?;
-    let base = route
-        .upstream_base_override
-        .as_deref()
-        .unwrap_or("https://api.openai.com");
-    let url = format!("{}{}", base.trim_end_matches('/'), path);
-    let upstream = sign_and_execute(client, &route.cred, &url, "", body, &[]).await?;
-    forward_response(upstream).await
-}
-
 /// The error for a binding missing a field a handler needs.
 pub(crate) fn missing_field(route: &GatewayRoute, field: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::BindingConfigInvalid {
@@ -701,9 +766,9 @@ pub(crate) fn upstream_target(
 ) -> Result<(String, &'static str)> {
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic | GatewayTarget::DirectOpenAi => {
+        GatewayTarget::DirectAnthropic => {
             return Err(AlienError::new(ErrorData::Other {
-                message: "direct providers do not use a cloud upstream target".to_string(),
+                message: "direct Anthropic does not use a cloud upstream target".to_string(),
             }))
         }
     };
@@ -777,6 +842,8 @@ fn parse_stream_flag(value: Option<Value>) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use aws_credential_types::provider::SharedCredentialsProvider;
     use aws_credential_types::Credentials;
@@ -787,6 +854,15 @@ mod tests {
 
     use super::*;
     use crate::creds::{AwsSigV4Cred, BearerTokenCred};
+    use crate::usage::{AiTokenUsage, AiUsageEvent, AiUsageOutcome};
+
+    struct TestUsageObserver(mpsc::Sender<AiUsageEvent>);
+
+    impl AiUsageObserver for TestUsageObserver {
+        fn observe(&self, event: AiUsageEvent) {
+            let _ = self.0.send(event);
+        }
+    }
 
     fn test_aws_cred() -> AmbientCred {
         let creds = Credentials::new(
@@ -835,6 +911,100 @@ mod tests {
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
         }
+    }
+
+    fn direct_openai_route(upstream: &str) -> GatewayRoute {
+        let mut route = route_from_direct_openai("llm", "sk-test").expect("direct OpenAI route");
+        route.upstream_base_override = Some(upstream.to_string());
+        route
+    }
+
+    #[tokio::test]
+    async fn observes_usage_from_a_completed_response_body() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "id": "response",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "prompt_tokens_details": { "cached_tokens": 3 }
+                        }
+                    }));
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![direct_openai_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-5-mini", "messages": [] }))
+            .send()
+            .await
+            .expect("proxy response");
+        let body = response.bytes().await.expect("response body");
+        assert!(body
+            .windows(b"prompt_tokens".len())
+            .any(|part| part == b"prompt_tokens"));
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("completed usage observation");
+        assert_eq!(event.provider, AiUsageProvider::OpenAi);
+        assert_eq!(event.public_model, "gpt-5-mini");
+        assert_eq!(event.client_api, AiUsageClientApi::OpenAiChatCompletions);
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
+        assert_eq!(event.status, 200);
+        assert_eq!(event.tokens.input_tokens, Some(13));
+        assert_eq!(event.tokens.output_tokens, Some(5));
+        assert_eq!(event.tokens.cache_read_tokens, Some(3));
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn observes_sanitized_provider_failures_without_parsing_the_error_body() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(429)
+                    .header("retry-after", "2")
+                    .json_body(json!({ "secret_provider_detail": "must not escape" }));
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![direct_openai_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-5-mini", "messages": [] }))
+            .send()
+            .await
+            .expect("proxy response");
+        assert_eq!(response.status(), 429);
+        let body = response.text().await.expect("safe error body");
+        assert!(!body.contains("secret_provider_detail"));
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("provider error observation");
+        assert_eq!(event.outcome, AiUsageOutcome::ProviderError);
+        assert_eq!(event.status, 429);
+        assert_eq!(event.tokens, AiTokenUsage::default());
     }
 
     #[test]

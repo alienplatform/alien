@@ -17,8 +17,9 @@ pub use creds::{
 };
 pub use error::{ErrorData, Result};
 pub use router::{
-    build_router, build_router_with_availability, route_from_direct_anthropic,
-    route_from_direct_openai, AvailableModels, GatewayRoute, GatewayTarget,
+    build_router, build_router_with_availability, build_router_with_availability_and_observer,
+    build_router_with_observer, route_from_direct_anthropic, route_from_direct_openai,
+    AvailableModels, GatewayRoute, GatewayTarget,
 };
 pub use usage::{
     parse_ai_token_usage, AiTokenUsage, AiUsageClientApi, AiUsageEvent, AiUsageObserver,

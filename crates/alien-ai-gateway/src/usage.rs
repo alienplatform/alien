@@ -3,10 +3,17 @@
 //! The gateway reports only request metadata and provider-supplied token counts.
 //! It never includes prompts, responses, headers, credentials, or provider error bodies.
 
-use std::time::{Duration, SystemTime};
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
+use axum::body::{Body, Bytes};
+use axum::response::Response;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 
 /// Receives completed request observations. Implementations must return quickly;
 /// inference must never wait for telemetry delivery. A typical implementation uses
@@ -22,13 +29,16 @@ pub enum AiUsageProvider {
     GcpVertex,
     AzureFoundry,
     Anthropic,
+    #[serde(rename = "openai")]
     OpenAi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiUsageClientApi {
+    #[serde(rename = "openai-chat-completions")]
     OpenAiChatCompletions,
+    #[serde(rename = "openai-responses")]
     OpenAiResponses,
     AnthropicMessages,
 }
@@ -66,6 +76,160 @@ pub struct AiUsageEvent {
     pub status: u16,
     pub outcome: AiUsageOutcome,
     pub tokens: AiTokenUsage,
+}
+
+const MAX_USAGE_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone)]
+pub(crate) struct AiUsageContext {
+    request_id: String,
+    started_at: SystemTime,
+    started: Instant,
+    binding: String,
+    provider: AiUsageProvider,
+    public_model: String,
+    provider_model: String,
+    client_api: AiUsageClientApi,
+    provider_region: Option<String>,
+}
+
+impl AiUsageContext {
+    pub(crate) fn new(
+        binding: &str,
+        provider: AiUsageProvider,
+        public_model: &str,
+        provider_model: &str,
+        client_api: AiUsageClientApi,
+        provider_region: Option<String>,
+    ) -> Self {
+        Self {
+            request_id: Uuid::new_v4().to_string(),
+            started_at: SystemTime::now(),
+            started: Instant::now(),
+            binding: binding.to_string(),
+            provider,
+            public_model: public_model.to_string(),
+            provider_model: provider_model.to_string(),
+            client_api,
+            provider_region,
+        }
+    }
+}
+
+struct ObservedBody {
+    inner: Pin<Box<dyn futures::Stream<Item = Result<Bytes, axum::Error>> + Send>>,
+    observer: Arc<dyn AiUsageObserver>,
+    context: AiUsageContext,
+    response_tail: VecDeque<u8>,
+    status: u16,
+    complete: bool,
+}
+
+impl ObservedBody {
+    fn retain_tail(&mut self, chunk: &[u8]) {
+        if chunk.len() >= MAX_USAGE_RESPONSE_BYTES {
+            self.response_tail.clear();
+            self.response_tail.extend(
+                chunk[chunk.len() - MAX_USAGE_RESPONSE_BYTES..]
+                    .iter()
+                    .copied(),
+            );
+            return;
+        }
+        let overflow = self
+            .response_tail
+            .len()
+            .saturating_add(chunk.len())
+            .saturating_sub(MAX_USAGE_RESPONSE_BYTES);
+        self.response_tail.drain(..overflow);
+        self.response_tail.extend(chunk.iter().copied());
+    }
+
+    fn finish(&mut self, outcome: AiUsageOutcome, status: u16) {
+        if self.complete {
+            return;
+        }
+        self.complete = true;
+        let tokens = if outcome == AiUsageOutcome::Success {
+            parse_ai_token_usage(
+                self.response_tail.make_contiguous(),
+                self.context.client_api,
+            )
+        } else {
+            AiTokenUsage::default()
+        };
+        let event = AiUsageEvent {
+            request_id: self.context.request_id.clone(),
+            started_at: self.context.started_at,
+            duration: self.context.started.elapsed(),
+            binding: self.context.binding.clone(),
+            provider: self.context.provider,
+            public_model: self.context.public_model.clone(),
+            provider_model: self.context.provider_model.clone(),
+            client_api: self.context.client_api,
+            provider_region: self.context.provider_region.clone(),
+            status,
+            outcome,
+            tokens,
+        };
+        let observer = Arc::clone(&self.observer);
+        // A faulty optional observer must not turn successful inference into a
+        // failed response or abort a response-body task.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observer.observe(event);
+        }));
+    }
+}
+
+impl Drop for ObservedBody {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.finish(AiUsageOutcome::Cancelled, 499);
+        }
+    }
+}
+
+pub(crate) fn observe_response(
+    response: Response,
+    observer: Option<&Arc<dyn AiUsageObserver>>,
+    context: AiUsageContext,
+) -> Response {
+    let Some(observer) = observer else {
+        return response;
+    };
+    let (parts, body) = response.into_parts();
+    let status = parts.status.as_u16();
+    let state = ObservedBody {
+        inner: Box::pin(body.into_data_stream()),
+        observer: Arc::clone(observer),
+        context,
+        response_tail: VecDeque::new(),
+        status,
+        complete: false,
+    };
+    let stream = futures::stream::unfold(state, |mut state| async move {
+        match state.inner.next().await {
+            Some(Ok(chunk)) => {
+                state.retain_tail(&chunk);
+                Some((Ok::<_, axum::Error>(chunk), state))
+            }
+            Some(Err(error)) => {
+                state.finish(AiUsageOutcome::ProviderError, 502);
+                Some((Err(error), state))
+            }
+            None => {
+                let outcome = if (200..300).contains(&state.status) {
+                    AiUsageOutcome::Success
+                } else {
+                    AiUsageOutcome::ProviderError
+                };
+                let status = state.status;
+                state.finish(outcome, status);
+                None
+            }
+        }
+    });
+    Response::from_parts(parts, Body::from_stream(stream))
 }
 
 /// Extract token counts from a complete JSON response or from the JSON payloads
@@ -190,7 +354,60 @@ fn merge_usage(current: &mut AiTokenUsage, next: AiTokenUsage) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::*;
+
+    struct TestObserver(mpsc::Sender<AiUsageEvent>);
+
+    impl AiUsageObserver for TestObserver {
+        fn observe(&self, event: AiUsageEvent) {
+            let _ = self.0.send(event);
+        }
+    }
+
+    #[test]
+    fn dropping_an_incomplete_response_stream_observes_cancellation() {
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let state = ObservedBody {
+            inner: Box::pin(futures::stream::pending()),
+            observer,
+            context: AiUsageContext::new(
+                "llm",
+                AiUsageProvider::OpenAi,
+                "gpt-5-mini",
+                "gpt-5-mini",
+                AiUsageClientApi::OpenAiChatCompletions,
+                None,
+            ),
+            response_tail: VecDeque::new(),
+            status: 200,
+            complete: false,
+        };
+        drop(state);
+
+        let event = receiver.try_recv().expect("cancelled usage observation");
+        assert_eq!(event.outcome, AiUsageOutcome::Cancelled);
+        assert_eq!(event.status, 499);
+        assert_eq!(event.tokens, AiTokenUsage::default());
+    }
+
+    #[test]
+    fn public_usage_identifiers_match_the_gateway_api() {
+        assert_eq!(
+            serde_json::to_string(&AiUsageProvider::OpenAi).unwrap(),
+            "\"openai\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AiUsageClientApi::OpenAiChatCompletions).unwrap(),
+            "\"openai-chat-completions\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AiUsageClientApi::OpenAiResponses).unwrap(),
+            "\"openai-responses\""
+        );
+    }
 
     #[test]
     fn extracts_openai_non_streaming_usage() {

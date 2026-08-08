@@ -131,6 +131,7 @@ dependencies = [
  "temp-env",
  "tokio",
  "tracing",
+ "uuid",
  "workspace_root",
 ]
 
