@@ -79,7 +79,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.2(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
+        version: 3.8.2(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
 
   packages/ai-gateway:
     dependencies:
@@ -128,7 +128,7 @@ importers:
         version: 2.5.7
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.2(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
+        version: 3.8.2(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
       '@types/node':
         specifier: ^24.0.15
         version: 24.13.3
@@ -225,7 +225,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.2(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
+        version: 3.8.2(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
 
   packages/scripts: {}
 
@@ -267,7 +267,7 @@ importers:
         version: 24.13.3
       ts-proto:
         specifier: ^2.7.0
-        version: 2.10.1
+        version: 2.12.0
       tsdown:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.8.3)
@@ -3749,8 +3749,8 @@ packages:
   ts-proto-descriptors@2.1.0:
     resolution: {integrity: sha512-S5EZYEQ6L9KLFfjSRpZWDIXDV/W7tAj8uW7pLsihIxyr62EAVSiKuVPwE8iWnr849Bqa53enex1jhDUcpgquzA==}
 
-  ts-proto@2.10.1:
-    resolution: {integrity: sha512-4sOE1hCs0uobJgdRCtcEwdbc8MAyKP+LJqUIKxZIiKac0rPBlVKsRGEGo2oQ1MnKA2Wwk0KuGP2POkiCwPtebw==}
+  ts-proto@2.12.0:
+    resolution: {integrity: sha512-ezMxg57ZiK/ZTW14U7y38+qyWHJr8cn8ELKuppANER666YnUteuNFO/mM1qI+9/wAHoTAfRadnIwtVdp1xw0jQ==}
     hasBin: true
 
   tsdown@0.13.5:
@@ -5121,7 +5121,7 @@ snapshots:
       strict-event-emitter: 0.5.1
     optional: true
 
-  '@napi-rs/cli@3.8.2(@emnapi/runtime@1.9.2)(@types/node@24.13.3)':
+  '@napi-rs/cli@3.8.2(@emnapi/runtime@1.11.2)(@types/node@24.13.3)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@24.13.3)
       '@napi-rs/cross-toolchain': 1.0.3
@@ -5137,7 +5137,7 @@ snapshots:
       typanion: 3.14.0
       typescript: 6.0.3
     optionalDependencies:
-      '@emnapi/runtime': 1.9.2
+      '@emnapi/runtime': 1.11.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'
@@ -7515,7 +7515,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.13.0
 
-  ts-proto@2.10.1:
+  ts-proto@2.12.0:
     dependencies:
       '@bufbuild/protobuf': 2.13.0
       case-anything: 2.1.13
