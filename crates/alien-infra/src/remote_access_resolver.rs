@@ -420,6 +420,32 @@ mod tests {
         }))
     }
 
+    fn gcp_two_hop_base_config(iam_credentials_url: String) -> ClientConfig {
+        let ClientConfig::Gcp(base) = gcp_base_config(iam_credentials_url) else {
+            unreachable!("GCP test config must be GCP")
+        };
+        let service_overrides = base.service_overrides.clone();
+        let project_number = base.project_number.clone();
+        ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: base.project_id.clone(),
+            region: base.region.clone(),
+            credentials: GcpCredentials::ImpersonatedServiceAccount {
+                source: base,
+                config: GcpImpersonationConfig {
+                    service_account_email: "management@managing-project.iam.gserviceaccount.com"
+                        .to_string(),
+                    scopes: vec![GCP_CLOUD_PLATFORM_SCOPE.to_string()],
+                    delegates: None,
+                    lifetime: Some("3600s".to_string()),
+                    target_project_id: None,
+                    target_region: None,
+                },
+            },
+            service_overrides,
+            project_number,
+        }))
+    }
+
     fn gcp_target_environment() -> EnvironmentInfo {
         EnvironmentInfo::Gcp(GcpEnvironmentInfo {
             project_id: "target-project".to_string(),
@@ -491,6 +517,41 @@ mod tests {
                 "resolved credentials should remain refreshable after validation, got {credentials:?}"
             ),
         }
+    }
+
+    #[tokio::test]
+    async fn gcp_remote_access_materializes_two_hop_credentials() {
+        let server = MockServer::start_async().await;
+        let token_exchanges = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(200).json_body(json!({
+                    "accessToken": "impersonated-token",
+                    "expireTime": "2026-07-16T12:00:00Z"
+                }));
+            })
+            .await;
+        let service_account_email = "deployment@target-project.iam.gserviceaccount.com";
+
+        let resolved = RemoteAccessResolver::default()
+            .resolve(
+                gcp_two_hop_base_config(server.url("/v1")),
+                &gcp_stack_state(service_account_email),
+                Some(&gcp_target_environment()),
+            )
+            .await
+            .expect("two-hop GCP remote access should materialize target credentials");
+
+        assert_eq!(
+            token_exchanges.hits_async().await,
+            2,
+            "management and target service accounts must each be impersonated"
+        );
+        let gcp = resolved
+            .gcp_config()
+            .expect("resolved remote access should remain GCP");
+        assert_eq!(gcp.project_id, "target-project");
+        assert_eq!(gcp.region, "us-east1");
     }
 
     #[tokio::test]

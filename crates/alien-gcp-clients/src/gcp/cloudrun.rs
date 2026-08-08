@@ -633,7 +633,7 @@ pub enum Ingress {
     /// All inbound traffic is allowed.
     IngressTrafficAll,
     /// Only internal traffic is allowed.
-    IngressTrafficInternal,
+    IngressTrafficInternalOnly,
     /// Only internal and Cloud Load Balancing traffic is allowed.
     IngressTrafficInternalLoadBalancer,
 }
@@ -1442,4 +1442,17 @@ pub struct BuildInfo {
     /// Output only. Source code location of the image.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_location: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Ingress;
+
+    #[test]
+    fn serializes_internal_ingress_with_cloud_run_v2_enum_value() {
+        assert_eq!(
+            serde_json::to_string(&Ingress::IngressTrafficInternalOnly).unwrap(),
+            r#""INGRESS_TRAFFIC_INTERNAL_ONLY""#
+        );
+    }
 }

@@ -4537,7 +4537,7 @@ impl GcpWorkerController {
             .build();
 
         let ingress = if cfg.public_endpoints.is_empty() {
-            CloudRunIngress::IngressTrafficInternal
+            CloudRunIngress::IngressTrafficInternalOnly
         } else {
             CloudRunIngress::IngressTrafficAll
         };
@@ -5638,7 +5638,9 @@ mod tests {
         ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
-    use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
+    use alien_gcp_clients::cloudrun::{
+        Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, Service,
+    };
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
@@ -6752,6 +6754,9 @@ mod tests {
         let operation_name_for_get = operation_name.clone();
         mock_cloudrun
             .expect_create_service()
+            .withf(|_, _, service, _| {
+                service.ingress == Some(CloudRunIngress::IngressTrafficInternalOnly)
+            })
             .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
 
         mock_cloudrun
