@@ -427,6 +427,14 @@ impl CommandRegistry for SqliteCommandRegistry {
                 Expr::col((Commands::Table, Commands::DeploymentId)),
                 Alias::new("deployment_id"),
             )
+            .expr_as(
+                Expr::col((Commands::Table, Commands::TargetResourceId)),
+                Alias::new("target_resource_id"),
+            )
+            .expr_as(
+                Expr::col((Commands::Table, Commands::TargetResourceType)),
+                Alias::new("target_resource_type"),
+            )
             .from(Commands::Table)
             .join(
                 JoinType::InnerJoin,
@@ -451,6 +459,14 @@ impl CommandRegistry for SqliteCommandRegistry {
                     workspace_id: p.string(0, "workspace_id").map_err(to_cmd_err)?,
                     project_id: p.string(1, "project_id").map_err(to_cmd_err)?,
                     deployment_id: p.string(2, "deployment_id").map_err(to_cmd_err)?,
+                    target: parse_target_columns(&p, 3, 4)
+                        .map_err(to_cmd_err)?
+                        .unwrap_or_else(|| {
+                            CommandTarget::new(
+                                p.string(2, "deployment_id").unwrap_or_default(),
+                                CommandTargetType::Worker,
+                            )
+                        }),
                 }))
             }
             None => Ok(None),
@@ -826,6 +842,7 @@ mod tests {
                 workspace_id: "workspace-a".to_string(),
                 project_id: "project-a".to_string(),
                 deployment_id: "dep-1".to_string(),
+                target: CommandTarget::new("dep-1", CommandTargetType::Worker),
             }
         );
     }

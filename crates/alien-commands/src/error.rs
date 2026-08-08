@@ -31,6 +31,20 @@ pub enum ErrorData {
         command_id: String,
     },
 
+    /// The manager serving a hosted command capability no longer owns its
+    /// deployment. Clients should refresh bootstrap discovery and retry.
+    #[error(
+        code = "COMMAND_CONNECTION_STALE",
+        message = "Command connection is stale for '{resource}'",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 401
+    )]
+    CommandConnectionStale {
+        /// Deployment or command identifier whose manager assignment changed
+        resource: String,
+    },
+
     /// Explicitly requested command target does not exist in the deployment
     /// (or is not command-capable). Also returned for an empty resource id.
     ///

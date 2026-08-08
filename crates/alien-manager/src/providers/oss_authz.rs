@@ -44,10 +44,11 @@ impl Authz for OssAuthz {
         }
     }
 
-    fn can_read_release(&self, _s: &Subject, _release: &ReleaseRecord) -> bool {
+    fn can_read_release(&self, s: &Subject, _release: &ReleaseRecord) -> bool {
         // OSS single-tenant: any valid token reads any release. Deployment
-        // tokens included — agents need their target release to deploy.
-        true
+        // tokens included — agents need their target release to deploy. A
+        // commands capability is deliberately inert outside command routes.
+        !matches!(s.scope, Scope::Commands { .. }) && s.role != Role::CommandCapability
     }
 
     fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
@@ -78,6 +79,7 @@ impl Authz for OssAuthz {
                 deployment_id == &deployment.id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
+            Scope::Commands { .. } => false,
         }
     }
 
@@ -135,7 +137,7 @@ impl Authz for OssAuthz {
                 deployment_group_id,
                 ..
             } => deployment_group_id == &dg.id,
-            Scope::Deployment { .. } => false,
+            Scope::Deployment { .. } | Scope::Commands { .. } => false,
         }
     }
 
@@ -150,6 +152,11 @@ impl Authz for OssAuthz {
     // -- Commands ----------------------------------------------------------
 
     fn can_dispatch_command(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        if let Some(allowed) =
+            crate::auth::command_capability::sender_deployment_decision(s, deployment)
+        {
+            return allowed;
+        }
         if !self.can_read_deployment(s, deployment) {
             return false;
         }
@@ -163,6 +170,11 @@ impl Authz for OssAuthz {
     }
 
     fn can_read_command(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        if let Some(allowed) =
+            crate::auth::command_capability::sender_deployment_decision(s, deployment)
+        {
+            return allowed;
+        }
         self.can_read_deployment(s, deployment)
     }
 
@@ -171,6 +183,10 @@ impl Authz for OssAuthz {
         s: &Subject,
         command: &alien_commands::server::CommandAccessContext,
     ) -> bool {
+        if let Some(allowed) = crate::auth::command_capability::sender_context_decision(s, command)
+        {
+            return allowed;
+        }
         match &s.scope {
             Scope::Workspace => true,
             Scope::Project { project_id } => project_id == &command.project_id,
@@ -179,7 +195,30 @@ impl Authz for OssAuthz {
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
             Scope::DeploymentGroup { .. } => false,
+            Scope::Commands { .. } => false,
         }
+    }
+
+    fn can_receive_command(
+        &self,
+        s: &Subject,
+        deployment: &DeploymentRecord,
+        target: &alien_core::CommandTarget,
+    ) -> bool {
+        if let Some(allowed) =
+            crate::auth::command_capability::receiver_deployment_decision(s, deployment, target)
+        {
+            return allowed;
+        }
+        self.can_execute_command(s, deployment)
+    }
+
+    fn can_execute_command_context(
+        &self,
+        s: &Subject,
+        command: &alien_commands::server::CommandAccessContext,
+    ) -> bool {
+        crate::auth::command_capability::receiver_context_allowed(s, command)
     }
 
     // -- Sync protocol -----------------------------------------------------
@@ -195,6 +234,7 @@ impl Authz for OssAuthz {
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
             Scope::Project { .. } => true,
+            Scope::Commands { .. } => false,
         }
     }
 
@@ -240,8 +280,10 @@ impl Authz for OssAuthz {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
-    use crate::auth::SubjectKind;
+    use crate::auth::{CommandCapability, SubjectKind};
     use chrono::Utc;
 
     fn admin() -> Subject {
@@ -286,6 +328,38 @@ mod tests {
         }
     }
 
+    fn command_sender(deployment_id: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "command-sender".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Commands {
+                project_id: "default".to_string(),
+                deployment_id: deployment_id.to_string(),
+                capability: CommandCapability::Send,
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
+    fn command_receiver(deployment_id: &str, target: alien_core::CommandTarget) -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "command-receiver".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Commands {
+                project_id: "default".to_string(),
+                deployment_id: deployment_id.to_string(),
+                capability: CommandCapability::Receive { target },
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
     fn deployment(id: &str, dg: &str) -> DeploymentRecord {
         DeploymentRecord {
             deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
@@ -323,10 +397,32 @@ mod tests {
         }
     }
 
+    fn release() -> ReleaseRecord {
+        ReleaseRecord {
+            id: "release-1".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            stacks: HashMap::new(),
+            git_commit_sha: None,
+            git_commit_ref: None,
+            git_commit_message: None,
+            created_at: Utc::now(),
+        }
+    }
+
     #[test]
     fn admin_reads_any_deployment() {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_read_deployment(&admin(), &dep));
+    }
+
+    #[test]
+    fn commands_capabilities_cannot_read_or_export_releases() {
+        let release = release();
+        let subject = command_sender("d1");
+
+        assert!(!OssAuthz.can_read_release(&subject, &release));
+        assert!(!OssAuthz.can_export_release(&subject, &release));
     }
 
     #[test]
@@ -383,6 +479,10 @@ mod tests {
             workspace_id: "default".to_string(),
             project_id: "project-a".to_string(),
             deployment_id: "deployment-a".to_string(),
+            target: alien_core::CommandTarget::new(
+                "daemon-a",
+                alien_core::CommandTargetType::Daemon,
+            ),
         };
 
         assert!(OssAuthz.can_read_command_context(&subject, &command));
@@ -393,6 +493,69 @@ mod tests {
                 ..command
             }
         ));
+    }
+
+    #[test]
+    fn commands_sender_is_limited_to_sending_and_reading_its_deployment() {
+        let own = deployment("d1", "dg-a");
+        let other = deployment("d2", "dg-a");
+        let mut other_workspace = deployment("d1", "dg-a");
+        other_workspace.workspace_id = "other-workspace".to_string();
+        let sender = command_sender("d1");
+
+        assert!(OssAuthz.can_dispatch_command(&sender, &own));
+        assert!(OssAuthz.can_read_command(&sender, &own));
+        assert!(!OssAuthz.can_dispatch_command(&sender, &other));
+        assert!(!OssAuthz.can_dispatch_command(&sender, &other_workspace));
+        assert!(!OssAuthz.can_read_command(&sender, &other_workspace));
+        assert!(!OssAuthz.can_read_deployment(&sender, &own));
+        assert!(!OssAuthz.can_receive_command(
+            &sender,
+            &own,
+            &alien_core::CommandTarget::new("daemon-a", alien_core::CommandTargetType::Daemon),
+        ));
+    }
+
+    #[test]
+    fn commands_receiver_is_limited_to_its_exact_deployment_and_target() {
+        let allowed =
+            alien_core::CommandTarget::new("daemon-a", alien_core::CommandTargetType::Daemon);
+        let other =
+            alien_core::CommandTarget::new("daemon-b", alien_core::CommandTargetType::Daemon);
+        let receiver = command_receiver("d1", allowed.clone());
+        let own = deployment("d1", "dg-a");
+        let other_deployment = deployment("d2", "dg-a");
+        let mut other_workspace = deployment("d1", "dg-a");
+        other_workspace.workspace_id = "other-workspace".to_string();
+        let command = alien_commands::server::CommandAccessContext {
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            deployment_id: "d1".to_string(),
+            target: allowed.clone(),
+        };
+        let other_workspace_command = alien_commands::server::CommandAccessContext {
+            workspace_id: "other-workspace".to_string(),
+            project_id: "default".to_string(),
+            deployment_id: "d1".to_string(),
+            target: allowed.clone(),
+        };
+
+        assert!(OssAuthz.can_receive_command(&receiver, &own, &allowed));
+        assert!(!OssAuthz.can_receive_command(&receiver, &own, &other));
+        assert!(!OssAuthz.can_receive_command(&receiver, &other_deployment, &allowed,));
+        assert!(!OssAuthz.can_receive_command(&receiver, &other_workspace, &allowed,));
+        assert!(OssAuthz.can_execute_command_context(&receiver, &command));
+        assert!(!OssAuthz.can_execute_command_context(&receiver, &other_workspace_command,));
+        assert!(!OssAuthz.can_execute_command_context(
+            &receiver,
+            &alien_commands::server::CommandAccessContext {
+                target: other,
+                ..command
+            },
+        ));
+        assert!(!OssAuthz.can_dispatch_command(&receiver, &own));
+        assert!(!OssAuthz.can_read_command(&receiver, &own));
+        assert!(!OssAuthz.can_read_deployment(&receiver, &own));
     }
 
     #[test]
