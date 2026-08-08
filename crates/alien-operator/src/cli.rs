@@ -5,7 +5,9 @@
 
 use crate::error::{ErrorData, Result};
 use crate::loops::debug_session::DebugSessionLoop;
-use crate::{run_operator_with_cancel_and_debug_loop, InstanceLock, OperatorConfig};
+use crate::loops::access_requests::AccessRequestSyncLoop;
+use crate::loops::operations_exec::OperationsExecLoop;
+use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
@@ -152,8 +154,20 @@ pub type InitHook = fn();
 /// the OSS no-op stub in place.
 pub type DebugLoopHook = fn() -> Option<std::sync::Arc<dyn DebugSessionLoop>>;
 
+/// Optional third hook that lets downstream binaries inject a real
+/// [`AccessRequestSyncLoop`] (the access-request approval controller). Defaults
+/// to `None`, which leaves the OSS no-op stub in place.
+pub type AccessRequestSyncLoopHook = fn() -> Option<std::sync::Arc<dyn AccessRequestSyncLoop>>;
+
+/// Optional fourth hook that lets downstream binaries inject a real
+/// [`OperationsExecLoop`] (pull-mode operations executor). Defaults to `None`,
+/// so the OSS operator runs no authorized operations commands.
+pub type OperationsExecLoopHook = fn() -> Option<std::sync::Arc<dyn OperationsExecLoop>>;
+
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
+const NOOP_ACCESS_REQUEST_LOOP_HOOK: AccessRequestSyncLoopHook = || None;
+const NOOP_OPERATIONS_EXEC_LOOP_HOOK: OperationsExecLoopHook = || None;
 
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeploymentId {
@@ -172,9 +186,27 @@ pub fn cli_main_with_hook(init_hook: InitHook) {
 }
 
 /// Like [`cli_main_with_hook`] but also accepts a [`DebugLoopHook`] so
-/// downstream binaries can inject a real [`DebugSessionLoop`] before the
-/// operator starts.
+/// downstream binaries can inject a real [`DebugSessionLoop`]. Injects no
+/// operations approval controller (OSS no-op stub).
 pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) {
+    cli_main_with_all_loops(
+        init_hook,
+        debug_loop_hook,
+        NOOP_ACCESS_REQUEST_LOOP_HOOK,
+        NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+    );
+}
+
+/// Full-control CLI entry point: injects the init hook plus the pluggable loops
+/// (debug-session, access-request approval, and pull-mode operations executor).
+/// Downstream binaries call this to wire in their real implementations; the OSS
+/// binary uses no-op hooks.
+pub fn cli_main_with_all_loops(
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+    access_request_loop_hook: AccessRequestSyncLoopHook,
+    operations_exec_loop_hook: OperationsExecLoopHook,
+) {
     // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
     // (pulled by other deps) present in the tree can't auto-pick a provider
     // and panics on first TLS use ("Could not automatically determine the
@@ -187,7 +219,12 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
 
     #[cfg(windows)]
     if args.service {
-        windows_entry::run_as_service(init_hook);
+        windows_entry::run_as_service(
+            init_hook,
+            debug_loop_hook,
+            access_request_loop_hook,
+            operations_exec_loop_hook,
+        );
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -195,7 +232,13 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
         .build()
         .expect("failed to build tokio runtime");
 
-    if let Err(e) = rt.block_on(run(args, init_hook, debug_loop_hook)) {
+    if let Err(e) = rt.block_on(run(
+        args,
+        init_hook,
+        debug_loop_hook,
+        access_request_loop_hook,
+        operations_exec_loop_hook,
+    )) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -206,7 +249,13 @@ pub fn cli_main() {
     cli_main_with_hook(NOOP_INIT);
 }
 
-async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook) -> Result<()> {
+async fn run(
+    mut args: Args,
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+    access_request_loop_hook: AccessRequestSyncLoopHook,
+    operations_exec_loop_hook: OperationsExecLoopHook,
+) -> Result<()> {
     let embedded_config: Option<EmbeddedOperatorConfig> = load_embedded_config().ok().flatten();
 
     args.operator_name = args.operator_name.or_else(|| env_string("OPERATOR_NAME"));
@@ -432,10 +481,12 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
             None
         };
 
-    run_operator_with_cancel_and_debug_loop(
+    run_operator_with_cancel_and_loops(
         operator_config,
         service_provider,
         debug_loop_hook(),
+        access_request_loop_hook(),
+        operations_exec_loop_hook(),
         cancel,
     )
     .await?;
@@ -550,13 +601,31 @@ mod windows_entry {
 
     define_windows_service!(ffi_service_main, service_main);
 
-    /// Per-process slot holding the init hook the binary registered before
-    /// entering the service dispatcher. Only one operator runs per process so a
-    /// single static slot is sufficient.
+    /// Per-process slots holding the hooks the binary registered before entering
+    /// the service dispatcher. The Win32 service entry point (`service_main`)
+    /// takes no user arguments, so the hooks can't be threaded through as
+    /// parameters — they ride these statics instead. Only one operator runs per
+    /// process, so a single slot per hook is sufficient.
     static INIT_HOOK: std::sync::Mutex<Option<InitHook>> = std::sync::Mutex::new(None);
+    static DEBUG_LOOP_HOOK: std::sync::Mutex<Option<DebugLoopHook>> =
+        std::sync::Mutex::new(None);
+    static ACCESS_REQUEST_LOOP_HOOK: std::sync::Mutex<Option<AccessRequestSyncLoopHook>> =
+        std::sync::Mutex::new(None);
+    static OPERATIONS_EXEC_LOOP_HOOK: std::sync::Mutex<Option<OperationsExecLoopHook>> =
+        std::sync::Mutex::new(None);
 
-    pub fn run_as_service(init_hook: InitHook) -> ! {
+    pub fn run_as_service(
+        init_hook: InitHook,
+        debug_loop_hook: DebugLoopHook,
+        access_request_loop_hook: AccessRequestSyncLoopHook,
+        operations_exec_loop_hook: OperationsExecLoopHook,
+    ) -> ! {
         *INIT_HOOK.lock().expect("init hook lock") = Some(init_hook);
+        *DEBUG_LOOP_HOOK.lock().expect("debug loop hook lock") = Some(debug_loop_hook);
+        *ACCESS_REQUEST_LOOP_HOOK.lock().expect("access-request loop hook lock") =
+            Some(access_request_loop_hook);
+        *OPERATIONS_EXEC_LOOP_HOOK.lock().expect("operations-exec loop hook lock") =
+            Some(operations_exec_loop_hook);
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
             .expect("failed to start service dispatcher");
         std::process::exit(0);
@@ -592,6 +661,18 @@ mod windows_entry {
             .lock()
             .expect("init hook lock")
             .unwrap_or(super::NOOP_INIT);
+        let debug_loop_hook = DEBUG_LOOP_HOOK
+            .lock()
+            .expect("debug loop hook lock")
+            .unwrap_or(super::NOOP_DEBUG_LOOP_HOOK);
+        let access_request_loop_hook = ACCESS_REQUEST_LOOP_HOOK
+            .lock()
+            .expect("access-request loop hook lock")
+            .unwrap_or(super::NOOP_ACCESS_REQUEST_LOOP_HOOK);
+        let operations_exec_loop_hook = OPERATIONS_EXEC_LOOP_HOOK
+            .lock()
+            .expect("operations-exec loop hook lock")
+            .unwrap_or(super::NOOP_OPERATIONS_EXEC_LOOP_HOOK);
         let args = Args::parse();
         let cancel = CancellationToken::new();
         let cancel_for_stop = cancel.clone();
@@ -606,8 +687,13 @@ mod windows_entry {
             .build()
             .expect("failed to build tokio runtime");
 
-        let exit_code = match rt.block_on(super::run(args, init_hook, super::NOOP_DEBUG_LOOP_HOOK))
-        {
+        let exit_code = match rt.block_on(super::run(
+            args,
+            init_hook,
+            debug_loop_hook,
+            access_request_loop_hook,
+            operations_exec_loop_hook,
+        )) {
             Ok(()) => 0,
             Err(e) => {
                 error!(error = %e, "Operator exited with error");

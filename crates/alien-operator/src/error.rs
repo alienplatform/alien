@@ -101,4 +101,16 @@ pub enum ErrorData {
         http_status_code = 500
     )]
     EncryptionError { message: String },
+
+    /// A background loop exited on its own instead of being cancelled. The
+    /// operator has no useful work left once a core loop is gone, so it treats
+    /// this as a failure (non-zero exit) rather than a clean shutdown.
+    #[error(
+        code = "OPERATOR_LOOP_EXITED",
+        message = "Operator {loop_name} loop exited unexpectedly",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 500
+    )]
+    LoopExited { loop_name: String },
 }
