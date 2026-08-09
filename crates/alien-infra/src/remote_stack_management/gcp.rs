@@ -425,35 +425,12 @@ impl GcpRemoteStackManagementController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
-
-        // Heartbeat check: verify service account still exists
-        if let Some(service_account_email) = &self.service_account_email {
-            let sa = client
-                .get_service_account(service_account_email.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get management service account during heartbeat check"
-                        .to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            // Check if service account email matches what we expect
-            if let Some(fetched_email) = &sa.email {
-                if fetched_email != service_account_email {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!(
-                            "Management service account email changed from {} to {}",
-                            service_account_email, fetched_email
-                        ),
-                    }));
-                }
-            }
-        }
-
+        // The Manager has already proved that it can impersonate this identity
+        // before entering the resource loop. Requiring the management identity
+        // to inspect its own IAM record adds an unrelated
+        // `iam.serviceAccounts.get` permission and makes least-privilege
+        // imported deployments fail refresh. Resources using the identity
+        // perform their own provider-specific health checks.
         emit_gcp_remote_stack_management_heartbeat(ctx, self);
 
         Ok(HandlerAction::Continue {
@@ -679,7 +656,7 @@ fn emit_gcp_remote_stack_management_heartbeat(
                         health: ObservedHealth::Healthy,
                         lifecycle: ProviderLifecycleState::Running,
                         message: controller.service_account_email.as_ref().map(|email| {
-                            format!("GCP management service account '{}' is reachable", email)
+                            format!("GCP management service account '{}' is configured", email)
                         }),
                         stale: false,
                         partial: false,
