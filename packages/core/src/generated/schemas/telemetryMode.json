@@ -1,1 +1,6 @@
-{"type":"string","description":"How telemetry (logs, metrics, traces) is handled.","enum":["off","auto","approval-required"],"x-readme-ref-name":"TelemetryMode"}
+{
+  "type": "string",
+  "description": "How telemetry (logs, metrics, traces) is handled.",
+  "enum": ["off", "auto", "approval-required"],
+  "x-readme-ref-name": "TelemetryMode"
+}

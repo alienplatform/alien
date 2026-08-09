@@ -1,1 +1,33 @@
-{"type":"object","description":"Azure Build ImportData — an Azure Container Registry build task.","required":["subscriptionId","resourceGroup","registryName","taskName","buildEnvVars"],"properties":{"buildEnvVars":{"type":"object","description":"Environment variables stamped into the task's variables block.","additionalProperties":{"type":"string"},"propertyNames":{"type":"string"}},"registryName":{"type":"string","description":"Azure Container Registry name."},"resourceGroup":{"type":"string","description":"Resource group hosting the registry."},"subscriptionId":{"type":"string","description":"Subscription ID hosting the build task."},"taskName":{"type":"string","description":"Build task name."}},"x-readme-ref-name":"AzureBuildImportData"}
+{
+  "type": "object",
+  "description": "Azure Build ImportData — an Azure Container Registry build task.",
+  "required": [
+    "subscriptionId",
+    "resourceGroup",
+    "registryName",
+    "taskName",
+    "buildEnvVars"
+  ],
+  "properties": {
+    "buildEnvVars": {
+      "type": "object",
+      "description": "Environment variables stamped into the task's variables block.",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "type": "string" }
+    },
+    "registryName": {
+      "type": "string",
+      "description": "Azure Container Registry name."
+    },
+    "resourceGroup": {
+      "type": "string",
+      "description": "Resource group hosting the registry."
+    },
+    "subscriptionId": {
+      "type": "string",
+      "description": "Subscription ID hosting the build task."
+    },
+    "taskName": { "type": "string", "description": "Build task name." }
+  },
+  "x-readme-ref-name": "AzureBuildImportData"
+}

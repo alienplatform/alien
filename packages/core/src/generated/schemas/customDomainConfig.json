@@ -1,1 +1,87 @@
-{"type":"object","description":"Custom domain configuration for a single resource.","required":["domain","certificate"],"properties":{"certificate":{"description":"Customer-provided certificate reference.","type":"object","properties":{"aws":{"oneOf":[{"type":"null"},{"description":"AWS ACM certificate ARN","type":"object","required":["certificateArn"],"properties":{"certificateArn":{"type":"string"}},"x-readme-ref-name":"AwsCustomCertificateConfig"}]},"azure":{"oneOf":[{"type":"null"},{"description":"Azure Key Vault certificate ID","type":"object","required":["keyVaultCertificateId"],"properties":{"keyVaultCertificateId":{"type":"string"},"keyVaultResourceId":{"type":["string","null"]}},"x-readme-ref-name":"AzureCustomCertificateConfig"}]},"gcp":{"oneOf":[{"type":"null"},{"description":"GCP Certificate Manager certificate name","type":"object","required":["certificateName"],"properties":{"certificateName":{"type":"string"}},"x-readme-ref-name":"GcpCustomCertificateConfig"}]},"kubernetes":{"oneOf":[{"type":"null"},{"description":"Kubernetes TLS Secret reference for Secret-backed route profiles.","type":"object","required":["tlsSecretRef"],"properties":{"tlsSecretRef":{"description":"Existing TLS Secret containing `tls.crt` and `tls.key`.","type":"object","required":["secretName"],"properties":{"namespace":{"type":["string","null"],"description":"Secret namespace. Defaults to the release namespace when omitted."},"secretName":{"type":"string","description":"Secret name."}},"x-readme-ref-name":"KubernetesTlsSecretRef"}},"x-readme-ref-name":"KubernetesCustomCertificateConfig"}]}},"x-readme-ref-name":"CustomCertificateConfig"},"domain":{"type":"string","description":"Fully qualified domain name to use."}},"x-readme-ref-name":"CustomDomainConfig"}
+{
+  "type": "object",
+  "description": "Custom domain configuration for a single resource.",
+  "required": ["domain", "certificate"],
+  "properties": {
+    "certificate": {
+      "description": "Customer-provided certificate reference.",
+      "type": "object",
+      "properties": {
+        "aws": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "description": "AWS ACM certificate ARN",
+              "type": "object",
+              "required": ["certificateArn"],
+              "properties": { "certificateArn": { "type": "string" } },
+              "x-readme-ref-name": "AwsCustomCertificateConfig"
+            }
+          ]
+        },
+        "azure": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "description": "Azure Key Vault certificate ID",
+              "type": "object",
+              "required": ["keyVaultCertificateId"],
+              "properties": {
+                "keyVaultCertificateId": { "type": "string" },
+                "keyVaultResourceId": { "type": ["string", "null"] }
+              },
+              "x-readme-ref-name": "AzureCustomCertificateConfig"
+            }
+          ]
+        },
+        "gcp": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "description": "GCP Certificate Manager certificate name",
+              "type": "object",
+              "required": ["certificateName"],
+              "properties": { "certificateName": { "type": "string" } },
+              "x-readme-ref-name": "GcpCustomCertificateConfig"
+            }
+          ]
+        },
+        "kubernetes": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "description": "Kubernetes TLS Secret reference for Secret-backed route profiles.",
+              "type": "object",
+              "required": ["tlsSecretRef"],
+              "properties": {
+                "tlsSecretRef": {
+                  "description": "Existing TLS Secret containing `tls.crt` and `tls.key`.",
+                  "type": "object",
+                  "required": ["secretName"],
+                  "properties": {
+                    "namespace": {
+                      "type": ["string", "null"],
+                      "description": "Secret namespace. Defaults to the release namespace when omitted."
+                    },
+                    "secretName": {
+                      "type": "string",
+                      "description": "Secret name."
+                    }
+                  },
+                  "x-readme-ref-name": "KubernetesTlsSecretRef"
+                }
+              },
+              "x-readme-ref-name": "KubernetesCustomCertificateConfig"
+            }
+          ]
+        }
+      },
+      "x-readme-ref-name": "CustomCertificateConfig"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Fully qualified domain name to use."
+    }
+  },
+  "x-readme-ref-name": "CustomDomainConfig"
+}

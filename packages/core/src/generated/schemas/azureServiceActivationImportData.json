@@ -1,1 +1,20 @@
-{"type":"object","description":"Azure ServiceActivation ImportData — registers an Azure resource\nprovider on the customer's subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the\nstack contains resources that depend on a specific Azure RP\n(Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).","required":["subscriptionId","providerNamespace","registered"],"properties":{"providerNamespace":{"type":"string","description":"Resource provider namespace (e.g. `Microsoft.App`)."},"registered":{"type":"boolean","description":"True once the provider is reported `Registered`."},"subscriptionId":{"type":"string","description":"Subscription ID the provider was registered on."}},"x-readme-ref-name":"AzureServiceActivationImportData"}
+{
+  "type": "object",
+  "description": "Azure ServiceActivation ImportData — registers an Azure resource\nprovider on the customer's subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the\nstack contains resources that depend on a specific Azure RP\n(Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).",
+  "required": ["subscriptionId", "providerNamespace", "registered"],
+  "properties": {
+    "providerNamespace": {
+      "type": "string",
+      "description": "Resource provider namespace (e.g. `Microsoft.App`)."
+    },
+    "registered": {
+      "type": "boolean",
+      "description": "True once the provider is reported `Registered`."
+    },
+    "subscriptionId": {
+      "type": "string",
+      "description": "Subscription ID the provider was registered on."
+    }
+  },
+  "x-readme-ref-name": "AzureServiceActivationImportData"
+}

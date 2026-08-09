@@ -1,1 +1,9 @@
-{"type":"object","properties":{"current":{"type":["integer","null"],"format":"int32","minimum":0},"desired":{"type":["integer","null"],"format":"int32","minimum":0},"ready":{"type":["integer","null"],"format":"int32","minimum":0}},"x-readme-ref-name":"ObservedCounts"}
+{
+  "type": "object",
+  "properties": {
+    "current": { "type": ["integer", "null"], "format": "int32", "minimum": 0 },
+    "desired": { "type": ["integer", "null"], "format": "int32", "minimum": 0 },
+    "ready": { "type": ["integer", "null"], "format": "int32", "minimum": 0 }
+  },
+  "x-readme-ref-name": "ObservedCounts"
+}

@@ -1,1 +1,39 @@
-{"type":"object","required":["desiredMachines"],"properties":{"desiredMachines":{"type":"integer","format":"int32","minimum":0},"reason":{"type":["string","null"]},"unschedulableReplicas":{"type":["integer","null"],"format":"int32","minimum":0},"utilization":{"oneOf":[{"type":"null"},{"type":"object","required":["value","unit"],"properties":{"unit":{"type":"string","enum":["count","percent","bytes","cores","milliseconds","requests-per-second"],"x-readme-ref-name":"MetricUnit"},"value":{"type":"number","format":"double"}},"x-readme-ref-name":"MetricSample"}]}},"x-readme-ref-name":"ComputeCapacityRecommendation"}
+{
+  "type": "object",
+  "required": ["desiredMachines"],
+  "properties": {
+    "desiredMachines": { "type": "integer", "format": "int32", "minimum": 0 },
+    "reason": { "type": ["string", "null"] },
+    "unschedulableReplicas": {
+      "type": ["integer", "null"],
+      "format": "int32",
+      "minimum": 0
+    },
+    "utilization": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["value", "unit"],
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": [
+                "count",
+                "percent",
+                "bytes",
+                "cores",
+                "milliseconds",
+                "requests-per-second"
+              ],
+              "x-readme-ref-name": "MetricUnit"
+            },
+            "value": { "type": "number", "format": "double" }
+          },
+          "x-readme-ref-name": "MetricSample"
+        }
+      ]
+    }
+  },
+  "x-readme-ref-name": "ComputeCapacityRecommendation"
+}

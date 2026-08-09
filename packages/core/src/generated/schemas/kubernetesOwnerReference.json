@@ -1,1 +1,11 @@
-{"type":"object","required":["kind","name","uid","controller"],"properties":{"controller":{"type":"boolean"},"kind":{"type":"string"},"name":{"type":"string"},"uid":{"type":"string"}},"x-readme-ref-name":"KubernetesOwnerReference"}
+{
+  "type": "object",
+  "required": ["kind", "name", "uid", "controller"],
+  "properties": {
+    "controller": { "type": "boolean" },
+    "kind": { "type": "string" },
+    "name": { "type": "string" },
+    "uid": { "type": "string" }
+  },
+  "x-readme-ref-name": "KubernetesOwnerReference"
+}

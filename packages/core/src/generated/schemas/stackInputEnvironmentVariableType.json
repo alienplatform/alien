@@ -1,1 +1,6 @@
-{"type":"string","description":"Environment variable handling for a stack input mapping.","enum":["plain","secret"],"x-readme-ref-name":"StackInputEnvironmentVariableType"}
+{
+  "type": "string",
+  "description": "Environment variable handling for a stack input mapping.",
+  "enum": ["plain", "secret"],
+  "x-readme-ref-name": "StackInputEnvironmentVariableType"
+}

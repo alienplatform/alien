@@ -1,1 +1,6 @@
-{"type":"string","description":"Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.","enum":["cloudformation","terraform","helm"],"x-readme-ref-name":"ImportSourceKind"}
+{
+  "type": "string",
+  "description": "Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
+  "enum": ["cloudformation", "terraform", "helm"],
+  "x-readme-ref-name": "ImportSourceKind"
+}

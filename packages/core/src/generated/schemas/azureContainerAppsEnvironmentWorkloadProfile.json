@@ -1,1 +1,11 @@
-{"type":"object","required":["name","workloadProfileType"],"properties":{"maximumCount":{"type":["integer","null"],"format":"int32"},"minimumCount":{"type":["integer","null"],"format":"int32"},"name":{"type":"string"},"workloadProfileType":{"type":"string"}},"x-readme-ref-name":"AzureContainerAppsEnvironmentWorkloadProfile"}
+{
+  "type": "object",
+  "required": ["name", "workloadProfileType"],
+  "properties": {
+    "maximumCount": { "type": ["integer", "null"], "format": "int32" },
+    "minimumCount": { "type": ["integer", "null"], "format": "int32" },
+    "name": { "type": "string" },
+    "workloadProfileType": { "type": "string" }
+  },
+  "x-readme-ref-name": "AzureContainerAppsEnvironmentWorkloadProfile"
+}

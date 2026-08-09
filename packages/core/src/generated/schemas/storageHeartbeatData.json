@@ -1,1 +1,435 @@
-{"oneOf":[{"allOf":[{"type":"object","required":["status","name","lifecyclePresent","encryptionConfigPresent","publicAccessBlockPresent"],"properties":{"blockPublicAcls":{"type":["boolean","null"]},"blockPublicPolicy":{"type":["boolean","null"]},"bucketAclPresent":{"type":["boolean","null"]},"bucketLocation":{"type":["string","null"]},"bucketPolicyPresent":{"type":["boolean","null"]},"encryptionConfigPresent":{"type":"boolean"},"encryptionEnabled":{"type":["boolean","null"]},"ignorePublicAcls":{"type":["boolean","null"]},"lifecyclePresent":{"type":"boolean"},"lifecycleRuleCount":{"type":["integer","null"],"format":"int64","minimum":0},"name":{"type":"string"},"publicAccessBlockPresent":{"type":"boolean"},"region":{"type":["string","null"]},"restrictPublicBuckets":{"type":["boolean","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"StorageHeartbeatStatus"},"versioningEnabled":{"type":["boolean","null"]},"versioningStatus":{"type":["string","null"]}},"x-readme-ref-name":"AwsS3StorageHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["awsS3"]}}}]},{"allOf":[{"type":"object","required":["status","name","lifecyclePresent","encryptionConfigPresent"],"properties":{"bucketId":{"type":["string","null"]},"defaultKmsKeyName":{"type":["string","null"]},"encryptionConfigPresent":{"type":"boolean"},"lifecyclePresent":{"type":"boolean"},"lifecycleRuleCount":{"type":["integer","null"],"format":"int64","minimum":0},"location":{"type":["string","null"]},"locationType":{"type":["string","null"]},"name":{"type":"string"},"publicAccessPrevention":{"type":["string","null"]},"retentionPeriod":{"type":["string","null"]},"retentionPolicyEffectiveTime":{"type":["string","null"]},"retentionPolicyIsLocked":{"type":["boolean","null"]},"softDeleteEffectiveTime":{"type":["string","null"]},"softDeleteRetentionDurationSeconds":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"StorageHeartbeatStatus"},"storageClass":{"type":["string","null"]},"uniformBucketLevelAccessEnabled":{"type":["boolean","null"]},"uniformBucketLevelAccessLockedTime":{"type":["string","null"]},"versioningEnabled":{"type":["boolean","null"]}},"x-readme-ref-name":"GcpCloudStorageHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["gcpCloudStorage"]}}}]},{"allOf":[{"type":"object","required":["status","name"],"properties":{"accessTier":{"type":["string","null"]},"accountKind":{"type":["string","null"]},"allowBlobPublicAccess":{"type":["boolean","null"]},"blobDeleteRetentionDays":{"type":["integer","null"],"format":"int64","minimum":0},"blobDeleteRetentionEnabled":{"type":["boolean","null"]},"blobEncryptionEnabled":{"type":["boolean","null"]},"blobVersioningEnabled":{"type":["boolean","null"]},"changeFeedEnabled":{"type":["boolean","null"]},"changeFeedRetentionDays":{"type":["integer","null"],"format":"int64","minimum":0},"containerDeleteRetentionDays":{"type":["integer","null"],"format":"int64","minimum":0},"containerDeleteRetentionEnabled":{"type":["boolean","null"]},"containerPublicAccess":{"type":["string","null"]},"encryptionKeySource":{"type":["string","null"]},"fileEncryptionEnabled":{"type":["boolean","null"]},"location":{"type":["string","null"]},"name":{"type":"string"},"primaryLocation":{"type":["string","null"]},"provisioningState":{"type":["string","null"]},"publicNetworkAccess":{"type":["string","null"]},"queueEncryptionEnabled":{"type":["boolean","null"]},"resourceGroup":{"type":["string","null"]},"secondaryLocation":{"type":["string","null"]},"skuName":{"type":["string","null"]},"skuTier":{"type":["string","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"StorageHeartbeatStatus"},"statusOfPrimary":{"type":["string","null"]},"statusOfSecondary":{"type":["string","null"]},"storageAccountName":{"type":["string","null"]},"tableEncryptionEnabled":{"type":["boolean","null"]}},"x-readme-ref-name":"AzureBlobStorageHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["azureBlob"]}}}]},{"allOf":[{"type":"object","required":["status","path","pathExists"],"properties":{"isDirectory":{"type":["boolean","null"]},"modifiedAt":{"type":["string","null"],"format":"date-time"},"path":{"type":"string"},"pathExists":{"type":"boolean"},"readonly":{"type":["boolean","null"]},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"StorageHeartbeatStatus"}},"x-readme-ref-name":"LocalStorageHeartbeatData"},{"type":"object","required":["backend"],"properties":{"backend":{"type":"string","enum":["local"]}}}]}],"x-readme-ref-name":"StorageHeartbeatData"}
+{
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "lifecyclePresent",
+            "encryptionConfigPresent",
+            "publicAccessBlockPresent"
+          ],
+          "properties": {
+            "blockPublicAcls": { "type": ["boolean", "null"] },
+            "blockPublicPolicy": { "type": ["boolean", "null"] },
+            "bucketAclPresent": { "type": ["boolean", "null"] },
+            "bucketLocation": { "type": ["string", "null"] },
+            "bucketPolicyPresent": { "type": ["boolean", "null"] },
+            "encryptionConfigPresent": { "type": "boolean" },
+            "encryptionEnabled": { "type": ["boolean", "null"] },
+            "ignorePublicAcls": { "type": ["boolean", "null"] },
+            "lifecyclePresent": { "type": "boolean" },
+            "lifecycleRuleCount": {
+              "type": ["integer", "null"],
+              "format": "int64",
+              "minimum": 0
+            },
+            "name": { "type": "string" },
+            "publicAccessBlockPresent": { "type": "boolean" },
+            "region": { "type": ["string", "null"] },
+            "restrictPublicBuckets": { "type": ["boolean", "null"] },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "StorageHeartbeatStatus"
+            },
+            "versioningEnabled": { "type": ["boolean", "null"] },
+            "versioningStatus": { "type": ["string", "null"] }
+          },
+          "x-readme-ref-name": "AwsS3StorageHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": { "backend": { "type": "string", "enum": ["awsS3"] } }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "name",
+            "lifecyclePresent",
+            "encryptionConfigPresent"
+          ],
+          "properties": {
+            "bucketId": { "type": ["string", "null"] },
+            "defaultKmsKeyName": { "type": ["string", "null"] },
+            "encryptionConfigPresent": { "type": "boolean" },
+            "lifecyclePresent": { "type": "boolean" },
+            "lifecycleRuleCount": {
+              "type": ["integer", "null"],
+              "format": "int64",
+              "minimum": 0
+            },
+            "location": { "type": ["string", "null"] },
+            "locationType": { "type": ["string", "null"] },
+            "name": { "type": "string" },
+            "publicAccessPrevention": { "type": ["string", "null"] },
+            "retentionPeriod": { "type": ["string", "null"] },
+            "retentionPolicyEffectiveTime": { "type": ["string", "null"] },
+            "retentionPolicyIsLocked": { "type": ["boolean", "null"] },
+            "softDeleteEffectiveTime": { "type": ["string", "null"] },
+            "softDeleteRetentionDurationSeconds": {
+              "type": ["string", "null"]
+            },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "StorageHeartbeatStatus"
+            },
+            "storageClass": { "type": ["string", "null"] },
+            "uniformBucketLevelAccessEnabled": { "type": ["boolean", "null"] },
+            "uniformBucketLevelAccessLockedTime": {
+              "type": ["string", "null"]
+            },
+            "versioningEnabled": { "type": ["boolean", "null"] }
+          },
+          "x-readme-ref-name": "GcpCloudStorageHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": {
+            "backend": { "type": "string", "enum": ["gcpCloudStorage"] }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": ["status", "name"],
+          "properties": {
+            "accessTier": { "type": ["string", "null"] },
+            "accountKind": { "type": ["string", "null"] },
+            "allowBlobPublicAccess": { "type": ["boolean", "null"] },
+            "blobDeleteRetentionDays": {
+              "type": ["integer", "null"],
+              "format": "int64",
+              "minimum": 0
+            },
+            "blobDeleteRetentionEnabled": { "type": ["boolean", "null"] },
+            "blobEncryptionEnabled": { "type": ["boolean", "null"] },
+            "blobVersioningEnabled": { "type": ["boolean", "null"] },
+            "changeFeedEnabled": { "type": ["boolean", "null"] },
+            "changeFeedRetentionDays": {
+              "type": ["integer", "null"],
+              "format": "int64",
+              "minimum": 0
+            },
+            "containerDeleteRetentionDays": {
+              "type": ["integer", "null"],
+              "format": "int64",
+              "minimum": 0
+            },
+            "containerDeleteRetentionEnabled": { "type": ["boolean", "null"] },
+            "containerPublicAccess": { "type": ["string", "null"] },
+            "encryptionKeySource": { "type": ["string", "null"] },
+            "fileEncryptionEnabled": { "type": ["boolean", "null"] },
+            "location": { "type": ["string", "null"] },
+            "name": { "type": "string" },
+            "primaryLocation": { "type": ["string", "null"] },
+            "provisioningState": { "type": ["string", "null"] },
+            "publicNetworkAccess": { "type": ["string", "null"] },
+            "queueEncryptionEnabled": { "type": ["boolean", "null"] },
+            "resourceGroup": { "type": ["string", "null"] },
+            "secondaryLocation": { "type": ["string", "null"] },
+            "skuName": { "type": ["string", "null"] },
+            "skuTier": { "type": ["string", "null"] },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "StorageHeartbeatStatus"
+            },
+            "statusOfPrimary": { "type": ["string", "null"] },
+            "statusOfSecondary": { "type": ["string", "null"] },
+            "storageAccountName": { "type": ["string", "null"] },
+            "tableEncryptionEnabled": { "type": ["boolean", "null"] }
+          },
+          "x-readme-ref-name": "AzureBlobStorageHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": {
+            "backend": { "type": "string", "enum": ["azureBlob"] }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "required": ["status", "path", "pathExists"],
+          "properties": {
+            "isDirectory": { "type": ["boolean", "null"] },
+            "modifiedAt": { "type": ["string", "null"], "format": "date-time" },
+            "path": { "type": "string" },
+            "pathExists": { "type": "boolean" },
+            "readonly": { "type": ["boolean", "null"] },
+            "status": {
+              "type": "object",
+              "required": [
+                "health",
+                "lifecycle",
+                "stale",
+                "partial",
+                "collectionIssues"
+              ],
+              "properties": {
+                "collectionIssues": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["source", "reason", "severity", "message"],
+                    "properties": {
+                      "message": { "type": "string" },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "forbidden",
+                          "not-installed",
+                          "api-unavailable",
+                          "collection-failed",
+                          "timed-out"
+                        ],
+                        "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "x-readme-ref-name": "HeartbeatIssueSeverity"
+                      },
+                      "source": { "type": "string" }
+                    },
+                    "x-readme-ref-name": "HeartbeatCollectionIssue"
+                  }
+                },
+                "health": {
+                  "type": "string",
+                  "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+                  "x-readme-ref-name": "ObservedHealth"
+                },
+                "lifecycle": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "creating",
+                    "updating",
+                    "running",
+                    "scaling",
+                    "stopping",
+                    "stopped",
+                    "deleting",
+                    "deleted",
+                    "failed"
+                  ],
+                  "x-readme-ref-name": "ProviderLifecycleState"
+                },
+                "message": { "type": ["string", "null"] },
+                "partial": { "type": "boolean" },
+                "stale": { "type": "boolean" }
+              },
+              "x-readme-ref-name": "StorageHeartbeatStatus"
+            }
+          },
+          "x-readme-ref-name": "LocalStorageHeartbeatData"
+        },
+        {
+          "type": "object",
+          "required": ["backend"],
+          "properties": { "backend": { "type": "string", "enum": ["local"] } }
+        }
+      ]
+    }
+  ],
+  "x-readme-ref-name": "StorageHeartbeatData"
+}

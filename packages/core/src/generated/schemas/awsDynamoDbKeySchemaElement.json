@@ -1,1 +1,9 @@
-{"type":"object","required":["attributeName","keyType"],"properties":{"attributeName":{"type":"string"},"keyType":{"type":"string"}},"x-readme-ref-name":"AwsDynamoDbKeySchemaElement"}
+{
+  "type": "object",
+  "required": ["attributeName", "keyType"],
+  "properties": {
+    "attributeName": { "type": "string" },
+    "keyType": { "type": "string" }
+  },
+  "x-readme-ref-name": "AwsDynamoDbKeySchemaElement"
+}

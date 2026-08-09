@@ -1,1 +1,89 @@
-{"type":"object","required":["status","databaseName","cmekEnabled","sourceInfoPresent"],"properties":{"appEngineIntegrationMode":{"type":["string","null"]},"cmekEnabled":{"type":"boolean"},"concurrencyMode":{"type":["string","null"]},"createTime":{"type":["string","null"]},"databaseEdition":{"type":["string","null"]},"databaseName":{"type":"string"},"databaseType":{"type":["string","null"]},"deleteProtectionState":{"type":["string","null"]},"deleteTime":{"type":["string","null"]},"earliestVersionTime":{"type":["string","null"]},"endpoint":{"type":["string","null"]},"locationId":{"type":["string","null"]},"pointInTimeRecoveryEnablement":{"type":["string","null"]},"projectId":{"type":["string","null"]},"sourceInfoPresent":{"type":"boolean"},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"KvHeartbeatStatus"},"updateTime":{"type":["string","null"]},"versionRetentionPeriod":{"type":["string","null"]}},"x-readme-ref-name":"GcpFirestoreKvHeartbeatData"}
+{
+  "type": "object",
+  "required": ["status", "databaseName", "cmekEnabled", "sourceInfoPresent"],
+  "properties": {
+    "appEngineIntegrationMode": { "type": ["string", "null"] },
+    "cmekEnabled": { "type": "boolean" },
+    "concurrencyMode": { "type": ["string", "null"] },
+    "createTime": { "type": ["string", "null"] },
+    "databaseEdition": { "type": ["string", "null"] },
+    "databaseName": { "type": "string" },
+    "databaseType": { "type": ["string", "null"] },
+    "deleteProtectionState": { "type": ["string", "null"] },
+    "deleteTime": { "type": ["string", "null"] },
+    "earliestVersionTime": { "type": ["string", "null"] },
+    "endpoint": { "type": ["string", "null"] },
+    "locationId": { "type": ["string", "null"] },
+    "pointInTimeRecoveryEnablement": { "type": ["string", "null"] },
+    "projectId": { "type": ["string", "null"] },
+    "sourceInfoPresent": { "type": "boolean" },
+    "status": {
+      "type": "object",
+      "required": [
+        "health",
+        "lifecycle",
+        "stale",
+        "partial",
+        "collectionIssues"
+      ],
+      "properties": {
+        "collectionIssues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "reason", "severity", "message"],
+            "properties": {
+              "message": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "forbidden",
+                  "not-installed",
+                  "api-unavailable",
+                  "collection-failed",
+                  "timed-out"
+                ],
+                "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warning", "error"],
+                "x-readme-ref-name": "HeartbeatIssueSeverity"
+              },
+              "source": { "type": "string" }
+            },
+            "x-readme-ref-name": "HeartbeatCollectionIssue"
+          }
+        },
+        "health": {
+          "type": "string",
+          "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+          "x-readme-ref-name": "ObservedHealth"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "creating",
+            "updating",
+            "running",
+            "scaling",
+            "stopping",
+            "stopped",
+            "deleting",
+            "deleted",
+            "failed"
+          ],
+          "x-readme-ref-name": "ProviderLifecycleState"
+        },
+        "message": { "type": ["string", "null"] },
+        "partial": { "type": "boolean" },
+        "stale": { "type": "boolean" }
+      },
+      "x-readme-ref-name": "KvHeartbeatStatus"
+    },
+    "updateTime": { "type": ["string", "null"] },
+    "versionRetentionPeriod": { "type": ["string", "null"] }
+  },
+  "x-readme-ref-name": "GcpFirestoreKvHeartbeatData"
+}

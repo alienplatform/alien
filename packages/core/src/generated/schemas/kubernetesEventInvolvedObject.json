@@ -1,1 +1,13 @@
-{"type":"object","properties":{"apiVersion":{"type":["string","null"]},"fieldPath":{"type":["string","null"]},"kind":{"type":["string","null"]},"name":{"type":["string","null"]},"namespace":{"type":["string","null"]},"resourceVersion":{"type":["string","null"]},"uid":{"type":["string","null"]}},"x-readme-ref-name":"KubernetesEventInvolvedObject"}
+{
+  "type": "object",
+  "properties": {
+    "apiVersion": { "type": ["string", "null"] },
+    "fieldPath": { "type": ["string", "null"] },
+    "kind": { "type": ["string", "null"] },
+    "name": { "type": ["string", "null"] },
+    "namespace": { "type": ["string", "null"] },
+    "resourceVersion": { "type": ["string", "null"] },
+    "uid": { "type": ["string", "null"] }
+  },
+  "x-readme-ref-name": "KubernetesEventInvolvedObject"
+}

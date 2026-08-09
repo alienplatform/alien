@@ -1,1 +1,15 @@
-{"type":"object","description":"Reference to a resource by its stable id and resource type.","required":["type","id"],"properties":{"id":{"type":"string"},"type":{"type":"string","description":"Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.","examples":["worker","storage","queue","redis","postgres"],"x-readme-ref-name":"ResourceType"}},"x-readme-ref-name":"ResourceRef"}
+{
+  "type": "object",
+  "description": "Reference to a resource by its stable id and resource type.",
+  "required": ["type", "id"],
+  "properties": {
+    "id": { "type": "string" },
+    "type": {
+      "type": "string",
+      "description": "Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.",
+      "examples": ["worker", "storage", "queue", "redis", "postgres"],
+      "x-readme-ref-name": "ResourceType"
+    }
+  },
+  "x-readme-ref-name": "ResourceRef"
+}

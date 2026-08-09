@@ -1,1 +1,16 @@
-{"type":"object","required":["source","format","collectedAt","body","truncated"],"properties":{"body":{"type":"string"},"collectedAt":{"type":"string","format":"date-time"},"format":{"type":"string","enum":["json","yaml","text"],"x-readme-ref-name":"RawHeartbeatSnippetFormat"},"source":{"type":"string"},"truncated":{"type":"boolean"}},"x-readme-ref-name":"RawHeartbeatSnippet"}
+{
+  "type": "object",
+  "required": ["source", "format", "collectedAt", "body", "truncated"],
+  "properties": {
+    "body": { "type": "string" },
+    "collectedAt": { "type": "string", "format": "date-time" },
+    "format": {
+      "type": "string",
+      "enum": ["json", "yaml", "text"],
+      "x-readme-ref-name": "RawHeartbeatSnippetFormat"
+    },
+    "source": { "type": "string" },
+    "truncated": { "type": "boolean" }
+  },
+  "x-readme-ref-name": "RawHeartbeatSnippet"
+}

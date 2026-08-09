@@ -1,1 +1,6 @@
-{"type":"string","description":"Container status in the managed container backend.","enum":["pending","running","stopped","failing"],"x-readme-ref-name":"ContainerStatus"}
+{
+  "type": "string",
+  "description": "Container status in the managed container backend.",
+  "enum": ["pending", "running", "stopped", "failing"],
+  "x-readme-ref-name": "ContainerStatus"
+}

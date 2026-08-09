@@ -1,1 +1,102 @@
-{"type":"object","required":["status","name","softDeleteEnabled","softDeleteRetentionDays","rbacAuthorizationEnabled","publicNetworkAccess","accessPolicyCount","privateEndpointConnectionCount","secretMetadataListed"],"properties":{"accessPolicyCount":{"type":"integer","format":"int32","minimum":0},"location":{"type":["string","null"]},"name":{"type":"string"},"privateEndpointConnectionCount":{"type":"integer","format":"int32","minimum":0},"provisioningState":{"type":["string","null"]},"publicNetworkAccess":{"type":"string"},"purgeProtectionEnabled":{"type":["boolean","null"]},"rbacAuthorizationEnabled":{"type":"boolean"},"resourceGroup":{"type":["string","null"]},"resourceId":{"type":["string","null"]},"secretMetadataListed":{"type":"boolean"},"skuFamily":{"type":["string","null"]},"skuName":{"type":["string","null"]},"softDeleteEnabled":{"type":"boolean"},"softDeleteRetentionDays":{"type":"integer","format":"int32"},"status":{"type":"object","required":["health","lifecycle","stale","partial","collectionIssues"],"properties":{"collectionIssues":{"type":"array","items":{"type":"object","required":["source","reason","severity","message"],"properties":{"message":{"type":"string"},"reason":{"type":"string","enum":["forbidden","not-installed","api-unavailable","collection-failed","timed-out"],"x-readme-ref-name":"HeartbeatCollectionIssueReason"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":"string"}},"x-readme-ref-name":"HeartbeatCollectionIssue"}},"health":{"type":"string","enum":["unknown","healthy","degraded","unhealthy"],"x-readme-ref-name":"ObservedHealth"},"lifecycle":{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"},"message":{"type":["string","null"]},"partial":{"type":"boolean"},"stale":{"type":"boolean"}},"x-readme-ref-name":"VaultHeartbeatStatus"},"vaultUri":{"type":["string","null"]}},"x-readme-ref-name":"AzureKeyVaultHeartbeatData"}
+{
+  "type": "object",
+  "required": [
+    "status",
+    "name",
+    "softDeleteEnabled",
+    "softDeleteRetentionDays",
+    "rbacAuthorizationEnabled",
+    "publicNetworkAccess",
+    "accessPolicyCount",
+    "privateEndpointConnectionCount",
+    "secretMetadataListed"
+  ],
+  "properties": {
+    "accessPolicyCount": { "type": "integer", "format": "int32", "minimum": 0 },
+    "location": { "type": ["string", "null"] },
+    "name": { "type": "string" },
+    "privateEndpointConnectionCount": {
+      "type": "integer",
+      "format": "int32",
+      "minimum": 0
+    },
+    "provisioningState": { "type": ["string", "null"] },
+    "publicNetworkAccess": { "type": "string" },
+    "purgeProtectionEnabled": { "type": ["boolean", "null"] },
+    "rbacAuthorizationEnabled": { "type": "boolean" },
+    "resourceGroup": { "type": ["string", "null"] },
+    "resourceId": { "type": ["string", "null"] },
+    "secretMetadataListed": { "type": "boolean" },
+    "skuFamily": { "type": ["string", "null"] },
+    "skuName": { "type": ["string", "null"] },
+    "softDeleteEnabled": { "type": "boolean" },
+    "softDeleteRetentionDays": { "type": "integer", "format": "int32" },
+    "status": {
+      "type": "object",
+      "required": [
+        "health",
+        "lifecycle",
+        "stale",
+        "partial",
+        "collectionIssues"
+      ],
+      "properties": {
+        "collectionIssues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "reason", "severity", "message"],
+            "properties": {
+              "message": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "forbidden",
+                  "not-installed",
+                  "api-unavailable",
+                  "collection-failed",
+                  "timed-out"
+                ],
+                "x-readme-ref-name": "HeartbeatCollectionIssueReason"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warning", "error"],
+                "x-readme-ref-name": "HeartbeatIssueSeverity"
+              },
+              "source": { "type": "string" }
+            },
+            "x-readme-ref-name": "HeartbeatCollectionIssue"
+          }
+        },
+        "health": {
+          "type": "string",
+          "enum": ["unknown", "healthy", "degraded", "unhealthy"],
+          "x-readme-ref-name": "ObservedHealth"
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "creating",
+            "updating",
+            "running",
+            "scaling",
+            "stopping",
+            "stopped",
+            "deleting",
+            "deleted",
+            "failed"
+          ],
+          "x-readme-ref-name": "ProviderLifecycleState"
+        },
+        "message": { "type": ["string", "null"] },
+        "partial": { "type": "boolean" },
+        "stale": { "type": "boolean" }
+      },
+      "x-readme-ref-name": "VaultHeartbeatStatus"
+    },
+    "vaultUri": { "type": ["string", "null"] }
+  },
+  "x-readme-ref-name": "AzureKeyVaultHeartbeatData"
+}

@@ -1,1 +1,44 @@
-{"type":"object","description":"Azure RemoteStackManagement ImportData — UAMI + Federated Identity\nCredential the manager uses to act on this stack via Azure AD.","required":["subscriptionId","resourceGroup","tenantId","identityId","principalId","clientId","managementPermissionsApplied"],"properties":{"clientId":{"type":"string","description":"Management UAMI client id (used by the manager to call AAD)."},"identityId":{"type":"string","description":"Management UAMI resource id."},"managementPermissionsApplied":{"type":"boolean","description":"Whether the management role assignments were applied by the\ngenerated stack."},"principalId":{"type":"string","description":"Management UAMI principal id."},"resourceGroup":{"type":"string","description":"Resource group containing the management identity."},"subscriptionId":{"type":"string","description":"Subscription ID containing the management identity."},"tenantId":{"type":"string","description":"Tenant ID containing the management identity."}},"x-readme-ref-name":"AzureRemoteStackManagementImportData"}
+{
+  "type": "object",
+  "description": "Azure RemoteStackManagement ImportData — UAMI + Federated Identity\nCredential the manager uses to act on this stack via Azure AD.",
+  "required": [
+    "subscriptionId",
+    "resourceGroup",
+    "tenantId",
+    "identityId",
+    "principalId",
+    "clientId",
+    "managementPermissionsApplied"
+  ],
+  "properties": {
+    "clientId": {
+      "type": "string",
+      "description": "Management UAMI client id (used by the manager to call AAD)."
+    },
+    "identityId": {
+      "type": "string",
+      "description": "Management UAMI resource id."
+    },
+    "managementPermissionsApplied": {
+      "type": "boolean",
+      "description": "Whether the management role assignments were applied by the\ngenerated stack."
+    },
+    "principalId": {
+      "type": "string",
+      "description": "Management UAMI principal id."
+    },
+    "resourceGroup": {
+      "type": "string",
+      "description": "Resource group containing the management identity."
+    },
+    "subscriptionId": {
+      "type": "string",
+      "description": "Subscription ID containing the management identity."
+    },
+    "tenantId": {
+      "type": "string",
+      "description": "Tenant ID containing the management identity."
+    }
+  },
+  "x-readme-ref-name": "AzureRemoteStackManagementImportData"
+}

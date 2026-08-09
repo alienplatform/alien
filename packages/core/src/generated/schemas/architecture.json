@@ -1,1 +1,6 @@
-{"type":"string","description":"CPU architecture.","enum":["arm64","x86_64"],"x-readme-ref-name":"Architecture"}
+{
+  "type": "string",
+  "description": "CPU architecture.",
+  "enum": ["arm64", "x86_64"],
+  "x-readme-ref-name": "Architecture"
+}
