@@ -1,14 +1,1 @@
-{
-  "type": "object",
-  "properties": {
-    "details": {
-      "oneOf": [{ "type": "null" }, { "x-readme-ref-name": "Value" }]
-    },
-    "id": { "type": ["string", "null"] },
-    "kind": { "type": ["string", "null"] },
-    "machineId": { "type": ["string", "null"] },
-    "name": { "type": ["string", "null"] },
-    "replicaId": { "type": ["string", "null"] }
-  },
-  "x-readme-ref-name": "ManagedRuntimeEventInvolvedObject"
-}
+{"type":"object","properties":{"details":{"oneOf":[{"type":"null"},{"x-readme-ref-name":"Value"}]},"id":{"type":["string","null"]},"kind":{"type":["string","null"]},"machineId":{"type":["string","null"]},"name":{"type":["string","null"]},"replicaId":{"type":["string","null"]}},"x-readme-ref-name":"ManagedRuntimeEventInvolvedObject"}

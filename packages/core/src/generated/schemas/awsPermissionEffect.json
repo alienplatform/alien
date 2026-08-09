@@ -1,5 +1,1 @@
-{
-  "type": "string",
-  "enum": ["Allow", "Deny"],
-  "x-readme-ref-name": "AwsPermissionEffect"
-}
+{"type":"string","enum":["Allow","Deny"],"x-readme-ref-name":"AwsPermissionEffect"}

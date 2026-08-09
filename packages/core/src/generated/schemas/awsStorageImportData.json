@@ -1,10 +1,1 @@
-{
-  "type": "object",
-  "description": "AWS Storage ImportData.",
-  "required": ["bucketName", "bucketArn"],
-  "properties": {
-    "bucketArn": { "type": "string", "description": "S3 bucket ARN." },
-    "bucketName": { "type": "string", "description": "S3 bucket name." }
-  },
-  "x-readme-ref-name": "AwsStorageImportData"
-}
+{"type":"object","description":"AWS Storage ImportData.","required":["bucketName","bucketArn"],"properties":{"bucketArn":{"type":"string","description":"S3 bucket ARN."},"bucketName":{"type":"string","description":"S3 bucket name."}},"x-readme-ref-name":"AwsStorageImportData"}

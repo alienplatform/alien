@@ -1,16 +1,1 @@
-{
-  "type": "object",
-  "required": ["category", "message", "observedAt"],
-  "properties": {
-    "category": {
-      "type": "string",
-      "enum": ["quota", "capacity", "allocation", "other"],
-      "x-readme-ref-name": "ComputeCapacityBlockerCategory"
-    },
-    "message": { "type": "string" },
-    "observedAt": { "type": "string", "format": "date-time" },
-    "providerCode": { "type": ["string", "null"] },
-    "providerReference": { "type": ["string", "null"] }
-  },
-  "x-readme-ref-name": "ComputeCapacityBlocker"
-}
+{"type":"object","required":["category","message","observedAt"],"properties":{"category":{"type":"string","enum":["quota","capacity","allocation","other"],"x-readme-ref-name":"ComputeCapacityBlockerCategory"},"message":{"type":"string"},"observedAt":{"type":"string","format":"date-time"},"providerCode":{"type":["string","null"]},"providerReference":{"type":["string","null"]}},"x-readme-ref-name":"ComputeCapacityBlocker"}

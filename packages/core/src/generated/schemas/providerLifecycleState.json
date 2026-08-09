@@ -1,16 +1,1 @@
-{
-  "type": "string",
-  "enum": [
-    "unknown",
-    "creating",
-    "updating",
-    "running",
-    "scaling",
-    "stopping",
-    "stopped",
-    "deleting",
-    "deleted",
-    "failed"
-  ],
-  "x-readme-ref-name": "ProviderLifecycleState"
-}
+{"type":"string","enum":["unknown","creating","updating","running","scaling","stopping","stopped","deleting","deleted","failed"],"x-readme-ref-name":"ProviderLifecycleState"}

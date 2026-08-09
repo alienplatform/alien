@@ -1,11 +1,1 @@
-{
-  "type": "object",
-  "description": "AWS Queue ImportData.",
-  "required": ["queueName", "queueUrl", "queueArn"],
-  "properties": {
-    "queueArn": { "type": "string", "description": "SQS queue ARN." },
-    "queueName": { "type": "string", "description": "SQS queue name." },
-    "queueUrl": { "type": "string", "description": "SQS queue URL." }
-  },
-  "x-readme-ref-name": "AwsQueueImportData"
-}
+{"type":"object","description":"AWS Queue ImportData.","required":["queueName","queueUrl","queueArn"],"properties":{"queueArn":{"type":"string","description":"SQS queue ARN."},"queueName":{"type":"string","description":"SQS queue name."},"queueUrl":{"type":"string","description":"SQS queue URL."}},"x-readme-ref-name":"AwsQueueImportData"}

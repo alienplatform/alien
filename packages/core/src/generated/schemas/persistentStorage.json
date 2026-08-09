@@ -1,16 +1,1 @@
-{
-  "type": "object",
-  "description": "Persistent storage configuration for stateful containers.",
-  "required": ["size", "mountPath"],
-  "properties": {
-    "mountPath": {
-      "type": "string",
-      "description": "Mount path inside the container"
-    },
-    "size": {
-      "type": "string",
-      "description": "Storage size (e.g., \"100Gi\", \"500Gi\")"
-    }
-  },
-  "x-readme-ref-name": "PersistentStorage"
-}
+{"type":"object","description":"Persistent storage configuration for stateful containers.","required":["size","mountPath"],"properties":{"mountPath":{"type":"string","description":"Mount path inside the container"},"size":{"type":"string","description":"Storage size (e.g., \"100Gi\", \"500Gi\")"}},"x-readme-ref-name":"PersistentStorage"}

@@ -1,5 +1,1 @@
-{
-  "type": "string",
-  "enum": ["replicated", "stateful", "daemon"],
-  "x-readme-ref-name": "HorizonWorkloadSchedulingMode"
-}
+{"type":"string","enum":["replicated","stateful","daemon"],"x-readme-ref-name":"HorizonWorkloadSchedulingMode"}
