@@ -247,7 +247,9 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "name": name,
             "externalId": external_id,
             "deploymentLink": deployment_link,
-            "token": response.token,
+            "setupItems": args.setup_items.iter().map(onboard_setup_item_name).collect::<Vec<_>>(),
+            "readiness": "setup_pending",
+            "nextAction": "Share deploymentLink with the customer's admin, then run `alien deployments ls` to check readiness.",
             "maxDeployments": args.max_deployments,
             "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
             "subdomain": public_subdomain,
@@ -276,6 +278,16 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     );
 
     Ok(())
+}
+
+fn onboard_setup_item_name(item: &OnboardSetupItem) -> &'static str {
+    match item {
+        OnboardSetupItem::Application => "application",
+        OnboardSetupItem::Models => "models",
+        OnboardSetupItem::Keys => "keys",
+        OnboardSetupItem::Storage => "storage",
+        OnboardSetupItem::Registry => "registry",
+    }
 }
 
 #[cfg(feature = "platform")]
@@ -1221,6 +1233,23 @@ mod tests {
                 OnboardSetupItem::Storage,
                 OnboardSetupItem::Registry,
             ]
+        );
+    }
+
+    #[test]
+    fn setup_item_names_are_stable_for_json_output() {
+        assert_eq!(
+            [
+                OnboardSetupItem::Application,
+                OnboardSetupItem::Models,
+                OnboardSetupItem::Keys,
+                OnboardSetupItem::Storage,
+                OnboardSetupItem::Registry,
+            ]
+            .iter()
+            .map(onboard_setup_item_name)
+            .collect::<Vec<_>>(),
+            ["application", "models", "keys", "storage", "registry"]
         );
     }
 
