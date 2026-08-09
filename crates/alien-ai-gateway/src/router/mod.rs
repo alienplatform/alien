@@ -479,9 +479,7 @@ async fn proxy(
             ensure_model_available(&state, &binding, &model)?;
             if client_api != ClientApi::OpenAiChatCompletions {
                 return Err(AlienError::new(ErrorData::InvalidRequest {
-                    message: format!(
-                        "direct OpenAI chat completions use /{binding}/v1/chat/completions"
-                    ),
+                    message: "direct OpenAI chat completions use /v1/chat/completions".to_string(),
                 }));
             }
             let descriptor = AiUsageContext::new(
@@ -540,7 +538,7 @@ async fn proxy(
         };
         return Err(AlienError::new(ErrorData::InvalidRequest {
             message: format!(
-                "model `{model}` is not supported by this client API; send it to /{binding}/{expected_path}"
+                "model `{model}` is not supported by this client API; send it to /{expected_path}"
             ),
         }));
     }
@@ -635,10 +633,12 @@ async fn proxy_responses(
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
         GatewayTarget::DirectAnthropic => {
-            return Err(AlienError::new(ErrorData::ModelNotAvailable {
-                model,
-                binding,
-            }))
+            ensure_model_available(&state, &binding, &model)?;
+            return Err(AlienError::new(ErrorData::InvalidRequest {
+                message: format!(
+                    "model `{model}` is not supported by this client API; send it to /v1/messages"
+                ),
+            }));
         }
         GatewayTarget::DirectOpenAi => {
             ensure_model_available(&state, &binding, &model)?;
@@ -646,15 +646,29 @@ async fn proxy_responses(
                 .await;
         }
     };
-    let catalog_model = ai_catalog::resolve_for(&model, cloud)
-        .filter(|model| model.client_apis.contains(&ClientApi::OpenAiResponses))
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ModelNotAvailable {
-                model: model.clone(),
-                binding: binding.clone(),
-            })
-        })?;
+    let catalog_model = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.clone(),
+            binding: binding.clone(),
+        })
+    })?;
     ensure_model_available(&state, &binding, &model)?;
+    if !catalog_model
+        .client_apis
+        .contains(&ClientApi::OpenAiResponses)
+    {
+        let expected_path = match catalog_model.client_apis.first() {
+            Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
+            Some(ClientApi::AnthropicMessages) => "v1/messages",
+            Some(ClientApi::OpenAiResponses) => "v1/responses",
+            None => "v1/models",
+        };
+        return Err(AlienError::new(ErrorData::InvalidRequest {
+            message: format!(
+                "model `{model}` is not supported by this client API; send it to /{expected_path}"
+            ),
+        }));
+    }
     let target = ai_catalog::responses_target(catalog_model.public_id).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
             model: model.clone(),
@@ -1388,7 +1402,7 @@ mod tests {
             .text()
             .await
             .expect("chat error body")
-            .contains("/llm/v1/messages"));
+            .contains("/v1/messages"));
 
         let openai_model_on_messages = client
             .post(format!("{url}/llm/v1/messages"))
@@ -1401,7 +1415,21 @@ mod tests {
             .text()
             .await
             .expect("messages error body")
-            .contains("/llm/v1/chat/completions"));
+            .contains("/v1/chat/completions"));
+
+        let gcp_url = serve(build_router(vec![gcp_route("global")])).await;
+        let gemini_on_responses = client
+            .post(format!("{gcp_url}/llm/v1/responses"))
+            .json(&json!({"model":"gemini-2.5-flash","input":"hi"}))
+            .send()
+            .await
+            .expect("responses request");
+        assert_eq!(gemini_on_responses.status(), 400);
+        assert!(gemini_on_responses
+            .text()
+            .await
+            .expect("responses error body")
+            .contains("/v1/chat/completions"));
 
         upstream.assert_hits_async(0).await;
     }
