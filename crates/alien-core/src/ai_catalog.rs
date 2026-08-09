@@ -71,6 +71,18 @@ pub struct DirectAnthropicModel {
     pub upstream_id: &'static str,
 }
 
+/// One OpenAI model qualified through the Gateway's direct-provider route.
+///
+/// OpenAI's account model listing also contains embeddings, image, audio,
+/// moderation, realtime, and other APIs. Keep this list explicit so
+/// `GET /v1/models` never claims that an observed provider model is callable
+/// through Chat Completions or Responses when it is not.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectOpenAiModel {
+    pub public_id: &'static str,
+    pub client_apis: &'static [ClientApi],
+}
+
 impl DirectAnthropicModel {
     pub fn display_name(&self) -> &'static str {
         resolve(self.public_id)
@@ -839,6 +851,22 @@ static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
     },
 ];
 
+/// Direct OpenAI models qualified end to end through the Gateway.
+///
+/// Add a model only after exercising every client API listed for it against a
+/// real provider account. Provider discovery is then used as the account-level
+/// availability filter; discovery alone is not sufficient to expose a model.
+static DIRECT_OPENAI_MODELS: &[DirectOpenAiModel] = &[
+    DirectOpenAiModel {
+        public_id: "gpt-4.1-mini",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-sol",
+        client_apis: &[ClientApi::OpenAiResponses],
+    },
+];
+
 /// Where a model sits on the bedrock-mantle Responses API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResponsesTarget {
@@ -924,6 +952,16 @@ pub fn direct_anthropic_models() -> Vec<&'static DirectAnthropicModel> {
 
 pub fn resolve_direct_anthropic(public_id: &str) -> Option<&'static DirectAnthropicModel> {
     DIRECT_ANTHROPIC_MODELS
+        .iter()
+        .find(|model| model.public_id == public_id)
+}
+
+pub fn direct_openai_models() -> Vec<&'static DirectOpenAiModel> {
+    DIRECT_OPENAI_MODELS.iter().collect()
+}
+
+pub fn resolve_direct_openai(public_id: &str) -> Option<&'static DirectOpenAiModel> {
+    DIRECT_OPENAI_MODELS
         .iter()
         .find(|model| model.public_id == public_id)
 }
@@ -1067,6 +1105,23 @@ mod tests {
             assert_ne!(model.display_name(), model.public_id);
         }
         assert!(resolve_direct_anthropic("claude-not-real").is_none());
+    }
+
+    #[test]
+    fn direct_openai_models_are_unique_and_have_qualified_apis() {
+        let mut public_ids = std::collections::HashSet::new();
+        for model in DIRECT_OPENAI_MODELS {
+            assert!(public_ids.insert(model.public_id));
+            assert!(!model.client_apis.is_empty());
+            assert_eq!(
+                resolve_direct_openai(model.public_id)
+                    .expect("direct model must resolve")
+                    .client_apis,
+                model.client_apis
+            );
+        }
+        assert!(resolve_direct_openai("text-embedding-3-small").is_none());
+        assert!(resolve_direct_openai("gpt-image-1").is_none());
     }
 
     use super::*;
