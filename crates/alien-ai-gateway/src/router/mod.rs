@@ -143,12 +143,23 @@ struct AppState {
     client: reqwest::Client,
     /// Account-specific, read-only control-plane observations supplied by the
     /// hosted route resolver. `None` keeps embedded gateways catalog-only.
-    available_models: Option<AvailableModels>,
+    observed_models: Option<ObservedModels>,
     usage_observer: Option<Arc<dyn AiUsageObserver>>,
 }
 
 /// Available public model IDs keyed by binding name.
 pub type AvailableModels = HashMap<String, HashSet<String>>;
+
+/// Request-time access state for one model in a resolved customer connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObservedModelAvailability {
+    Available,
+    Blocked { reason: String },
+    Unknown,
+}
+
+/// Observed public model access keyed by binding name and public model ID.
+pub type ObservedModels = HashMap<String, HashMap<String, ObservedModelAvailability>>;
 
 /// Build the axum router serving every binding under `/<name>/...`:
 /// `POST /<name>/v1/chat/completions` (OpenAI), `POST /<name>/v1/messages`
@@ -171,7 +182,19 @@ pub fn build_router_with_availability(
     routes: Vec<GatewayRoute>,
     available_models: AvailableModels,
 ) -> Router {
-    build_router_inner(routes, Some(available_models), None)
+    build_router_inner(
+        routes,
+        Some(observed_from_available(available_models)),
+        None,
+    )
+}
+
+/// Build a router that preserves provider-reported model blocker state.
+pub fn build_router_with_observed_models(
+    routes: Vec<GatewayRoute>,
+    observed_models: ObservedModels,
+) -> Router {
+    build_router_inner(routes, Some(observed_models), None)
 }
 
 /// Build a hosted router with both bounded model availability and usage observation.
@@ -180,12 +203,25 @@ pub fn build_router_with_availability_and_observer(
     available_models: AvailableModels,
     usage_observer: Arc<dyn AiUsageObserver>,
 ) -> Router {
-    build_router_inner(routes, Some(available_models), Some(usage_observer))
+    build_router_inner(
+        routes,
+        Some(observed_from_available(available_models)),
+        Some(usage_observer),
+    )
+}
+
+/// Build a hosted router that preserves provider-reported model blocker state.
+pub fn build_router_with_observed_models_and_observer(
+    routes: Vec<GatewayRoute>,
+    observed_models: ObservedModels,
+    usage_observer: Arc<dyn AiUsageObserver>,
+) -> Router {
+    build_router_inner(routes, Some(observed_models), Some(usage_observer))
 }
 
 fn build_router_inner(
     routes: Vec<GatewayRoute>,
-    available_models: Option<AvailableModels>,
+    observed_models: Option<ObservedModels>,
     usage_observer: Option<Arc<dyn AiUsageObserver>>,
 ) -> Router {
     let routes: HashMap<String, GatewayRoute> =
@@ -193,7 +229,7 @@ fn build_router_inner(
     let state = Arc::new(AppState {
         routes,
         client: reqwest::Client::new(),
-        available_models,
+        observed_models,
         usage_observer,
     });
     Router::new()
@@ -206,6 +242,21 @@ fn build_router_inner(
         .route("/{binding}/v1/models", get(list_models))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .with_state(state)
+}
+
+fn observed_from_available(available_models: AvailableModels) -> ObservedModels {
+    available_models
+        .into_iter()
+        .map(|(binding, models)| {
+            (
+                binding,
+                models
+                    .into_iter()
+                    .map(|model| (model, ObservedModelAvailability::Available))
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 /// Parse a proxied request body as JSON and pull out its required `model` field.
@@ -666,8 +717,8 @@ async fn list_models(
             binding: binding.clone(),
         })
     })?;
-    let allowed = state
-        .available_models
+    let observed = state
+        .observed_models
         .as_ref()
         .map(|by_binding| by_binding.get(&binding));
 
@@ -675,8 +726,10 @@ async fn list_models(
         GatewayTarget::Cloud(cloud) => ai_catalog::models_for(cloud)
             .into_iter()
             .filter(|model| {
-                allowed.is_none_or(|models| {
-                    models.is_some_and(|models| models.contains(model.public_id))
+                observed.is_none_or(|models| {
+                    models.is_some_and(|models| {
+                        models.get(model.public_id) == Some(&ObservedModelAvailability::Available)
+                    })
                 })
             })
             .map(|model| {
@@ -691,8 +744,10 @@ async fn list_models(
         GatewayTarget::DirectAnthropic => ai_catalog::direct_anthropic_models()
             .into_iter()
             .filter(|model| {
-                allowed.is_none_or(|models| {
-                    models.is_some_and(|models| models.contains(model.public_id))
+                observed.is_none_or(|models| {
+                    models.is_some_and(|models| {
+                        models.get(model.public_id) == Some(&ObservedModelAvailability::Available)
+                    })
                 })
             })
             .map(|model| {
@@ -705,10 +760,13 @@ async fn list_models(
             })
             .collect(),
         GatewayTarget::DirectOpenAi => {
-            let mut models = allowed
+            let mut models = observed
                 .into_iter()
                 .flatten()
                 .flat_map(|models| models.iter())
+                .filter_map(|(model, availability)| {
+                    (availability == &ObservedModelAvailability::Available).then_some(model)
+                })
                 .collect::<Vec<_>>();
             models.sort();
             models
@@ -728,17 +786,29 @@ async fn list_models(
 }
 
 fn ensure_model_available(state: &AppState, binding: &str, model: &str) -> Result<()> {
-    if state.available_models.as_ref().is_some_and(|by_binding| {
-        !by_binding
-            .get(binding)
-            .is_some_and(|models| models.contains(model))
-    }) {
-        return Err(AlienError::new(ErrorData::ModelNotAvailable {
+    let Some(by_binding) = state.observed_models.as_ref() else {
+        return Ok(());
+    };
+    match by_binding.get(binding).and_then(|models| models.get(model)) {
+        Some(ObservedModelAvailability::Available) => Ok(()),
+        Some(ObservedModelAvailability::Blocked { reason }) => {
+            Err(AlienError::new(ErrorData::ModelAccessRequired {
+                model: model.to_string(),
+                binding: binding.to_string(),
+                reason: reason.clone(),
+            }))
+        }
+        Some(ObservedModelAvailability::Unknown) => {
+            Err(AlienError::new(ErrorData::ModelAvailabilityUnknown {
+                model: model.to_string(),
+                binding: binding.to_string(),
+            }))
+        }
+        None => Err(AlienError::new(ErrorData::ModelNotAvailable {
             model: model.to_string(),
             binding: binding.to_string(),
-        }));
+        })),
     }
-    Ok(())
 }
 
 async fn proxy_direct_anthropic(
@@ -2265,6 +2335,55 @@ mod tests {
             0,
             "blocked inference must stay local"
         );
+    }
+
+    #[tokio::test]
+    async fn observed_model_blockers_are_actionable_and_unknown_is_retryable() {
+        let server = MockServer::start_async().await;
+        let observed = HashMap::from([(
+            "llm".to_string(),
+            HashMap::from([
+                (
+                    "gpt-oss-20b".to_string(),
+                    ObservedModelAvailability::Blocked {
+                        reason: "provider agreement required".to_string(),
+                    },
+                ),
+                (
+                    "gpt-oss-120b".to_string(),
+                    ObservedModelAvailability::Unknown,
+                ),
+            ]),
+        )]);
+        let url = serve(build_router_with_observed_models(
+            vec![aws_route(&server.base_url())],
+            observed,
+        ))
+        .await;
+        let client = reqwest::Client::new();
+
+        let blocked = client
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-oss-20b", "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+        let blocked_body = blocked.text().await.unwrap();
+        assert!(blocked_body.contains("GATEWAY_MODEL_ACCESS_REQUIRED"));
+        assert!(blocked_body.contains("provider agreement required"));
+        assert!(blocked_body.contains("\"retryable\":false"));
+
+        let unknown = client
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-oss-120b", "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unknown.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let unknown_body = unknown.text().await.unwrap();
+        assert!(unknown_body.contains("GATEWAY_MODEL_AVAILABILITY_UNKNOWN"));
+        assert!(unknown_body.contains("\"retryable\":true"));
     }
 
     #[tokio::test]
