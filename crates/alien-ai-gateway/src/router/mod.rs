@@ -2227,7 +2227,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_over_responses_is_404() {
+    async fn claude_over_responses_names_the_messages_api() {
         // Claude on mantle is Messages-only; a Claude id over /v1/responses must be
         // rejected by the gateway, not forwarded.
         let server = MockServer::start_async().await;
@@ -2238,14 +2238,11 @@ mod tests {
             .send()
             .await
             .expect("proxy request");
-        assert_eq!(resp.status(), 404);
-        // The mock upstream answers unmatched requests with its own 404, so the
-        // status alone cannot prove the gateway rejected the model rather than
-        // forwarding the request — the body must carry the gateway's error code.
+        assert_eq!(resp.status(), 400);
         let body = resp.text().await.expect("response body");
         assert!(
-            body.contains("GATEWAY_MODEL_NOT_AVAILABLE"),
-            "the 404 must be the gateway's own rejection, not a forwarded upstream 404: {body}"
+            body.contains("GATEWAY_INVALID_REQUEST") && body.contains("/v1/messages"),
+            "the response must name the supported Messages endpoint: {body}"
         );
     }
 
