@@ -65,6 +65,7 @@ pub mod rds;
 pub mod resourcegroupstagging;
 pub mod s3;
 pub mod secrets_manager;
+pub mod ses;
 pub mod sqs;
 pub mod ssm;
 pub mod sts;

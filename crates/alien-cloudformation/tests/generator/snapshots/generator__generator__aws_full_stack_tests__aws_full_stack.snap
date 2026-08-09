@@ -1341,7 +1341,16 @@ Resources:
                       if active == physical_id:
                           ses.set_active_receipt_rule_set()
                   else:
-                      ses.set_active_receipt_rule_set(RuleSetName=desired)
+                      active = ses.describe_active_receipt_rule_set().get("Metadata", {}).get("Name")
+                      if active and active != desired:
+                          raise RuntimeError(
+                              f"SES receipt rule set '{active}' is already active in this account and region. "
+                              "Inbound email resources require exclusive ownership of SES receiving. "
+                              "Existing routing was not modified; choose an unused region or intentionally "
+                              "deactivate the existing rule set before retrying."
+                          )
+                      if active != desired:
+                          ses.set_active_receipt_rule_set(RuleSetName=desired)
                       physical_id = desired
                   cfnresponse.send(
                       event, context, cfnresponse.SUCCESS, {}, physicalResourceId=physical_id

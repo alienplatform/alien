@@ -165,6 +165,9 @@ fn aws_email_renders_ses_infrastructure() {
         ["ZipFile"]
         .as_str()
         .expect("inline custom-resource handler");
+    assert!(activator_code.contains("if active and active != desired:"));
+    assert!(activator_code.contains("Existing routing was not modified"));
+    assert!(activator_code.contains("if active != desired:"));
     assert!(activator_code.contains("ses.set_active_receipt_rule_set(RuleSetName=desired)"));
     assert!(activator_code.contains("if active == physical_id:"));
     assert!(activator_code.contains("ses.set_active_receipt_rule_set()"));
