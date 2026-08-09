@@ -13,11 +13,11 @@ import { GcpManagementConfigSchema } from "./gcp-management-config-schema.js";
  */
 export const ManagementConfigSchema = z.union([z.lazy(() => AwsManagementConfigSchema).and(z.object({
     "platform": z.enum(["aws"])
-    })), z.lazy(() => GcpManagementConfigSchema).and(z.object({
+    })).describe("AWS management configuration extracted from stack settings"), z.lazy(() => GcpManagementConfigSchema).and(z.object({
     "platform": z.enum(["gcp"])
-    })), z.lazy(() => AzureManagementConfigSchema).and(z.object({
+    })).describe("GCP management configuration extracted from stack settings"), z.lazy(() => AzureManagementConfigSchema).and(z.object({
     "platform": z.enum(["azure"])
-    })), z.object({
+    })).describe("Azure management configuration extracted from stack settings"), z.object({
     "platform": z.enum(["kubernetes"])
     })]).describe("Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount.")
 
