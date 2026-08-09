@@ -33,10 +33,14 @@ pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
 
     println!("{}", contextual_heading("Logged in to", &workspace, &[]));
     println!("{}", success_line("Workspace ready."));
+    println!("{}", dim_label("Next"));
+    println!("  {}  Link a project directory", command("alien link"));
     println!(
-        "{} run {} in a project directory or {}.",
-        dim_label("Next"),
-        command("alien link"),
+        "  {}  Set up customer models",
+        command("alien --project <name> onboard <customer> --setup-items models")
+    );
+    println!(
+        "  {}  Publish an application",
         command("alien release --project <name>")
     );
 
