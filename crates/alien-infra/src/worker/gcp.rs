@@ -41,8 +41,7 @@ const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 const MAX_IMAGE_PULL_PERMISSION_RETRIES: u8 = 4;
 
 fn is_cross_project_image_pull_permission_error(message: &str) -> bool {
-    message.contains("serverless-robot-prod.iam.gserviceaccount.com")
-        && message.contains("artifactregistry.repositories.downloadArtifacts")
+    message.contains("artifactregistry.repositories.downloadArtifacts")
 }
 
 fn image_pull_permission_retry_delay(attempt: u8) -> Duration {
@@ -5677,8 +5676,10 @@ mod tests {
             "Google Cloud Run Service Agent service-123@serverless-robot-prod.iam.gserviceaccount.com \
              was denied artifactregistry.repositories.downloadArtifacts"
         ));
-        assert!(!is_cross_project_image_pull_permission_error(
-            "artifactregistry.repositories.downloadArtifacts denied for a user service account"
+        assert!(is_cross_project_image_pull_permission_error(
+            "Permission 'artifactregistry.repositories.downloadArtifacts' denied on resource \
+             '//artifactregistry.googleapis.com/projects/alien-dev-1/locations/us-central1/repositories/alien-artifacts' \
+             (or it may not exist)."
         ));
         assert!(!is_cross_project_image_pull_permission_error(
             "Cloud Run revision failed its startup probe"
@@ -5880,9 +5881,9 @@ mod tests {
                 error: Status::builder()
                     .code(7)
                     .message(
-                        "Google Cloud Run Service Agent \
-                         service-123@serverless-robot-prod.iam.gserviceaccount.com must have \
-                         artifactregistry.repositories.downloadArtifacts permission"
+                        "Permission 'artifactregistry.repositories.downloadArtifacts' denied on \
+                         resource '//artifactregistry.googleapis.com/projects/alien-dev-1/locations/us-central1/repositories/alien-artifacts' \
+                         (or it may not exist)."
                             .to_string(),
                     )
                     .build(),
