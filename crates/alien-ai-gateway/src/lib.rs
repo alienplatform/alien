@@ -19,8 +19,9 @@ pub use error::{ErrorData, Result};
 pub use router::{
     build_router, build_router_with_availability, build_router_with_availability_and_observer,
     build_router_with_observed_models, build_router_with_observed_models_and_observer,
-    build_router_with_observer, route_from_direct_anthropic, route_from_direct_openai,
-    AvailableModels, GatewayRoute, GatewayTarget, ObservedModelAvailability, ObservedModels,
+    build_router_with_observer, route_from_direct_anthropic, route_from_direct_databricks,
+    route_from_direct_openai, AvailableModels, GatewayRoute, GatewayTarget,
+    ObservedModelAvailability, ObservedModels,
 };
 pub use usage::{
     parse_ai_token_usage, AiTokenUsage, AiUsageClientApi, AiUsageEvent, AiUsageObserver,

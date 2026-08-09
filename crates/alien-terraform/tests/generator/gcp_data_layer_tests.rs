@@ -424,5 +424,13 @@ fn gcp_remote_ai_invoke_permissions_attach_to_access_identity() {
 
     assert!(rendered.contains("aiplatform.endpoints.predict"));
     assert!(rendered.contains("google_service_account.access.email"));
+    assert!(
+        rendered.contains("variable \"management_url\""),
+        "setup-only modules must accept the Manager selected for their deployment target"
+    );
+    assert!(
+        rendered.contains("management_url              = var.management_url"),
+        "registration must use the selected Manager rather than an empty URL"
+    );
     assert_terraform_valid(&module, "gcp_remote_ai_invoke_permissions");
 }

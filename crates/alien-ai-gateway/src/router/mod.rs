@@ -82,6 +82,8 @@ where
 pub enum GatewayTarget {
     Cloud(Platform),
     DirectAnthropic,
+    DirectDatabricks,
+    DirectOpenAi,
 }
 
 pub struct GatewayRoute {
@@ -116,6 +118,82 @@ pub fn route_from_direct_anthropic(
         azure_endpoint: None,
         cred: AmbientCred::AnthropicApiKey(AnthropicApiKeyCred::new(api_key)?),
         upstream_base_override: None,
+    })
+}
+
+/// Build the fixed-host OpenAI static-key route. Keeping this separate from a
+/// generic bearer route prevents a stored provider key from being forwarded to
+/// a caller-controlled host.
+pub fn route_from_direct_openai(
+    name: impl Into<String>,
+    api_key: impl Into<String>,
+) -> Result<GatewayRoute> {
+    Ok(GatewayRoute {
+        name: name.into(),
+        target: GatewayTarget::DirectOpenAi,
+        region: None,
+        project: None,
+        azure_endpoint: None,
+        cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(api_key)?),
+        upstream_base_override: None,
+    })
+}
+
+/// Build a Databricks Unity AI Gateway route for one validated workspace.
+///
+/// Databricks uses an OpenAI-compatible request and bearer credential, but its
+/// upstream host belongs to the customer's workspace. Only canonical Databricks
+/// workspace hosts are accepted so this cannot become a generic bearer-token proxy.
+pub fn route_from_direct_databricks(
+    name: impl Into<String>,
+    workspace_url: &str,
+    access_token: impl Into<String>,
+) -> Result<GatewayRoute> {
+    let name = name.into();
+    let mut upstream = reqwest::Url::parse(workspace_url)
+        .into_alien_error()
+        .context(ErrorData::BindingConfigInvalid {
+            binding: name.clone(),
+            message: "the Databricks workspace URL is invalid".to_string(),
+        })?;
+    let route_name = upstream
+        .host_str()
+        .map(str::to_string)
+        .ok_or_else(|| AlienError::new(ErrorData::BindingConfigInvalid {
+            binding: name.clone(),
+            message: "the Databricks workspace URL has no host".to_string(),
+        }))?;
+    let valid_host = [
+        ".cloud.databricks.com",
+        ".azuredatabricks.net",
+        ".gcp.databricks.com",
+    ]
+    .iter()
+    .any(|suffix| route_name.ends_with(suffix));
+    if upstream.scheme() != "https"
+        || !valid_host
+        || upstream.port().is_some()
+        || !upstream.username().is_empty()
+        || upstream.password().is_some()
+        || upstream.query().is_some()
+        || upstream.fragment().is_some()
+    {
+        return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+            binding: name,
+            message: "the Databricks workspace URL must be an HTTPS Databricks workspace host"
+                .to_string(),
+        }));
+    }
+    upstream.set_path("/ai-gateway/mlflow");
+
+    Ok(GatewayRoute {
+        name,
+        target: GatewayTarget::DirectDatabricks,
+        region: None,
+        project: None,
+        azure_endpoint: None,
+        cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(access_token)?),
+        upstream_base_override: Some(upstream.to_string().trim_end_matches('/').to_string()),
     })
 }
 
@@ -243,8 +321,14 @@ fn observed_from_available(available_models: AvailableModels) -> ObservedModels 
 /// Parse a proxied request body as JSON and pull out its required `model` field.
 /// Both the chat/completions|messages handler and the Responses handler route on
 /// the request's `model`, so they share this preamble.
+///
+/// AI SDK conventions namespace model ids as `vendor/model` (for example
+/// `openai/gpt-5.6-luna`). The gateway's namespace is `byo/` — every model runs
+/// on the caller's own provider account — so `byo/<id>` is accepted as an alias
+/// for the bare catalog id, and the payload is normalized so downstream routing,
+/// availability checks, and usage reporting all see one spelling.
 fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
-    let payload: Value =
+    let mut payload: Value =
         serde_json::from_slice(body)
             .into_alien_error()
             .context(ErrorData::InvalidRequest {
@@ -259,6 +343,14 @@ fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
             })
         })?
         .to_string();
+    let model = match model.strip_prefix("byo/") {
+        Some(bare) => {
+            let bare = bare.to_string();
+            payload["model"] = Value::String(bare.clone());
+            bare
+        }
+        None => model,
+    };
     Ok((payload, model))
 }
 
@@ -486,11 +578,23 @@ async fn proxy(
                 descriptor,
             ));
         }
+        GatewayTarget::DirectDatabricks => {
+            ensure_model_available(&state, &binding, &model)?;
+            return Err(AlienError::new(ErrorData::InvalidRequest {
+                message: format!(
+                    "Databricks models use /{binding}/v1/responses"
+                ),
+            }));
+        }
         GatewayTarget::Cloud(_) => {}
     }
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic => unreachable!("handled above"),
+        GatewayTarget::DirectAnthropic
+        | GatewayTarget::DirectDatabricks
+        | GatewayTarget::DirectOpenAi => {
+            unreachable!("handled above")
+        }
     };
     let cm = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
@@ -639,6 +743,24 @@ async fn proxy_responses(
                 descriptor,
             ));
         }
+        GatewayTarget::DirectDatabricks => {
+            ensure_model_available(&state, &binding, &model)?;
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::Databricks,
+                &model,
+                &model,
+                AiUsageClientApi::OpenAiResponses,
+                None,
+            );
+            let response =
+                proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await?;
+            return Ok(observe_response(
+                response,
+                state.usage_observer.as_ref(),
+                descriptor,
+            ));
+        }
     };
     let catalog_model = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
@@ -715,7 +837,9 @@ async fn proxy_responses(
 }
 
 /// `GET /<name>/v1/models`: the qualified catalog, intersected with the bounded
-/// account observation when the hosted control plane supplied one.
+/// account observation when the hosted control plane supplied one. Ids are
+/// listed in the `byo/` namespace — the spelling the chat endpoints accept —
+/// and the bare id remains accepted as an alias.
 async fn list_models(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
@@ -742,7 +866,7 @@ async fn list_models(
             })
             .map(|model| {
                 json!({
-                    "id": model.public_id,
+                    "id": format!("byo/{}", model.public_id),
                     "object": "model",
                     "provider": model.provider(),
                     "displayName": model.display_name(),
@@ -760,7 +884,7 @@ async fn list_models(
             })
             .map(|model| {
                 json!({
-                    "id": model.public_id,
+                    "id": format!("byo/{}", model.public_id),
                     "object": "model",
                     "provider": "anthropic",
                     "displayName": model.display_name(),
@@ -781,9 +905,31 @@ async fn list_models(
                 .into_iter()
                 .map(|model| {
                     json!({
-                        "id": model,
+                        "id": format!("byo/{model}"),
                         "object": "model",
                         "provider": "openai",
+                        "displayName": model,
+                    })
+                })
+                .collect()
+        }
+        GatewayTarget::DirectDatabricks => {
+            let mut models = observed
+                .into_iter()
+                .flatten()
+                .flat_map(|models| models.iter())
+                .filter_map(|(model, availability)| {
+                    (availability == &ObservedModelAvailability::Available).then_some(model)
+                })
+                .collect::<Vec<_>>();
+            models.sort();
+            models
+                .into_iter()
+                .map(|model| {
+                    json!({
+                        "id": format!("byo/{model}"),
+                        "object": "model",
+                        "provider": "databricks",
                         "displayName": model,
                     })
                 })
@@ -898,9 +1044,11 @@ pub(crate) fn upstream_target(
 ) -> Result<(String, &'static str)> {
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic => {
+        GatewayTarget::DirectAnthropic
+        | GatewayTarget::DirectDatabricks
+        | GatewayTarget::DirectOpenAi => {
             return Err(AlienError::new(ErrorData::Other {
-                message: "direct Anthropic does not use a cloud upstream target".to_string(),
+                message: "direct providers do not use a cloud upstream target".to_string(),
             }))
         }
     };
@@ -1446,6 +1594,45 @@ mod tests {
         // The mock only matches when the body carries the rewritten upstream id and an
         // Authorization header, so a hit proves the model rewrite and cred injection.
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn byo_namespace_routes_like_the_bare_model_id() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/chat/completions")
+                    // The namespace never reaches the provider: the body carries the
+                    // rewritten upstream id, exactly as for the bare public id.
+                    .body_contains("openai.gpt-oss-20b-1:0")
+                    .header_exists("authorization");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"cmpl-1","choices":[{"message":{"content":"pong"}}]}"#);
+            })
+            .await;
+
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"byo/gpt-oss-20b","messages":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 200);
+        mock.assert_async().await;
+
+        // The namespace is `byo/` only — any other vendor prefix stays an unknown model,
+        // so ids never resolve to a provider the customer didn't connect.
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"openai/gpt-oss-20b","messages":[]}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 404);
     }
 
     #[tokio::test]
@@ -2394,8 +2581,8 @@ mod tests {
             .collect();
 
         assert!(
-            ids.contains(&"gpt-5.6-sol"),
-            "gpt-5.6-sol must be listed: {ids:?}"
+            ids.contains(&"byo/gpt-5.6-sol"),
+            "byo/gpt-5.6-sol must be listed: {ids:?}"
         );
         assert_eq!(
             responses.hits_async().await,
@@ -2406,8 +2593,8 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|m| m["id"] == "gpt-5.6-sol")
-            .expect("gpt-5.6-sol entry");
+            .find(|m| m["id"] == "byo/gpt-5.6-sol")
+            .expect("byo/gpt-5.6-sol entry");
         assert_eq!(sol["displayName"], "GPT-5.6 Sol");
     }
 
@@ -2439,11 +2626,11 @@ mod tests {
         let data = body["data"].as_array().unwrap();
         let ids: Vec<&str> = data.iter().map(|m| m["id"].as_str().unwrap()).collect();
 
-        assert_eq!(ids, vec!["gpt-oss-20b"]);
+        assert_eq!(ids, vec!["byo/gpt-oss-20b"]);
         let gpt = data
             .iter()
-            .find(|m| m["id"] == "gpt-oss-20b")
-            .expect("gpt-oss-20b entry");
+            .find(|m| m["id"] == "byo/gpt-oss-20b")
+            .expect("byo/gpt-oss-20b entry");
         assert_eq!(gpt["provider"], "openai");
         assert_eq!(gpt["displayName"], "GPT-OSS 20B");
         assert_eq!(

@@ -19,16 +19,16 @@ use crate::{
     expr,
 };
 use alien_core::{
-    ErrorData, NetworkSettings, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, ResourceLifecycle, Result, import::EmitContext,
+    import::EmitContext, ErrorData, NetworkSettings, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteStackManagement, ResourceLifecycle, Result,
 };
 use alien_error::Context;
 use alien_permissions::{
-    BindingTarget,
     generators::{
-        AzureGrantPlan, AzureRoleDefinition, AzureRoleDefinitionRef,
-        AzureRuntimePermissionsGenerator, dedupe_azure_role_bindings,
+        dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinition, AzureRoleDefinitionRef,
+        AzureRuntimePermissionsGenerator,
     },
+    BindingTarget,
 };
 use hcl::expr::Expression;
 use std::collections::BTreeSet;

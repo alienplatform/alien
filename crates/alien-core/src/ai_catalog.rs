@@ -143,7 +143,6 @@ impl CatalogModel {
             "deepseek-v3.2" => "DeepSeek V3.2",
             "qwen3-32b" => "Qwen3 32B",
             "qwen3-coder-30b" => "Qwen3 Coder 30B",
-            "qwen3-coder-next" => "Qwen3 Coder Next",
             "qwen3-next-80b" => "Qwen3 Next 80B",
             "qwen3-vl-235b" => "Qwen3 VL 235B",
             "mistral-large-3" => "Mistral Large 3",
@@ -173,14 +172,10 @@ impl CatalogModel {
             "claude-opus-4.7" => "Claude Opus 4.7",
             "claude-opus-4.6" => "Claude Opus 4.6",
             "claude-opus-4.5" => "Claude Opus 4.5",
-            "claude-opus-4.1" => "Claude Opus 4.1",
             "claude-sonnet-4.6" => "Claude Sonnet 4.6",
             "claude-sonnet-4.5" => "Claude Sonnet 4.5",
             "claude-haiku-4.5" => "Claude Haiku 4.5",
             "claude-fable-5" => "Claude Fable 5",
-            "claude-mythos-5" => "Claude Mythos 5",
-            "claude-sonnet-4" => "Claude Sonnet 4",
-            "claude-3-haiku" => "Claude 3 Haiku",
             "gemini-2.5-pro" => "Gemini 2.5 Pro",
             "gemini-2.5-flash" => "Gemini 2.5 Flash",
             "gemini-2.5-flash-lite" => "Gemini 2.5 Flash Lite",
@@ -301,13 +296,6 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "qwen3-coder-30b",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-coder-30b-a3b-v1:0",
-        client_apis: &[ClientApi::OpenAiChatCompletions],
-        provider_api: ProviderApi::OpenAi,
-    },
-    CatalogModel {
-        public_id: "qwen3-coder-next",
-        cloud: Platform::Aws,
-        upstream_id: "qwen.qwen3-coder-next",
         client_apis: &[ClientApi::OpenAiChatCompletions],
         provider_api: ProviderApi::OpenAi,
     },
@@ -521,13 +509,6 @@ static CATALOG: &[CatalogModel] = &[
         provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
-        public_id: "claude-opus-4.1",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-opus-4-1-20250805-v1:0",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
         public_id: "claude-sonnet-4.6",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-sonnet-4-6",
@@ -552,27 +533,6 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "claude-fable-5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-fable-5",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
-        public_id: "claude-mythos-5",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-mythos-5",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
-        public_id: "claude-sonnet-4",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-sonnet-4-20250514-v1:0",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
-        public_id: "claude-3-haiku",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-3-haiku-20240307-v1:0",
         client_apis: &[ClientApi::AnthropicMessages],
         provider_api: ProviderApi::Anthropic,
     },
@@ -617,6 +577,13 @@ static CATALOG: &[CatalogModel] = &[
     // in the `:rawPredict` URL path (`publishers/anthropic/models/<id>`); models past
     // Sonnet 4.5 carry no date suffix, older ones keep an `@<date>` version. Needs
     // Claude model access granted on the deployment's project.
+    CatalogModel {
+        public_id: "claude-opus-5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-opus-5",
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
+    },
     CatalogModel {
         public_id: "claude-sonnet-5",
         cloud: Platform::Gcp,
@@ -712,6 +679,13 @@ static CATALOG: &[CatalogModel] = &[
     // in the catalog as the deployment-name mapping. The resource heartbeat lists
     // actual deployments, so the gateway omits Claude until that deployment exists.
     CatalogModel {
+        public_id: "claude-opus-5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-opus-5",
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
+    },
+    CatalogModel {
         public_id: "claude-sonnet-5",
         cloud: Platform::Azure,
         upstream_id: "claude-sonnet-5",
@@ -779,7 +753,7 @@ static CATALOG: &[CatalogModel] = &[
 /// Changes whenever public model ids or their supported client APIs change.
 /// Heartbeat consumers use this to distinguish an old observation from a
 /// current catalog without duplicating the catalog in durable state.
-pub const AI_CATALOG_REVISION: &str = "2026-08-05.1";
+pub const AI_CATALOG_REVISION: &str = "2026-08-09.1";
 
 /// Azure deployments to create at provision time: (deployment name, model name,
 /// model version). The deployment name is the catalog `upstream_id`. The version
@@ -818,10 +792,6 @@ static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
         upstream_id: "claude-opus-4-5",
     },
     DirectAnthropicModel {
-        public_id: "claude-opus-4.1",
-        upstream_id: "claude-opus-4-1-20250805",
-    },
-    DirectAnthropicModel {
         public_id: "claude-sonnet-4.6",
         upstream_id: "claude-sonnet-4-6",
     },
@@ -837,18 +807,6 @@ static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
         public_id: "claude-fable-5",
         upstream_id: "claude-fable-5",
     },
-    DirectAnthropicModel {
-        public_id: "claude-mythos-5",
-        upstream_id: "claude-mythos-5",
-    },
-    DirectAnthropicModel {
-        public_id: "claude-sonnet-4",
-        upstream_id: "claude-sonnet-4-20250514",
-    },
-    DirectAnthropicModel {
-        public_id: "claude-3-haiku",
-        upstream_id: "claude-3-haiku-20240307",
-    },
 ];
 
 /// Direct OpenAI models qualified end to end through the Gateway.
@@ -856,14 +814,42 @@ static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
 /// Add a model only after exercising every client API listed for it against a
 /// real provider account. Provider discovery is then used as the account-level
 /// availability filter; discovery alone is not sufficient to expose a model.
+///
+/// Every entry below was exercised live (2026-08-09) against both
+/// `/v1/chat/completions` and `/v1/responses`. Note the GPT-5 family answers
+/// both APIs here, unlike on bedrock-mantle where it is Responses-only.
 static DIRECT_OPENAI_MODELS: &[DirectOpenAiModel] = &[
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-sol",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-terra",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-luna",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.5",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.4",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-4.1",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
     DirectOpenAiModel {
         public_id: "gpt-4.1-mini",
         client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
     },
     DirectOpenAiModel {
-        public_id: "gpt-5.6-sol",
-        client_apis: &[ClientApi::OpenAiResponses],
+        public_id: "gpt-4o-mini",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
     },
 ];
 
