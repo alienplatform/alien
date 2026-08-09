@@ -16,7 +16,8 @@
 //! structured `context` can reach JS as first-class properties — the only
 //! channel that carries arbitrary data is the `reason` (the JS `message`).
 //! We therefore serialize a compact, stable JSON envelope
-//! (`{ code, message, context, retryable }`) into `reason`. The TypeScript layer
+//! (`{ code, message, context, retryable, internal, httpStatusCode, hint }`) into
+//! `reason`. The TypeScript layer
 //! recovers the structured error with a single `JSON.parse(err.message)` — no
 //! regex, no message scraping — and re-throws a proper `AlienError`.
 //!
@@ -34,6 +35,7 @@ use serde::Serialize;
 /// (snake_case, e.g. `binding_name` / `env_var`), exactly as produced by
 /// `AlienErrorData::context()`.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ErrorEnvelope<'a> {
     /// Machine-readable alien error code (e.g. `BINDING_NOT_CONFIGURED`).
     code: &'a str,
@@ -44,6 +46,14 @@ struct ErrorEnvelope<'a> {
     context: Option<&'a serde_json::Value>,
     /// Whether the underlying operation is retryable.
     retryable: bool,
+    /// Whether the error contains details that must not be exposed externally.
+    internal: bool,
+    /// HTTP status associated with the failure, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    http_status_code: Option<u16>,
+    /// Optional human-facing remediation guidance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<&'a str>,
 }
 
 /// Serialize an `AlienError` into a `napi::Error` carrying the structured
@@ -59,6 +69,9 @@ pub fn map_alien_error(err: AlienError<ErrorData>) -> napi::Error {
         message: &err.message,
         context: err.context.as_ref(),
         retryable: err.retryable,
+        internal: err.internal,
+        http_status_code: err.http_status_code,
+        hint: err.hint.as_deref(),
     };
     // Serialization of this fixed, owned shape cannot realistically fail; fall
     // back to the bare message so an error is never swallowed.
@@ -70,9 +83,9 @@ pub fn map_alien_error(err: AlienError<ErrorData>) -> napi::Error {
 /// methods on a storage binding) into a `napi::Error`.
 ///
 /// If an `AlienError` is found anywhere in the error's source chain it is passed
-/// through unchanged (a provider that already produced a structured error keeps
-/// its code/context). Otherwise the error is wrapped as
-/// `STORAGE_OPERATION_FAILED`, naming the binding and the operation.
+/// through unchanged. Provider errors are otherwise classified without copying
+/// their message into the public error: those messages may contain object URLs,
+/// cloud identities, or provider troubleshooting links.
 pub fn map_object_store_error(
     err: object_store::Error,
     binding_name: &str,
@@ -81,10 +94,25 @@ pub fn map_object_store_error(
     if let Some(alien) = alien_error_in_chain(&err) {
         return map_alien_error(alien);
     }
-    let wrapped = AlienError::new(ErrorData::StorageOperationFailed {
-        binding_name: binding_name.to_string(),
-        operation: format!("{operation}: {err}"),
-    });
+    let binding_name = binding_name.to_string();
+    let operation = operation.to_string();
+    let wrapped = match err {
+        object_store::Error::PermissionDenied { .. }
+        | object_store::Error::Unauthenticated { .. } => {
+            AlienError::new(ErrorData::StorageAccessDenied {
+                binding_name,
+                operation,
+            })
+        }
+        object_store::Error::NotFound { .. } => AlienError::new(ErrorData::StorageObjectNotFound {
+            binding_name,
+            operation,
+        }),
+        _ => AlienError::new(ErrorData::StorageOperationFailed {
+            binding_name,
+            operation,
+        }),
+    };
     map_alien_error(wrapped)
 }
 
@@ -227,28 +255,68 @@ mod tests {
         assert_eq!(envelope_of(&not_retryable)["retryable"], false);
     }
 
-    /// A raw `object_store::Error` with no alien error in its chain is wrapped
-    /// as STORAGE_OPERATION_FAILED, naming the binding, and the operation
-    /// description is preserved.
     #[test]
-    fn map_object_store_error_wraps_as_storage_operation_failed() {
+    fn map_alien_error_preserves_security_and_http_metadata() {
+        let mut error = AlienError::new(ErrorData::RemoteAccessFailed {
+            operation: "authorize remote access".to_string(),
+        });
+        error.retryable = false;
+        error.internal = false;
+        error.http_status_code = Some(401);
+        error.hint = Some("Create or enable a Remote Bindings API key".to_string());
+
+        let envelope = envelope_of(&map_alien_error(error));
+
+        assert_eq!(envelope["retryable"], false);
+        assert_eq!(envelope["internal"], false);
+        assert_eq!(envelope["httpStatusCode"], 401);
+        assert_eq!(
+            envelope["hint"],
+            "Create or enable a Remote Bindings API key"
+        );
+    }
+
+    /// Missing objects retain useful classification without exposing provider
+    /// response details or object paths.
+    #[test]
+    fn map_object_store_error_classifies_not_found_safely() {
         let err = object_store::Error::NotFound {
             path: "greeting.txt".to_string(),
-            source: "missing".into(),
+            source: "provider detail with a secret URL".into(),
         };
         let napi_err = map_object_store_error(err, "files", "get");
 
         let env = envelope_of(&napi_err);
-        assert_eq!(env["code"], "STORAGE_OPERATION_FAILED");
+        assert_eq!(env["code"], "STORAGE_OBJECT_NOT_FOUND");
+        assert_eq!(env["retryable"], false);
+        assert_eq!(env["httpStatusCode"], 404);
         assert_eq!(env["context"]["binding_name"], "files");
-        assert!(
-            env["context"]["operation"]
-                .as_str()
-                .expect("operation is a string")
-                .starts_with("get:"),
-            "operation should be prefixed with the op name, got {:?}",
-            env["context"]["operation"]
-        );
+        assert_eq!(env["context"]["operation"], "get");
+        let serialized = env.to_string();
+        assert!(!serialized.contains("greeting.txt"));
+        assert!(!serialized.contains("secret URL"));
+    }
+
+    /// Permission failures are permanent until the customer repairs IAM and
+    /// must not disclose the provider identity, request URL, or object path.
+    #[test]
+    fn map_object_store_error_classifies_access_denied_safely() {
+        let err = object_store::Error::PermissionDenied {
+            path: "private/customer/object.txt".to_string(),
+            source: "service-account@example.test denied at https://provider.invalid".into(),
+        };
+        let napi_err = map_object_store_error(err, "storage", "put");
+
+        let env = envelope_of(&napi_err);
+        assert_eq!(env["code"], "STORAGE_ACCESS_DENIED");
+        assert_eq!(env["retryable"], false);
+        assert_eq!(env["httpStatusCode"], 403);
+        assert_eq!(env["context"]["binding_name"], "storage");
+        assert_eq!(env["context"]["operation"], "put");
+        let serialized = env.to_string();
+        assert!(!serialized.contains("object.txt"));
+        assert!(!serialized.contains("service-account"));
+        assert!(!serialized.contains("provider.invalid"));
     }
 
     /// An `AlienError` boxed inside an `object_store::Error` passes through with

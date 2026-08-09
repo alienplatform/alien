@@ -16,6 +16,9 @@ import type {
 
 function unusedRemoteBindingsHandle(): NativeAddon["RemoteBindingsHandle"] {
   return {
+    async forCustomer(): Promise<never> {
+      throw new Error("unused")
+    },
     async forDeployment(): Promise<never> {
       throw new Error("unused")
     },

@@ -25,13 +25,16 @@ describe("unwrapNapiError", () => {
     expect(err.retryable).toBe(false)
   })
 
-  it("preserves code, context, and retryable for other envelope codes", () => {
+  it("preserves all structured metadata for other envelope codes", () => {
     const err = unwrapNapiError(
       napiError({
         code: "STORAGE_OPERATION_FAILED",
         message: "get failed",
         context: { binding_name: "files", operation: "get" },
         retryable: true,
+        internal: false,
+        httpStatusCode: 503,
+        hint: "Retry after the customer finishes setup",
       }),
     )
 
@@ -39,6 +42,9 @@ describe("unwrapNapiError", () => {
     expect(err.code).toBe("STORAGE_OPERATION_FAILED")
     expect(err.message).toBe("get failed")
     expect(err.retryable).toBe(true)
+    expect(err.internal).toBe(false)
+    expect(err.httpStatusCode).toBe(503)
+    expect(err.hint).toBe("Retry after the customer finishes setup")
     expect(err.context).toEqual({ binding_name: "files", operation: "get" })
   })
 

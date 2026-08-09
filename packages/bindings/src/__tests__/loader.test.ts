@@ -28,6 +28,9 @@ function addonReporting(version: string): NativeAddon {
   }
 
   const RemoteBindingsHandle: NativeAddon["RemoteBindingsHandle"] = {
+    async forCustomer(): Promise<never> {
+      throw new Error("not used by version validation")
+    },
     async forDeployment(): Promise<never> {
       throw new Error("not used by version validation")
     },

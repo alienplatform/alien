@@ -1,6 +1,33 @@
 use super::*;
 
 #[tokio::test]
+async fn customer_access_uses_external_id_and_refreshes_the_manager_lease() {
+    let fixture = Fixture::new(at(0), at(3600)).await;
+    let provider = fixture.remote_customer_provider().await;
+
+    provider
+        .load_storage("storage")
+        .await
+        .expect("customer Storage should resolve");
+    fixture.clock.set(at(270));
+    provider
+        .load_storage("archive")
+        .await
+        .expect("customer manager access should refresh");
+
+    let requests = fixture
+        .platform_requests
+        .lock()
+        .expect("platform requests lock");
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request.path == format!("/v1/projects/{PROJECT_ID}/remote-bindings/access")
+            && request.body == Some(json!({ "externalId": EXTERNAL_ID, "capability": "storage" }))
+    }));
+    assert_eq!(fixture.token_calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn manager_access_token_refreshes_with_skew_without_forwarding_platform_token() {
     let fixture = Fixture::new(at(0), at(3600)).await;
     let provider = fixture.remote_provider().await;
