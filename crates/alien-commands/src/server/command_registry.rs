@@ -81,6 +81,7 @@ pub struct CommandAccessContext {
     pub workspace_id: String,
     pub project_id: String,
     pub deployment_id: String,
+    pub target: CommandTarget,
 }
 
 /// Internal command record stored in memory
@@ -293,6 +294,7 @@ pub trait CommandRegistry: Send + Sync {
                 workspace_id: status.workspace_id,
                 project_id: status.project_id,
                 deployment_id: status.deployment_id,
+                target: status.target,
             }))
     }
 
@@ -878,6 +880,7 @@ mod tests {
                 workspace_id: "default".to_string(),
                 project_id: "default".to_string(),
                 deployment_id: "dep-1".to_string(),
+                target: CommandTarget::new("worker-1", CommandTargetType::Worker),
             }
         );
     }

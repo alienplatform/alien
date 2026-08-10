@@ -17,6 +17,7 @@ use alien_aws_clients::{
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
+    ses::{SesApi, SesClient},
     sqs::{SqsApi, SqsClient},
     ssm::{SsmApi, SsmClient},
     AwsClientConfig, AwsCredentialProvider,
@@ -94,6 +95,7 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>>;
     async fn get_aws_lambda_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn LambdaApi>>;
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
+    async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>>;
     async fn get_aws_cloudformation_client(
         &self,
         config: &AwsClientConfig,
@@ -469,6 +471,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(S3Client::new(reqwest::Client::new(), credentials)))
+    }
+
+    async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(SesClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
     }
 
     async fn get_aws_cloudformation_client(

@@ -23,6 +23,7 @@ pub use aws::rds::{RdsApi, RdsClient};
 pub use aws::resourcegroupstagging::{ResourceGroupsTaggingApi, ResourceGroupsTaggingClient};
 pub use aws::s3::{S3Api, S3Client};
 pub use aws::secrets_manager::{SecretsManagerApi, SecretsManagerClient};
+pub use aws::ses::{SesApi, SesClient};
 pub use aws::sqs::{SqsApi, SqsClient};
 pub use aws::sts::{StsApi, StsClient};
 

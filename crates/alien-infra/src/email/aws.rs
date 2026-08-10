@@ -8,10 +8,10 @@
 //! imported state through the deployment loop and expose
 //! [`alien_core::EmailOutputs`].
 //!
-//! The `Ready` handler is passive: there is no SES client in
-//! `alien-aws-clients` yet, so no liveness probe (`ses:GetConfigurationSet`,
-//! covered by the `email/management` permission set) is performed. Adding an
-//! active heartbeat is a follow-up that lands together with an SES client.
+//! The `Ready` handler verifies that an imported inbound receipt rule set
+//! remains active. This detects account-level SES routing changes that would
+//! otherwise leave the deployment apparently healthy while mail is no longer
+//! delivered to its storage binding.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -19,12 +19,27 @@ use std::time::Duration;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{Email, EmailDomainOutputs, EmailOutputs, ResourceOutputs, ResourceStatus};
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
 use alien_macros::controller;
 
-/// How often the passive `Ready` handler re-runs. There is no cloud probe
-/// behind it, so a long interval avoids pointless churn in the refresh loop.
+/// How often the active receipt-rule-set check runs.
 const READY_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+
+fn verify_active_rule_set(resource_id: &str, expected: &str, observed: Option<&str>) -> Result<()> {
+    if observed == Some(expected) {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::CloudPlatformError {
+        message: format!(
+            "Expected SES receipt rule set '{expected}' to be active, but observed {}",
+            observed
+                .map(|name| format!("'{name}'"))
+                .unwrap_or_else(|| "no active rule set".to_string())
+        ),
+        resource_id: Some(resource_id.to_string()),
+    }))
+}
 
 #[controller]
 pub struct AwsEmailController {
@@ -66,14 +81,31 @@ impl AwsEmailController {
     }
 
     // ─────────────── READY STATE ────────────────────────────────
-    /// Passive refresh: no SES client exists in `alien-aws-clients` yet, so
-    /// this performs no liveness probe. See the module docs.
+    /// Verify that SES still routes inbound mail through this resource.
     #[handler(
         state = Ready,
         on_failure = RefreshFailed,
         status = ResourceStatus::Running,
     )]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if let Some(expected) = &self.rule_set_name {
+            let config = ctx.desired_resource_config::<Email>()?;
+            let client = ctx
+                .service_provider
+                .get_aws_ses_client(ctx.get_aws_config()?)
+                .await?;
+            let observed = client
+                .describe_active_receipt_rule_set()
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to verify the active SES receipt rule set".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?
+                .name;
+
+            verify_active_rule_set(&config.id, expected, observed.as_deref())?;
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(READY_REFRESH_INTERVAL),
@@ -120,5 +152,27 @@ impl AwsEmailController {
             binding["region"] = serde_json::Value::String(region.clone());
         }
         Ok(Some(binding))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_active_rule_set;
+
+    #[test]
+    fn active_rule_set_matches() {
+        verify_active_rule_set("mail", "expected", Some("expected")).unwrap();
+    }
+
+    #[test]
+    fn missing_active_rule_set_is_unhealthy() {
+        let error = verify_active_rule_set("mail", "expected", None).unwrap_err();
+        assert!(error.to_string().contains("observed no active rule set"));
+    }
+
+    #[test]
+    fn different_active_rule_set_is_unhealthy() {
+        let error = verify_active_rule_set("mail", "expected", Some("other")).unwrap_err();
+        assert!(error.to_string().contains("observed 'other'"));
     }
 }

@@ -4,11 +4,9 @@
   "additionalBranchPrefix": "alien-370-",
   "packageRules": [
     {
-      "description": "Automerge stable non-major updates",
+      "description": "Automerge stable non-major updates independently after CI passes",
       "matchUpdateTypes": ["minor", "patch"],
       "matchCurrentVersion": "!/^0/",
-      "groupName": "stable non-major dependencies",
-      "groupSlug": "stable-minor-patch",
       "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash"
@@ -18,6 +16,11 @@
       "matchUpdateTypes": ["minor"],
       "matchCurrentVersion": "/^0\\./",
       "enabled": false
+    },
+    {
+      "description": "Require explicit dashboard approval for major updates",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
     }
   ]
 }

@@ -113,6 +113,31 @@ fn gcp_remote_stack_management_function_provision_role() {
 }
 
 #[test]
+fn gcp_custom_role_prefix_keeps_long_resource_prefixes_unique() {
+    let stack = Stack::new("acme-mgmt".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["worker/provision"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("length(replace(lower(local.resource_prefix), \"-\", \"_\")) <= 18"));
+    assert!(rendered.contains("substr(sha256(local.resource_prefix), 0, 8)"));
+    assert!(rendered.contains(
+        "var.gcp_custom_role_prefix != \"\" ? substr(replace(lower(var.gcp_custom_role_prefix), \"-\", \"_\"), 0, 18)"
+    ));
+    assert_terraform_valid(&module, "gcp_unique_custom_role_prefix");
+}
+
+#[test]
 fn gcp_network_create_two_subnets() {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {

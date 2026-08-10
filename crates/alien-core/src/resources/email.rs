@@ -35,8 +35,10 @@ use std::fmt::Debug;
 ///
 /// Alien activates the provisioned receipt rule set as part of setup. Because
 /// SES permits only one active receipt rule set per AWS account and region, an
-/// AWS stack may contain only one email resource with inbound delivery, and
-/// installing it makes its rule set the account's active rule set. SES email
+/// AWS stack may contain only one email resource with inbound delivery. The
+/// resource requires exclusive ownership of SES receiving in its account and
+/// region: setup refuses to replace an active rule set it does not own. Choose
+/// an unused region when the account already receives email through SES. SES email
 /// receiving is available only in a subset of AWS regions; deploying `inbound`
 /// to an unsupported region fails during setup.
 ///

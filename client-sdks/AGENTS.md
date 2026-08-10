@@ -28,6 +28,15 @@ pnpm run generate:manager-api      # Regenerate manager TypeScript SDK
 pnpm run generate:platform-api     # Regenerate platform TypeScript SDK from checked-in spec
 ```
 
+### Platform TypeScript SDK drift
+
+Before including a platform TypeScript SDK regeneration in a feature PR,
+inspect the generated diff from a clean worktree. If it rewrites endpoints or
+models unrelated to the feature, keep the relevant OpenAPI and Rust inputs
+produced by the supported generation pipeline and move the full TypeScript SDK
+refresh to a dedicated PR. Do not manually edit or selectively patch generated
+SDK code to force a smaller diff.
+
 ## Don't
 
 - Don't edit generated code — regenerate from the OpenAPI spec

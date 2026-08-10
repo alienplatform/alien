@@ -20,10 +20,11 @@ the same wire protocol.
 
 | Export | Kind | Signature sketch | Notes |
 |---|---|---|---|
-| `CommandsClient` | class | `new CommandsClient({ managerUrl, deploymentId, token })` | Sender. Constructor options `{ managerUrl: string; deploymentId: string; token: string }`. |
+| `CommandsClient` | class | `await CommandsClient.forDeployment({ deploymentId, apiKey })` | Hosted sender. Discovers the current manager and refreshes short-lived commands-only credentials. The explicit constructor remains the self-hosted escape hatch. |
 | `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Returns `TargetedCommands`. |
 | `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. See the API details below. |
-| `createCommandReceiver` | function | `createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver` | Constructs the pull receiver from environment configuration. |
+| `createCommandReceiver` | function | `createCommandReceiver({ deploymentId, apiKey, target })` or `createCommandReceiver()` | Hosted external receivers discover on `run()`; Alien-deployed receivers keep the zero-config injected environment flow. |
+| `HostedCommandReceiverOptions` | type | hosted receiver options | `{ deploymentId, apiKey, target, platformUrl?, fetch?, ...tuning }`. `target` is required; hosted Alien resolves whether it is a Container or Daemon. |
 | `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, pollMaxIntervalMs?, pollJitter?, leaseSeconds?, maxLeases?, drainTimeoutMs? }`. Constructor values override environment values. |
 | `CommandReceiver` | type | receiver handle | `.command(name, handler)` parses JSON as `unknown`; `.command(name, schema, handler)` also validates with Standard Schema and infers the validated type. `.handleRaw(name, handler)` is the byte-level escape hatch. `.run()` leases and dispatches until stopped. |
 | `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty or invalid. Context names the offending identity, token-source, or tuning variable. |
@@ -88,6 +89,17 @@ MAY depend on:
 
 - Importing the package and constructing `CommandsClient` requires no deployment and
   no cloud credentials.
+- `CommandsClient.forDeployment({ deploymentId, apiKey, platformUrl? })`
+  bootstraps through `POST /v1/commands/bootstrap`, refreshes before credential
+  expiry, and refreshes/retries once after a manager 401. The API key is sent
+  only to the bootstrap endpoint and is never forwarded to the manager.
+- `createCommandReceiver({ deploymentId, apiKey, target, platformUrl? })`
+  validates local options synchronously but defers hosted discovery until
+  `run()`. It refreshes before expiry and refreshes/retries once after a lease
+  endpoint 401. The caller always supplies the target string; hosted Alien
+  returns its exact Container/Daemon identity, so the receiver never guesses
+  either the target or its type. The resulting credential is limited to that
+  deployment, target, and receiver operations.
 - `createCommandReceiver()` reads the receiver environment contract above. An
   empty/invalid required value or tunable throws
   `CommandReceiverConfigInvalidError` (code `COMMAND_RECEIVER_CONFIG_INVALID`)
@@ -196,6 +208,15 @@ MAY depend on:
   `{ managerUrl: string; deploymentId: string; token: string; timeoutMs?: number; allowLocalStorage?: boolean }`
   (`timeoutMs` = default invoke timeout, 60000ms; `allowLocalStorage` gates the
   `local` storage backend for dev).
+- **`CommandsClientDeploymentConfig`:**
+  `{ deploymentId: string; apiKey: string; platformUrl?: string; timeoutMs?:
+  number; allowLocalStorage?: boolean; fetch?: typeof fetch }`.
+  `CommandsClient.forDeployment` returns `Promise<CommandsClient>`.
+- **`HostedCommandReceiverOptions`:**
+  `{ deploymentId: string; apiKey: string; target: string; platformUrl?:
+  string; fetch?: typeof fetch; pollIntervalMs?: number; pollMaxIntervalMs?:
+  number; pollJitter?: number; leaseSeconds?: number; maxLeases?: number;
+  drainTimeoutMs?: number }`. Discovery occurs from `run()`, not construction.
 - **Exported sender-error set** (migrated from the former `@alienplatform/sdk/commands` subpath,
   all `defineError` from `@alienplatform/core`): `CommandCreationFailedError`
   (`COMMAND_CREATION_FAILED`), `CommandTimeoutError` (`COMMAND_TIMEOUT`),

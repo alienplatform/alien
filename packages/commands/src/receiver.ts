@@ -34,8 +34,8 @@
  * ```
  */
 
-import { readFile } from "node:fs/promises"
 import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
+import { requestWithRefreshingConnection } from "./bootstrap.js"
 import {
   CommandReceiverConfigInvalidError,
   InvalidEnvelopeError,
@@ -53,7 +53,19 @@ import type {
   PresignedRequest,
   TraceContext,
 } from "./protocol.js"
+import {
+  type CommandReceiverOptions,
+  type CommandReceiverRuntimeOptions,
+  ENV_ALIEN_COMMANDS_URL,
+  type HostedCommandReceiverOptions,
+  type ReceiverConnection,
+  type ReceiverConnectionProvider,
+  type ReceiverRuntimeConfig,
+  resolveReceiverConfig,
+} from "./receiver-config.js"
 import { parseWireResponse } from "./wire.js"
+
+export type { CommandReceiverOptions, HostedCommandReceiverOptions } from "./receiver-config.js"
 
 /**
  * Presigned-transfer policy for receivers: the local backend is always
@@ -70,18 +82,6 @@ export const ERROR_CODE_HANDLER_TIMEOUT = "HANDLER_TIMEOUT"
 /** Error code submitted when a handler throws/rejects (or its response fails to serialize). */
 export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR"
 
-/** Lease poll interval, in ms. */
-const DEFAULT_POLL_INTERVAL_MS = 5_000
-/** Max leases requested per poll. One process executes one command at a time by default. */
-const DEFAULT_MAX_LEASES = 1
-/** Requested lease duration, in seconds. */
-const DEFAULT_LEASE_SECONDS = 60
-/** Maximum interval reached by the empty/error poll backoff. */
-const DEFAULT_POLL_MAX_INTERVAL_MS = 30_000
-/** Fractional randomization applied to poll sleeps. */
-const DEFAULT_POLL_JITTER = 0.1
-/** Time allowed for in-flight handlers to finish before abort + release. */
-const DEFAULT_DRAIN_TIMEOUT_MS = 30_000
 /**
  * Safety margin subtracted from a lease's expiry when computing the execution
  * budget, in ms. Stopping this far before the lease actually expires
@@ -98,21 +98,6 @@ const LEASE_SAFETY_MARGIN_MS = 5_000
  * timeout.
  */
 const CONTROL_TIMEOUT_MS = 30_000
-
-// Env variable names — identical strings to the Rust twin
-// (`alien_core::runtime_environment`).
-const ENV_ALIEN_COMMANDS_URL = "ALIEN_COMMANDS_URL"
-const ENV_ALIEN_COMMANDS_TOKEN = "ALIEN_COMMANDS_TOKEN"
-const ENV_ALIEN_COMMANDS_TOKEN_FILE = "ALIEN_COMMANDS_TOKEN_FILE"
-const ENV_ALIEN_DEPLOYMENT_ID = "ALIEN_DEPLOYMENT_ID"
-const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID = "ALIEN_COMMANDS_TARGET_RESOURCE_ID"
-const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE = "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE"
-const ENV_ALIEN_COMMANDS_LEASE_SECONDS = "ALIEN_COMMANDS_LEASE_SECONDS"
-const ENV_ALIEN_COMMANDS_MAX_LEASES = "ALIEN_COMMANDS_MAX_LEASES"
-const ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS = "ALIEN_COMMANDS_POLL_INTERVAL_MS"
-const ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS = "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS"
-const ENV_ALIEN_COMMANDS_POLL_JITTER = "ALIEN_COMMANDS_POLL_JITTER"
-const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS"
 
 /**
  * Per-command context passed to a {@link CommandHandler}.
@@ -221,41 +206,6 @@ export interface CommandReceiver {
   stop(): void
 }
 
-/** Options for {@link createCommandReceiver}; every field has a production default. */
-export interface CommandReceiverOptions {
-  /** Environment source (defaults to `process.env`). */
-  env?: Record<string, string | undefined>
-  /** `fetch` implementation (defaults to the global `fetch`). */
-  fetch?: typeof fetch
-  /** Lease poll interval in ms (default 5000). Overrides the environment. */
-  pollIntervalMs?: number
-  /** Maximum empty/error poll interval in ms (default 30000). */
-  pollMaxIntervalMs?: number
-  /** Poll jitter fraction from 0 to 1 (default 0.1). */
-  pollJitter?: number
-  /** Requested lease duration in seconds (default 60). Overrides the environment. */
-  leaseSeconds?: number
-  /** Max leases requested per poll (default 1). Overrides the environment. */
-  maxLeases?: number
-  /** Graceful drain timeout in ms (default 30000). */
-  drainTimeoutMs?: number
-}
-
-interface ReceiverConfig {
-  url: string
-  token?: string
-  tokenFile?: string
-  deploymentId: string
-  resourceId: string
-  resourceType: Exclude<CommandTargetType, "worker">
-  pollIntervalMs: number
-  pollMaxIntervalMs: number
-  pollJitter: number
-  leaseSeconds: number
-  maxLeases: number
-  drainTimeoutMs: number
-}
-
 /**
  * Construct the pull receiver from environment configuration.
  *
@@ -266,207 +216,13 @@ interface ReceiverConfig {
  * `container` or `daemon`; `worker` (and anything else) is rejected — a receiver
  * must not guess its target type.
  */
-export function createCommandReceiver(options: CommandReceiverOptions = {}): CommandReceiver {
-  const env = options.env ?? (typeof process !== "undefined" ? process.env : {})
-  const config = validateConfig(env, options)
-  return new PullCommandReceiver(config, options)
-}
-
-function requireEnv(env: Record<string, string | undefined>, name: string): string {
-  const value = env[name]
-  if (value === undefined) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({ envVar: name, reason: `${name} is required` }),
-    )
-  }
-  if (value.trim() === "") {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: name,
-        reason: `${name} must not be empty`,
-      }),
-    )
-  }
-  return value
-}
-
-function optionalNonEmpty(
-  env: Record<string, string | undefined>,
-  name: string,
-): string | undefined {
-  const value = env[name]
-  if (value?.trim() === "") {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: name,
-        reason: `${name} must not be empty`,
-      }),
-    )
-  }
-  return value
-}
-
-function numericConfig(
-  env: Record<string, string | undefined>,
-  envName: string,
-  override: number | undefined,
-  fallback: number,
-  validate: (value: number) => boolean,
-): number {
-  const raw = override ?? (env[envName] === undefined ? fallback : Number(env[envName]))
-  if (!Number.isFinite(raw) || !validate(raw)) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: envName,
-        reason: `${envName} has invalid numeric value '${env[envName] ?? raw}'`,
-      }),
-    )
-  }
-  return raw
-}
-
-function validateConfig(
-  env: Record<string, string | undefined>,
-  options: CommandReceiverOptions,
-): ReceiverConfig {
-  const url = requireEnv(env, ENV_ALIEN_COMMANDS_URL)
-  try {
-    // eslint-disable-next-line no-new -- validating parseability only
-    new URL(url)
-  } catch {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_URL,
-        reason: `${ENV_ALIEN_COMMANDS_URL} is not a valid URL: ${url}`,
-      }),
-    )
-  }
-
-  const token = optionalNonEmpty(env, ENV_ALIEN_COMMANDS_TOKEN)
-  const tokenFile = optionalNonEmpty(env, ENV_ALIEN_COMMANDS_TOKEN_FILE)
-  if (token === undefined && tokenFile === undefined) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_TOKEN,
-        reason: `${ENV_ALIEN_COMMANDS_TOKEN} or ${ENV_ALIEN_COMMANDS_TOKEN_FILE} is required`,
-      }),
-    )
-  }
-  const deploymentId = requireEnv(env, ENV_ALIEN_DEPLOYMENT_ID)
-  const resourceId = requireEnv(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)
-
-  const rawType = requireEnv(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE)
-  if (rawType !== "container" && rawType !== "daemon") {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
-        reason: `${ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE} must be 'container' or 'daemon', got '${rawType}'`,
-      }),
-    )
-  }
-
-  const pollIntervalMs = numericConfig(
-    env,
-    ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
-    options.pollIntervalMs,
-    DEFAULT_POLL_INTERVAL_MS,
-    value => Number.isInteger(value) && value > 0,
-  )
-  const pollMaxIntervalMs = numericConfig(
-    env,
-    ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
-    options.pollMaxIntervalMs,
-    DEFAULT_POLL_MAX_INTERVAL_MS,
-    value => Number.isInteger(value) && value > 0,
-  )
-  if (pollMaxIntervalMs < pollIntervalMs) {
-    throw new AlienError(
-      CommandReceiverConfigInvalidError.create({
-        envVar: ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
-        reason: `${ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS} must be at least ${ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS}`,
-      }),
-    )
-  }
-
-  return {
-    url,
-    token,
-    tokenFile,
-    deploymentId,
-    resourceId,
-    resourceType: rawType,
-    pollIntervalMs,
-    pollMaxIntervalMs,
-    pollJitter: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_POLL_JITTER,
-      options.pollJitter,
-      DEFAULT_POLL_JITTER,
-      value => value >= 0 && value <= 1,
-    ),
-    leaseSeconds: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_LEASE_SECONDS,
-      options.leaseSeconds,
-      DEFAULT_LEASE_SECONDS,
-      value => Number.isInteger(value) && value > 0,
-    ),
-    maxLeases: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_MAX_LEASES,
-      options.maxLeases,
-      DEFAULT_MAX_LEASES,
-      value => Number.isInteger(value) && value > 0,
-    ),
-    drainTimeoutMs: numericConfig(
-      env,
-      ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
-      options.drainTimeoutMs,
-      DEFAULT_DRAIN_TIMEOUT_MS,
-      value => Number.isInteger(value) && value >= 0,
-    ),
-  }
-}
-
-class TokenSource {
-  private cachedFileToken: string | undefined
-
-  constructor(
-    private readonly token: string | undefined,
-    private readonly tokenFile: string | undefined,
-  ) {}
-
-  get refreshable(): boolean {
-    return this.token === undefined && this.tokenFile !== undefined
-  }
-
-  async read(forceRefresh = false): Promise<string> {
-    if (this.token !== undefined) return this.token
-    if (!forceRefresh && this.cachedFileToken !== undefined) return this.cachedFileToken
-
-    const path = this.tokenFile as string
-    let token: string
-    try {
-      token = (await readFile(path, "utf8")).trim()
-    } catch (error) {
-      throw (await AlienError.from(error)).withContext(
-        CommandReceiverConfigInvalidError.create({
-          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
-          reason: `Failed to read command token file '${path}'`,
-        }),
-      )
-    }
-    if (token === "") {
-      throw new AlienError(
-        CommandReceiverConfigInvalidError.create({
-          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
-          reason: `${ENV_ALIEN_COMMANDS_TOKEN_FILE} '${path}' contains an empty token`,
-        }),
-      )
-    }
-    this.cachedFileToken = token
-    return token
-  }
+export function createCommandReceiver(options: HostedCommandReceiverOptions): CommandReceiver
+export function createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver
+export function createCommandReceiver(
+  options: CommandReceiverOptions | HostedCommandReceiverOptions = {},
+): CommandReceiver {
+  const { connectionProvider, runtimeConfig } = resolveReceiverConfig(options)
+  return new PullCommandReceiver(connectionProvider, runtimeConfig, options)
 }
 
 interface ActiveLease {
@@ -475,8 +231,13 @@ interface ActiveLease {
   task: Promise<void>
 }
 
+interface AcquiredLease {
+  lease: LeaseInfo
+  connection: ReceiverConnection
+}
+
 class PullCommandReceiver implements CommandReceiver {
-  private readonly config: ReceiverConfig
+  private readonly connectionProvider: ReceiverConnectionProvider
   private readonly fetchImpl: typeof fetch
   private readonly pollIntervalMs: number
   private readonly leaseSeconds: number
@@ -484,13 +245,16 @@ class PullCommandReceiver implements CommandReceiver {
   private readonly pollMaxIntervalMs: number
   private readonly pollJitter: number
   private readonly drainTimeoutMs: number
-  private readonly tokenSource: TokenSource
   private readonly handlers = new Map<string, RawCommandHandler>()
   private readonly shutdown = new AbortController()
   private readonly active = new Map<string, ActiveLease>()
 
-  constructor(config: ReceiverConfig, options: CommandReceiverOptions) {
-    this.config = config
+  constructor(
+    connectionProvider: ReceiverConnectionProvider,
+    config: ReceiverRuntimeConfig,
+    options: CommandReceiverRuntimeOptions,
+  ) {
+    this.connectionProvider = connectionProvider
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.pollIntervalMs = config.pollIntervalMs
     this.pollMaxIntervalMs = config.pollMaxIntervalMs
@@ -498,7 +262,6 @@ class PullCommandReceiver implements CommandReceiver {
     this.leaseSeconds = config.leaseSeconds
     this.maxLeases = config.maxLeases
     this.drainTimeoutMs = config.drainTimeoutMs
-    this.tokenSource = new TokenSource(config.token, config.tokenFile)
   }
 
   command(name: string, handler: CommandHandler<unknown>): CommandReceiver
@@ -551,7 +314,7 @@ class PullCommandReceiver implements CommandReceiver {
     // (no new poll starts once draining begins), acquire leases (a poll already
     // in flight completes and its leases are dispatched), then sleep-or-stop.
     while (!this.shutdown.signal.aborted) {
-      let leases: LeaseInfo[] = []
+      let leases: AcquiredLease[] = []
       let sleepMs = nextPollMs
       const available = Math.max(0, this.maxLeases - this.active.size)
       if (available === 0) {
@@ -567,6 +330,7 @@ class PullCommandReceiver implements CommandReceiver {
             nextPollMs = this.nextBackoff(nextPollMs)
           }
         } catch (error) {
+          if (this.shutdown.signal.aborted) break
           if (error instanceof AlienError && !error.retryable) {
             terminalError = error
             break
@@ -578,13 +342,13 @@ class PullCommandReceiver implements CommandReceiver {
         }
       }
 
-      for (const lease of leases) {
+      for (const { lease, connection } of leases) {
         if (this.active.has(lease.commandId)) {
           await this.releaseLease(lease.leaseId)
           continue
         }
         const controller = new AbortController()
-        const task = this.processLease(lease, controller).finally(() => {
+        const task = this.processLease(lease, controller, connection).finally(() => {
           const current = this.active.get(lease.commandId)
           if (current?.lease.leaseId === lease.leaseId) this.active.delete(lease.commandId)
         })
@@ -624,30 +388,32 @@ class PullCommandReceiver implements CommandReceiver {
   }
 
   /** Build the lease request this receiver sends (pure — unit-testable). */
-  private buildLeaseRequest(maxLeases: number): LeaseRequest {
+  private buildLeaseRequest(maxLeases: number, connection: ReceiverConnection): LeaseRequest {
     return {
-      deploymentId: this.config.deploymentId,
+      deploymentId: connection.deploymentId,
       target: {
-        resourceId: this.config.resourceId,
-        resourceType: this.config.resourceType,
+        resourceId: connection.resourceId,
+        resourceType: connection.resourceType,
       },
       maxLeases,
       leaseSeconds: this.leaseSeconds,
     }
   }
 
-  private async acquireLeases(maxLeases: number): Promise<LeaseInfo[]> {
-    const endpoint = buildLeaseEndpoint(this.config.url)
-    const response = await this.authenticatedFetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  private async acquireLeases(maxLeases: number): Promise<AcquiredLease[]> {
+    const { response, endpoint, connection } = await this.authenticatedFetch(connection => ({
+      endpoint: buildLeaseEndpoint(connection.url),
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(this.buildLeaseRequest(maxLeases, connection)),
+        // fetch has no default timeout; a hung lease call would freeze the
+        // whole poll loop, so cap it well under the lease duration.
+        signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
       },
-      body: JSON.stringify(this.buildLeaseRequest(maxLeases)),
-      // fetch has no default timeout; a hung lease call would freeze the
-      // whole poll loop, so cap it well under the lease duration.
-      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-    })
+    }))
 
     if (!response.ok) {
       const context = {
@@ -675,21 +441,29 @@ class PullCommandReceiver implements CommandReceiver {
     for (const lease of parsed.leases) {
       resolveEnvelopeUrls(lease.envelope, endpoint)
     }
-    return parsed.leases
+    return parsed.leases.map(lease => ({ lease, connection }))
   }
 
-  private async authenticatedFetch(endpoint: string, init: RequestInit): Promise<Response> {
-    const send = async (forceRefresh: boolean) => {
-      const token = await this.tokenSource.read(forceRefresh)
-      const headers = new Headers(init.headers)
-      headers.set("Authorization", `Bearer ${token}`)
-      return this.fetchImpl(endpoint, { ...init, headers })
-    }
-    let response = await send(false)
-    if (response.status === 401 && this.tokenSource.refreshable) {
-      response = await send(true)
-    }
-    return response
+  private async authenticatedFetch(
+    buildRequest: (connection: ReceiverConnection) => {
+      endpoint: string
+      init: RequestInit
+    },
+  ): Promise<{ response: Response; endpoint: string; connection: ReceiverConnection }> {
+    return requestWithRefreshingConnection(
+      this.connectionProvider,
+      async connection => {
+        const { endpoint, init } = buildRequest(connection)
+        const headers = new Headers(init.headers)
+        headers.set("Authorization", `Bearer ${connection.token}`)
+        return {
+          response: await this.fetchImpl(endpoint, { ...init, headers }),
+          endpoint,
+          connection,
+        }
+      },
+      this.shutdown.signal,
+    )
   }
 
   /**
@@ -698,12 +472,16 @@ class PullCommandReceiver implements CommandReceiver {
    * submit, and a submit failure produces no ack, so the lease expires and the
    * command is redelivered.
    */
-  private async processLease(lease: LeaseInfo, controller: AbortController): Promise<void> {
+  private async processLease(
+    lease: LeaseInfo,
+    controller: AbortController,
+    identity: ReceiverConnection,
+  ): Promise<void> {
     const executionBudget = commandBudget(
       lease.envelope.deadline ?? undefined,
       lease.leaseExpiresAt,
     )
-    const response = await this.executeLease(lease, controller, executionBudget)
+    const response = await this.executeLease(lease, controller, executionBudget, identity)
     if (response === undefined) {
       await this.releaseLease(lease.leaseId)
       return
@@ -723,8 +501,8 @@ class PullCommandReceiver implements CommandReceiver {
     logCommandProcessed({
       commandId: lease.commandId,
       leaseId: lease.leaseId,
-      targetResourceId: this.config.resourceId,
-      targetResourceType: this.config.resourceType,
+      targetResourceId: identity.resourceId,
+      targetResourceType: identity.resourceType,
       attempt: lease.attempt,
       deadline: lease.envelope.deadline ?? null,
       handlerStatus,
@@ -740,6 +518,7 @@ class PullCommandReceiver implements CommandReceiver {
     lease: LeaseInfo,
     controller: AbortController,
     budget: Date,
+    identity: ReceiverConnection,
   ): Promise<CommandResponse | undefined> {
     const { envelope, attempt } = lease
     const handler = this.handlers.get(envelope.command)
@@ -768,8 +547,8 @@ class PullCommandReceiver implements CommandReceiver {
         commandId: envelope.commandId,
         attempt,
         target: {
-          resourceId: this.config.resourceId,
-          resourceType: this.config.resourceType,
+          resourceId: identity.resourceId,
+          resourceType: identity.resourceType,
         },
         traceContext: envelope.traceContext ?? undefined,
       }
@@ -780,14 +559,16 @@ class PullCommandReceiver implements CommandReceiver {
   }
 
   private async releaseLease(leaseId: string): Promise<void> {
-    const endpoint = buildReleaseEndpoint(this.config.url, leaseId)
     try {
-      const response = await this.authenticatedFetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leaseId }),
-        signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-      })
+      const { response } = await this.authenticatedFetch(connection => ({
+        endpoint: buildReleaseEndpoint(connection.url, leaseId),
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leaseId }),
+          signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
+        },
+      }))
       if (response.ok || response.status === 409 || response.status === 410) return
       const body = await response.text().catch(() => "")
       logWarn(

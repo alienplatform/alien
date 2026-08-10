@@ -2323,7 +2323,7 @@ fn locals_body(
         body.push(attr(
             "gcp_custom_role_prefix",
             expr::raw(
-                "substr(replace(lower(var.gcp_custom_role_prefix == \"\" ? local.resource_prefix : var.gcp_custom_role_prefix), \"-\", \"_\"), 0, 18)",
+                "var.gcp_custom_role_prefix != \"\" ? substr(replace(lower(var.gcp_custom_role_prefix), \"-\", \"_\"), 0, 18) : length(replace(lower(local.resource_prefix), \"-\", \"_\")) <= 18 ? replace(lower(local.resource_prefix), \"-\", \"_\") : format(\"%s_%s\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 9), substr(sha256(local.resource_prefix), 0, 8))",
             ),
         ));
     }

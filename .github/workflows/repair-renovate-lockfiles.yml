@@ -1,0 +1,55 @@
+name: Repair Renovate lockfiles
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - "**/package.json"
+      - "**/pnpm-lock.yaml"
+      - "**/pnpm-workspace.yaml"
+
+concurrency:
+  group: repair-renovate-lockfiles-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: >-
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - name: Regenerate pnpm lockfiles
+        run: |
+          pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
+          pnpm --dir examples install --lockfile-only --no-frozen-lockfile --ignore-scripts
+          pnpm --dir examples/github-agent/packages/dashboard install \
+            --lockfile-only --no-frozen-lockfile --ignore-scripts
+
+      - name: Commit repaired lockfiles
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PUSH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+        run: |
+          git add pnpm-lock.yaml examples/pnpm-lock.yaml \
+            examples/github-agent/packages/dashboard/pnpm-lock.yaml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "alien-platform[bot]"
+          git config user.email "3108015+alien-platform[bot]@users.noreply.github.com"
+          git commit -m "chore(deps): repair pnpm lockfiles"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:${BRANCH}"
