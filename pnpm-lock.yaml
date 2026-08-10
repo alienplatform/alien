@@ -72,7 +72,7 @@ importers:
         specifier: ~5.8.3
         version: 5.8.3
       typescript-eslint:
-        specifier: ^8.67.0
+        specifier: ^8.26.0
         version: 8.67.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.8.3)
 
   crates/alien-bindings-node:
@@ -298,7 +298,7 @@ importers:
         version: link:../config-typescript
       '@aws-sdk/client-ssm':
         specifier: ^3.0.0
-        version: 3.1106.0
+        version: 3.1107.0
       '@azure/identity':
         specifier: ^4.0.0
         version: 4.13.1
@@ -429,8 +429,8 @@ packages:
     resolution: {integrity: sha512-vT3eqOEmJ4KZ2qojycEV0zzFBPDrkwntyfnWi8/WMaag8jvGN4osIdVRuwxWcK6AvQr32ohrpcLGqEZ+ZHVNcw==}
     hasBin: true
 
-  '@aws-sdk/client-ssm@3.1106.0':
-    resolution: {integrity: sha512-jPGMnYT+XtpXnnXzOBm9zBg+o4+vGQClj8TtDKZzX6sGFVcEunQEL1dZHn5iRy3z5vaGN+T7ch4zgI9A2WJkfA==}
+  '@aws-sdk/client-ssm@3.1107.0':
+    resolution: {integrity: sha512-0i1/C5YfrGqr+bAB25X2u/vbkH/TglltJUrFw+g8EQ7aRkwqdFhhGvGrX86Lz2ZEqEhmRkin5pV8Ga+tWZrA3A==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.977.6':
@@ -4106,7 +4106,7 @@ snapshots:
       js-yaml: 4.1.1
       typescript: 4.9.5
 
-  '@aws-sdk/client-ssm@3.1106.0':
+  '@aws-sdk/client-ssm@3.1107.0':
     dependencies:
       '@aws-sdk/core': 3.977.6
       '@aws-sdk/credential-provider-node': 3.972.78
