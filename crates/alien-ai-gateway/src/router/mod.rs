@@ -156,13 +156,12 @@ pub fn route_from_direct_databricks(
             binding: name.clone(),
             message: "the Databricks workspace URL is invalid".to_string(),
         })?;
-    let route_name = upstream
-        .host_str()
-        .map(str::to_string)
-        .ok_or_else(|| AlienError::new(ErrorData::BindingConfigInvalid {
+    let route_name = upstream.host_str().map(str::to_string).ok_or_else(|| {
+        AlienError::new(ErrorData::BindingConfigInvalid {
             binding: name.clone(),
             message: "the Databricks workspace URL has no host".to_string(),
-        }))?;
+        })
+    })?;
     let valid_host = [
         ".cloud.databricks.com",
         ".azuredatabricks.net",
@@ -184,7 +183,7 @@ pub fn route_from_direct_databricks(
                 .to_string(),
         }));
     }
-    upstream.set_path("/ai-gateway/mlflow");
+    upstream.set_path("");
 
     Ok(GatewayRoute {
         name,
@@ -580,11 +579,45 @@ async fn proxy(
         }
         GatewayTarget::DirectDatabricks => {
             ensure_model_available(&state, &binding, &model)?;
-            return Err(AlienError::new(ErrorData::InvalidRequest {
-                message: format!(
-                    "Databricks models use /{binding}/v1/responses"
-                ),
-            }));
+            let direct = ensure_direct_databricks_client_api(&model, &binding, client_api)?;
+            let provider_model = direct.upstream_id;
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::Databricks,
+                &model,
+                provider_model,
+                usage_client_api(client_api),
+                None,
+            );
+            let response = match client_api {
+                ClientApi::OpenAiChatCompletions => {
+                    proxy_direct_openai(
+                        &state.client,
+                        route,
+                        payload,
+                        provider_model,
+                        "/ai-gateway/mlflow/v1/chat/completions",
+                    )
+                    .await?
+                }
+                ClientApi::AnthropicMessages => {
+                    proxy_direct_anthropic_at(
+                        &state.client,
+                        route,
+                        payload,
+                        provider_model,
+                        &headers,
+                        "/ai-gateway/anthropic/v1/messages",
+                    )
+                    .await?
+                }
+                ClientApi::OpenAiResponses => unreachable!("handled by proxy_responses"),
+            };
+            return Ok(observe_response(
+                response,
+                state.usage_observer.as_ref(),
+                descriptor,
+            ));
         }
         GatewayTarget::Cloud(_) => {}
     }
@@ -745,16 +778,27 @@ async fn proxy_responses(
         }
         GatewayTarget::DirectDatabricks => {
             ensure_model_available(&state, &binding, &model)?;
+            let provider_model =
+                ensure_direct_databricks_client_api(&model, &binding, ClientApi::OpenAiResponses)?
+                    .upstream_id
+                    .to_string();
+            payload["model"] = Value::String(provider_model.clone());
             let descriptor = AiUsageContext::new(
                 &binding,
                 AiUsageProvider::Databricks,
                 &model,
-                &model,
+                &provider_model,
                 AiUsageClientApi::OpenAiResponses,
                 None,
             );
-            let response =
-                proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await?;
+            let response = proxy_direct_openai(
+                &state.client,
+                route,
+                payload,
+                &provider_model,
+                "/ai-gateway/mlflow/v1/responses",
+            )
+            .await?;
             return Ok(observe_response(
                 response,
                 state.usage_observer.as_ref(),
@@ -992,10 +1036,37 @@ fn ensure_direct_openai_client_api(
     }))
 }
 
+fn ensure_direct_databricks_client_api(
+    model: &str,
+    binding: &str,
+    client_api: ClientApi,
+) -> Result<&'static ai_catalog::DirectDatabricksModel> {
+    let direct = ai_catalog::resolve_direct_databricks(model).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.to_string(),
+            binding: binding.to_string(),
+        })
+    })?;
+    if direct.client_apis.contains(&client_api) {
+        return Ok(direct);
+    }
+    let expected_path = match direct.client_apis.first() {
+        Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
+        Some(ClientApi::OpenAiResponses) => "v1/responses",
+        Some(ClientApi::AnthropicMessages) => "v1/messages",
+        None => "v1/models",
+    };
+    Err(AlienError::new(ErrorData::InvalidRequest {
+        message: format!(
+            "model `{model}` is not supported by this client API; send it to /{expected_path}"
+        ),
+    }))
+}
+
 async fn proxy_direct_anthropic(
     client: &reqwest::Client,
     route: &GatewayRoute,
-    mut payload: Value,
+    payload: Value,
     model: &str,
     headers: &HeaderMap,
 ) -> Result<Response> {
@@ -1005,7 +1076,26 @@ async fn proxy_direct_anthropic(
             binding: route.name.clone(),
         })
     })?;
-    payload["model"] = Value::String(direct.upstream_id.to_string());
+    proxy_direct_anthropic_at(
+        client,
+        route,
+        payload,
+        direct.upstream_id,
+        headers,
+        "/v1/messages",
+    )
+    .await
+}
+
+async fn proxy_direct_anthropic_at(
+    client: &reqwest::Client,
+    route: &GatewayRoute,
+    mut payload: Value,
+    provider_model: &str,
+    headers: &HeaderMap,
+    path: &str,
+) -> Result<Response> {
+    payload["model"] = Value::String(provider_model.to_string());
     let body = serde_json::to_vec(&payload)
         .into_alien_error()
         .context(ErrorData::Other {
@@ -1015,7 +1105,7 @@ async fn proxy_direct_anthropic(
         .upstream_base_override
         .as_deref()
         .unwrap_or("https://api.anthropic.com");
-    let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
     let version = headers
         .get("anthropic-version")
         .and_then(|value| value.to_str().ok())
@@ -1197,6 +1287,121 @@ mod tests {
         let mut route = route_from_direct_openai("llm", "sk-test").expect("direct OpenAI route");
         route.upstream_base_override = Some(upstream.to_string());
         route
+    }
+
+    fn direct_databricks_route(upstream: &str) -> GatewayRoute {
+        let mut route = route_from_direct_databricks(
+            "llm",
+            "https://dbc-123.cloud.databricks.com",
+            "temporary-oauth-token",
+        )
+        .expect("direct Databricks route");
+        route.upstream_base_override = Some(upstream.to_string());
+        route
+    }
+
+    #[tokio::test]
+    async fn databricks_responses_rewrites_the_public_model_id() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/ai-gateway/mlflow/v1/responses")
+                    .header("authorization", "Bearer temporary-oauth-token")
+                    .body_contains("databricks-gpt-5-6-sol");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({"id": "response", "output": []}));
+            })
+            .await;
+        let url = serve(build_router_with_availability(
+            vec![direct_databricks_route(&server.base_url())],
+            HashMap::from([(
+                "llm".to_string(),
+                HashSet::from(["gpt-5.6-sol".to_string()]),
+            )]),
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model": "gpt-5.6-sol", "input": "ping"}))
+            .send()
+            .await
+            .expect("proxy response");
+
+        assert_eq!(response.status(), 200);
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn databricks_chat_rewrites_the_public_model_id() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/ai-gateway/mlflow/v1/chat/completions")
+                    .header("authorization", "Bearer temporary-oauth-token")
+                    .body_contains("databricks-gemma-3-12b");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({"id": "completion", "choices": []}));
+            })
+            .await;
+        let url = serve(build_router_with_availability(
+            vec![direct_databricks_route(&server.base_url())],
+            HashMap::from([(
+                "llm".to_string(),
+                HashSet::from(["gemma-3-12b".to_string()]),
+            )]),
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model": "gemma-3-12b", "messages": []}))
+            .send()
+            .await
+            .expect("proxy response");
+
+        assert_eq!(response.status(), 200);
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn databricks_messages_rewrites_claude_and_forwards_version() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/ai-gateway/anthropic/v1/messages")
+                    .header("authorization", "Bearer temporary-oauth-token")
+                    .header("anthropic-version", "2023-06-01")
+                    .body_contains("databricks-claude-sonnet-5");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({"id": "message", "content": []}));
+            })
+            .await;
+        let url = serve(build_router_with_availability(
+            vec![direct_databricks_route(&server.base_url())],
+            HashMap::from([(
+                "llm".to_string(),
+                HashSet::from(["claude-sonnet-5".to_string()]),
+            )]),
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/messages"))
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({"model": "claude-sonnet-5", "max_tokens": 16, "messages": []}))
+            .send()
+            .await
+            .expect("proxy response");
+
+        assert_eq!(response.status(), 200);
+        upstream.assert_async().await;
     }
 
     #[tokio::test]

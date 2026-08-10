@@ -83,6 +83,14 @@ pub struct DirectOpenAiModel {
     pub client_apis: &'static [ClientApi],
 }
 
+/// One Databricks-hosted model service qualified through Unity AI Gateway.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectDatabricksModel {
+    pub public_id: &'static str,
+    pub upstream_id: &'static str,
+    pub client_apis: &'static [ClientApi],
+}
+
 impl DirectAnthropicModel {
     pub fn display_name(&self) -> &'static str {
         resolve(self.public_id)
@@ -853,6 +861,155 @@ static DIRECT_OPENAI_MODELS: &[DirectOpenAiModel] = &[
     },
 ];
 
+/// Generally available Databricks-hosted text-generation models that have an
+/// exact Alien public-model ID, reviewed against Databricks' supported-models
+/// catalog on 2026-08-10. Preview, deprecated, embedding, and image-generation
+/// models are intentionally excluded. Credential verification is separate from
+/// model access: Databricks can accept OAuth while a service is disabled by quota.
+/// Source: <https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models>
+static DIRECT_DATABRICKS_MODELS: &[DirectDatabricksModel] = &[
+    DirectDatabricksModel {
+        public_id: "gpt-5.6-sol",
+        upstream_id: "databricks-gpt-5-6-sol",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.6-terra",
+        upstream_id: "databricks-gpt-5-6-terra",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.6-luna",
+        upstream_id: "databricks-gpt-5-6-luna",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.5",
+        upstream_id: "databricks-gpt-5-5",
+        client_apis: &[ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.4",
+        upstream_id: "databricks-gpt-5-4",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-haiku-4.5",
+        upstream_id: "databricks-claude-haiku-4-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-5",
+        upstream_id: "databricks-claude-opus-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-sonnet-5",
+        upstream_id: "databricks-claude-sonnet-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-sonnet-4.6",
+        upstream_id: "databricks-claude-sonnet-4-6",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-sonnet-4.5",
+        upstream_id: "databricks-claude-sonnet-4-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-fable-5",
+        upstream_id: "databricks-claude-fable-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.8",
+        upstream_id: "databricks-claude-opus-4-8",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.7",
+        upstream_id: "databricks-claude-opus-4-7",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.6",
+        upstream_id: "databricks-claude-opus-4-6",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.5",
+        upstream_id: "databricks-claude-opus-4-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "gemini-3.5-flash",
+        upstream_id: "databricks-gemini-3-5-flash",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gemini-3.1-flash-lite",
+        upstream_id: "databricks-gemini-3-1-flash-lite",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-oss-120b",
+        upstream_id: "databricks-gpt-oss-120b",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-oss-20b",
+        upstream_id: "databricks-gpt-oss-20b",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gemma-3-12b",
+        upstream_id: "databricks-gemma-3-12b",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+];
+
 /// Where a model sits on the bedrock-mantle Responses API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResponsesTarget {
@@ -948,6 +1105,16 @@ pub fn direct_openai_models() -> Vec<&'static DirectOpenAiModel> {
 
 pub fn resolve_direct_openai(public_id: &str) -> Option<&'static DirectOpenAiModel> {
     DIRECT_OPENAI_MODELS
+        .iter()
+        .find(|model| model.public_id == public_id)
+}
+
+pub fn direct_databricks_models() -> Vec<&'static DirectDatabricksModel> {
+    DIRECT_DATABRICKS_MODELS.iter().collect()
+}
+
+pub fn resolve_direct_databricks(public_id: &str) -> Option<&'static DirectDatabricksModel> {
+    DIRECT_DATABRICKS_MODELS
         .iter()
         .find(|model| model.public_id == public_id)
 }
@@ -1108,6 +1275,30 @@ mod tests {
         }
         assert!(resolve_direct_openai("text-embedding-3-small").is_none());
         assert!(resolve_direct_openai("gpt-image-1").is_none());
+    }
+
+    #[test]
+    fn direct_databricks_models_are_unique_and_resolve_to_provider_ids() {
+        let mut public_ids = std::collections::HashSet::new();
+        for model in DIRECT_DATABRICKS_MODELS {
+            assert!(public_ids.insert(model.public_id));
+            assert!(model.upstream_id.starts_with("databricks-"));
+            assert!(!model.client_apis.is_empty());
+            assert_eq!(
+                resolve_direct_databricks(model.public_id)
+                    .expect("direct Databricks model must resolve")
+                    .upstream_id,
+                model.upstream_id
+            );
+        }
+        assert!(resolve_direct_databricks("bge-large-en").is_none());
+        assert!(resolve_direct_databricks("databricks-genie").is_none());
+        assert_eq!(
+            resolve_direct_databricks("gpt-5.5")
+                .expect("GPT-5.5 must resolve")
+                .client_apis,
+            &[ClientApi::OpenAiResponses]
+        );
     }
 
     use super::*;

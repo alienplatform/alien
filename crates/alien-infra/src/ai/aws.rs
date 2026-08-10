@@ -125,23 +125,21 @@ async fn observe_bedrock_availability(
             error_code: None,
         })
         .collect();
-    models.extend(responses
-        .into_iter()
-        .map(|(model, result)| match result {
-            Ok(response) => classify_bedrock_availability(model, &response, tested_at),
-            Err(error) => {
-                warn!(model = model.public_id, %error, "Bedrock availability observation failed");
-                AiModelAvailabilityObservation {
-                    public_model_id: model.public_id.to_string(),
-                    client_apis: model.client_apis.to_vec(),
-                    availability: AiModelAvailability::Unknown,
-                    blockers: vec![AiAvailabilityBlocker::ObservationFailed],
-                    access_test: AiAccessTest::NotChecked,
-                    tested_at: Some(tested_at),
-                    error_code: Some("bedrock-observation-failed".to_string()),
-                }
+    models.extend(responses.into_iter().map(|(model, result)| match result {
+        Ok(response) => classify_bedrock_availability(model, &response, tested_at),
+        Err(error) => {
+            warn!(model = model.public_id, %error, "Bedrock availability observation failed");
+            AiModelAvailabilityObservation {
+                public_model_id: model.public_id.to_string(),
+                client_apis: model.client_apis.to_vec(),
+                availability: AiModelAvailability::Unknown,
+                blockers: vec![AiAvailabilityBlocker::ObservationFailed],
+                access_test: AiAccessTest::NotChecked,
+                tested_at: Some(tested_at),
+                error_code: Some("bedrock-observation-failed".to_string()),
             }
-        }));
+        }
+    }));
     AiAvailabilityObservation {
         source: AiAvailabilitySource::AwsBedrock,
         catalog_revision: ai_catalog::AI_CATALOG_REVISION.to_string(),
