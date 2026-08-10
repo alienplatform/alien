@@ -228,6 +228,18 @@ impl ExecutionMode {
         match self {
             Self::Dev { .. } => Ok("local-dev".to_string()),
             Self::Standalone { .. } => Ok("default".to_string()),
+            // An explicit workspace is honored even with an api_key present: the
+            // credential may be a user bearer token (e.g. the ai-agent's per-turn
+            // user session handed to the CLI via `ALIEN_API_KEY`) that requires
+            // it. The API ignores the workspace for real API keys, so this is
+            // harmless for them. Mirrors `resolve_workspace_query_with_bootstrap`
+            // and `resolve_platform_workspace_context`.
+            #[cfg(feature = "platform")]
+            Self::Platform {
+                api_key: Some(_),
+                workspace: Some(workspace),
+                ..
+            } => Ok(workspace.clone()),
             #[cfg(feature = "platform")]
             Self::Platform {
                 api_key: Some(_),

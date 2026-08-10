@@ -10,10 +10,11 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
-    ErrorData, KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
-    KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
-    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs, Container,
+    ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster, KubernetesClusterOutputs,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
+    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -116,6 +117,10 @@ pub struct OperatorManifestOptions<'a> {
     /// `RawManifest`; ignored for `HelmTemplate`, which uses `.Release.Namespace`.
     /// In `Namespace` scope this is also the namespace observed.
     pub install_namespace: Option<&'a str>,
+    /// The vendor's branded DNS domain (e.g. `acme.dev`), used to white-label
+    /// the access-request CRD (group/kind/plural). `None` → the Alien defaults.
+    /// Same value the operator carries at runtime, so both agree on the CRD.
+    pub label_domain: Option<&'a str>,
     pub scope: OperatorScope,
     /// Optional Kubernetes label selector that narrows what the operator manages,
     /// applied on top of `scope`. Independent of namespace vs cluster scope: a
@@ -278,23 +283,30 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     let labels = operator_labels(&base_name);
     let cluster_wide = options.scope.is_cluster_wide();
 
+    // White-labeled access-request CRD names, derived from the branded domain.
+    // The operator carries the same domain at runtime, so both agree on the CRD.
+    let crd_names = alien_core::access_request_crd::access_request_crd_names(options.label_domain);
+
     let mut docs = Vec::new();
+    // The access-request CRD is cluster-scoped and must exist before any CR is
+    // created. Register it up front, regardless of namespace/cluster scope.
+    docs.push(access_request_crd_doc(&crd_names));
     docs.push(operator_service_account_doc(
         namespace,
         &operator_name,
         &labels,
     ));
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
-    // stays a namespaced Role. Both grant only get/list/watch.
+    // stays a namespaced Role. Both grant read-only + the access-request CRD.
     if cluster_wide {
-        docs.push(operator_clusterrole_doc(&operator_name, &labels));
+        docs.push(operator_clusterrole_doc(&operator_name, &labels, &crd_names));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
             &operator_name,
             &labels,
         ));
     } else {
-        docs.push(operator_role_doc(namespace, &operator_name, &labels));
+        docs.push(operator_role_doc(namespace, &operator_name, &labels, &crd_names));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
     docs.push(operator_secret_doc(
@@ -555,6 +567,7 @@ fn operator_role_doc(
     namespace: &str,
     operator_name: &str,
     labels: &BTreeMap<String, String>,
+    crd_names: &AccessRequestCrdNames,
 ) -> String {
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -563,7 +576,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(OPERATOR_OBSERVE_RULES);
+    yaml.push_str(&operator_observe_rules(crd_names));
     yaml
 }
 
@@ -596,9 +609,31 @@ roleRef:
     yaml
 }
 
-/// Read-only observe rules, shared by the namespaced `Role` and the cluster-wide
-/// `ClusterRole`. Only `get/list/watch`; never `secrets` or `pods/log`.
-const OPERATOR_OBSERVE_RULES: &str = r#"rules:
+/// Observe rules plus the writes the shipped operations builtins need, shared by
+/// the namespaced `Role` and the cluster-wide `ClusterRole`.
+///
+/// Base access is read-only (`get/list/watch`; never `secrets`). On top of that
+/// the operator grants exactly what its `kubernetes` operations builtin needs to
+/// run the mutating operations it exposes — otherwise a customer-approved
+/// remediation (e.g. `restart-pod`) is dispatched to the operator only to be
+/// rejected by the apiserver with a 403:
+///   - `pods` `delete`   — `restart-pod` (the controller reschedules the pod)
+///   - `pods/log` `get`  — `logs`
+///   - workload `scale` `patch` — `scale` (the `scale` subresource)
+/// These are the operations the operator ships; nothing beyond them is granted.
+///
+/// Plus the access-request custom resource, which the operator creates
+/// (materializing a control-plane access request the customer must authorize)
+/// and updates the `status` of (recording the approval window read back from
+/// the customer). The operator never executes commands from the CR — the
+/// customer's approval is reported back to the control plane, which dispatches
+/// the commands through the normal commands queue.
+///
+/// The access-request `apiGroups`/`resources` are white-labeled from `names` so
+/// a vendor build grants access to *their* CRD, matching the CRD doc below.
+fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
+    format!(
+        r#"rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
     verbs: ["get", "list", "watch"]
@@ -611,7 +646,139 @@ const OPERATOR_OBSERVE_RULES: &str = r#"rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
-"#;
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["patch"]
+  - apiGroups: ["{group}"]
+    resources: ["{plural}"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["{group}"]
+    resources: ["{plural}/status"]
+    verbs: ["get", "update", "patch"]
+"#,
+        group = names.group,
+        plural = names.plural,
+    )
+}
+
+/// The access-request `CustomResourceDefinition`, white-labeled from `names`.
+///
+/// One CR is a **time-boxed grant**: a control-plane access request (usually a
+/// remediation plan) proposing a set of commands the customer must authorize.
+/// The customer reviews the commands and approves by patching a duration —
+/// `kubectl patch … --type=merge -p '{"spec":{"approvedForMinutes":360}}'` — to
+/// authorize the grant for that many minutes. The operator records the resulting
+/// window in `status.approvedUntil` and reports the approval back to the control
+/// plane, which then dispatches the commands one by one through the normal
+/// commands queue. The operator does **not** execute commands from the CR.
+///
+/// Printer columns show STATE/COMMANDS/APPROVED-UNTIL/AGE.
+///
+/// Appended to the operator manifest so `kubectl apply`/Helm registers the kind
+/// before any CR is created.
+fn access_request_crd_doc(names: &AccessRequestCrdNames) -> String {
+    format!(
+        r#"apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: {crd_name}
+spec:
+  group: {group}
+  scope: Namespaced
+  names:
+    plural: {plural}
+    singular: {singular}
+    kind: {kind}
+    shortNames: ["{short_name}"]
+  versions:
+    - name: {version}
+      served: true
+      storage: true
+      subresources:
+        status: {{}}
+      additionalPrinterColumns:
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Commands
+          type: integer
+          jsonPath: .status.commandCount
+        - name: Approved-Until
+          type: date
+          jsonPath: .status.approvedUntil
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["requestId", "commands"]
+              properties:
+                requestId:
+                  type: string
+                  description: Control-plane access-request id this CR mirrors.
+                title:
+                  type: string
+                  description: Human-readable title (e.g. the remediation plan title).
+                reason:
+                  type: string
+                  description: Why access is being requested.
+                commands:
+                  type: array
+                  description: The commands this grant covers.
+                  items:
+                    type: object
+                    required: ["command"]
+                    properties:
+                      command:
+                        type: string
+                        description: Command name, <plugin>/<operation>.
+                      summary:
+                        type: string
+                        description: One-line human summary for display.
+                approvedForMinutes:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    Set by the customer to approve the grant for this many
+                    minutes. The operator computes status.approvedUntil from it.
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: PENDING_APPROVAL | APPROVED | EXPIRED
+                commandCount:
+                  type: integer
+                  description: Number of commands this grant covers.
+                approvedAt:
+                  type: string
+                  description: When the customer approved (RFC3339).
+                approvedUntil:
+                  type: string
+                  description: >-
+                    Instant the grant is authorized until (RFC3339), computed as
+                    approvedAt + approvedForMinutes. After this the control plane
+                    must not dispatch the grant's commands.
+"#,
+        crd_name = names.crd_name,
+        group = names.group,
+        plural = names.plural,
+        singular = names.singular,
+        kind = names.kind,
+        short_name = names.short_name,
+        version = alien_core::access_request_crd::ACCESS_REQUEST_CRD_VERSION,
+    )
+}
 
 /// Cluster-scoped metadata header (no `metadata.namespace`) for `ClusterRole` and
 /// `ClusterRoleBinding`, which are not namespaced objects.
@@ -630,9 +797,13 @@ fn operator_cluster_metadata_doc(
     yaml
 }
 
-fn operator_clusterrole_doc(operator_name: &str, labels: &BTreeMap<String, String>) -> String {
+fn operator_clusterrole_doc(
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+    crd_names: &AccessRequestCrdNames,
+) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(OPERATOR_OBSERVE_RULES);
+    yaml.push_str(&operator_observe_rules(crd_names));
     yaml
 }
 
@@ -3861,6 +4032,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -3882,6 +4054,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -3938,6 +4111,9 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
+                // The access-request CRD is cluster-scoped and leads the manifest
+                // so the kind is registered before any namespaced object.
+                "CustomResourceDefinition",
                 "ServiceAccount",
                 "Role",
                 "RoleBinding",
@@ -3955,10 +4131,19 @@ mod tests {
             "operator manifest must not bind cluster-scoped RBAC"
         );
         for doc in docs {
+            // The CRD is a cluster-scoped object; only namespaced docs carry a
+            // metadata.namespace.
+            if yaml_str(&doc, "kind") == Some("CustomResourceDefinition") {
+                assert!(
+                    yaml_path(&doc, &["metadata", "namespace"]).is_none(),
+                    "the CRD is cluster-scoped and must not be namespaced"
+                );
+                continue;
+            }
             assert_eq!(
                 yaml_path(&doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
                 Some("demo"),
-                "every operator document should be namespaced"
+                "every namespaced operator document should be namespaced"
             );
         }
     }
@@ -3976,6 +4161,13 @@ mod tests {
             .expect("Role should include rules");
 
         for rule in rules {
+            let api_groups = rule
+                .get("apiGroups")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include apiGroups")
+                .iter()
+                .map(|g| g.as_str().expect("apiGroup should be string"))
+                .collect::<Vec<_>>();
             let verbs = rule
                 .get("verbs")
                 .and_then(YamlValue::as_sequence)
@@ -3983,7 +4175,6 @@ mod tests {
                 .iter()
                 .map(|verb| verb.as_str().expect("verb should be string"))
                 .collect::<Vec<_>>();
-            assert_eq!(verbs, vec!["get", "list", "watch"]);
 
             let resources = rule
                 .get("resources")
@@ -3992,15 +4183,129 @@ mod tests {
                 .iter()
                 .map(|resource| resource.as_str().expect("resource should be string"))
                 .collect::<Vec<_>>();
+
+            // Secrets are never accessible, on any rule.
             assert!(
                 !resources.contains(&"secrets"),
-                "observe Operator must not read customer Secrets"
+                "operator must not access customer Secrets"
             );
-            assert!(
-                !resources.contains(&"pods/log"),
-                "logs must flow through the log collector, not Kubernetes API tailing"
-            );
+
+            // The access-request CRD is the operator's own control resource: it
+            // materializes access requests and records the approval window in
+            // status, but never deletes them.
+            if api_groups == vec!["accessrequests.alien.dev"] {
+                assert!(
+                    verbs.iter().all(|v| matches!(
+                        *v,
+                        "get" | "list" | "watch" | "create" | "update" | "patch"
+                    )),
+                    "access-request rule verbs must stay within the materialize/status set: {verbs:?}"
+                );
+                assert!(
+                    !verbs.contains(&"delete") && !verbs.contains(&"deletecollection"),
+                    "operator must not delete access-request CRs"
+                );
+                continue;
+            }
+
+            // Everything else is either read-only observation or one of the
+            // narrow writes the shipped operations builtins need. Verbs beyond
+            // this set would mean the operator was granted more than its
+            // operations require.
+            let allowed = ["get", "list", "watch", "delete", "patch"];
+            for v in &verbs {
+                assert!(
+                    allowed.contains(v),
+                    "unexpected verb '{v}' on rule for {resources:?}; \
+                     operator RBAC must stay within observe + the operations writes"
+                );
+            }
+            // The only mutating verbs are the exact ones the operations need:
+            // pods:delete (restart-pod), pods/log:get (logs), scale:patch (scale).
+            if verbs.contains(&"delete") {
+                assert_eq!(
+                    resources,
+                    vec!["pods"],
+                    "delete is only for restart-pod (pods)"
+                );
+            }
+            if verbs.contains(&"patch") {
+                assert!(
+                    resources.iter().all(|r| r.ends_with("/scale")),
+                    "patch outside the access-request CRD is only the scale subresource: {resources:?}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn access_request_crd_is_white_labeled_from_the_brand_domain() {
+        // A vendor whose branded domain is acme.dev gets AcmeAccessRequest, not
+        // AlienAccessRequest — the CRD, RBAC, and (elsewhere) the operator
+        // runtime all derive from the same domain.
+        let manifest = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod"),
+            install_namespace: Some("demo"),
+            label_domain: Some("acme.dev"),
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("branded operator manifest should render");
+        let docs = parse_manifest_docs(&manifest);
+
+        let crd = docs_by_kind(&docs, "CustomResourceDefinition")
+            .into_iter()
+            .next()
+            .expect("manifest should include the access-request CRD");
+        assert_eq!(
+            yaml_path(&crd, &["metadata", "name"]).and_then(YamlValue::as_str),
+            Some("acmeaccessrequests.accessrequests.acme.dev")
+        );
+        assert_eq!(
+            yaml_path(&crd, &["spec", "group"]).and_then(YamlValue::as_str),
+            Some("accessrequests.acme.dev")
+        );
+        assert_eq!(
+            yaml_path(&crd, &["spec", "names", "kind"]).and_then(YamlValue::as_str),
+            Some("AcmeAccessRequest")
+        );
+        assert_eq!(
+            yaml_path(&crd, &["spec", "names", "plural"]).and_then(YamlValue::as_str),
+            Some("acmeaccessrequests")
+        );
+        // Not the Alien defaults.
+        let text = &manifest;
+        assert!(
+            !text.contains("alienaccessrequests"),
+            "no alien-named resource in a branded build"
+        );
+        assert!(
+            !text.contains("accessrequests.alien.dev"),
+            "no alien group in a branded build"
+        );
+
+        // RBAC targets the branded group/resource.
+        let role = docs_by_kind(&docs, "Role").into_iter().next().unwrap();
+        let has_branded_rule = role
+            .get("rules")
+            .and_then(YamlValue::as_sequence)
+            .unwrap()
+            .iter()
+            .any(|r| {
+                r.get("apiGroups")
+                    .and_then(YamlValue::as_sequence)
+                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme.dev")))
+                    .unwrap_or(false)
+            });
+        assert!(has_branded_rule, "RBAC must grant the branded access-request group");
     }
 
     #[test]
@@ -4096,7 +4401,10 @@ mod tests {
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
         assert!(manifest.contains("fluent/fluent-bit:3.2"));
-        assert!(!manifest.contains("pods/log"));
+        // The log collector tails pod log FILES on the node, not the API — but
+        // the operator's own RBAC does grant `pods/log` for the on-demand `logs`
+        // operation, so `pods/log` legitimately appears in the operator Role.
+        assert!(manifest.contains("pods/log"));
         assert!(!manifest.contains("void"));
 
         let collector_role = docs_by_kind(&docs, "Role")
@@ -4169,6 +4477,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("app.kubernetes.io/part-of=my-saas"),
             permission: OperatorPermission::Observe,
@@ -4225,6 +4534,7 @@ mod tests {
             // Ignored for Helm output — the value comes from .Values / .Release per install.
             environment_name: None,
             install_namespace: None,
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4234,6 +4544,11 @@ mod tests {
 
         let docs = parse_manifest_docs(&manifest);
         for doc in &docs {
+            // The CRD is cluster-scoped — no namespace on any output format.
+            if yaml_str(doc, "kind") == Some("CustomResourceDefinition") {
+                assert!(yaml_path(doc, &["metadata", "namespace"]).is_none());
+                continue;
+            }
             assert_eq!(
                 yaml_path(doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
                 Some("{{ .Release.Namespace }}"),
@@ -4267,6 +4582,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme"),
             install_namespace: None,
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4286,6 +4602,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: None,
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
             permission: OperatorPermission::Observe,
@@ -4303,6 +4620,7 @@ mod tests {
             project_name: "my-saas",
             environment_name: Some("acme"),
             install_namespace: Some("demo"),
+            label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("   "),
             permission: OperatorPermission::Observe,
@@ -4404,7 +4722,13 @@ logCollector:
         assert!(rendered
             .stdout
             .contains("verbs: [\"get\", \"list\", \"watch\"]"));
-        assert!(!rendered.stdout.contains("resources: [\"pods/log\"]"));
+        // The operator grants `pods/log` for the on-demand `logs` operation. In
+        // the helm chart the operator Role folds it into the core `""`-group
+        // rule (see `role_tpl`), so it appears bundled with the other pod-level
+        // resources rather than as a standalone rule.
+        assert!(rendered
+            .stdout
+            .contains("\"pods\", \"pods/log\", \"persistentvolumeclaims\""));
         assert!(!rendered.stdout.contains("void"));
     }
 

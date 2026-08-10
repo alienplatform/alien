@@ -35,6 +35,7 @@ pub use db::{Approval, ApprovalStatus};
 pub use error::ErrorData;
 pub use lock::InstanceLock;
 
+use alien_error::AlienError;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -73,13 +74,42 @@ pub async fn run_operator_with_cancel(
     run_operator_with_cancel_and_debug_loop(config, service_provider, None, cancel).await
 }
 
-/// Full-control entry point. Binary callers that ship a real
-/// [`DebugSessionLoop`] implementation pass it here; the OSS default is
-/// `None`, which falls back to the no-op stub.
+/// Back-compat entry point that injects only a [`DebugSessionLoop`]. Forwards to
+/// [`run_operator_with_cancel_and_loops`] with no operations-approval loop.
 pub async fn run_operator_with_cancel_and_debug_loop(
     config: OperatorConfig,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    cancel: CancellationToken,
+) -> error::Result<()> {
+    run_operator_with_cancel_and_loops(
+        config,
+        service_provider,
+        debug_session_loop,
+        None,
+        None,
+        cancel,
+    )
+        .await
+}
+
+/// Full-control entry point. Binary callers that ship real pluggable-loop
+/// implementations pass them here; the OSS default is `None` for each, falling
+/// back to the corresponding no-op stub.
+///
+/// - `debug_session_loop` — the `alien debug` tunnel loop.
+/// - `access_request_loop` — the access-request sync loop (materializes access
+///   requests for customer approval and reports approvals back; execution flows
+///   separately through the commands queue).
+/// - `operations_exec_loop` — the pull-mode operations-execution loop (runs
+///   authorized `<plugin>/<operation>` commands the customer approved; OSS
+///   builds inject none and run nothing).
+pub async fn run_operator_with_cancel_and_loops(
+    config: OperatorConfig,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
+    operations_exec_loop: Option<Arc<dyn loops::operations_exec::OperationsExecLoop>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
     use tracing::{info, warn};
@@ -204,51 +234,112 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         None
     };
 
-    // Wait for cancellation or any loop to exit unexpectedly
-    tokio::select! {
+    // Access-request sync loop. Materializes control-plane access requests as
+    // artifacts the customer approves (Kubernetes: a custom resource) and
+    // reports approvals back — a Kubernetes-only flow for now. Execution of the
+    // approved commands happens separately via the commands queue. OSS builds
+    // inject no loop and fall through to the no-op stub, which parks until
+    // shutdown.
+    let access_request_handle =
+        if !config.is_airgapped() && matches!(config.platform, Platform::Kubernetes) {
+            let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> =
+                access_request_loop.unwrap_or_else(|| {
+                    Arc::new(loops::access_requests::UnimplementedAccessRequestSyncLoop)
+                });
+            Some(tokio::spawn({
+                let state = state.clone();
+                async move {
+                    loop_impl.run(state).await;
+                }
+            }))
+        } else {
+            None
+        };
+
+    // Operations-execution loop (pull mode). Runs authorized `<plugin>/<operation>`
+    // commands the customer already approved. Only spawned when a binary injects
+    // a real executor loop — OSS builds pass `None` here and the operator runs no
+    // operations commands. The loop leases + runs regardless of platform (the
+    // executor decides what it can run).
+    let operations_exec_handle = match operations_exec_loop {
+        Some(loop_impl) if !config.is_airgapped() => Some(tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop_impl.run(state).await;
+            }
+        })),
+        _ => None,
+    };
+
+    // Wait for cancellation or any loop to exit unexpectedly. `exited_loop`
+    // captures which loop (if any) fell out on its own; `None` means we were
+    // cancelled cleanly. A loop exiting is never expected — the operator has no
+    // useful work left once one is gone — so we surface it as an error below
+    // rather than reporting a clean exit to CLI/service callers.
+    //
+    // Distinguishing a genuine loop failure from a shutdown-driven loop return
+    // is a race unless we resolve it atomically WITH the branch that wins. Two
+    // measures do that, and neither relies on re-reading the token after the
+    // select (which would reopen a window where an independent shutdown flips it
+    // between the select resolving and the read):
+    //   - `biased` polls the cancellation branch first, so when both are ready in
+    //     the same tick the clean-shutdown branch wins.
+    //   - each loop branch samples `cancel.is_cancelled()` in the same synchronous
+    //     step it wins in (no `.await` in between), so a loop that returned
+    //     BECAUSE it observed the cancelled token classifies itself as clean.
+    // A loop branch that wins with the token NOT yet cancelled is a real failure,
+    // and nothing that happens afterward can flip that verdict.
+    let exited_loop: Option<&'static str> = tokio::select! {
+        biased;
+
         _ = cancel.cancelled() => {
             info!("Shutdown signal received, waiting for loops to finish...");
+            None
         },
-        _ = deployment_handle => {
-            warn!("Deployment loop exited unexpectedly");
-        },
+        _ = deployment_handle => loop_exit(&cancel, "deployment"),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Debug-session loop exited unexpectedly");
-        },
+        } => loop_exit(&cancel, "debug-session"),
         _ = async {
             if let Some(h) = sync_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Sync loop exited unexpectedly");
-        },
+        } => loop_exit(&cancel, "sync"),
         _ = async {
             if let Some(h) = telemetry_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Telemetry loop exited unexpectedly");
-        },
+        } => loop_exit(&cancel, "telemetry"),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => {
-            warn!("Commands dispatch loop exited unexpectedly");
-        },
-    }
+        } => loop_exit(&cancel, "commands-dispatch"),
+        _ = async {
+            if let Some(h) = access_request_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => loop_exit(&cancel, "access-request-sync"),
+        _ = async {
+            if let Some(h) = operations_exec_handle {
+                h.await.ok();
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => loop_exit(&cancel, "operations-execution"),
+    };
 
     // Signal all loops to stop (idempotent if already cancelled)
     cancel.cancel();
@@ -261,8 +352,32 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         local_bindings.shutdown().await;
     }
 
+    if let Some(loop_name) = exited_loop {
+        // A core loop exited on its own — report a non-zero exit so CLI and
+        // Windows-service callers don't mistake a failed loop for a clean stop.
+        return Err(AlienError::new(error::ErrorData::LoopExited {
+            loop_name: loop_name.to_string(),
+        }));
+    }
+
     info!("Operator shutdown complete");
     Ok(())
+}
+
+/// Classify a supervised loop falling out of the `select!`. Called synchronously
+/// in the winning branch (no `.await` between the branch resolving and this
+/// call), so the `is_cancelled()` read reflects the token state AT THE MOMENT the
+/// loop won — closing the race where an independent shutdown flips the token
+/// afterward. A loop that returned because shutdown was already requested is a
+/// clean exit (`None`); otherwise it is a genuine failure (`Some(name)`).
+fn loop_exit(cancel: &CancellationToken, name: &'static str) -> Option<&'static str> {
+    if cancel.is_cancelled() {
+        tracing::info!(loop = name, "Loop stopped in response to shutdown");
+        None
+    } else {
+        tracing::warn!(loop = name, "Loop exited unexpectedly");
+        Some(name)
+    }
 }
 
 fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
@@ -279,8 +394,24 @@ fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
 
 #[cfg(test)]
 mod command_loop_routing_tests {
-    use super::should_run_commands_loop;
+    use super::{loop_exit, should_run_commands_loop};
     use alien_core::Platform;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn loop_exit_is_a_failure_only_without_shutdown() {
+        // A loop that falls out while the token is live is a real failure.
+        let live = CancellationToken::new();
+        assert_eq!(loop_exit(&live, "sync"), Some("sync"));
+
+        // A loop that falls out after shutdown was requested is a clean exit —
+        // it stopped because it was told to. `loop_exit` samples the token in the
+        // same step the branch wins, so an independent cancel can't later flip a
+        // real failure into a clean one (the race the review flagged).
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(loop_exit(&cancelled, "sync"), None);
+    }
 
     #[test]
     fn kubernetes_and_local_start_environment_local_command_relays() {

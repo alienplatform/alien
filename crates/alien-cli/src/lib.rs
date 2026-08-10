@@ -23,6 +23,8 @@ use crate::auth::normalize_workspace_name;
 #[cfg(feature = "platform")]
 use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
+use crate::commands::operations::{operations_task, OperationsArgs};
+#[cfg(feature = "platform")]
 use crate::commands::platform::{
     link_task, login_task, logout_task, project_task, unlink_task, workspace_task, PlatformCommand,
 };
@@ -114,6 +116,8 @@ impl Cli {
             Some(Commands::Platform(PlatformCommand::Projects(args))) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::Managers(args)) => args.json,
+            #[cfg(feature = "platform")]
+            Some(Commands::Operations(args)) => args.json,
             _ => false,
         }
     }
@@ -164,6 +168,11 @@ pub enum Commands {
     #[cfg(feature = "platform")]
     #[command(alias = "manager")]
     Managers(ManagersArgs),
+
+    /// Manage operations plugins (publish custom bundles, list the catalog)
+    #[cfg(feature = "platform")]
+    #[command(alias = "operation")]
+    Operations(OperationsArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -1512,6 +1521,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             },
             #[cfg(feature = "platform")]
             Some(Commands::Managers(args)) => managers_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::Operations(args)) => operations_task(args, ctx).await?,
         }
 
         Ok(())
