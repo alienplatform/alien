@@ -72,14 +72,14 @@ importers:
         specifier: ~5.8.3
         version: 5.8.3
       typescript-eslint:
-        specifier: ^8.67.0
+        specifier: ^8.26.0
         version: 8.67.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.8.3)
 
   crates/alien-bindings-node:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.5(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
+        version: 3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
 
   packages/ai-gateway:
     dependencies:
@@ -128,7 +128,7 @@ importers:
         version: 2.5.7
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.5(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
+        version: 3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
       '@types/node':
         specifier: ^24.0.15
         version: 24.13.3
@@ -225,7 +225,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.5(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
+        version: 3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
 
   packages/scripts: {}
 
@@ -5133,7 +5133,7 @@ snapshots:
       strict-event-emitter: 0.5.1
     optional: true
 
-  '@napi-rs/cli@3.8.5(@emnapi/runtime@1.9.2)(@types/node@24.13.3)':
+  '@napi-rs/cli@3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@24.13.3)
       '@napi-rs/cross-toolchain': 1.0.3
@@ -5149,7 +5149,7 @@ snapshots:
       typanion: 3.14.0
       typescript: 6.0.3
     optionalDependencies:
-      '@emnapi/runtime': 1.9.2
+      '@emnapi/runtime': 1.11.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'
