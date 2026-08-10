@@ -1945,5 +1945,9 @@ async fn initialize(
                 Err(e) => e.into_response(),
             }
         }
+        crate::auth::Scope::Commands { .. } => {
+            ErrorData::forbidden("Command credentials cannot initialize deployments")
+                .into_response()
+        }
     }
 }

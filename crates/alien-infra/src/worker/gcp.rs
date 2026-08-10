@@ -41,8 +41,7 @@ const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 const MAX_IMAGE_PULL_PERMISSION_RETRIES: u8 = 4;
 
 fn is_cross_project_image_pull_permission_error(message: &str) -> bool {
-    message.contains("serverless-robot-prod.iam.gserviceaccount.com")
-        && message.contains("artifactregistry.repositories.downloadArtifacts")
+    message.contains("artifactregistry.repositories.downloadArtifacts")
 }
 
 fn image_pull_permission_retry_delay(attempt: u8) -> Duration {
@@ -1842,7 +1841,8 @@ impl GcpWorkerController {
             })
         })?;
 
-        let push_endpoint = format!("{}/", service_url.trim_end_matches('/'));
+        let oidc_audience = service_url.trim_end_matches('/').to_string();
+        let push_endpoint = format!("{oidc_audience}/");
 
         // Only use OIDC authentication on the push subscription when the worker
         // is private. Public workers have invoker_iam_disabled=true on the Cloud
@@ -1874,7 +1874,7 @@ impl GcpWorkerController {
 
             Some(OidcToken {
                 service_account_email,
-                audience: Some(push_endpoint.clone()),
+                audience: Some(oidc_audience),
             })
         } else {
             None
@@ -1977,10 +1977,11 @@ impl GcpWorkerController {
 
         info!(name=%service_name, "Setting IAM policy for Cloud Run service");
 
-        // Apply resource-scoped IAM bindings only. Public access is handled via
-        // invoker_iam_disabled on the service (set during creation), not via allUsers
-        // IAM binding. This avoids issues with domain-restricted sharing org policies.
-        self.apply_consolidated_iam_policy(ctx, service_name, false)
+        // Public access is handled via invoker_iam_disabled on the service. Private
+        // workers keep IAM checks enabled, so their execution service account must
+        // be allowed to invoke the service for authenticated Pub/Sub and Scheduler
+        // delivery.
+        self.apply_consolidated_iam_policy(ctx, service_name)
             .await?;
 
         // Always go to readiness probe next (linear flow - may be no-op)
@@ -3638,6 +3639,16 @@ impl GcpWorkerController {
                 {
                     info!(name=%neg_name, "Serverless NEG was already deleted");
                 }
+                Err(e) if is_gcp_resource_in_use(&e) => {
+                    info!(
+                        name=%neg_name,
+                        "Serverless NEG is still referenced by a backend service; retrying deletion"
+                    );
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(30),
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    });
+                }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete serverless NEG '{}'", neg_name),
@@ -4537,7 +4548,7 @@ impl GcpWorkerController {
             .build();
 
         let ingress = if cfg.public_endpoints.is_empty() {
-            CloudRunIngress::IngressTrafficInternal
+            CloudRunIngress::IngressTrafficInternalOnly
         } else {
             CloudRunIngress::IngressTrafficAll
         };
@@ -4669,12 +4680,11 @@ impl GcpWorkerController {
         Ok(env_vars)
     }
 
-    /// Applies consolidated IAM policy (resource-scoped permissions + public access) in a single operation
+    /// Applies the worker's resource-scoped IAM policy in a single operation.
     async fn apply_consolidated_iam_policy(
         &self,
         ctx: &ResourceControllerContext<'_>,
         service_name: &str,
-        enable_public_access: bool,
     ) -> Result<()> {
         use alien_gcp_clients::iam::Binding;
 
@@ -4691,41 +4701,46 @@ impl GcpWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        // Step 1: Apply resource-scoped permissions from the stack
+        // Apply resource-scoped permissions from the stack.
         let mut resource_bindings = Vec::new();
         self.collect_resource_scoped_bindings(ctx, service_name, &mut resource_bindings)
             .await?;
 
-        // Step 2: Add public access binding if needed
-        if enable_public_access {
-            info!(service_name = %service_name, "Adding public access to IAM policy");
+        // Pub/Sub and Cloud Scheduler mint their OIDC token for the worker's
+        // execution service account. Private services keep the Cloud Run IAM
+        // invoker check enabled, so grant that identity access to this service.
+        if config.public_endpoints.is_empty() {
             let invoker_role = "roles/run.invoker".to_string();
-            let all_users_member = "allUsers".to_string();
+            let invoker_member = format!(
+                "serviceAccount:{}",
+                self.get_service_account_email(ctx, &config)?
+            );
 
-            // Check if binding already exists
-            let binding_exists = policy
-                .bindings
-                .iter()
-                .any(|b| b.role == invoker_role && b.members.contains(&all_users_member));
+            let binding_exists = policy.bindings.iter().any(|binding| {
+                binding.role == invoker_role && binding.members.contains(&invoker_member)
+            });
 
             if !binding_exists {
-                // Find existing binding or create new one
-                if let Some(binding) = policy.bindings.iter_mut().find(|b| b.role == invoker_role) {
-                    if !binding.members.contains(&all_users_member) {
-                        binding.members.push(all_users_member);
+                if let Some(binding) = policy
+                    .bindings
+                    .iter_mut()
+                    .find(|binding| binding.role == invoker_role && binding.condition.is_none())
+                {
+                    if !binding.members.contains(&invoker_member) {
+                        binding.members.push(invoker_member);
                     }
                 } else {
                     policy.bindings.push(
                         Binding::builder()
                             .role(invoker_role)
-                            .members(vec![all_users_member])
+                            .members(vec![invoker_member])
                             .build(),
                     );
                 }
             }
         }
 
-        // Step 3: Add resource-scoped bindings
+        // Add generated resource-scoped bindings.
         if !resource_bindings.is_empty() {
             info!(
                 service_name = %service_name,
@@ -4735,7 +4750,7 @@ impl GcpWorkerController {
             policy.bindings.extend(resource_bindings);
         }
 
-        // Step 4: Apply the consolidated policy in one operation
+        // Apply the consolidated policy in one operation.
         client
             .set_service_iam_policy(gcp_config.region.clone(), service_name.to_string(), policy)
             .await
@@ -5008,8 +5023,10 @@ impl GcpWorkerController {
             })
         })?;
 
-        // Build push endpoint URL (Cloud Run service URL)
-        let push_endpoint = format!("{}/", service_url.trim_end_matches('/'));
+        // The push endpoint is slash-terminated, but Cloud Run validates the OIDC
+        // audience against its exact canonical service URI.
+        let oidc_audience = service_url.trim_end_matches('/').to_string();
+        let push_endpoint = format!("{oidc_audience}/");
 
         // Get service account email for OIDC authentication
         let service_account_id = format!("{}-sa", worker_config.get_permissions());
@@ -5036,7 +5053,7 @@ impl GcpWorkerController {
         // Create push config with OIDC authentication
         let oidc_token = OidcToken {
             service_account_email: service_account_email.clone(),
-            audience: Some(push_endpoint.clone()),
+            audience: Some(oidc_audience),
         };
 
         let push_config = PushConfig {
@@ -5376,14 +5393,15 @@ impl GcpWorkerController {
             })
         })?;
 
-        let push_endpoint = format!("{}/", service_url.trim_end_matches('/'));
+        let oidc_audience = service_url.trim_end_matches('/').to_string();
+        let push_endpoint = format!("{oidc_audience}/");
 
         // Get service account email for OIDC authentication
         let service_account_email = self.get_service_account_email(ctx, worker_config)?;
 
         let oidc_token = OidcToken {
             service_account_email,
-            audience: Some(push_endpoint.clone()),
+            audience: Some(oidc_audience),
         };
 
         let subscription_name = format!(
@@ -5638,7 +5656,9 @@ mod tests {
         ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
-    use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
+    use alien_gcp_clients::cloudrun::{
+        Condition, ConditionState, Ingress as CloudRunIngress, MockCloudRunApi, Service,
+    };
     use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
     use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
@@ -5675,8 +5695,10 @@ mod tests {
             "Google Cloud Run Service Agent service-123@serverless-robot-prod.iam.gserviceaccount.com \
              was denied artifactregistry.repositories.downloadArtifacts"
         ));
-        assert!(!is_cross_project_image_pull_permission_error(
-            "artifactregistry.repositories.downloadArtifacts denied for a user service account"
+        assert!(is_cross_project_image_pull_permission_error(
+            "Permission 'artifactregistry.repositories.downloadArtifacts' denied on resource \
+             '//artifactregistry.googleapis.com/projects/alien-dev-1/locations/us-central1/repositories/alien-artifacts' \
+             (or it may not exist)."
         ));
         assert!(!is_cross_project_image_pull_permission_error(
             "Cloud Run revision failed its startup probe"
@@ -5878,9 +5900,9 @@ mod tests {
                 error: Status::builder()
                     .code(7)
                     .message(
-                        "Google Cloud Run Service Agent \
-                         service-123@serverless-robot-prod.iam.gserviceaccount.com must have \
-                         artifactregistry.repositories.downloadArtifacts permission"
+                        "Permission 'artifactregistry.repositories.downloadArtifacts' denied on \
+                         resource '//artifactregistry.googleapis.com/projects/alien-dev-1/locations/us-central1/repositories/alien-artifacts' \
+                         (or it may not exist)."
                             .to_string(),
                     )
                     .build(),
@@ -6604,10 +6626,72 @@ mod tests {
         assert_eq!(proxy_delete_attempts.load(Ordering::SeqCst), 2);
     }
 
+    #[tokio::test]
+    async fn test_delete_retries_serverless_neg_while_backend_reference_drains() {
+        let worker = function_public_ingress();
+        let function_name = format!("test-{}", worker.id);
+        let neg_delete_attempts = Arc::new(AtomicUsize::new(0));
+        let neg_delete_attempts_for_mock = Arc::clone(&neg_delete_attempts);
+        let mock_cloudrun = setup_mock_client_for_creation_and_deletion(&function_name, true);
+
+        let mut mock_compute = MockComputeApi::new();
+        mock_compute
+            .expect_delete_global_forwarding_rule()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_target_https_proxy()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_url_map()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_backend_service()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_region_network_endpoint_group()
+            .returning(move |_, _| {
+                if neg_delete_attempts_for_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(resource_in_use_error())
+                } else {
+                    Ok(Operation::default())
+                }
+            });
+        mock_compute
+            .expect_delete_global_address()
+            .returning(|_| Ok(Operation::default()));
+
+        let mock_provider =
+            setup_mock_service_provider(mock_cloudrun, Some(Arc::new(mock_compute)));
+        let mut controller = GcpWorkerController::mock_ready(&function_name);
+        controller.forwarding_rule_name = Some("test-fwd".to_string());
+        controller.target_https_proxy_name = Some("test-proxy".to_string());
+        controller.url_map_name = Some("test-url-map".to_string());
+        controller.backend_service_name = Some("test-backend".to_string());
+        controller.serverless_neg_name = Some("test-neg".to_string());
+        controller.global_address_name = Some("test-address".to_string());
+        controller.global_address_ip = Some("203.0.113.9".to_string());
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(neg_delete_attempts.load(Ordering::SeqCst), 2);
+    }
+
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
 
     #[tokio::test]
-    async fn queue_push_subscription_uses_fully_qualified_topic_name() {
+    async fn queue_push_subscription_uses_canonical_cloud_run_oidc_audience() {
         use crate::queue::gcp::{GcpQueueController, GcpQueueState};
 
         let worker = function_with_queue_trigger();
@@ -6618,9 +6702,16 @@ mod tests {
         mock_pubsub
             .expect_create_subscription()
             .withf(|subscription_id, subscription| {
+                let push_config = subscription.push_config.as_ref();
                 subscription_id == "test-queue-func-test-queue"
                     && subscription.topic.as_deref()
                         == Some("projects/test-project-123/topics/test-test-queue")
+                    && push_config.and_then(|config| config.push_endpoint.as_deref())
+                        == Some("https://test-queue-func-abcd1234-uc.a.run.app/")
+                    && push_config
+                        .and_then(|config| config.oidc_token.as_ref())
+                        .and_then(|token| token.audience.as_deref())
+                        == Some("https://test-queue-func-abcd1234-uc.a.run.app")
             })
             .times(1)
             .returning(|_, subscription| Ok(subscription));
@@ -6641,6 +6732,61 @@ mod tests {
             .service_provider(mock_provider)
             .with_test_dependencies()
             .with_dependency(test_queue(), queue_controller)
+            .build()
+            .await
+            .unwrap();
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn commands_push_subscription_uses_canonical_cloud_run_oidc_audience() {
+        let mut worker = function_private_ingress();
+        worker.commands_enabled = true;
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+
+        let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub
+            .expect_create_topic()
+            .withf(|topic_id, _| topic_id == "test-private-func-rq")
+            .times(1)
+            .returning(|_, topic| Ok(topic));
+        mock_pubsub
+            .expect_create_subscription()
+            .withf(|subscription_id, subscription| {
+                let push_config = subscription.push_config.as_ref();
+                subscription_id == "test-private-func-rq-sub"
+                    && subscription.topic.as_deref()
+                        == Some("projects/test-project-123/topics/test-private-func-rq")
+                    && push_config.and_then(|config| config.push_endpoint.as_deref())
+                        == Some("https://test-private-func-abcd1234-uc.a.run.app/")
+                    && push_config
+                        .and_then(|config| config.oidc_token.as_ref())
+                        .is_some_and(|token| {
+                            token.service_account_email
+                                == "default-profile-sa@mock-project.iam.gserviceaccount.com"
+                                && token.audience.as_deref()
+                                    == Some("https://test-private-func-abcd1234-uc.a.run.app")
+                        })
+            })
+            .times(1)
+            .returning(|_, subscription| Ok(subscription));
+        mock_pubsub
+            .expect_set_topic_iam_policy()
+            .withf(|topic_id, _| topic_id == "test-private-func-rq")
+            .times(1)
+            .returning(|_, policy| Ok(policy));
+
+        let mock_provider =
+            setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
             .build()
             .await
             .unwrap();
@@ -6739,9 +6885,9 @@ mod tests {
         assert!(function_outputs.public_endpoints.contains_key("default"));
     }
 
-    /// Test that verifies private workers handle resource-scoped permissions correctly
+    /// Private workers authenticate Pub/Sub and Scheduler delivery as their execution SA.
     #[tokio::test]
-    async fn test_private_function_skips_iam_policy() {
+    async fn test_private_function_grants_invoker_to_execution_service_account() {
         let worker = function_private_ingress();
         let function_name = format!("test-{}", worker.id);
 
@@ -6752,6 +6898,10 @@ mod tests {
         let operation_name_for_get = operation_name.clone();
         mock_cloudrun
             .expect_create_service()
+            .withf(|_, _, service, _| {
+                service.ingress == Some(CloudRunIngress::IngressTrafficInternalOnly)
+                    && service.invoker_iam_disabled == Some(false)
+            })
             .returning(move |_, _, _, _| Ok(create_successful_operation_response(&operation_name)));
 
         mock_cloudrun
@@ -6765,13 +6915,21 @@ mod tests {
             .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)))
             .times(1);
 
-        // IAM policy operations are now called for all workers (for resource-scoped permissions)
         mock_cloudrun
             .expect_get_service_iam_policy()
             .returning(|_, _| Ok(create_empty_iam_policy()));
 
         mock_cloudrun
             .expect_set_service_iam_policy()
+            .withf(|_, _, policy| {
+                policy.bindings.iter().any(|binding| {
+                    binding.role == "roles/run.invoker"
+                        && binding.members
+                            == ["serviceAccount:default-profile-sa@mock-project.iam.gserviceaccount.com"]
+                        && binding.condition.is_none()
+                })
+            })
+            .times(1)
             .returning(|_, _, _| Ok(create_empty_iam_policy()));
 
         // Mock deletion

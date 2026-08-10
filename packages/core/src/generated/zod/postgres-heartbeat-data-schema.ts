@@ -11,12 +11,12 @@ import { LocalPostgresHeartbeatDataSchema } from "./local-postgres-heartbeat-dat
 
 export const PostgresHeartbeatDataSchema = z.union([z.lazy(() => AuroraPostgresHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["aurora"])
-    })), z.lazy(() => GcpCloudSqlPostgresHeartbeatDataSchema).and(z.object({
+    })).describe("AWS Aurora Serverless v2 backend."), z.lazy(() => GcpCloudSqlPostgresHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["cloudSql"])
-    })), z.lazy(() => AzureFlexibleServerPostgresHeartbeatDataSchema).and(z.object({
+    })).describe("GCP Cloud SQL backend."), z.lazy(() => AzureFlexibleServerPostgresHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["flexibleServer"])
-    })), z.lazy(() => LocalPostgresHeartbeatDataSchema).and(z.object({
+    })).describe("Azure Flexible Server backend."), z.lazy(() => LocalPostgresHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["local"])
-    }))])
+    })).describe("Local embedded Postgres backend.")])
 
 export type PostgresHeartbeatData = z.infer<typeof PostgresHeartbeatDataSchema>

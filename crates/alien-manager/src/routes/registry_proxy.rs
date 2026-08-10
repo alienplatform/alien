@@ -1097,6 +1097,13 @@ async fn validate_pull_access(
                 "Registry proxy pulls require a deployment token",
             ))
         }
+        Scope::Commands { .. } => {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Command credentials cannot access the registry proxy",
+            ))
+        }
         Scope::Deployment {
             project_id,
             deployment_id,

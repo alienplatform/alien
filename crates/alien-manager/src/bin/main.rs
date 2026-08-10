@@ -47,8 +47,16 @@ struct Cli {
     disable_heartbeat_loop: bool,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(8 * 1024 * 1024)
+        .build()
+        .expect("Failed to build Tokio runtime");
+    runtime.block_on(async_main());
+}
+
+async fn async_main() {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(

@@ -383,6 +383,10 @@ async fn create_deployment(
             return ErrorData::forbidden("Deployment tokens cannot create deployments")
                 .into_response();
         }
+        crate::auth::Scope::Commands { .. } => {
+            return ErrorData::forbidden("Command credentials cannot create deployments")
+                .into_response();
+        }
     };
 
     // Verify deployment group exists
@@ -542,6 +546,10 @@ async fn list_deployments(
         }
         crate::auth::Scope::Deployment { .. } => {
             return ErrorData::forbidden("Deployment tokens cannot list deployments")
+                .into_response();
+        }
+        crate::auth::Scope::Commands { .. } => {
+            return ErrorData::forbidden("Command credentials cannot list deployments")
                 .into_response();
         }
     };

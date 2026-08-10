@@ -36,6 +36,21 @@ async fn get_command_owner(state: &AppState, command_id: &str) -> Result<String,
         })
 }
 
+async fn get_command_deployment(
+    deployment_store: &dyn crate::traits::DeploymentStore,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+) -> Result<crate::traits::DeploymentRecord, Response> {
+    match deployment_store
+        .get_deployment(subject, deployment_id)
+        .await
+        .map_err(|e| e.into_response())?
+    {
+        Some(deployment) => Ok(deployment),
+        None => Err(ErrorData::not_found_deployment(deployment_id).into_response()),
+    }
+}
+
 /// Authorize the caller against the deployment that owns a command.
 /// Loads the deployment then defers to `Authz::can_read_command`.
 async fn require_command_access(
@@ -43,12 +58,8 @@ async fn require_command_access(
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    let deployment = state
-        .deployment_store
-        .get_deployment(subject, deployment_id)
-        .await
-        .map_err(|e| e.into_response())?
-        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
+    let deployment =
+        get_command_deployment(state.deployment_store.as_ref(), subject, deployment_id).await?;
     if state.authz.can_read_command(subject, &deployment) {
         Ok(())
     } else {
@@ -64,7 +75,7 @@ async fn require_command_read_access(
     subject: &crate::auth::Subject,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
-    if !matches!(subject.scope, crate::auth::Scope::DeploymentGroup { .. }) {
+    if !matches!(&subject.scope, crate::auth::Scope::DeploymentGroup { .. }) {
         return if state.authz.can_read_command_context(subject, command) {
             Ok(())
         } else {
@@ -75,22 +86,98 @@ async fn require_command_read_access(
     require_command_access(state, subject, &command.deployment_id).await
 }
 
+async fn require_command_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::Subject, Response> {
+    auth::require_auth(state, headers)
+        .await
+        .map_err(IntoResponse::into_response)
+}
+
+async fn require_command_dispatch_access(
+    deployment_store: &dyn crate::traits::DeploymentStore,
+    authz: &dyn crate::auth::Authz,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+) -> Result<(), Response> {
+    if let Some(allowed) =
+        crate::auth::command_capability::sender_request_decision(subject, deployment_id)
+    {
+        return if allowed {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    let deployment = get_command_deployment(deployment_store, subject, deployment_id).await?;
+    if authz.can_dispatch_command(subject, &deployment) {
+        Ok(())
+    } else {
+        Err(ErrorData::forbidden("Access denied").into_response())
+    }
+}
+
 async fn require_command_execution_access(
     state: &AppState,
     subject: &crate::auth::Subject,
     deployment_id: &str,
 ) -> Result<(), Response> {
-    let deployment = state
-        .deployment_store
-        .get_deployment(subject, deployment_id)
-        .await
-        .map_err(|e| e.into_response())?
-        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
+    let deployment =
+        get_command_deployment(state.deployment_store.as_ref(), subject, deployment_id).await?;
     if state.authz.can_execute_command(subject, &deployment) {
         Ok(())
     } else {
         Err(ErrorData::forbidden("Access denied").into_response())
     }
+}
+
+async fn require_command_receive_access(
+    deployment_store: &dyn crate::traits::DeploymentStore,
+    authz: &dyn crate::auth::Authz,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+    target: &alien_core::CommandTarget,
+) -> Result<(), Response> {
+    if let Some(allowed) =
+        crate::auth::command_capability::receiver_request_decision(subject, deployment_id, target)
+    {
+        return if allowed {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    let deployment = get_command_deployment(deployment_store, subject, deployment_id).await?;
+    if authz.can_receive_command(subject, &deployment, target) {
+        Ok(())
+    } else {
+        Err(
+            ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
+                .into_response(),
+        )
+    }
+}
+
+/// Authorize response/release execution from canonical command ownership.
+/// Commands-only receiver credentials are checked against the exact target;
+/// existing admin/deployment/group callers retain the deployment-level path.
+async fn require_command_execution_context(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    command: &alien_commands::server::CommandAccessContext,
+) -> Result<(), Response> {
+    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+        return if state.authz.can_execute_command_context(subject, command) {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    require_command_execution_access(state, subject, &command.deployment_id).await
 }
 
 // --- Router ---
@@ -139,18 +226,15 @@ async fn create_command(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &request.deployment_id)
-        .await
+    if let Err(response) = require_command_dispatch_access(
+        state.deployment_store.as_ref(),
+        state.authz.as_ref(),
+        &subject,
+        &request.deployment_id,
+    )
+    .await
     {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
-        Err(e) => return e.into_response(),
-    };
-
-    if !state.authz.can_dispatch_command(&subject, &deployment) {
-        return ErrorData::forbidden("Cannot dispatch command for this deployment").into_response();
+        return response;
     }
 
     match state.command_server.create_command(request).await {
@@ -167,9 +251,9 @@ async fn get_command_status(
     headers: HeaderMap,
     Path(command_id): Path<String>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
     let command = match state
         .command_server
@@ -207,27 +291,24 @@ async fn upload_complete(
     Path(command_id): Path<String>,
     Json(upload_request): Json<UploadCompleteRequest>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
     let deployment_id = match get_command_owner(&state, &command_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &deployment_id)
-        .await
+    if let Err(response) = require_command_dispatch_access(
+        state.deployment_store.as_ref(),
+        state.authz.as_ref(),
+        &subject,
+        &deployment_id,
+    )
+    .await
     {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
-        Err(e) => return e.into_response(),
-    };
-
-    if !state.authz.can_dispatch_command(&subject, &deployment) {
-        return ErrorData::forbidden("Access denied").into_response();
+        return response;
     }
 
     match state
@@ -267,23 +348,27 @@ async fn submit_response(
     };
 
     if let Some(subject) = bearer_auth {
-        // Standard Bearer auth path — verify deployment access via Authz.
-        let deployment_id = match get_command_owner(&state, &command_id).await {
-            Ok(id) => id,
-            Err(e) => return e,
-        };
-        let deployment = match state
-            .deployment_store
-            .get_deployment(&subject, &deployment_id)
+        // Standard Bearer auth path — commands-only receiver credentials are
+        // bound to the exact command target, while legacy/admin credentials
+        // retain deployment-level authorization.
+        let command = match state
+            .command_server
+            .get_command_access_context(&command_id)
             .await
         {
-            Ok(Some(d)) => d,
-            Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+            Ok(Some(command)) => command,
+            Ok(None) => {
+                return alien_error::AlienError::new(
+                    alien_commands::error::ErrorData::CommandNotFound {
+                        command_id: command_id.clone(),
+                    },
+                )
+                .into_response()
+            }
             Err(e) => return e.into_response(),
         };
-        if !state.authz.can_execute_command(&subject, &deployment) {
-            return ErrorData::forbidden("Access denied: cannot act on the target deployment")
-                .into_response();
+        if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
+            return e;
         }
     } else {
         // No Bearer token — try presigned URL auth from query parameters.
@@ -318,9 +403,9 @@ async fn get_command_payload(
     headers: HeaderMap,
     Path(command_id): Path<String>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
     // Verify the caller has access to this command's deployment via Authz.
     // If the command isn't in the local registry (e.g. when command metadata
@@ -341,7 +426,7 @@ async fn get_command_payload(
         Ok(None) => {
             // No canonical owner in the local registry — only workspace-wide
             // writers may inspect such payloads.
-            if !matches!(subject.scope, crate::auth::Scope::Workspace)
+            if !matches!(&subject.scope, crate::auth::Scope::Workspace)
                 || !matches!(
                     subject.role,
                     crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
@@ -430,21 +515,16 @@ async fn acquire_leases(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &lease_request.deployment_id)
-        .await
+    if let Err(response) = require_command_receive_access(
+        state.deployment_store.as_ref(),
+        state.authz.as_ref(),
+        &subject,
+        &lease_request.deployment_id,
+        &lease_request.target,
+    )
+    .await
     {
-        Ok(Some(d)) => d,
-        Ok(None) => {
-            return ErrorData::not_found_deployment(&lease_request.deployment_id).into_response()
-        }
-        Err(e) => return e.into_response(),
-    };
-
-    if !state.authz.can_act_on_deployment(&subject, &deployment) {
-        return ErrorData::forbidden("Access denied: can only acquire leases for own deployment")
-            .into_response();
+        return response;
     }
 
     match state
@@ -468,13 +548,13 @@ async fn release_lease(
     headers: HeaderMap,
     Path(lease_id): Path<String>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
+    let subject = match require_command_auth(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
     };
 
-    let owner = match state.command_server.get_lease_owner(&lease_id).await {
-        Ok(Some((_command_id, owner))) => owner,
+    let (command_id, owner) = match state.command_server.get_lease_owner(&lease_id).await {
+        Ok(Some((command_id, owner))) => (command_id, owner),
         Ok(None) => {
             return alien_error::AlienError::new(alien_commands::error::ErrorData::LeaseNotFound {
                 lease_id: lease_id.clone(),
@@ -483,12 +563,136 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
-    if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
+    if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
+        let command = match state
+            .command_server
+            .get_command_access_context(&command_id)
+            .await
+        {
+            Ok(Some(command)) => command,
+            Ok(None) => {
+                return alien_error::AlienError::new(
+                    alien_commands::error::ErrorData::CommandNotFound { command_id },
+                )
+                .into_response()
+            }
+            Err(e) => return e.into_response(),
+        };
+        if let Err(e) = require_command_execution_context(&state, &subject, &command).await {
+            return e;
+        }
+    } else if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
         return e;
     }
 
     match state.command_server.release_lease_by_id(&lease_id).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{CommandCapability, Role, Scope, Subject, SubjectKind};
+    use crate::providers::OssAuthz;
+    use crate::traits::deployment_store::MockDeploymentStore;
+
+    fn commands_sender_subject() -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "commands-sender".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Send,
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn commands_dispatch_authorization_does_not_preflight_the_deployment() {
+        let mut deployment_store = MockDeploymentStore::new();
+        require_command_dispatch_access(
+            &deployment_store,
+            &OssAuthz,
+            &commands_sender_subject(),
+            "deployment-1",
+        )
+        .await
+        .expect("signed deployment scope should authorize the sender");
+
+        deployment_store.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn commands_receive_authorization_does_not_preflight_the_deployment() {
+        let mut deployment_store = MockDeploymentStore::new();
+        let target = alien_core::CommandTarget::new(
+            "container-1".to_string(),
+            alien_core::CommandTargetType::Container,
+        );
+        let subject = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "commands-receiver".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Receive {
+                    target: target.clone(),
+                },
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        };
+
+        require_command_receive_access(
+            &deployment_store,
+            &OssAuthz,
+            &subject,
+            "deployment-1",
+            &target,
+        )
+        .await
+        .expect("signed deployment and target should authorize the receiver");
+
+        let wrong_target = alien_core::CommandTarget::new(
+            "container-2".to_string(),
+            alien_core::CommandTargetType::Container,
+        );
+        assert_eq!(
+            require_command_receive_access(
+                &deployment_store,
+                &OssAuthz,
+                &subject,
+                "deployment-1",
+                &wrong_target,
+            )
+            .await
+            .expect_err("receiver capability must stay bound to its exact target")
+            .status(),
+            StatusCode::FORBIDDEN,
+        );
+        assert_eq!(
+            require_command_receive_access(
+                &deployment_store,
+                &OssAuthz,
+                &subject,
+                "deployment-2",
+                &target,
+            )
+            .await
+            .expect_err("receiver capability must stay bound to its deployment")
+            .status(),
+            StatusCode::FORBIDDEN,
+        );
+
+        deployment_store.checkpoint();
     }
 }

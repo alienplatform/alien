@@ -10,6 +10,57 @@ import { defineError } from "@alienplatform/core"
 import * as z from "zod/v4"
 
 /**
+ * Error thrown when hosted command bootstrap configuration is invalid.
+ */
+export const CommandBootstrapConfigInvalidError = defineError({
+  code: "COMMAND_BOOTSTRAP_CONFIG_INVALID",
+  context: z.object({
+    field: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ reason }) => `Command bootstrap configuration invalid: ${reason}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/**
+ * Error thrown when a network or transport failure prevents hosted command
+ * bootstrap.
+ */
+export const CommandBootstrapFailedError = defineError({
+  code: "COMMAND_BOOTSTRAP_FAILED",
+  context: z.object({
+    deploymentId: z.string(),
+    role: z.enum(["sender", "receiver"]),
+    reason: z.string(),
+  }),
+  message: ({ deploymentId, role, reason }) =>
+    `Failed to bootstrap command ${role} access for deployment '${deploymentId}': ${reason}`,
+  retryable: true,
+  internal: false,
+  httpStatusCode: 503,
+})
+
+/**
+ * Error thrown when the Alien Platform API rejects command bootstrap.
+ */
+export const PlatformHttpError = defineError({
+  code: "PLATFORM_HTTP_ERROR",
+  context: z.object({
+    method: z.string(),
+    url: z.string(),
+    status: z.number(),
+    statusText: z.string(),
+  }),
+  message: ({ method, url, status, statusText }) =>
+    `Alien Platform ${method} ${url} failed: ${status} ${statusText}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 500,
+})
+
+/**
  * Error thrown when command creation fails.
  */
 export const CommandCreationFailedError = defineError({
