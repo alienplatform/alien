@@ -79,7 +79,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.4(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
+        version: 3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
 
   packages/ai-gateway:
     dependencies:
@@ -128,7 +128,7 @@ importers:
         version: 2.5.7
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.4(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
+        version: 3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
       '@types/node':
         specifier: ^24.0.15
         version: 24.13.3
@@ -225,7 +225,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.4(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
+        version: 3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
 
   packages/scripts: {}
 
@@ -1238,8 +1238,8 @@ packages:
     resolution: {integrity: sha512-EFd6cVbHsgLa6wa4RljGj6Wk75qoHxUSyc5asLyyPSyuhIcdS2Q3Phw6ImS1q+CkALthJRShiYfKANcQMuMqsQ==}
     engines: {node: '>=18'}
 
-  '@napi-rs/cli@3.8.4':
-    resolution: {integrity: sha512-/uIzAUHXAMHzzye6+DWdVV6oc3lCRr7ck98UNeW5Gbs+KaxXRztWFmehbz46ufLdTtzjcyZGXOplDHEWh3qxew==}
+  '@napi-rs/cli@3.8.5':
+    resolution: {integrity: sha512-lOFzFYBeBpnFAajFiyu+RWCrh1j7/Ma7I5z87huUIGlUkyE8eYxIfNBuH8KOOxW3lkkUxP7CMcl5Hfq3EjgEkg==}
     engines: {node: ^20.17.0 || ^22.13.0 || >= 23.5.0}
     hasBin: true
     peerDependencies:
@@ -5133,7 +5133,7 @@ snapshots:
       strict-event-emitter: 0.5.1
     optional: true
 
-  '@napi-rs/cli@3.8.4(@emnapi/runtime@1.11.2)(@types/node@24.13.3)':
+  '@napi-rs/cli@3.8.5(@emnapi/runtime@1.11.2)(@types/node@24.13.3)':
     dependencies:
       '@inquirer/prompts': 8.5.2(@types/node@24.13.3)
       '@napi-rs/cross-toolchain': 1.0.3
