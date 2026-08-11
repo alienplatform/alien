@@ -627,7 +627,10 @@ async fn run_remote_exec_attach(
         send_remote_exec_resize_frame(&input_tx).await;
         spawn_remote_exec_resize_forwarder(input_tx.clone());
     }
-    drop(input_tx);
+    // Stdin EOF means that the command receives no more input; it does not
+    // cancel the remote process. Retain one sender until the read side sees an
+    // exit/error/timeout so the writer cannot close the WebSocket first.
+    let _session_input_guard = input_tx;
 
     let writer = tokio::spawn(async move {
         while let Some(outgoing) = input_rx.recv().await {
@@ -1581,5 +1584,37 @@ mod tests {
             .as_deref(),
             Some("spawn failed")
         );
+    }
+
+    #[tokio::test]
+    async fn remote_exec_waits_for_exit_after_noninteractive_stdin_eof() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("client should connect");
+            let mut socket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("websocket handshake should succeed");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            socket
+                .send(Message::Text(
+                    serde_json::json!({ "type": "exit", "exitCode": 0 })
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("exit frame should send");
+        });
+        let mut session = remote_exec_session(&format!("ws://{address}/attach"), "token");
+        session.tty = false;
+
+        run_remote_exec_attach(session, Some(2), true)
+            .await
+            .expect("stdin EOF must not cancel the remote command");
+        server.await.expect("server task should finish");
     }
 }
