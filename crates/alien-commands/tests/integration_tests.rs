@@ -633,6 +633,44 @@ mod tests {
         assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
     }
 
+    /// A registered target using the reserved operator id never becomes a
+    /// shorthand candidate. A targetless create routes to the sole stack
+    /// target, and the operator cannot lease that command.
+    #[tokio::test]
+    async fn test_create_shorthand_ignores_reserved_operator_target() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("operator", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+
+        let request = test_inline_create_command("target-agent", "targeted-command");
+        let created = server.create_command(request).await.unwrap();
+
+        let operator_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: CommandTarget::new("operator", CommandTargetType::Daemon),
+                    max_leases: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(operator_leases.leases.is_empty());
+
+        let lease = server
+            .acquire_single_lease("target-agent")
+            .await
+            .unwrap()
+            .expect("the normal target should lease the shorthand command");
+        assert_eq!(lease.command_id, created.command_id);
+        assert_eq!(lease.envelope.target, server.default_target);
+    }
+
     /// Each target leases only its own commands: two targets, two commands,
     /// each lease scan returns only the requester's command.
     #[tokio::test]

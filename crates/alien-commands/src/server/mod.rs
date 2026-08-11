@@ -1035,6 +1035,14 @@ impl CommandServer {
         Ok(status.map(|s| s.deployment_id))
     }
 
+    /// Get the command registry's canonical status record for authorization.
+    pub async fn get_command_status_record(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandStatus>> {
+        self.command_registry.get_command_status(command_id).await
+    }
+
     /// Get the command's canonical ownership fields for route authorization.
     pub async fn get_command_access_context(
         &self,

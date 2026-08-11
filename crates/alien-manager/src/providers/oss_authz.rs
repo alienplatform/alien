@@ -550,12 +550,24 @@ mod tests {
             &receiver,
             &alien_commands::server::CommandAccessContext {
                 target: other,
-                ..command
+                ..command.clone()
             },
         ));
         assert!(!OssAuthz.can_dispatch_command(&receiver, &own));
         assert!(!OssAuthz.can_read_command(&receiver, &own));
         assert!(!OssAuthz.can_read_deployment(&receiver, &own));
+
+        let operator = alien_core::CommandTarget::new(
+            alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID,
+            alien_core::CommandTargetType::Daemon,
+        );
+        let operator_receiver = command_receiver("d1", operator.clone());
+        let operator_command = alien_commands::server::CommandAccessContext {
+            target: operator.clone(),
+            ..command
+        };
+        assert!(!OssAuthz.can_receive_command(&operator_receiver, &own, &operator,));
+        assert!(!OssAuthz.can_execute_command_context(&operator_receiver, &operator_command,));
     }
 
     #[test]

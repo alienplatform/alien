@@ -110,6 +110,8 @@ pub enum Scope {
 pub enum CommandCapability {
     /// Create commands and read their status.
     Send,
+    /// Create one exact command addressed to the manager's reserved operations target.
+    Operations { command: String },
     /// Lease and complete commands for one exact app-owned receiver target.
     Receive { target: CommandTarget },
 }
@@ -123,6 +125,7 @@ impl<'de> Deserialize<'de> for CommandCapability {
         #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
         enum WireCapability {
             Send {},
+            Operations { command: String },
             Receive { target: WireTarget },
         }
 
@@ -135,6 +138,14 @@ impl<'de> Deserialize<'de> for CommandCapability {
 
         Ok(match WireCapability::deserialize(deserializer)? {
             WireCapability::Send {} => Self::Send,
+            WireCapability::Operations { command } => {
+                if command.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "operations capability command must not be empty",
+                    ));
+                }
+                Self::Operations { command }
+            }
             WireCapability::Receive { target } => Self::Receive {
                 target: CommandTarget::new(target.resource_id, target.resource_type),
             },
@@ -385,6 +396,43 @@ mod tests {
         }));
 
         assert!(result.is_err(), "send capabilities must not carry a target");
+    }
+
+    #[test]
+    fn operations_command_capability_has_a_strict_stable_wire_shape() {
+        let capability = CommandCapability::Operations {
+            command: "postgres/health".to_string(),
+        };
+        let json = serde_json::to_value(&capability).expect("serialize operations capability");
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "operations", "command": "postgres/health" })
+        );
+
+        assert_eq!(
+            serde_json::from_value::<CommandCapability>(json)
+                .expect("deserialize operations capability"),
+            capability
+        );
+        assert!(
+            serde_json::from_value::<CommandCapability>(serde_json::json!({
+                "type": "operations",
+                "command": "postgres/health",
+                "target": { "resourceId": "operator", "resourceType": "daemon" },
+            }))
+            .is_err(),
+            "operations capabilities must not carry caller-selected targets"
+        );
+    }
+
+    #[test]
+    fn operations_command_capability_rejects_an_empty_command() {
+        let result = serde_json::from_value::<CommandCapability>(serde_json::json!({
+            "type": "operations",
+            "command": "",
+        }));
+
+        assert!(result.is_err(), "operations command must be non-empty");
     }
 
     #[test]

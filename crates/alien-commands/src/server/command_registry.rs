@@ -153,9 +153,11 @@ pub const OPERATOR_COMMAND_TARGET_ID: &str = "operator";
 ///   id never falls back to shorthand. The reserved
 ///   [`OPERATOR_COMMAND_TARGET_ID`] always resolves to a pull-mode daemon
 ///   target for the operator, independent of the stack.
-/// - `requested = None` (single-target shorthand): exactly one target must
-///   exist, else `COMMAND_TARGET_AMBIGUOUS` (more than one) or
-///   `NO_COMMAND_TARGETS` (none).
+/// - `requested = None` (single-target shorthand): exactly one non-reserved
+///   stack target must exist, else `COMMAND_TARGET_AMBIGUOUS` (more than one)
+///   or `NO_COMMAND_TARGETS` (none). A registered target named
+///   [`OPERATOR_COMMAND_TARGET_ID`] is excluded so shorthand can never address
+///   the operator.
 ///
 /// The resolved target's own id is also validated, so a target registered with
 /// a `:`-bearing id can never resolve into the key grammar.
@@ -194,19 +196,22 @@ pub fn select_command_target(
                 })?
                 .clone()
         }
-        None => match targets {
-            [] => {
+        None => {
+            let mut candidates = targets
+                .iter()
+                .filter(|target| target.resource_id != OPERATOR_COMMAND_TARGET_ID);
+            let Some(single) = candidates.next() else {
                 return Err(AlienError::new(ErrorData::NoCommandTargets {
                     deployment_id: deployment_id.to_string(),
-                }))
-            }
-            [single] => single.clone(),
-            _ => {
+                }));
+            };
+            if candidates.next().is_some() {
                 return Err(AlienError::new(ErrorData::CommandTargetAmbiguous {
                     deployment_id: deployment_id.to_string(),
-                }))
+                }));
             }
-        },
+            single.clone()
+        }
     };
 
     // A registered target whose id breaks the key grammar must never resolve.
@@ -714,6 +719,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_resolve_shorthand_operator_only_is_no_targets() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
+            .await
+            .unwrap();
+
+        let err = resolved(&registry, None).await.unwrap_err();
+        assert_eq!(err.code, "NO_COMMAND_TARGETS");
+        assert_eq!(err.http_status_code, Some(422));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_shorthand_ignores_operator_beside_one_stack_target() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        registry
+            .register_target("daemon-1", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+
+        let result = resolved(&registry, None).await.unwrap();
+        assert_eq!(
+            result.target,
+            CommandTarget::new("daemon-1", CommandTargetType::Daemon)
+        );
+    }
+
+    #[tokio::test]
     async fn test_delivery_mode_container_and_daemon_always_pull() {
         // Even with a Push-capable worker context, Container/Daemon are Pull.
         let registry =
@@ -926,8 +963,7 @@ mod tests {
         // The reserved operator id resolves to a pull-mode daemon target even
         // when no stack targets exist — operations commands address the operator
         // itself, which is never a stack resource.
-        let target =
-            select_command_target("dep-1", &[], Some(OPERATOR_COMMAND_TARGET_ID)).unwrap();
+        let target = select_command_target("dep-1", &[], Some(OPERATOR_COMMAND_TARGET_ID)).unwrap();
         assert_eq!(target.resource_id, OPERATOR_COMMAND_TARGET_ID);
         assert_eq!(target.resource_type, CommandTargetType::Daemon);
         // A daemon target always delivers via pull, regardless of worker mode.
