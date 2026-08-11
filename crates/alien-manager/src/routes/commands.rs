@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID;
+use alien_commands::server::command_registry::{CommandStatus, OPERATOR_COMMAND_TARGET_ID};
 use alien_commands::server::{CommandPayloadResponse, StorePayloadRequest};
 use alien_commands::types::*;
 
@@ -22,34 +22,43 @@ use super::{auth, AppState};
 
 // --- Helpers ---
 
-async fn get_command_context(
-    state: &AppState,
-    command_id: &str,
-) -> Result<alien_commands::server::CommandAccessContext, Response> {
-    state
-        .command_server
-        .get_command_access_context(command_id)
-        .await
-        .map_err(|e| e.into_response())?
-        .ok_or_else(|| {
-            alien_error::AlienError::new(alien_commands::error::ErrorData::CommandNotFound {
-                command_id: command_id.to_string(),
-            })
-            .into_response()
-        })
-}
-
-async fn require_command_mutation_access(
+async fn require_upload_complete_access(
     deployment_store: &dyn crate::traits::DeploymentStore,
     authz: &dyn crate::auth::Authz,
     subject: &crate::auth::Subject,
-    command: &alien_commands::server::CommandAccessContext,
+    command: &CommandStatus,
 ) -> Result<(), Response> {
     if command.target.resource_id == OPERATOR_COMMAND_TARGET_ID {
-        return Err(ErrorData::forbidden("Access denied").into_response());
+        return if crate::auth::command_capability::operator_upload_complete_allowed(
+            subject, command,
+        ) {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
     }
 
     require_command_dispatch_access(deployment_store, authz, subject, &command.deployment_id).await
+}
+
+fn require_direct_payload_access(
+    subject: &crate::auth::Subject,
+    command: Option<&alien_commands::server::CommandAccessContext>,
+) -> Result<(), &'static str> {
+    if command.is_some_and(|command| command.target.resource_id == OPERATOR_COMMAND_TARGET_ID) {
+        return Err("Access denied");
+    }
+
+    if matches!(subject.scope, crate::auth::Scope::Workspace)
+        && matches!(
+            subject.role,
+            crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
+        )
+    {
+        Ok(())
+    } else {
+        Err("Workspace-write access required")
+    }
 }
 
 async fn get_command_deployment(
@@ -327,7 +336,8 @@ async fn get_command_status(
 
 /// Mark upload as complete.
 ///
-/// Auth: Admin or DG (same as create — the command creator completes the upload).
+/// Auth: Same deployment-level rules as create. Reserved operator commands
+/// require the exact operations capability that created the command.
 async fn upload_complete(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -338,12 +348,24 @@ async fn upload_complete(
         Ok(subject) => subject,
         Err(response) => return response,
     };
-    let command = match get_command_context(&state, &command_id).await {
-        Ok(command) => command,
-        Err(e) => return e,
+    let command = match state
+        .command_server
+        .get_command_status_record(&command_id)
+        .await
+    {
+        Ok(Some(command)) => command,
+        Ok(None) => {
+            return alien_error::AlienError::new(
+                alien_commands::error::ErrorData::CommandNotFound {
+                    command_id: command_id.clone(),
+                },
+            )
+            .into_response()
+        }
+        Err(e) => return e.into_response(),
     };
 
-    if let Err(response) = require_command_mutation_access(
+    if let Err(response) = require_upload_complete_access(
         state.deployment_store.as_ref(),
         state.authz.as_ref(),
         &subject,
@@ -518,26 +540,17 @@ async fn store_command_payload(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    match state
+    let command = match state
         .command_server
         .get_command_access_context(&command_id)
         .await
     {
-        Ok(Some(command)) if command.target.resource_id == OPERATOR_COMMAND_TARGET_ID => {
-            return ErrorData::forbidden("Access denied").into_response();
-        }
-        Ok(_) => {}
+        Ok(command) => command,
         Err(e) => return e.into_response(),
-    }
+    };
 
-    // Storing payload with no entity context is workspace-write only.
-    if !matches!(subject.scope, crate::auth::Scope::Workspace)
-        || !matches!(
-            subject.role,
-            crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
-        )
-    {
-        return ErrorData::forbidden("Workspace-write access required").into_response();
+    if let Err(message) = require_direct_payload_access(&subject, command.as_ref()) {
+        return ErrorData::forbidden(message).into_response();
     }
 
     if let Some(params) = &request.params {
@@ -650,6 +663,11 @@ async fn release_lease(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_commands::test_utils::{
+        test_storage_create_command, test_upload_complete_request, TestCommandServer,
+    };
+    use chrono::Utc;
+
     use crate::auth::{CommandCapability, Role, Scope, Subject, SubjectKind};
     use crate::providers::OssAuthz;
     use crate::traits::deployment_store::MockDeploymentStore;
@@ -671,16 +689,46 @@ mod tests {
     }
 
     fn operations_subject(command: &str) -> Subject {
+        operations_subject_for("workspace-1", "project-1", "deployment-1", command)
+    }
+
+    fn operations_subject_for(
+        workspace_id: &str,
+        project_id: &str,
+        deployment_id: &str,
+        command: &str,
+    ) -> Subject {
         Subject {
             kind: SubjectKind::ServiceAccount {
                 id: "operations-dispatcher".to_string(),
+            },
+            workspace_id: workspace_id.to_string(),
+            scope: Scope::Commands {
+                project_id: project_id.to_string(),
+                deployment_id: deployment_id.to_string(),
+                capability: CommandCapability::Operations {
+                    command: command.to_string(),
+                },
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
+    fn commands_receiver_subject() -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "commands-receiver".to_string(),
             },
             workspace_id: "workspace-1".to_string(),
             scope: Scope::Commands {
                 project_id: "project-1".to_string(),
                 deployment_id: "deployment-1".to_string(),
-                capability: CommandCapability::Operations {
-                    command: command.to_string(),
+                capability: CommandCapability::Receive {
+                    target: alien_core::CommandTarget::new(
+                        OPERATOR_COMMAND_TARGET_ID,
+                        alien_core::CommandTargetType::Daemon,
+                    ),
                 },
             },
             role: Role::CommandCapability,
@@ -697,6 +745,29 @@ mod tests {
             scope: Scope::Workspace,
             role: Role::WorkspaceAdmin,
             bearer_token: "bearer".to_string(),
+        }
+    }
+
+    fn operator_command_status(command: &str) -> CommandStatus {
+        CommandStatus {
+            command_id: "command-1".to_string(),
+            workspace_id: "workspace-1".to_string(),
+            project_id: "project-1".to_string(),
+            deployment_id: "deployment-1".to_string(),
+            command: command.to_string(),
+            state: CommandState::PendingUpload,
+            attempt: 0,
+            deadline: None,
+            created_at: Utc::now(),
+            dispatched_at: None,
+            completed_at: None,
+            error: None,
+            request_size_bytes: Some(200_000),
+            response_size_bytes: None,
+            target: alien_core::CommandTarget::new(
+                OPERATOR_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Daemon,
+            ),
         }
     }
 
@@ -885,8 +956,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_command_payload_cannot_be_mutated_after_create() {
+    async fn operator_upload_complete_rejects_non_operations_subjects() {
         let mut deployment_store = MockDeploymentStore::new();
+        let command = operator_command_status("postgres/health");
+        let subjects = [
+            commands_sender_subject(),
+            commands_receiver_subject(),
+            workspace_admin_subject(),
+        ];
+
+        for subject in &subjects {
+            assert_eq!(
+                require_upload_complete_access(&deployment_store, &OssAuthz, subject, &command,)
+                    .await
+                    .expect_err("only an operations capability may complete an operator upload")
+                    .status(),
+                StatusCode::FORBIDDEN,
+            );
+        }
+
+        deployment_store.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn operator_upload_complete_rejects_a_different_operation_command() {
+        let mut deployment_store = MockDeploymentStore::new();
+
+        assert_eq!(
+            require_upload_complete_access(
+                &deployment_store,
+                &OssAuthz,
+                &operations_subject("postgres/version"),
+                &operator_command_status("postgres/health"),
+            )
+            .await
+            .expect_err("operations capability must match the canonical command name")
+            .status(),
+            StatusCode::FORBIDDEN,
+        );
+
+        deployment_store.checkpoint();
+    }
+
+    #[test]
+    fn direct_operator_payload_put_remains_denied() {
         let command = alien_commands::server::CommandAccessContext {
             workspace_id: "workspace-1".to_string(),
             project_id: "project-1".to_string(),
@@ -896,23 +1009,79 @@ mod tests {
                 alien_core::CommandTargetType::Daemon,
             ),
         };
-        let subjects = [
-            commands_sender_subject(),
+
+        for subject in [
             operations_subject("postgres/health"),
             workspace_admin_subject(),
-        ];
-
-        for subject in &subjects {
+        ] {
             assert_eq!(
-                require_command_mutation_access(&deployment_store, &OssAuthz, subject, &command,)
-                    .await
-                    .expect_err("operator command payload must be immutable after creation")
-                    .status(),
-                StatusCode::FORBIDDEN,
+                require_direct_payload_access(&subject, Some(&command)),
+                Err("Access denied"),
             );
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_operator_upload_becomes_leasable_for_exact_operations_capability() {
+        let mut server = TestCommandServer::builder().with_pull_mode().build().await;
+        let deployment_id = "deployment-1";
+        let command_name = "postgres/health";
+        let mut request = test_storage_create_command(deployment_id, command_name, 200_000);
+        request.target_resource_id = Some(OPERATOR_COMMAND_TARGET_ID.to_string());
+
+        let created = server
+            .create_command(request)
+            .await
+            .expect("create oversized operator command");
+        assert_eq!(created.state, CommandState::PendingUpload);
+
+        let command = server
+            .command_server
+            .get_command_status_record(&created.command_id)
+            .await
+            .expect("read canonical command status")
+            .expect("created command status");
+        let mut deployment_store = MockDeploymentStore::new();
+        require_upload_complete_access(
+            &deployment_store,
+            &OssAuthz,
+            &operations_subject_for("default", "default", deployment_id, command_name),
+            &command,
+        )
+        .await
+        .expect("exact operations capability should complete its params upload");
+
+        let completed = server
+            .upload_complete(&created.command_id, test_upload_complete_request(200_000))
+            .await
+            .expect("complete operator params upload");
+        assert_eq!(completed.state, CommandState::Pending);
+
+        let replay = server
+            .upload_complete(&created.command_id, test_upload_complete_request(200_000))
+            .await
+            .expect_err("upload completion must not replay after leaving PendingUpload");
+        assert_eq!(replay.code, "INVALID_STATE_TRANSITION");
+
+        let leases = server
+            .acquire_lease(
+                deployment_id,
+                LeaseRequest {
+                    deployment_id: deployment_id.to_string(),
+                    target: alien_core::CommandTarget::new(
+                        OPERATOR_COMMAND_TARGET_ID,
+                        alien_core::CommandTargetType::Daemon,
+                    ),
+                    max_leases: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .expect("lease uploaded operator command");
+        assert_eq!(leases.leases[0].command_id, created.command_id);
 
         deployment_store.checkpoint();
+        server.shutdown().await;
     }
 
     #[tokio::test]
