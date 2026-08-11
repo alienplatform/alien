@@ -66,7 +66,7 @@ importers:
         specifier: ^9.19.0
         version: 9.39.5(jiti@2.7.0)
       globals:
-        specifier: ^17.10.0
+        specifier: ^17.0.0
         version: 17.10.0
       typescript:
         specifier: ~5.9.0
