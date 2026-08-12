@@ -1,7 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { type AiConnection, ai, getAiConnection } from "@alienplatform/sdk"
-import { type UIMessage, convertToModelMessages, stepCountIs, streamText, tool } from "ai"
+import { convertToModelMessages, stepCountIs, streamText, tool, type UIMessage } from "ai"
 import { query } from "../../db"
 import { type Ask, askSchema, plan, supportedFilters, unsupportedFilters } from "../../queries"
 import { ensureSeeded } from "../../seed"
