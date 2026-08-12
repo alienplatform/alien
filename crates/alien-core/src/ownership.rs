@@ -74,7 +74,7 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
     match resource_type {
         "function" | "container-cluster" => removed_resource_type(),
         "worker" | "daemon" | "container" => live_only(),
-        "compute-cluster" => frozen_with_runtime_cleanup(),
+        "compute-cluster" | "sandbox" => frozen_with_runtime_cleanup(),
         "artifact-registry" | "key" => frozen_with_management(),
         "build"
         | "network"

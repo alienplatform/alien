@@ -807,6 +807,7 @@ mod tests {
         ) -> BindingResult<Arc<dyn alien_bindings::traits::ServiceAccount>> {
             Err(missing_binding(binding_name))
         }
+
     }
 
     fn aws_state_with_stack(stack: Stack) -> DeploymentState {

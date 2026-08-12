@@ -22,6 +22,9 @@ const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
     "compute-cluster", // ASGs/MIGs/VMSSs need VPC subnets
     "daemon",          // Transforms into compute-cluster in Phase 2 -> needs VPC
     "postgres",        // Needs a VPC on cloud (private-only DB); no-op on Local
+    // A sandbox's egress runs through a VPC connector, and that connector needs subnets.
+    // Omitting it does not deny egress on AWS — it leaves the public internet on.
+    "sandbox",
 ];
 
 /// Check if any resource in the stack requires VPC networking.

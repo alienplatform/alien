@@ -160,6 +160,8 @@ pub enum ResourceHeartbeatData {
     Ai(AiHeartbeatData),
     #[serde(rename = "key")]
     Key(KeyHeartbeatData),
+    #[serde(rename = "sandbox")]
+    Sandbox(SandboxHeartbeatData),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1583,6 +1585,97 @@ impl Default for PostgresHeartbeatStatus {
             collection_issues: vec![],
         }
     }
+}
+
+/// Content-free telemetry about a sandbox's sessions.
+///
+/// Never anything from inside a session. A controller reaches only the cloud's management APIs,
+/// and the whole point of the resource is that the control plane cannot see what runs in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "backend", rename_all = "camelCase")]
+pub enum SandboxHeartbeatData {
+    AwsMicrovm(AwsMicrovmSandboxHeartbeatData),
+    AzureSandboxGroup(AzureSandboxGroupHeartbeatData),
+    KubernetesPods(KubernetesSandboxHeartbeatData),
+    Local(LocalSandboxHeartbeatData),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxHeartbeatStatus {
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    pub message: Option<String>,
+    pub stale: bool,
+    pub partial: bool,
+    pub collection_issues: Vec<HeartbeatCollectionIssue>,
+}
+
+impl Default for SandboxHeartbeatStatus {
+    fn default() -> Self {
+        Self {
+            health: ObservedHealth::Healthy,
+            lifecycle: ProviderLifecycleState::Running,
+            message: None,
+            stale: false,
+            partial: false,
+            collection_issues: Vec::new(),
+        }
+    }
+}
+
+/// AWS: MicroVMs started from one image, counted across every version.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsMicrovmSandboxHeartbeatData {
+    pub status: SandboxHeartbeatStatus,
+    /// Image the sessions belong to.
+    pub image_identifier: String,
+    /// Sessions running now. Counted across all image versions, because a rolled version stays a
+    /// scope until its own MicroVMs are gone.
+    pub active_sessions: u32,
+    /// Image versions still carrying sessions.
+    pub versions_with_sessions: u32,
+    /// The image's own lifecycle state, which is where AWS surfaces base-image deprecation.
+    pub image_state: Option<String>,
+}
+
+/// Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count
+/// is not available here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AzureSandboxGroupHeartbeatData {
+    pub status: SandboxHeartbeatStatus,
+    pub sandbox_group: String,
+    pub provisioning_state: Option<String>,
+}
+
+/// Kubernetes: pods carrying the sandbox label, in the deployment's namespace.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesSandboxHeartbeatData {
+    pub status: SandboxHeartbeatStatus,
+    pub namespace: String,
+    pub active_sessions: u32,
+    /// Claimed but unused pods waiting in the pool.
+    pub idle_pods: u32,
+}
+
+/// Local: containers Docker still holds for this sandbox.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSandboxHeartbeatData {
+    pub status: SandboxHeartbeatStatus,
+    pub active_sessions: u32,
+    /// Whether the loopback route is serving in this process. False after a manager restart until
+    /// the next tick rebinds it.
+    pub route_serving: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

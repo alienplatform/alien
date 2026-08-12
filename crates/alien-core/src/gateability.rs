@@ -147,6 +147,7 @@ pub const MANIFEST_TYPES: &[&str] = &[
     "daemon",
     "container",
     "email",
+    "sandbox",
     "experimental/aws-opensearch",
 ];
 
@@ -210,6 +211,46 @@ mod tests {
             let gateability = type_gateability(setup_owned);
             assert!(gateability.frozen, "{setup_owned} gates at setup");
             assert!(!gateability.live, "{setup_owned} has no runtime controller");
+        }
+    }
+
+    /// A sandbox declaration is the Frozen image and pool, not a session. Sessions are created at
+    /// runtime and cleaned up with the parent, so there is no Live entry for a gate to sit on.
+    #[test]
+    fn sandbox_gates_as_a_frozen_resource() {
+        assert_eq!(gate_refusal("sandbox", "agents"), None);
+        let gateability = type_gateability("sandbox");
+        assert!(gateability.frozen, "the declaration itself gates at setup");
+        assert!(
+            !gateability.live,
+            "sessions are not declared, so a live gate would have nothing to refuse"
+        );
+    }
+
+    /// Every manifest type must state its gateability, because the SDK builder surface is
+    /// generated from it — a type nobody asserted gets whatever the ownership table happens to
+    /// say, which is how a new resource acquires an unintended gate.
+    #[test]
+    fn every_manifest_type_is_asserted_somewhere_above() {
+        let asserted = [
+            "kv",
+            "storage",
+            "queue",
+            "vault",
+            "ai",
+            "postgres",
+            "worker",
+            "daemon",
+            "container",
+            "email",
+            "experimental/aws-opensearch",
+            "sandbox",
+        ];
+        for declared in MANIFEST_TYPES {
+            assert!(
+                asserted.contains(declared),
+                "{declared} is in the manifest but no test pins its gateability"
+            );
         }
     }
 
