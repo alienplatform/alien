@@ -278,9 +278,7 @@ pub fn emit_role_definition_and_assignments(
         .platforms
         .azure
         .as_ref()
-        .map(|bindings| {
-            bindings.is_empty() || bindings.iter().all(|b| b.binding.stack.is_none())
-        })
+        .map(|bindings| bindings.is_empty() || bindings.iter().all(|b| b.binding.stack.is_none()))
         .unwrap_or(true)
     {
         return Ok(());

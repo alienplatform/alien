@@ -7,8 +7,8 @@ use crate::registry::TfRegistry;
 use alien_core::{
     Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, Build, Key, KubernetesCluster, Kv, Network,
-    Platform, Queue, RemoteBindings, RemoteStackManagement, ServiceAccount, ServiceActivation,
-    Storage, Vault, Worker,
+    Platform, Queue, RemoteBindings, RemoteStackManagement, Sandbox, ServiceAccount,
+    ServiceActivation, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -49,6 +49,7 @@ fn register_aws(registry: &mut TfRegistry) {
     );
     registry.register(Build::RESOURCE_TYPE, p, aws::AwsBuildEmitter);
     registry.register(Worker::RESOURCE_TYPE, p, aws::AwsWorkerEmitter);
+    registry.register(Sandbox::RESOURCE_TYPE, p, aws::AwsSandboxEmitter);
     registry.register(
         KubernetesCluster::RESOURCE_TYPE,
         p,

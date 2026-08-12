@@ -11,13 +11,14 @@ use super::helpers::{
 };
 use alien_cloudformation::{CfRegistry, CloudFormationTarget};
 use alien_core::{
-    ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Key, Kv,
-    PermissionProfile, Platform, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack,
+    ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Key, Kv, Network,
+    NetworkSettings, PermissionProfile, Platform, Queue, ResourceLifecycle, ResourceRef, Sandbox,
+    SandboxCode, SandboxEgress, SandboxLimits, SandboxSessionPolicy, ServiceAccount, Stack,
     StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use std::collections::HashMap;
 
-fn gated_fixture(resource_type: &str) -> Option<Stack> {
+fn gated_fixture(resource_type: &str) -> Option<(Stack, StackSettings)> {
     let base = || {
         Stack::new("matrix-stack".to_string()).inputs(vec![gate_input(
             "fixtureEnabled",
@@ -61,6 +62,35 @@ fn gated_fixture(resource_type: &str) -> Option<Stack> {
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
+        // An AWS sandbox's egress connector needs private subnets, so the
+        // fixture declares the network the emitter refuses to render without.
+        "sandbox" => base()
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(sandbox_network())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                Sandbox::new("fixture".to_string())
+                    .code(SandboxCode::Image {
+                        image: "s3://matrix-artifacts/sandbox.zip".to_string(),
+                    })
+                    .limits(SandboxLimits {
+                        cpu: "1".to_string(),
+                        memory: "2Gi".to_string(),
+                        disk: "10Gi".to_string(),
+                        max_processes: None,
+                    })
+                    .egress(SandboxEgress::Deny)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+                "fixtureEnabled",
+            ),
         "experimental/aws-opensearch" => base().add_enabled_when(
             AwsOpenSearch::new("fixture".to_string()).build(),
             ResourceLifecycle::Frozen,
@@ -68,7 +98,33 @@ fn gated_fixture(resource_type: &str) -> Option<Stack> {
         ),
         _ => return None,
     };
-    Some(stack.build())
+    let settings = StackSettings {
+        network: (resource_type == "sandbox").then(sandbox_network),
+        ..StackSettings::default()
+    };
+    Some((stack.build(), settings))
+}
+
+/// The network the sandbox fixture attaches its egress connector to. The
+/// `Network` resource and the stack settings must agree — the emitters read
+/// the resource, the parameter block reads the settings.
+fn sandbox_network() -> NetworkSettings {
+    NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    }
+}
+
+/// Deploy-time answers for a fixture that declares a network: the managed VPC, two AZs.
+fn network_answers() -> HashMap<&'static str, bool> {
+    HashMap::from([
+        ("NetworkModeCreate", true),
+        ("NetworkModeUseExisting", false),
+        ("NetworkUseAz2", true),
+        ("NetworkUseAz3", false),
+        ("NetworkCreateUseAz2", true),
+        ("NetworkCreateUseAz3", false),
+    ])
 }
 
 /// A gated Live resource never reaches a setup template: the generator skips
@@ -131,14 +187,14 @@ fn assert_live_gate_ignored_by_setup(resource_type: &str) {
 /// Rendered, linted, and resolved with the gate declined: the fixture must
 /// leave no registration entry, and every resource the fixture contributed
 /// must carry the gate's condition.
-fn assert_gated_render(resource_type: &str, stack: &Stack) {
+fn assert_gated_render(resource_type: &str, stack: &Stack, settings: StackSettings) {
     // The local cfn-lint spec predates the OpenSearch `Generation` property
     // and fails the type's ungated renders too, so its matrix cell asserts
     // structure without the lint until the spec catches up.
     let template = if resource_type == "experimental/aws-opensearch" {
         try_render_built_ins(
             stack,
-            StackSettings::default(),
+            settings,
             custom_resource_registration(),
             CloudFormationTarget::Aws,
             "aws",
@@ -148,7 +204,7 @@ fn assert_gated_render(resource_type: &str, stack: &Stack) {
     } else {
         let (template, _yaml) = render_built_ins_template(
             stack,
-            StackSettings::default(),
+            settings,
             custom_resource_registration(),
             CloudFormationTarget::Aws,
             "aws",
@@ -178,12 +234,12 @@ fn assert_gated_render(resource_type: &str, stack: &Stack) {
     );
 
     let payload = registration_payload(&template);
-    let declined = resolve(
-        &payload,
-        &HashMap::from([(condition_name, false)]),
-        Declined::Removed,
-    )
-    .expect("registration payload should survive resolution");
+    let mut answers = HashMap::from([(condition_name, false)]);
+    // A fixture that declares a network puts its conditions in the payload too. They are the
+    // deploy-time answers the fixture asks for, not the gate under test.
+    answers.extend(network_answers());
+    let declined = resolve(&payload, &answers, Declined::Removed)
+        .expect("registration payload should survive resolution");
     let text = serde_json::to_string(&declined).expect("resolved payload serializes");
     assert!(
         !text.contains("\"fixture\""),
@@ -208,7 +264,7 @@ fn every_registered_emitter_is_policy_refused_or_renders_gated() {
             continue;
         }
         match gated_fixture(resource_type) {
-            Some(stack) => assert_gated_render(resource_type, &stack),
+            Some((stack, settings)) => assert_gated_render(resource_type, &stack, settings),
             None => allowed_without_fixture.push(resource_type.to_string()),
         }
     }
@@ -229,16 +285,16 @@ fn every_registered_emitter_is_policy_refused_or_renders_gated() {
 /// asserted through both deploy-time answers and locked by a snapshot.
 #[test]
 fn a_gated_vault_renders_conditionally() {
-    let stack = gated_fixture("vault").expect("vault fixture");
+    let (stack, settings) = gated_fixture("vault").expect("vault fixture");
     let (template, yaml) = render_built_ins_template(
         &stack,
-        StackSettings::default(),
+        settings.clone(),
         custom_resource_registration(),
         CloudFormationTarget::Aws,
         "aws",
         "gated vault stack",
     );
-    assert_gated_render("vault", &stack);
+    assert_gated_render("vault", &stack, settings);
 
     let payload = registration_payload(&template);
     let accepted = resolve(
@@ -455,4 +511,30 @@ fn inputs_colliding_after_normalization_are_refused() {
         "the message should render without space runs: {}",
         error.message
     );
+}
+
+/// Writes the sandbox template so it can be validated against AWS itself. The generator's own
+/// tests prove shape; only CloudFormation can say whether it would accept the resource.
+#[test]
+#[ignore]
+fn dump_sandbox_template_for_live_validation() {
+    let (stack, settings) = gated_fixture("sandbox").expect("sandbox fixture");
+    let registry = CfRegistry::built_in();
+    let template = alien_cloudformation::generate_cloudformation_template(
+        &stack,
+        alien_cloudformation::CloudFormationOptions {
+            registry: &registry,
+            target: alien_cloudformation::CloudFormationTarget::Aws,
+            stack_settings: settings,
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
+            registration: alien_cloudformation::RegistrationMode::OutputsFallback,
+            description: None,
+        },
+    )
+    .expect("template generates");
+
+    let json = serde_json::to_string_pretty(&template).expect("serializes");
+    std::fs::write("/tmp/sandbox-template.json", json).expect("writes");
 }

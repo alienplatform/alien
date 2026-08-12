@@ -26,8 +26,8 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
-    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
+    Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
     StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
@@ -207,6 +207,15 @@ pub fn generate_terraform_module(
             continue;
         }
 
+        // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
+        // cloud infrastructure. Emitter lookup keys off the cloud the cluster runs in, so
+        // without this an EKS install would provision the MicroVM image, connector, security
+        // group and roles of the AWS backend it never uses — and refuse `egress: allow`, which
+        // Kubernetes supports, with advice about a platform the customer did not choose.
+        if target.is_kubernetes() && resource_type.as_ref() == Sandbox::RESOURCE_TYPE.as_ref() {
+            continue;
+        }
+
         let emitter = options.registry.require(&resource_type, platform)?;
         let ctx = EmitContext {
             stack,
@@ -336,6 +345,21 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action");
+    // Cloud Control, for AWS APIs the main provider has not caught up with. Keyed off what was
+    // actually emitted, so a stack without one of those resources is unchanged.
+    // Keyed off the connector, not the image: the image is a Cloud Control resource from the
+    // `aws` provider, and only the connector still goes through `awscc`.
+    let include_awscc_provider = has_resource_type(
+        &per_resource,
+        crate::emitters::aws::sandbox::NETWORK_CONNECTOR_RESOURCE,
+    );
+    // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
+    // of its own, and a missing declaration fails at init rather than at plan.
+    let include_time_provider = gcp_iam_propagation_barrier.is_some()
+        || has_resource_type(
+            &per_resource,
+            crate::emitters::aws::sandbox::PROPAGATION_BARRIER_RESOURCE,
+        );
     let setup_only = stack
         .resources
         .values()
@@ -363,10 +387,11 @@ pub fn generate_terraform_module(
         render_body(versions_body(
             target,
             options.registration.as_ref(),
-            gcp_iam_propagation_barrier.is_some(),
+            include_time_provider,
             include_kubernetes_provider,
             include_helm_provider,
             include_azapi_provider,
+            include_awscc_provider,
         ))?,
     );
     files.insert(
@@ -391,6 +416,7 @@ pub fn generate_terraform_module(
             include_kubernetes_provider,
             include_helm_provider,
             include_azapi_provider,
+            include_awscc_provider,
         ))?,
     );
     files.insert(
@@ -1101,6 +1127,7 @@ fn versions_body(
     include_kubernetes_provider: bool,
     include_helm_provider: bool,
     include_azapi_provider: bool,
+    include_awscc_provider: bool,
 ) -> Body {
     let required_version = if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
@@ -1115,6 +1142,12 @@ fn versions_body(
     let mut provider_attrs: Vec<Structure> = Vec::new();
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
+        if include_awscc_provider {
+            provider_attrs.push(attr(
+                "awscc",
+                provider_decl_attr("hashicorp/awscc", ">= 1.0"),
+            ));
+        }
         if matches!(target, TerraformTarget::Eks) {
             provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
         }
@@ -2183,6 +2216,7 @@ fn providers_body(
     include_kubernetes_provider: bool,
     include_helm_provider: bool,
     include_azapi_provider: bool,
+    include_awscc_provider: bool,
 ) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.cloud_platform() {
@@ -2208,6 +2242,17 @@ fn providers_body(
                 ],
                 body: Body::default(),
             }));
+            // awscc has no ambient default: declaring it in required_providers without a
+            // provider block makes `terraform plan` refuse the module outright. It also has to
+            // name the same region as the `aws` provider, or the image is built somewhere the
+            // binding will not look for it.
+            if include_awscc_provider {
+                structures.push(Structure::Block(Block {
+                    identifier: Identifier::sanitized("provider"),
+                    labels: vec![BlockLabel::String("awscc".to_string())],
+                    body: Body::from(vec![attr("region", expr::raw("var.aws_region"))]),
+                }));
+            }
         }
         alien_core::Platform::Gcp => {
             structures.push(Structure::Block(Block {
@@ -3303,6 +3348,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,

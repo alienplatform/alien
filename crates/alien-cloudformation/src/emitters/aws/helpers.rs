@@ -29,7 +29,7 @@ pub const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
 const CONDITION_NETWORK_AZ2: &str = "NetworkUseAz2";
 const CONDITION_NETWORK_AZ3: &str = "NetworkUseAz3";
 pub const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
-const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
+pub const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
 pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
