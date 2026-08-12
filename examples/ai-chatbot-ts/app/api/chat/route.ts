@@ -46,6 +46,9 @@ const queryDatabase = tool({
   },
 })
 
+// Open on purpose: clicking the deployed URL and asking a question is the example. The cost is
+// that anyone holding the URL spends the deployment's model quota, so a real app puts
+// authentication and a per-caller rate limit here. README, "Deploying".
 export async function POST(req: Request) {
   const { messages, model }: { messages: UIMessage[]; model?: string } = await req.json()
 
