@@ -15,6 +15,9 @@ local = ["tokio/fs"]
 # Signing and verifying sandbox capability tokens. Gated because alien-core is also built for
 # targets that have no business carrying a crypto implementation.
 sandbox-capability = ["dep:ed25519-compact"]
+# Framing a child process into sandbox output frames. Gated because most consumers of this
+# crate have no business spawning processes.
+sandbox-process = ["tokio/process", "tokio/io-util", "tokio/time", "tokio/macros", "tokio/sync"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }

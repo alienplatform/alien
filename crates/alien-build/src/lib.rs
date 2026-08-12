@@ -3,6 +3,7 @@ pub mod dependencies;
 pub mod error;
 pub mod merge;
 pub mod plan;
+pub mod sandbox_bundle;
 pub mod settings;
 pub mod toolchain;
 

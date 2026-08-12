@@ -25,6 +25,7 @@ members = [
   "crates/alien-ai-gateway",
   "crates/alien-error-derive",
   "crates/alien-permissions",
+  "crates/alien-sandbox-agent",
   "crates/alien-preflights",
   "crates/alien-deployment",
   "crates/alien-local",

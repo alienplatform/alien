@@ -10,7 +10,8 @@ license-file.workspace = true
 test-utils = ["alien-core/test-utils"]
 
 [dependencies]
-alien-core = { workspace = true }
+zip = { workspace = true }
+alien-core = { workspace = true, features = ["sandbox-process"] }
 alien-error = { workspace = true }
 alien-preflights = { workspace = true }
 dockdash = { workspace = true }
