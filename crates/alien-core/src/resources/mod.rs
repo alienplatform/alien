@@ -9,6 +9,9 @@
 mod worker;
 pub use worker::*;
 
+mod operations_worker;
+pub use operations_worker::*;
+
 mod public_endpoint;
 pub use public_endpoint::*;
 

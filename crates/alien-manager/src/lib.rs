@@ -39,6 +39,7 @@ mod credential_materialization;
 pub mod error;
 pub(crate) mod ids;
 pub mod registry;
+pub mod stack_augmentation;
 pub mod standalone_config;
 pub mod traits;
 

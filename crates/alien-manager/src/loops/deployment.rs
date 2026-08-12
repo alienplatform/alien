@@ -534,7 +534,7 @@ impl DeploymentLoop {
         let client_config = resolved_credentials.client_config;
 
         // 3. Extract the stack for this deployment's platform from the release.
-        let deployment_stack = deployment_stack.ok_or_else(|| {
+        let mut deployment_stack = deployment_stack.ok_or_else(|| {
             AlienError::new(GenericError {
                 message: format!(
                     "Release {} does not contain a stack for platform {}",
@@ -542,6 +542,15 @@ impl DeploymentLoop {
                 ),
             })
         })?;
+
+        // Give a registered extension (platform-owned infrastructure like the
+        // push-mode operations worker) a chance to inject resources into this
+        // pass's in-memory desired stack — never persisted to the release
+        // record. See `stack_augmentation` module docs: the callback must run
+        // on every pass for the resource's whole lifetime, since the executor
+        // deletes anything that disappears between passes.
+        crate::stack_augmentation::augment_desired_stack(&deployment, &mut deployment_stack)
+            .await?;
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {

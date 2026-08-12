@@ -145,6 +145,14 @@ pub fn validate_command_name(command: &str) -> Result<()> {
 /// consulting the stack, since the operator is not a stack resource.
 pub const OPERATOR_COMMAND_TARGET_ID: &str = "operator";
 
+/// The reserved command-target id for the push-mode operations worker — the
+/// twin of [`OPERATOR_COMMAND_TARGET_ID`] for deployments that push commands
+/// instead of the operator pulling them. Not a stack resource: whoever
+/// provisions the deployment's push infrastructure owns this target's actual
+/// delivery, independent of what the customer declared in their stack. It is
+/// resolved to a Worker target so [`delivery_mode_for`] can route it Push.
+pub const OPERATIONS_COMMAND_TARGET_ID: &str = "operations";
+
 /// Target-selection rules shared by both the
 /// in-memory and SQLite registries route through.
 ///
@@ -173,6 +181,17 @@ pub fn select_command_target(
         return Ok(CommandTarget::new(
             OPERATOR_COMMAND_TARGET_ID.to_string(),
             CommandTargetType::Daemon,
+        ));
+    }
+
+    // The push-mode operations worker is likewise reserved, not a stack
+    // resource — resolved as a Worker target so delivery_mode_for can route it
+    // Push. A same-named customer stack resource never shadows this: the
+    // reserved check runs before the stack lookup below.
+    if requested == Some(OPERATIONS_COMMAND_TARGET_ID) {
+        return Ok(CommandTarget::new(
+            OPERATIONS_COMMAND_TARGET_ID.to_string(),
+            CommandTargetType::Worker,
         ));
     }
 
@@ -984,5 +1003,40 @@ mod tests {
         let target =
             select_command_target("dep-1", &targets, Some(OPERATOR_COMMAND_TARGET_ID)).unwrap();
         assert_eq!(target.resource_type, CommandTargetType::Daemon);
+    }
+
+    #[test]
+    fn operations_target_resolves_without_a_stack_resource() {
+        // The reserved operations id resolves to a Worker target even when no
+        // stack targets exist — push-mode operation commands address the
+        // operator-owned operations worker, which is never a stack resource.
+        let target =
+            select_command_target("dep-1", &[], Some(OPERATIONS_COMMAND_TARGET_ID)).unwrap();
+        assert_eq!(target.resource_id, OPERATIONS_COMMAND_TARGET_ID);
+        assert_eq!(target.resource_type, CommandTargetType::Worker);
+        // A Worker target follows worker_mode — Push when the caller derives Push.
+        assert_eq!(
+            delivery_mode_for(target.resource_type, CommandDeliveryMode::Push),
+            CommandDeliveryMode::Push
+        );
+        assert_eq!(
+            delivery_mode_for(target.resource_type, CommandDeliveryMode::Pull),
+            CommandDeliveryMode::Pull
+        );
+    }
+
+    #[test]
+    fn operations_target_is_not_shadowed_by_a_same_named_stack_resource() {
+        // Even if a stack somehow registered a "operations" worker, the reserved
+        // id resolves to the operator-owned target (the short-circuit wins) —
+        // same resource type either way here, but the id must still short-circuit
+        // rather than fall through to the stack lookup.
+        let targets = vec![CommandTarget::new(
+            OPERATIONS_COMMAND_TARGET_ID,
+            CommandTargetType::Container,
+        )];
+        let target =
+            select_command_target("dep-1", &targets, Some(OPERATIONS_COMMAND_TARGET_ID)).unwrap();
+        assert_eq!(target.resource_type, CommandTargetType::Worker);
     }
 }

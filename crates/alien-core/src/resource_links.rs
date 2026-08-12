@@ -244,6 +244,10 @@ mod tests {
         ("azure_container_apps_environment", false),
         ("azure_service_bus_namespace", false),
         ("experimental/aws-opensearch", false),
+        // Never customer-declared (the manager injects it, see
+        // alien-manager's stack_augmentation), so it has no author-declared
+        // `links` field to resolve or scrub.
+        ("operations_worker", false),
     ];
 
     /// Drift guard. The registered types are read out of the deserializer's own

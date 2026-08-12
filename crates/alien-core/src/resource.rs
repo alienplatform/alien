@@ -266,6 +266,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::AwsOpenSearch>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "operations_worker" => Box::new(
+                serde_json::from_value::<crate::resources::OperationsWorker>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             other => {
                 return Err(serde::de::Error::unknown_variant(
                     other,
@@ -294,6 +298,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "azure_container_apps_environment",
                         "azure_service_bus_namespace",
                         "experimental/aws-opensearch",
+                        "operations_worker",
                     ],
                 ))
             }
