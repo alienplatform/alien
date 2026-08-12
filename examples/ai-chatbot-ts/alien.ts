@@ -13,6 +13,8 @@ const app = new alien.Container("app")
   .cpu(0.5)
   .memory("512Mi")
   .port(3000)
+  // Unauthenticated on purpose, which is what makes the demo clickable; see the note
+  // above POST in app/api/chat/route.ts for what a real deployment owes this endpoint.
   .publicEndpoint("web", 3000, "http")
   // Next's standalone server reads these; HOSTNAME=0.0.0.0 binds all interfaces.
   .environment({ PORT: "3000", HOSTNAME: "0.0.0.0" })
