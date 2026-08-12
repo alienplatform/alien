@@ -27,11 +27,11 @@ use alien_error::{AlienError, Context, IntoAlienError};
 /// The manager holds the secret key; it never enters deployment state and never reaches a
 /// sandbox — see `crates/alien-infra/AGENTS.md` on raw secrets in resource configs.
 pub fn mint(claims: &SandboxCapabilityClaims, secret_key: &SecretKey) -> Result<String> {
-    let json = serde_json::to_vec(claims)
-        .into_alien_error()
-        .context(ErrorData::JsonSerializationFailed {
+    let json = serde_json::to_vec(claims).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
             reason: "Failed to serialize sandbox capability claims".to_string(),
-        })?;
+        },
+    )?;
 
     let payload = URL_SAFE_NO_PAD.encode(json);
     let signature = secret_key.sign(payload.as_bytes(), None);

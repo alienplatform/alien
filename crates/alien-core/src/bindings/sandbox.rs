@@ -221,8 +221,17 @@ mod tests {
     #[test]
     fn every_variant_roundtrips() {
         let bindings = vec![
-            SandboxBinding::aws("arn:aws:lambda:us-east-2:1:microvm-image:sbx", "3", "us-east-2"),
-            SandboxBinding::azure("sbg1", "https://management.swedencentral.azuredevcompute.io", "swedencentral", "rg"),
+            SandboxBinding::aws(
+                "arn:aws:lambda:us-east-2:1:microvm-image:sbx",
+                "3",
+                "us-east-2",
+            ),
+            SandboxBinding::azure(
+                "sbg1",
+                "https://management.swedencentral.azuredevcompute.io",
+                "swedencentral",
+                "rg",
+            ),
             SandboxBinding::gcp("/usr/local/gcp/bin/sandbox", false),
             SandboxBinding::kubernetes(
                 "alien-sandboxes",
@@ -232,7 +241,11 @@ mod tests {
                 "alien-sandbox-agent-capability",
                 "/var/run/secrets/kubernetes.io/serviceaccount/token",
             ),
-            SandboxBinding::local("http://127.0.0.1:8931", "agent", "/state/sandbox-manager.token"),
+            SandboxBinding::local(
+                "http://127.0.0.1:8931",
+                "agent",
+                "/state/sandbox-manager.token",
+            ),
         ];
 
         for binding in bindings {
@@ -275,8 +288,12 @@ mod tests {
     /// another's by dropping the fields that differ.
     #[test]
     fn a_sandbox_binding_cannot_deserialize_as_another_resource() {
-        let json = serde_json::to_string(&SandboxBinding::local("http://127.0.0.1:8931", "agent", "/state/sandbox-manager.token"))
-            .expect("serializes");
+        let json = serde_json::to_string(&SandboxBinding::local(
+            "http://127.0.0.1:8931",
+            "agent",
+            "/state/sandbox-manager.token",
+        ))
+        .expect("serializes");
 
         serde_json::from_str::<KvBinding>(&json)
             .expect_err("a sandbox binding must not parse as a KV binding");

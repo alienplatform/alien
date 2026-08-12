@@ -56,6 +56,7 @@ export type { AwsRemoteBindingsImportData } from "./aws-remote-bindings-import-d
 export type { AwsRemoteStackManagementHeartbeatData } from "./aws-remote-stack-management-heartbeat-data-schema.js";
 export type { AwsRemoteStackManagementImportData } from "./aws-remote-stack-management-import-data-schema.js";
 export type { AwsS3StorageHeartbeatData } from "./aws-s3-storage-heartbeat-data-schema.js";
+export type { AwsSandboxImportData } from "./aws-sandbox-import-data-schema.js";
 export type { AwsServiceAccountImportData } from "./aws-service-account-import-data-schema.js";
 export type { AwsSqsQueueHeartbeatData } from "./aws-sqs-queue-heartbeat-data-schema.js";
 export type { AwsStorageImportData } from "./aws-storage-import-data-schema.js";
@@ -96,6 +97,7 @@ export type { AzureResourceGroupHeartbeatStatus } from "./azure-resource-group-h
 export type { AzureResourceGroupImportData } from "./azure-resource-group-import-data-schema.js";
 export type { AzureResourceProviderActivationHeartbeatData } from "./azure-resource-provider-activation-heartbeat-data-schema.js";
 export type { AzureSandboxGroupHeartbeatData } from "./azure-sandbox-group-heartbeat-data-schema.js";
+export type { AzureSandboxImportData } from "./azure-sandbox-import-data-schema.js";
 export type { AzureServiceAccountImportData } from "./azure-service-account-import-data-schema.js";
 export type { AzureServiceActivationImportData } from "./azure-service-activation-import-data-schema.js";
 export type { AzureServiceBusNamespaceHeartbeatData } from "./azure-service-bus-namespace-heartbeat-data-schema.js";
@@ -476,6 +478,7 @@ export { AwsRemoteBindingsImportDataSchema } from "./aws-remote-bindings-import-
 export { AwsRemoteStackManagementHeartbeatDataSchema } from "./aws-remote-stack-management-heartbeat-data-schema.js";
 export { AwsRemoteStackManagementImportDataSchema } from "./aws-remote-stack-management-import-data-schema.js";
 export { AwsS3StorageHeartbeatDataSchema } from "./aws-s3-storage-heartbeat-data-schema.js";
+export { AwsSandboxImportDataSchema } from "./aws-sandbox-import-data-schema.js";
 export { AwsServiceAccountImportDataSchema } from "./aws-service-account-import-data-schema.js";
 export { AwsSqsQueueHeartbeatDataSchema } from "./aws-sqs-queue-heartbeat-data-schema.js";
 export { AwsStorageImportDataSchema } from "./aws-storage-import-data-schema.js";
@@ -516,6 +519,7 @@ export { AzureResourceGroupHeartbeatStatusSchema } from "./azure-resource-group-
 export { AzureResourceGroupImportDataSchema } from "./azure-resource-group-import-data-schema.js";
 export { AzureResourceProviderActivationHeartbeatDataSchema } from "./azure-resource-provider-activation-heartbeat-data-schema.js";
 export { AzureSandboxGroupHeartbeatDataSchema } from "./azure-sandbox-group-heartbeat-data-schema.js";
+export { AzureSandboxImportDataSchema } from "./azure-sandbox-import-data-schema.js";
 export { AzureServiceAccountImportDataSchema } from "./azure-service-account-import-data-schema.js";
 export { AzureServiceActivationImportDataSchema } from "./azure-service-activation-import-data-schema.js";
 export { AzureServiceBusNamespaceHeartbeatDataSchema } from "./azure-service-bus-namespace-heartbeat-data-schema.js";

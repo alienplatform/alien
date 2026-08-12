@@ -14,6 +14,8 @@ pub mod authorization;
 pub mod blob_containers;
 pub mod cognitive_services;
 pub mod common;
+pub mod sandbox_data_plane;
+pub mod sandbox_groups;
 pub mod compute;
 pub mod container_apps;
 pub mod containerregistry;

@@ -16,6 +16,7 @@ use alien_aws_clients::{
     iam::{IamApi, IamClient},
     kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
+    lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient},
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
@@ -27,6 +28,8 @@ use alien_aws_clients::{
 use alien_azure_clients::{
     application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient},
     authorization::{AuthorizationApi, AzureAuthorizationClient},
+    sandbox_data_plane::{AzureSandboxDataPlaneClient, SandboxDataPlaneApi},
+    sandbox_groups::{AzureSandboxGroupsClient, SandboxGroupsApi},
     blob_containers::{AzureBlobContainerClient, BlobContainerApi},
     cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi},
     compute::{AzureVmssClient, VirtualMachineScaleSetsApi},
@@ -80,7 +83,8 @@ use alien_gcp_clients::{
 use alien_k8s_clients::{
     deployments::DeploymentApi, events::EventApi, jobs::JobApi,
     kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
-    routes::RouteApi, secrets::SecretsApi, services::ServiceApi, version::VersionApi,
+    routes::RouteApi, runtime_classes::RuntimeClassApi, secrets::SecretsApi,
+    services::ServiceApi, version::VersionApi,
     KubernetesClientConfig,
 };
 use std::sync::Arc;
@@ -101,6 +105,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     async fn get_aws_bedrock_client(&self, config: &AwsClientConfig)
         -> Result<Arc<dyn BedrockApi>>;
     async fn get_aws_lambda_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn LambdaApi>>;
+    async fn get_aws_microvms_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn LambdaMicrovmsApi>>;
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
     async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>>;
     async fn get_aws_cloudformation_client(
@@ -194,6 +202,16 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn AuthorizationApi>>;
+    fn get_azure_sandbox_groups_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn SandboxGroupsApi>>;
+    fn get_azure_sandbox_data_plane_client(
+        &self,
+        config: &AzureClientConfig,
+        region: &str,
+        resource_group: &str,
+    ) -> Result<Arc<dyn SandboxDataPlaneApi>>;
     fn get_azure_blob_container_client(
         &self,
         config: &AzureClientConfig,
@@ -326,6 +344,11 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn NodeApi>>;
     #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_runtime_class_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn RuntimeClassApi>>;
+    #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_metrics_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
@@ -404,6 +427,13 @@ pub trait PlatformServiceProvider: Send + Sync {
     }
 
     #[cfg(feature = "local")]
+    fn get_local_sandbox_manager(&self) -> Option<Arc<alien_local::LocalSandboxManager>>;
+    #[cfg(not(feature = "local"))]
+    fn get_local_sandbox_manager(&self) -> Option<Arc<()>> {
+        None
+    }
+
+    #[cfg(feature = "local")]
     fn get_local_queue_manager(&self) -> Option<Arc<alien_local::LocalQueueManager>>;
     #[cfg(not(feature = "local"))]
     fn get_local_queue_manager(&self) -> Option<Arc<()>> {
@@ -478,6 +508,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(IamClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_microvms_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn LambdaMicrovmsApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(LambdaMicrovmsClient::new(
             reqwest::Client::new(),
             credentials,
         )))
@@ -912,6 +958,30 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_azure_sandbox_groups_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn SandboxGroupsApi>> {
+        Ok(Arc::new(AzureSandboxGroupsClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_sandbox_data_plane_client(
+        &self,
+        config: &AzureClientConfig,
+        region: &str,
+        resource_group: &str,
+    ) -> Result<Arc<dyn SandboxDataPlaneApi>> {
+        Ok(Arc::new(AzureSandboxDataPlaneClient::new(
+            reqwest::Client::new(),
+            region,
+            resource_group,
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
     fn get_azure_application_gateway_client(
         &self,
         config: &AzureClientConfig,
@@ -1186,7 +1256,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn DeploymentApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes deployment client".to_string(),
                 resource_id: None,
@@ -1200,7 +1270,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn JobApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes job client".to_string(),
                 resource_id: None,
@@ -1214,7 +1284,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn PodApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes pod client".to_string(),
                 resource_id: None,
@@ -1228,9 +1298,23 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn EventApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes event client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_runtime_class_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn RuntimeClassApi>> {
+        let client = kubernetes_client(config).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes runtime class client".to_string(),
                 resource_id: None,
             },
         )?;
@@ -1242,7 +1326,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn NodeApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes node client".to_string(),
                 resource_id: None,
@@ -1256,7 +1340,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn MetricsApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes metrics client".to_string(),
                 resource_id: None,
@@ -1270,7 +1354,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn SecretsApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes secrets client".to_string(),
                 resource_id: None,
@@ -1284,7 +1368,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn ServiceApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes service client".to_string(),
                 resource_id: None,
@@ -1298,7 +1382,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn RouteApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes route client".to_string(),
                 resource_id: None,
@@ -1312,7 +1396,7 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn VersionApi>> {
-        let client = KubernetesClient::new(config.clone()).await.context(
+        let client = kubernetes_client(config).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes version client".to_string(),
                 resource_id: None,
@@ -1370,6 +1454,11 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     #[cfg(feature = "local")]
+    fn get_local_sandbox_manager(&self) -> Option<Arc<alien_local::LocalSandboxManager>> {
+        self.local_bindings.as_ref().and_then(|p| p.sandbox_manager())
+    }
+
+    #[cfg(feature = "local")]
     fn get_local_queue_manager(&self) -> Option<Arc<alien_local::LocalQueueManager>> {
         self.local_bindings
             .as_ref()
@@ -1380,4 +1469,17 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     fn get_local_bindings_provider(&self) -> Option<Arc<alien_local::LocalBindingsProvider>> {
         self.local_bindings.clone()
     }
+}
+
+/// Builds a Kubernetes client, resolving a kubeconfig reference first.
+///
+/// `KubernetesClientConfig::Kubeconfig` is a placeholder the client refuses, and it names this
+/// crate as where the resolution belongs. Routing every client through here is what makes that
+/// true, rather than each caller resolving for itself or, as before, nobody doing it.
+#[cfg(feature = "kubernetes")]
+async fn kubernetes_client(
+    config: &KubernetesClientConfig,
+) -> alien_client_core::Result<KubernetesClient> {
+    let resolved = crate::kubeconfig::resolve_kubeconfig(config).await?;
+    KubernetesClient::new(resolved).await
 }

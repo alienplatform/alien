@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::future::join_all;
-use object_store::PutPayload;
 use object_store::path::Path;
+use object_store::PutPayload;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -969,11 +969,9 @@ fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
     let error = validate_aws_remote_client_config(&aws, at(3600))
         .expect_err("AWS credentials expiring before the lease must fail closed");
     assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
-    assert!(
-        error
-            .message
-            .contains("credential expires before its lease")
-    );
+    assert!(error
+        .message
+        .contains("credential expires before its lease"));
 
     let aws = alien_core::AwsClientConfig {
         account_id: "123456789012".to_string(),

@@ -1205,7 +1205,8 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// Given a binding identifier, builds a ServiceAccount implementation.
     async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>>;
 
-
+    /// Given a binding identifier, builds a Sandbox implementation.
+    async fn load_sandbox(&self, binding_name: &str) -> Result<Arc<dyn Sandbox>>;
 
     /// Runtime-only binding env vars (a local Postgres connection with its password, a local
     /// BYO-key AI binding) for the given resource — re-resolved on every (re)start so the secret
