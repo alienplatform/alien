@@ -12,6 +12,7 @@ use tracing::info;
 /// The binding name used in test app stack configurations.
 pub(super) const STORAGE_BINDING: &str = "alien-storage";
 const KV_BINDING: &str = "alien-kv";
+const SANDBOX_BINDING: &str = "alien-sandbox";
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
@@ -1087,5 +1088,45 @@ pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
         model_count,
         probe_model, "AI catalog metadata and one qualified invocation passed (2xx or 429)"
     );
+    Ok(())
+}
+
+/// Runs a real sandbox session through the deployed app.
+///
+/// The app creates a session, runs a command, moves a file both directions and terminates. A
+/// failure anywhere in that chain comes back as a non-2xx, so the assertion here is the whole
+/// chain rather than any one call.
+pub async fn check_sandbox(deployment: &TestDeployment) -> anyhow::Result<()> {
+    let url = deployment_url(deployment)?;
+    info!("Checking sandbox binding");
+
+    let client = reqwest::Client::new();
+    let resp = post_empty(&client, format!("{}/sandbox-test/{}", url, SANDBOX_BINDING))
+        .send()
+        .await
+        .context("Sandbox test request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("Sandbox test returned {}: {}", status, body);
+    }
+
+    let data: BindingTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse sandbox response")?;
+    if !data.success {
+        bail!("Sandbox test reported failure");
+    }
+    if data.binding_name != SANDBOX_BINDING {
+        bail!(
+            "Sandbox test binding mismatch: expected {}, got {}",
+            SANDBOX_BINDING,
+            data.binding_name
+        );
+    }
+
+    info!("Sandbox binding check passed");
     Ok(())
 }

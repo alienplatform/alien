@@ -20,6 +20,17 @@ const queue = new alien.Queue("alien-queue").build()
 const eventsQueue = new alien.Queue("alien-events-queue").build()
 const serviceAccount = new alien.ServiceAccount("test-alien-sa").build()
 const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
+// Sandbox is Local-only here for the same reason as Postgres: the cloud sandbox controllers
+// do not ship in this repo, so declaring one on a cloud target would ask the executor to
+// provision a backend with no registered controller.
+const sandbox = isLocal
+  ? new alien.Sandbox("alien-sandbox")
+      .code({ type: "image", image: "alpine:3.20" })
+      .limits({ cpu: "500m", memory: "512Mi", disk: "1Gi", maxProcesses: 64 })
+      .egress({ mode: "deny" })
+      .session({ maxLifetimeSeconds: 600 })
+      .build()
+  : undefined
 
 let workerBuilder = new alien.Worker("alien-rs-worker")
   .code({
@@ -52,6 +63,9 @@ let workerBuilder = new alien.Worker("alien-rs-worker")
 if (postgres) {
   workerBuilder = workerBuilder.link(postgres)
 }
+if (sandbox) {
+  workerBuilder = workerBuilder.link(sandbox)
+}
 const worker = workerBuilder.build()
 
 const executionPermissions = [
@@ -69,6 +83,9 @@ const executionPermissions = [
 ]
 if (postgres) {
   executionPermissions.push("postgres/data-access")
+}
+if (sandbox) {
+  executionPermissions.push("sandbox/execute")
 }
 
 let stackBuilder = new alien.Stack("alien-rs-stack")
@@ -89,6 +106,9 @@ let stackBuilder = new alien.Stack("alien-rs-stack")
   .add(serviceAccount, "frozen")
 if (postgres) {
   stackBuilder = stackBuilder.add(postgres, "live")
+}
+if (sandbox) {
+  stackBuilder = stackBuilder.add(sandbox, "frozen")
 }
 const stack = stackBuilder.add(worker, "live").build()
 

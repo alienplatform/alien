@@ -190,6 +190,8 @@ pub enum Binding {
     Vault,
     /// Managed Postgres database (Aurora, Cloud SQL, Flexible Server, embedded pgvector on Local)
     Postgres,
+    /// Sandbox session: run a command, move a file in and out, terminate
+    Sandbox,
     /// Message queue (SQS, Pub/Sub, Service Bus)
     Queue,
     /// Direct worker-to-worker invocation
@@ -233,6 +235,7 @@ impl std::fmt::Display for Binding {
             Binding::Kv => write!(f, "kv"),
             Binding::Vault => write!(f, "vault"),
             Binding::Postgres => write!(f, "postgres"),
+            Binding::Sandbox => write!(f, "sandbox"),
             Binding::Queue => write!(f, "queue"),
             Binding::Worker => write!(f, "worker"),
             Binding::Container => write!(f, "container"),
@@ -312,6 +315,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             // Only the embedded Local controller ships in this repo, so Postgres is
             // exercised on Local only.
             bindings.push(Binding::Postgres);
+            // Same reason for Sandbox: the cloud sandbox controllers are not in this repo, so
+            // the cloud matrix is covered by recorded live runs rather than by this suite.
+            bindings.push(Binding::Sandbox);
         }
         _ => {}
     }
