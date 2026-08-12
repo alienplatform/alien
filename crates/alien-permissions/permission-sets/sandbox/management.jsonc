@@ -1,0 +1,91 @@
+{
+  "id": "sandbox/management",
+  "description": "Allows creating and terminating sandbox sessions (no access to session contents)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Creating a session acts on the image it is launched from, so this statement carries
+          // the real ${stackPrefix} scope: a workload can only start MicroVMs from its own
+          // sandbox's image.
+          "actions": ["lambda:RunMicrovm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        // Name-scoped: PassRole is evaluated against the role being passed, which carries no
+        // resource tag to bound it with.
+        "label": "pass-sandbox-execution-role",
+        "description": "Allow a MicroVM to run under the sandbox's own execution role.",
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          // Addressing an already-running MicroVM. Suspending or terminating does not grant
+          // access to what runs inside — that needs CreateMicrovmAuthToken, which is
+          // sandbox/execute.
+          "actions": ["lambda:TerminateMicrovm", "lambda:SuspendMicrovm", "lambda:ResumeMicrovm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    // Azure separates session lifecycle from the actions that reach inside a session, so this
+    // set can start and stop sessions without being able to read one.
+    "azure": [
+      {
+        "grant": {
+          "dataActions": [
+            "Microsoft.App/sandboxGroups/sandboxes/write",
+            "Microsoft.App/sandboxGroups/sandboxes/delete",
+            "Microsoft.App/sandboxGroups/sandboxes/read",
+            "Microsoft.App/sandboxGroups/sandboxes/count/read"
+          ]
+        },
+        // Resource-scoped only, unlike every other grant here. An Azure RBAC scope has to name a
+        // concrete resource, so the stack-level scope can only be the whole resource group — and
+        // there it would let a holder terminate sessions in a sibling sandbox group. Nothing
+        // needs it: sessions are created and destroyed by the application through its resource
+        // binding at runtime, and the sandbox group's own lifecycle is a control-plane action.
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+    // No GCP entry, and nothing to add: a GCP sandbox is a launcher subprocess inside the app's
+    // own Cloud Run instance, so it creates no GCP resource and makes no GCP API call.
+  }
+}

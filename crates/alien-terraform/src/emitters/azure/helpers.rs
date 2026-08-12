@@ -270,11 +270,17 @@ pub fn emit_role_definition_and_assignments(
     // `postgres/data-access`, whose connection secret is read through the shared deployment vault's
     // `vault/data-read`, so it carries an empty `azure` list by design). An empty list reaching
     // the generator would otherwise fail-fast with "produced no Azure bindings".
+    // Skipped for the same reason when no Azure grant declares a stack binding. A grant can be
+    // deliberately resource-only — `sandbox/management`, whose session actions would reach a
+    // sibling sandbox group at the only stack-level scope Azure RBAC can express — and asking the
+    // generator for a target the set does not declare is a hard error rather than an empty plan.
     if permission_set
         .platforms
         .azure
         .as_ref()
-        .map(|bindings| bindings.is_empty())
+        .map(|bindings| {
+            bindings.is_empty() || bindings.iter().all(|b| b.binding.stack.is_none())
+        })
         .unwrap_or(true)
     {
         return Ok(());

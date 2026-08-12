@@ -1,0 +1,49 @@
+{
+  "id": "sandbox/heartbeat",
+  "description": "Allows reading sandbox parent state",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Parent state: whether the image exists and which versions are live. A rolled
+          // version stays a cleanup scope until its own MicroVMs are gone, so the heartbeat
+          // reads versions rather than assuming the newest.
+          //
+          // No session count here: counting sessions means `lambda:ListMicrovms`, which AWS
+          // authorizes against no resource type, so granting it would mean an account-wide grant.
+          "actions": ["lambda:GetMicrovmImage", "lambda:ListMicrovmImageVersions"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          // Control-plane read only. Microsoft.App/sandboxGroups/sandboxes/stats/read returns cpu, memory and network counters with no
+          // session contents, and AppEnvSessionConsoleLogs is deliberately absent — it captures
+          // whatever the sandbox writes.
+          "actions": ["Microsoft.App/sandboxGroups/read"]
+        },
+        // Resource-scoped only. At the resource group — the sole stack-level scope Azure RBAC
+        // can express — this read would enumerate sibling sandbox groups. Nothing needs it: the
+        // heartbeat reports on the sandbox it is bound to.
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

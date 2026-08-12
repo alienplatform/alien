@@ -373,3 +373,108 @@ fn test_azure_wildcard_scope_error() {
         .to_string()
         .contains("uses wildcard scope"));
 }
+
+/// Session lifecycle is a data action on a sandbox group's children, and an Azure RBAC scope has
+/// to name a concrete resource — so a stack-level binding could only be the whole resource group,
+/// where it would let a holder terminate sessions in a sibling sandbox group. Nothing needs that:
+/// sessions are created and destroyed by the application through its resource binding.
+/// A resource-group-scoped read enumerates sibling sandbox groups. The heartbeat reports on the
+/// sandbox it is bound to, so it has no reason to see them.
+#[test]
+fn sandbox_heartbeat_grants_nothing_at_stack_scope() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/heartbeat").expect("permission set exists");
+    let context = create_test_context();
+
+    let error = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect_err("a stack-scoped read would enumerate sibling sandbox groups");
+    assert_eq!(error.code, "BINDING_TARGET_NOT_SUPPORTED");
+}
+
+/// The Data Owner role reaches inside a session. At the only stack-level scope Azure RBAC can
+/// express — the resource group — a holder would reach inside every sibling sandbox group.
+#[test]
+fn sandbox_execute_grants_nothing_at_stack_scope() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/execute").expect("permission set exists");
+    let context = create_test_context();
+
+    let error = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect_err("session-content access must not span sibling sandbox groups");
+    assert_eq!(error.code, "BINDING_TARGET_NOT_SUPPORTED");
+
+    let resource_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("resource grant plan should generate");
+    assert_eq!(resource_plan.bindings.len(), 1, "the sandbox's own group is still reachable");
+    assert!(resource_plan.bindings[0].scope.contains("/sandboxGroups/"));
+}
+
+#[test]
+fn sandbox_management_grants_nothing_at_stack_scope() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/management").expect("permission set exists");
+    let context = create_test_context();
+
+    let error = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect_err("a resource-group-scoped session grant reaches sibling sandbox groups");
+    assert_eq!(error.code, "BINDING_TARGET_NOT_SUPPORTED");
+
+    let resource_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("resource grant plan should generate");
+    assert_eq!(resource_plan.bindings.len(), 1, "the sandbox's own group is still managed");
+    assert!(
+        resource_plan.bindings[0].scope.contains("/sandboxGroups/"),
+        "scoped to one sandbox group: {}",
+        resource_plan.bindings[0].scope
+    );
+}
+
+/// The one sandbox set that keeps a resource-group stack binding, because Azure authorizes a
+/// create against the parent and there is no scope between a group and its resource group.
+///
+/// Its siblings — management, execute and heartbeat — all refuse the stack target outright. This
+/// one cannot: a provision set is only ever compiled at stack scope, so a resource-only grant
+/// would reach nobody and leave the identity that created the group unable to destroy it. The
+/// test pins that the whole lifecycle is deliverable there, which is what the narrower shape
+/// silently broke.
+#[test]
+fn sandbox_provision_can_manage_its_group_at_stack_scope() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/provision").expect("permission set exists");
+    let context = create_test_context();
+
+    let stack_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("creating the group needs its parent");
+
+    let stack_actions: Vec<&str> = stack_plan
+        .custom_roles
+        .iter()
+        .flat_map(|role| role.role_definition.actions.iter().map(String::as_str))
+        .collect();
+
+    for required in [
+        "Microsoft.App/sandboxGroups/write",
+        "Microsoft.App/sandboxGroups/delete",
+        "Microsoft.App/sandboxGroups/read",
+    ] {
+        assert!(
+            stack_actions.contains(&required),
+            "the setup identity is the only holder of this set, so {required} must be \
+             deliverable at stack scope: {stack_actions:?}"
+        );
+    }
+
+    // The data-plane role stays out: this set could otherwise grant itself session access.
+    assert!(
+        !stack_actions
+            .iter()
+            .any(|action| action.contains("roleAssignments")),
+        "provision must not be able to assign roles: {stack_actions:?}"
+    );
+}
