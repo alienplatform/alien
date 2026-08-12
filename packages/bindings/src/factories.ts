@@ -17,11 +17,13 @@ import {
   AlienError,
   InvalidPostgresTlsConfigError,
   UnknownPostgresSslModeError,
+  UnknownSandboxValueError,
   unwrapNapiError,
 } from "./errors.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
+  RawCommandFrame,
   RawContainerHandle,
   RawKeyHandle,
   RawKvHandle,
@@ -30,10 +32,13 @@ import type {
   RawQueueHandle,
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
+  RawSandboxHandle,
+  RawSandboxSession,
   RawStorageHandle,
   RawVaultHandle,
 } from "./loader.js"
 import type {
+  CommandFrame,
   Container,
   Key,
   KeyOptions,
@@ -48,6 +53,8 @@ import type {
   Queue,
   QueueMessage,
   RemoteStorage,
+  Sandbox,
+  SandboxSession,
   SignedUrlOptions,
   Storage,
   StoragePutOptions,
@@ -130,6 +137,123 @@ function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): Remot
     delete: path => guard(handle, raw => raw.delete(path)),
     list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
     head: path => guard(handle, raw => raw.head(path)),
+  }
+}
+
+/** The session states the addon and this wrapper agree on. */
+const SANDBOX_SESSION_STATES = ["starting", "running", "suspended", "terminated"] as const
+
+/** The output frame kinds that carry data; `exit` is handled separately. */
+const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const
+
+/**
+ * Narrows a value the addon produced into a declared union, or throws.
+ *
+ * Casting would put a value outside the union behind a type claiming otherwise, and a caller's
+ * `switch` over the union would then fall through with no error. This is the same version-skew
+ * argument `toPostgresConnection` makes for `sslmode`.
+ */
+function narrow<T extends string>(field: string, value: string, expected: readonly T[]): T {
+  if ((expected as readonly string[]).includes(value)) {
+    return value as T
+  }
+  throw new AlienError(
+    UnknownSandboxValueError.create({ field, value, expected: [...expected] }).toOptions(),
+  )
+}
+
+function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
+  const session = (raw: RawSandboxSession): SandboxSession => ({
+    sessionId: raw.sessionId,
+    state: narrow("session state", raw.state, SANDBOX_SESSION_STATES),
+    generation: raw.generation,
+  })
+
+  const frame = (raw: RawCommandFrame): CommandFrame =>
+    raw.kind === "exit"
+      ? { kind: "exit", exitCode: raw.exitCode ?? -1, truncated: raw.truncated ?? false }
+      : {
+          kind: narrow("frame kind", raw.kind, SANDBOX_STREAM_KINDS),
+          seq: raw.seq ?? 0,
+          data: raw.data ?? Buffer.alloc(0),
+        }
+
+  return {
+    capabilities: () => guard(handle, async raw => raw.capabilities()),
+    create: options =>
+      guard(handle, async raw =>
+        session(
+          await raw.create(
+            options?.sessionId ?? null,
+            options?.tenantKey ?? null,
+            options?.env ?? null,
+          ),
+        ),
+      ),
+    get: sessionId =>
+      guard(handle, async raw => {
+        const found = await raw.get(sessionId)
+        return found === null ? null : session(found)
+      }),
+    getOrCreate: options =>
+      guard(handle, async raw =>
+        session(
+          await raw.getOrCreate(
+            options?.sessionId ?? null,
+            options?.tenantKey ?? null,
+            options?.env ?? null,
+          ),
+        ),
+      ),
+    list: () => guard(handle, async raw => (await raw.list()).map(session)),
+    // Not `async function*` over a resolved stream: the handle is opened on the first pull, so
+    // a caller that never iterates never starts a command.
+    runCommand: (sessionId, command, options) => ({
+      async *[Symbol.asyncIterator]() {
+        const stream = await guard(handle, raw =>
+          raw.runCommand(
+            sessionId,
+            command,
+            options.deadlineMs,
+            options.workingDirectory ?? null,
+            options.env ?? null,
+          ),
+        )
+
+        // A caller that breaks out of the loop, returns, or throws still leaves a command
+        // running in the sandbox. `for await` calls the generator's `return()` on every one of
+        // those, so closing here is what stops paying for output nobody is reading.
+        try {
+          while (true) {
+            let next: RawCommandFrame | null
+            try {
+              next = await stream.next()
+            } catch (err) {
+              throw unwrapNapiError(err)
+            }
+            if (next === null) return
+            yield frame(next)
+          }
+        } finally {
+          await stream.close()
+        }
+      },
+    }),
+    readFile: (sessionId, path) => guard(handle, raw => raw.readFile(sessionId, path)),
+    writeFiles: (sessionId, files) =>
+      guard(handle, async raw => {
+        for (const [path, contents] of Object.entries(files)) {
+          await raw.writeFile(
+            sessionId,
+            path,
+            typeof contents === "string" ? Buffer.from(contents, "utf8") : contents,
+          )
+        }
+      }),
+    mkdir: (sessionId, path) => guard(handle, raw => raw.mkdir(sessionId, path)),
+    suspend: sessionId => guard(handle, raw => raw.suspend(sessionId)),
+    resume: sessionId => guard(handle, raw => raw.resume(sessionId)),
+    terminate: sessionId => guard(handle, raw => raw.terminate(sessionId)),
   }
 }
 
@@ -348,6 +472,7 @@ export interface Factories {
   vault(name: string): Vault
   container(name: string): Container
   postgres(name: string): Postgres
+  sandbox(name: string): Sandbox
 }
 
 /** Build the factories bound to a given addon provider. */
@@ -361,6 +486,7 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
     vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
     container: name => makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
     postgres: name => makePostgres(lazyHandle(async () => (await getBindings()).postgres(name))),
+    sandbox: name => makeSandbox(lazyHandle(async () => (await getBindings()).sandbox(name))),
   }
 }
 

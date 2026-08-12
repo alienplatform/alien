@@ -3,7 +3,8 @@
  *
  * It provides the Worker handler APIs (`command`, `onStorageEvent`,
  * `onCronEvent`, `onQueueMessage`, `waitUntil`) and re-exports the app-facing
- * binding factories (`storage`, `kv`, `queue`, `vault`, `container`, `postgres`) from
+ * binding factories (`storage`, `kv`, `queue`, `vault`, `container`, `postgres`,
+ * `sandbox`) from
  * `@alienplatform/bindings`, so a Worker author installs one package.
  *
  * Worker protocol dependencies (nice-grpc, generated Worker protocol clients)
@@ -55,16 +56,20 @@ export {
 // ============================================================================
 
 export type {
+  CommandFrame,
   Container,
   Kv,
   Postgres,
   PostgresConnection,
   PostgresSslMode,
   Queue,
+  RunCommandOptions,
+  Sandbox,
+  SandboxSession,
   Storage,
   Vault,
 } from "@alienplatform/bindings"
-export { container, kv, postgres, queue, storage, vault } from "@alienplatform/bindings"
+export { container, kv, postgres, queue, sandbox, storage, vault } from "@alienplatform/bindings"
 
 // ============================================================================
 // AI: re-exported from @alienplatform/ai-gateway (a spawned Rust gateway process)

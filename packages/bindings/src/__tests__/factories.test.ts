@@ -4,15 +4,18 @@ import { createFactories } from "../factories.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
+  RawCommandFrame,
   RawContainerHandle,
   RawKeyHandle,
   RawKvHandle,
   RawPostgresConnection,
   RawPostgresHandle,
   RawQueueHandle,
+  RawSandboxHandle,
   RawStorageHandle,
   RawVaultHandle,
 } from "../loader.js"
+import type { CommandFrame } from "../types.js"
 
 function unusedRemoteBindingsHandle(): NativeAddon["RemoteBindingsHandle"] {
   return {
@@ -120,6 +123,33 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     connection: () => rawConnection("verify-full"),
   }
 
+  const sandboxHandle: RawSandboxHandle = {
+    capabilities: () => ["reconnect"],
+    create: async sessionId => ({ sessionId: sessionId ?? "s1", state: "running", generation: 1 }),
+    get: async sessionId => ({ sessionId, state: "running", generation: 1 }),
+    getOrCreate: async sessionId => ({
+      sessionId: sessionId ?? "s1",
+      state: "running",
+      generation: 1,
+    }),
+    list: async () => [],
+    runCommand: async () => {
+      const frames: RawCommandFrame[] = [
+        { kind: "stdout", seq: 0, data: Buffer.from("hello\n") },
+        { kind: "stderr", seq: 1, data: Buffer.from("problem\n") },
+        { kind: "exit", exitCode: 3, truncated: false },
+      ]
+      let index = 0
+      return { next: async () => frames[index++] ?? null, close: async () => {} }
+    },
+    readFile: async () => Buffer.from("contents"),
+    writeFile: async () => {},
+    mkdir: async () => {},
+    suspend: async () => {},
+    resume: async () => {},
+    terminate: async () => {},
+  }
+
   const bindings: RawBindingsHandle = {
     storage: async () => storageHandle,
     key: async () => keyHandle,
@@ -128,6 +158,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     vault: async () => vaultHandle,
     container: async () => containerHandle,
     postgres: async () => postgresHandle,
+    sandbox: async () => sandboxHandle,
   }
 
   class FakeBindingsHandle {
@@ -141,6 +172,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     vault = bindings.vault
     container = bindings.container
     postgres = bindings.postgres
+    sandbox = bindings.sandbox
   }
 
   return {
@@ -596,5 +628,161 @@ describe("createFactories postgres surface", () => {
     expect((error as AlienError).retryable).toBe(false)
     expect((error as AlienError).message).toContain("prefer")
     expect((error as AlienError).message).toContain("disable, verify-ca, verify-full")
+  })
+})
+
+describe("sandbox streaming", () => {
+  // Every other binding drains its stream before returning. This one must not: the resource
+  // exists for agent loops that print as they go, and a caller has to see a frame before the
+  // command ends.
+  it("yields frames one at a time and ends after the terminal frame", async () => {
+    const { addon } = fakeAddon()
+    const { sandbox } = createFactories(() => addon)
+
+    const seen: string[] = []
+    for await (const frame of sandbox("sbx").runCommand("s1", ["/bin/echo"], {
+      deadlineMs: 10_000,
+    })) {
+      seen.push(
+        frame.kind === "exit" ? `exit:${frame.exitCode}` : frame.data.toString("utf8").trim(),
+      )
+    }
+
+    expect(seen).toEqual(["hello", "problem", "exit:3"])
+  })
+
+  // A caller that never iterates must never start a command: the handle is opened on the first
+  // pull, which is also what makes the loop apply backpressure.
+  it("does not run the command until the iteration starts", async () => {
+    const { addon } = fakeAddon()
+    let opened = 0
+
+    class CountingBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: (...args: Parameters<RawSandboxHandle["runCommand"]>) => {
+            opened += 1
+            return inner.runCommand(...args)
+          },
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: CountingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+    const iterable = sandbox("sbx").runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+    expect(opened).toBe(0)
+
+    for await (const _ of iterable) {
+      break
+    }
+    expect(opened).toBe(1)
+  })
+
+  // Leaving the loop early is the ordinary way to stop reading — "run until the first match",
+  // an error part way through, a caller that gives up. The command keeps running and keeps
+  // costing until the stream is released, so leaving that to garbage collection is a leak
+  // measured in sandbox minutes.
+  it.each([
+    [
+      "the loop is broken out of",
+      async (frames: AsyncIterable<CommandFrame>) => {
+        for await (const _ of frames) break
+      },
+    ],
+    [
+      "the loop throws",
+      async (frames: AsyncIterable<CommandFrame>) => {
+        await expect(
+          (async () => {
+            for await (const _ of frames) throw new Error("caller gave up")
+          })(),
+        ).rejects.toThrow("caller gave up")
+      },
+    ],
+    [
+      "the command ends on its own",
+      async (frames: AsyncIterable<CommandFrame>) => {
+        for await (const _ of frames);
+      },
+    ],
+  ])("closes the stream when %s", async (_case, consume) => {
+    const { addon } = fakeAddon()
+    let closed = 0
+
+    class ClosingBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async (...args: Parameters<RawSandboxHandle["runCommand"]>) => ({
+            ...(await inner.runCommand(...args)),
+            close: async () => {
+              closed += 1
+            },
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: ClosingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    await consume(sandbox("sbx").runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 }))
+
+    expect(closed).toBe(1)
+  })
+
+  // env is the one option a caller cannot work around: without it reaching the addon there is no
+  // way to configure a session's environment from TypeScript at all.
+  it("passes env through to the addon on create and on a command", async () => {
+    const { addon } = fakeAddon()
+    const seen: Array<Record<string, string> | null | undefined> = []
+
+    class RecordingBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          create: (sessionId, tenantKey, env) => {
+            seen.push(env)
+            return inner.create(sessionId, tenantKey, env)
+          },
+          runCommand: (sessionId, command, deadlineMs, workingDirectory, env) => {
+            seen.push(env)
+            return inner.runCommand(sessionId, command, deadlineMs, workingDirectory, env)
+          },
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: RecordingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    await sandbox("sbx").create({ env: { TOKEN: "s3cret" } })
+    for await (const _ of sandbox("sbx").runCommand("s1", ["/bin/echo"], {
+      deadlineMs: 1000,
+      env: { EXTRA: "1" },
+    }));
+
+    expect(seen).toEqual([{ TOKEN: "s3cret" }, { EXTRA: "1" }])
+  })
+
+  it("writes files one call per path and reads them back as bytes", async () => {
+    const { addon } = fakeAddon()
+    const { sandbox } = createFactories(() => addon)
+
+    await sandbox("sbx").writeFiles("s1", { "a.txt": "text", "b.bin": Buffer.from([1, 2]) })
+    const read = await sandbox("sbx").readFile("s1", "a.txt")
+
+    expect(Buffer.isBuffer(read)).toBe(true)
   })
 })

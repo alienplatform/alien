@@ -27,6 +27,7 @@ platform-sdk = ["alien-bindings/platform-sdk"]
 # so the gRPC feature is never pulled in transitively; platform features are
 # forwarded explicitly above.
 alien-bindings = { workspace = true }
+alien-core = { workspace = true }
 alien-error = { workspace = true }
 futures = { workspace = true }
 napi = { workspace = true }

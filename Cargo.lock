@@ -273,6 +273,7 @@ name = "alien-bindings-node"
 version = "3.3.14"
 dependencies = [
  "alien-bindings",
+ "alien-core",
  "alien-error",
  "chrono",
  "futures",
