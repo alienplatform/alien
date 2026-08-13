@@ -1161,7 +1161,14 @@
             }
           },
           "404": {
-            "description": "Release not found"
+            "description": "Release not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
           }
         },
         "security": [

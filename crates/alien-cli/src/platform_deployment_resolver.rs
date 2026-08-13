@@ -114,6 +114,10 @@ pub async fn resolve(
         .get_deployment()
         .id(id.as_str())
         .workspace(workspace)
+        .include(vec![
+            types::GetDeploymentIncludeItem::DeploymentGroup,
+            types::GetDeploymentIncludeItem::Project,
+        ])
         .send()
         .await
         .into_sdk_error()
