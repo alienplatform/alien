@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alien_core::{
     AlienEvent, DeploymentStatus, EventBus, EventChange, EventHandler, EventState, Platform,
@@ -1159,13 +1159,126 @@ pub enum UiCommandKind {
 }
 
 pub fn event_bus_for_command(kind: Option<UiCommandKind>, json_output: bool) -> Option<EventBus> {
-    if json_output || !supports_ansi() {
-        return None;
-    }
-
     let kind = kind?;
+    if json_output || !supports_ansi() {
+        let handler = Arc::new(LineCommandEventHandler::new());
+        return Some(EventBus::with_handlers(vec![handler]));
+    }
     let handler = Arc::new(CommandEventHandler::new(kind));
     Some(EventBus::with_handlers(vec![handler]))
+}
+
+/// Stable, non-ANSI progress for CI and JSON commands. Output goes to stderr so JSON stdout
+/// remains a machine-readable contract.
+struct LineCommandEventHandler {
+    compilation_updates: Mutex<HashMap<String, (Instant, String)>>,
+}
+
+impl LineCommandEventHandler {
+    fn new() -> Self {
+        Self {
+            compilation_updates: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn record_compilation_progress(&self, id: String, progress: String, now: Instant) -> bool {
+        let mut updates = self
+            .compilation_updates
+            .lock()
+            .expect("line command event state poisoned");
+
+        match updates.get_mut(&id) {
+            Some((last_printed, latest_progress))
+                if now.saturating_duration_since(*last_printed) < Duration::from_secs(10) =>
+            {
+                *latest_progress = progress;
+                false
+            }
+            Some(update) => {
+                *update = (now, progress);
+                true
+            }
+            None => {
+                updates.insert(id, (now, progress));
+                true
+            }
+        }
+    }
+
+    fn print_created(event: &AlienEvent) {
+        match event {
+            AlienEvent::LoadingConfiguration => eprintln!("Loading configuration"),
+            AlienEvent::RunningPreflights { stack, platform } => {
+                eprintln!("Running preflights for {stack} ({platform})")
+            }
+            AlienEvent::BuildingResource {
+                resource_name,
+                resource_type,
+                related_resources,
+            } => eprintln!(
+                "Building {}",
+                build_resource_noun(resource_name, resource_type, related_resources)
+            ),
+            AlienEvent::CompilingCode { language, .. } => eprintln!("Compiling {language}"),
+            AlienEvent::PushingStack {
+                platform,
+                destination,
+                ..
+            } => match destination {
+                Some(destination) => eprintln!("Pushing {platform} images to {destination}"),
+                None => eprintln!("Pushing {platform} images"),
+            },
+            AlienEvent::PushingResource {
+                resource_name,
+                resource_type,
+            } => eprintln!("Pushing {resource_type} {resource_name}"),
+            AlienEvent::CreatingRelease { project } => eprintln!("Creating release for {project}"),
+            _ => {}
+        }
+    }
+}
+
+#[async_trait]
+impl EventHandler for LineCommandEventHandler {
+    async fn on_event_change(&self, change: EventChange) -> alien_core::Result<()> {
+        match change {
+            EventChange::Created { event, .. } => Self::print_created(&event),
+            EventChange::Updated { id, event, .. } => {
+                if let AlienEvent::CompilingCode {
+                    progress: Some(progress),
+                    ..
+                } = event
+                {
+                    let now = Instant::now();
+                    if self.record_compilation_progress(id, progress.clone(), now) {
+                        eprintln!("  {progress}");
+                    }
+                }
+            }
+            EventChange::StateChanged { id, new_state, .. } => {
+                let last_progress = self
+                    .compilation_updates
+                    .lock()
+                    .expect("line command event state poisoned")
+                    .remove(&id)
+                    .map(|(_, progress)| progress);
+                match new_state {
+                    EventState::Success => {
+                        if let Some(progress) = last_progress {
+                            eprintln!("  {progress}");
+                        }
+                    }
+                    EventState::Failed { error } => {
+                        if let Some(error) = error {
+                            eprintln!("Failed: {}", error.message);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1634,6 +1747,28 @@ mod command_event_tests {
             event_roles: HashMap::new(),
             resources: IndexMap::new(),
         }
+    }
+
+    #[test]
+    fn line_progress_throttles_from_the_last_printed_update() {
+        let handler = LineCommandEventHandler::new();
+        let started = Instant::now();
+
+        assert!(handler.record_compilation_progress(
+            "compile".to_string(),
+            "first".to_string(),
+            started,
+        ));
+        assert!(!handler.record_compilation_progress(
+            "compile".to_string(),
+            "suppressed".to_string(),
+            started + Duration::from_secs(1),
+        ));
+        assert!(handler.record_compilation_progress(
+            "compile".to_string(),
+            "periodic".to_string(),
+            started + Duration::from_secs(10),
+        ));
     }
 
     #[test]

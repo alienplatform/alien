@@ -18,6 +18,46 @@ pub enum CargoBuildStrategy {
     Xwin,
 }
 
+/// Operating system and architecture of the machine running a build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildHost {
+    /// Linux x86-64.
+    LinuxX64,
+    /// Linux ARM64.
+    LinuxArm64,
+    /// Windows x86-64.
+    WindowsX64,
+    /// macOS ARM64.
+    DarwinArm64,
+    /// A host Alien does not support. This includes Darwin x64 and Windows ARM64, for which
+    /// Alien does not publish native runtime targets.
+    Unsupported,
+}
+
+impl BuildHost {
+    /// Detect the build host without coercing unknown machines into a supported target.
+    pub fn current() -> Self {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => Self::LinuxX64,
+            ("linux", "aarch64") => Self::LinuxArm64,
+            ("windows", "x86_64") => Self::WindowsX64,
+            ("macos", "aarch64") => Self::DarwinArm64,
+            _ => Self::Unsupported,
+        }
+    }
+
+    /// Human-readable host identifier for diagnostics and cache keys.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::LinuxX64 => "linux-x64",
+            Self::LinuxArm64 => "linux-arm64",
+            Self::WindowsX64 => "windows-x64",
+            Self::DarwinArm64 => "darwin-arm64",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
 impl CargoBuildStrategy {
     /// The cargo subcommand to use (e.g. "build", "zigbuild", "xwin").
     pub fn cargo_subcommand(&self) -> &'static str {
@@ -132,21 +172,26 @@ impl BinaryTarget {
 
     /// Returns the cargo subcommand and tool name needed to build for this target.
     ///
-    /// - Linux musl: `cargo zigbuild` (zig provides the musl C toolchain)
+    /// - Linux musl on a matching Linux host: `cargo build` (native musl toolchain)
+    /// - Linux musl from another host or architecture: `cargo zigbuild`
     /// - Windows MSVC from non-Windows: `cargo xwin build` (xwin provides MSVC CRT/SDK)
     /// - Windows MSVC on Windows: `cargo build` (native MSVC toolchain)
     /// - macOS on macOS: `cargo build` (native Apple toolchain)
     pub fn cargo_build_strategy(&self) -> CargoBuildStrategy {
-        match self {
-            Self::LinuxX64 | Self::LinuxArm64 => CargoBuildStrategy::Zigbuild,
-            Self::WindowsX64 => {
-                if cfg!(target_os = "windows") {
-                    CargoBuildStrategy::Native
-                } else {
-                    CargoBuildStrategy::Xwin
-                }
-            }
-            Self::DarwinArm64 => CargoBuildStrategy::Native,
+        self.cargo_build_strategy_for(BuildHost::current())
+    }
+
+    /// Select the cheapest correct Rust compiler for an explicit build host.
+    pub fn cargo_build_strategy_for(&self, host: BuildHost) -> CargoBuildStrategy {
+        match (self, host) {
+            (Self::LinuxX64, BuildHost::LinuxX64)
+            | (Self::LinuxArm64, BuildHost::LinuxArm64)
+            | (Self::WindowsX64, BuildHost::WindowsX64)
+            | (Self::DarwinArm64, BuildHost::DarwinArm64) => CargoBuildStrategy::Native,
+            (Self::WindowsX64, _) => CargoBuildStrategy::Xwin,
+            (Self::LinuxX64 | Self::LinuxArm64, _) => CargoBuildStrategy::Zigbuild,
+            // The Rust target alone is insufficient off macOS: an Apple SDK is also required.
+            (Self::DarwinArm64, _) => CargoBuildStrategy::Native,
         }
     }
 
@@ -293,7 +338,7 @@ impl BinaryTarget {
             all(target_os = "macos", target_arch = "aarch64")
         )))]
         {
-            Self::LinuxX64
+            panic!("Alien does not support native binaries on this host")
         }
     }
 }
@@ -325,7 +370,7 @@ impl std::str::FromStr for BinaryTarget {
 
 #[cfg(test)]
 mod tests {
-    use super::BinaryTarget;
+    use super::{BinaryTarget, BuildHost, CargoBuildStrategy};
     use crate::Platform;
 
     #[test]
@@ -371,6 +416,34 @@ mod tests {
         assert_eq!(
             BinaryTarget::defaults_for_platform(Platform::Kubernetes),
             vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]
+        );
+    }
+
+    #[test]
+    fn cargo_build_strategy_uses_native_tools_only_on_compatible_hosts() {
+        assert_eq!(
+            BinaryTarget::LinuxX64.cargo_build_strategy_for(BuildHost::LinuxX64),
+            CargoBuildStrategy::Native
+        );
+        assert_eq!(
+            BinaryTarget::LinuxArm64.cargo_build_strategy_for(BuildHost::LinuxArm64),
+            CargoBuildStrategy::Native
+        );
+        assert_eq!(
+            BinaryTarget::LinuxArm64.cargo_build_strategy_for(BuildHost::LinuxX64),
+            CargoBuildStrategy::Zigbuild
+        );
+        assert_eq!(
+            BinaryTarget::WindowsX64.cargo_build_strategy_for(BuildHost::WindowsX64),
+            CargoBuildStrategy::Native
+        );
+        assert_eq!(
+            BinaryTarget::WindowsX64.cargo_build_strategy_for(BuildHost::DarwinArm64),
+            CargoBuildStrategy::Xwin
+        );
+        assert_eq!(
+            BinaryTarget::DarwinArm64.cargo_build_strategy_for(BuildHost::DarwinArm64),
+            CargoBuildStrategy::Native
         );
     }
 }
