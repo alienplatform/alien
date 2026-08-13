@@ -29,6 +29,7 @@ use alien_deployment::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
+use alien_manager_api::SdkResultExtReadingBody as _;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -1473,7 +1474,8 @@ async fn fetch_release_stack_by_id(
         .id(release_id)
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to fetch release '{release_id}' from manager"),
         })?
@@ -2939,7 +2941,8 @@ async fn fetch_kubernetes_release_stack(
         .id(&release_id)
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ConfigurationError {
             message: format!("Failed to fetch release '{release_id}' from manager"),
         })?
@@ -3436,7 +3439,8 @@ pub async fn push_initial_setup(
             .id(release_id)
             .send()
             .await
-            .into_sdk_error()
+            .into_sdk_error_reading_body()
+            .await
             .context(ErrorData::ConfigurationError {
                 message: format!("Failed to fetch desired release {release_id} from manager"),
             })?;
