@@ -328,12 +328,20 @@ impl BinaryTarget {
 
     /// Detect the current OS target
     pub fn current_os() -> Self {
-        match BuildHost::current() {
+        Self::current_os_for(BuildHost::current())
+    }
+
+    fn current_os_for(host: BuildHost) -> Self {
+        match host {
             BuildHost::WindowsX64 => Self::WindowsX64,
             BuildHost::LinuxX64 => Self::LinuxX64,
             BuildHost::LinuxArm64 => Self::LinuxArm64,
             BuildHost::DarwinArm64 => Self::DarwinArm64,
-            host => panic!("unsupported Alien host: {}", host.id()),
+            // Alien does not publish Darwin x64 or Windows ARM64 runtime artifacts yet.
+            // Preserve the historical Linux x64 fallback for these hosts and unknown hosts.
+            BuildHost::DarwinX64 | BuildHost::WindowsArm64 | BuildHost::Unsupported => {
+                Self::LinuxX64
+            }
         }
     }
 }
@@ -373,6 +381,22 @@ mod tests {
         assert_eq!(
             BinaryTarget::defaults_for_platform(Platform::Local),
             vec![BinaryTarget::current_os()]
+        );
+    }
+
+    #[test]
+    fn hosts_without_a_native_runtime_target_use_the_compatible_fallback() {
+        assert_eq!(
+            BinaryTarget::current_os_for(BuildHost::DarwinX64),
+            BinaryTarget::LinuxX64
+        );
+        assert_eq!(
+            BinaryTarget::current_os_for(BuildHost::WindowsArm64),
+            BinaryTarget::LinuxX64
+        );
+        assert_eq!(
+            BinaryTarget::current_os_for(BuildHost::Unsupported),
+            BinaryTarget::LinuxX64
         );
     }
 

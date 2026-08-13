@@ -1181,6 +1181,30 @@ impl LineCommandEventHandler {
         }
     }
 
+    fn record_compilation_progress(&self, id: String, progress: String, now: Instant) -> bool {
+        let mut updates = self
+            .compilation_updates
+            .lock()
+            .expect("line command event state poisoned");
+
+        match updates.get_mut(&id) {
+            Some((last_printed, latest_progress))
+                if now.saturating_duration_since(*last_printed) < Duration::from_secs(10) =>
+            {
+                *latest_progress = progress;
+                false
+            }
+            Some(update) => {
+                *update = (now, progress);
+                true
+            }
+            None => {
+                updates.insert(id, (now, progress));
+                true
+            }
+        }
+    }
+
     fn print_created(event: &AlienEvent) {
         match event {
             AlienEvent::LoadingConfiguration => eprintln!("Loading configuration"),
@@ -1225,16 +1249,8 @@ impl EventHandler for LineCommandEventHandler {
                     ..
                 } = event
                 {
-                    let mut updates = self
-                        .compilation_updates
-                        .lock()
-                        .expect("line command event state poisoned");
                     let now = Instant::now();
-                    let should_print = updates.get(&id).is_none_or(|(last_printed, _)| {
-                        last_printed.elapsed() >= Duration::from_secs(10)
-                    });
-                    updates.insert(id, (now, progress.clone()));
-                    if should_print {
+                    if self.record_compilation_progress(id, progress.clone(), now) {
                         eprintln!("  {progress}");
                     }
                 }
@@ -1731,6 +1747,28 @@ mod command_event_tests {
             event_roles: HashMap::new(),
             resources: IndexMap::new(),
         }
+    }
+
+    #[test]
+    fn line_progress_throttles_from_the_last_printed_update() {
+        let handler = LineCommandEventHandler::new();
+        let started = Instant::now();
+
+        assert!(handler.record_compilation_progress(
+            "compile".to_string(),
+            "first".to_string(),
+            started,
+        ));
+        assert!(!handler.record_compilation_progress(
+            "compile".to_string(),
+            "suppressed".to_string(),
+            started + Duration::from_secs(1),
+        ));
+        assert!(handler.record_compilation_progress(
+            "compile".to_string(),
+            "periodic".to_string(),
+            started + Duration::from_secs(10),
+        ));
     }
 
     #[test]
