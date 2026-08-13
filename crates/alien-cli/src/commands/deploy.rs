@@ -19,8 +19,8 @@ use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, NetworkSettings, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
-    acquire_deployment, acquire_setup_run_deployment, final_reconcile, release_deployment,
-    ManagerApiTransport,
+    acquire_deployment_with_payload, acquire_setup_run_deployment, final_reconcile,
+    release_deployment, ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -1325,16 +1325,13 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
     };
 
-    // Standalone path: the deployment record carries a `desiredReleaseId` and
-    // the platform-mode CLI normally relies on the manager to inject the
-    // target_release. The standalone manager doesn't do that injection on
-    // get_deployment, so fetch the release directly here and populate
-    // `target_release` ourselves — otherwise pending::handle_pending fails
-    // immediately with "Target release required for deployment".
+    // Deployment records intentionally omit the release stack. Resolve it
+    // before entering the step loop; a missing or incompatible target is a
+    // configuration error, not an observe-only deployment.
     if current.target_release.is_none() {
         if let Some(release_id) = deployment.desired_release_id.as_ref() {
             let url = format!("{}/v1/releases/{}", manager_ctx.manager_url, release_id);
-            if let Ok(resp) = manager_ctx
+            let response = manager_ctx
                 .http_client
                 .get(&url)
                 .header(
@@ -1343,28 +1340,29 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                 )
                 .send()
                 .await
-            {
-                if resp.status().is_success() {
-                    if let Ok(release_json) = resp.json::<serde_json::Value>().await {
-                        let stack_for_platform = release_json
-                            .get("stack")
-                            .and_then(|s| s.get(resolved_args.platform.as_str()))
-                            .cloned();
-                        if let Some(stack_json) = stack_for_platform {
-                            if let Ok(stack) =
-                                serde_json::from_value::<alien_core::Stack>(stack_json)
-                            {
-                                current.target_release = Some(alien_core::ReleaseInfo {
-                                    release_id: Some(release_id.clone()),
-                                    version: None,
-                                    description: None,
-                                    stack,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("loading target release '{release_id}'"),
+                    url: Some(url.clone()),
+                })?;
+            let response = response.error_for_status().into_alien_error().context(
+                ErrorData::ApiRequestFailed {
+                    message: format!("loading target release '{release_id}'"),
+                    url: Some(url),
+                },
+            )?;
+            let release_json = response
+                .json::<serde_json::Value>()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: format!("Failed to decode target release '{release_id}'"),
+                })?;
+            current.target_release = Some(target_release_from_json(
+                release_id,
+                platform,
+                release_json,
+            )?);
         }
     }
 
@@ -1422,7 +1420,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
     // Acquire → step loop → reconcile → release (all via manager)
     let session = format!("cli-deploy-{}", Uuid::new_v4());
-    if setup_owned_status {
+    let acquired_deployment = if setup_owned_status {
         acquire_setup_run_deployment(
             &manager_client,
             &tracked_deployment.deployment_id,
@@ -1432,9 +1430,9 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to acquire setup deployment lock".to_string(),
-        })?;
+        })?
     } else {
-        acquire_deployment(
+        acquire_deployment_with_payload(
             &manager_client,
             &tracked_deployment.deployment_id,
             &session,
@@ -1443,8 +1441,23 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to acquire deployment lock".to_string(),
-        })?;
+        })?
+    };
+
+    if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
+        config = serde_json::from_value(acquired_config)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize deploymentConfig from acquired deployment"
+                    .to_string(),
+            })?;
+    } else if manager_ctx.workspace.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Setup acquisition did not return deploymentConfig".to_string(),
+        }));
     }
+    config.manager_url = Some(manager_ctx.manager_url.clone());
+    config.deployment_token = Some(tracked_deployment.api_key.clone());
 
     // Re-fetch under lock (manager may have advanced the state)
     let deployment = manager_client
@@ -1725,9 +1738,53 @@ fn is_local_private_url(url: &str) -> bool {
         || url.starts_with("https://127.0.0.1:")
 }
 
+fn target_release_from_json(
+    release_id: &str,
+    platform: Platform,
+    release_json: serde_json::Value,
+) -> Result<alien_core::ReleaseInfo> {
+    let stack_json = release_json
+        .get("stack")
+        .and_then(|stacks| stacks.get(platform.as_str()))
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Target release '{release_id}' does not contain a stack for {platform}"
+                ),
+            })
+        })?;
+    let stack = serde_json::from_value(stack_json)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Target release '{release_id}' contains an invalid {platform} stack"),
+        })?;
+
+    Ok(alien_core::ReleaseInfo {
+        release_id: Some(release_id.to_string()),
+        version: None,
+        description: None,
+        stack,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_release_requires_a_stack_for_the_deployment_platform() {
+        let error = target_release_from_json(
+            "rel_test",
+            Platform::Aws,
+            serde_json::json!({ "stack": { "gcp": {} } }),
+        )
+        .expect_err("an AWS deployment must not continue without an AWS stack");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(error.message.contains("rel_test"));
+        assert!(error.message.contains("aws"));
+    }
 
     #[test]
     fn deployment_models_match_platform_delivery() {
