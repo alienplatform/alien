@@ -7,14 +7,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
-#[cfg(not(any(
-    all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "aarch64"),
-    all(target_os = "macos", target_arch = "aarch64")
-)))]
-compile_error!("Alien supports Linux x64/ARM64, macOS ARM64, and Windows x64 build hosts only");
-
 /// Build strategy for cross-compilation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CargoBuildStrategy {
@@ -346,7 +338,7 @@ impl BinaryTarget {
             all(target_os = "macos", target_arch = "aarch64")
         )))]
         {
-            unreachable!("unsupported hosts are rejected at compile time")
+            panic!("Alien does not support native binaries on this host")
         }
     }
 }
