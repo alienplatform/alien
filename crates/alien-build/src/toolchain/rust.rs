@@ -1,7 +1,7 @@
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput};
 use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
 use crate::error::{ErrorData, Result};
-use alien_core::{AlienEvent, CargoBuildStrategy};
+use alien_core::{AlienEvent, BinaryTarget, BuildHost, CargoBuildStrategy};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -80,7 +80,11 @@ impl RustToolchain {
     }
 
     /// Generate cache key from Cargo.lock and build configuration
-    async fn generate_cache_key(&self, context: &ToolchainContext) -> Result<String> {
+    async fn generate_cache_key(
+        &self,
+        context: &ToolchainContext,
+        strategy: CargoBuildStrategy,
+    ) -> Result<String> {
         let cargo_metadata = self.get_cargo_metadata(&context.src_dir).await?;
         let cargo_lock_hash =
             cache_utils::hash_files(&["Cargo.lock"], &cargo_metadata.workspace_root).await?;
@@ -91,12 +95,71 @@ impl RustToolchain {
         };
 
         Ok(format!(
-            "{}-{}-{}-{}",
+            "{}-{}-{}-{}-{}",
             cargo_lock_hash,
             context.build_target.rust_target_triple(),
+            strategy.cargo_subcommand(),
             build_mode,
             self.binary_name
         ))
+    }
+
+    async fn command_succeeds(command: &str, argument: &str) -> bool {
+        Command::new(command)
+            .arg(argument)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|status| status.success())
+    }
+
+    async fn resolve_build_strategy(&self, target: BinaryTarget) -> Result<CargoBuildStrategy> {
+        let host = BuildHost::current();
+        if target == BinaryTarget::DarwinArm64
+            && !matches!(host, BuildHost::DarwinArm64 | BuildHost::DarwinX64)
+        {
+            return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                resource_name: self.binary_name.clone(),
+                reason: format!(
+                    "darwin-arm64 Rust builds require macOS and an Apple SDK; current host is {}",
+                    host.id()
+                ),
+                build_output: None,
+            }));
+        }
+
+        let strategy = target.cargo_build_strategy_for(host);
+        if strategy != CargoBuildStrategy::Native
+            || !matches!(target, BinaryTarget::LinuxX64 | BinaryTarget::LinuxArm64)
+        {
+            return Ok(strategy);
+        }
+
+        let musl_compiler = match target {
+            BinaryTarget::LinuxX64 => "x86_64-linux-musl-gcc",
+            BinaryTarget::LinuxArm64 => "aarch64-linux-musl-gcc",
+            _ => unreachable!("Linux target checked above"),
+        };
+        if Self::command_succeeds(musl_compiler, "--version").await {
+            return Ok(CargoBuildStrategy::Native);
+        }
+        if Self::command_succeeds("zig", "version").await {
+            warn!(
+                compiler = musl_compiler,
+                "Native musl compiler not found; falling back to cargo zigbuild. Install musl-tools for faster native builds."
+            );
+            return Ok(CargoBuildStrategy::Zigbuild);
+        }
+
+        Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: self.binary_name.clone(),
+            reason: format!(
+                "{musl_compiler} is required for a native {} build. Install musl-tools, or install Zig for cross-compilation.",
+                target
+            ),
+            build_output: None,
+        }))
     }
 
     /// Get the target directory for the Rust project.
@@ -183,8 +246,10 @@ impl Toolchain for RustToolchain {
         let build_started = Instant::now();
         info!("Building Rust project with binary: {}", self.binary_name);
 
+        let strategy = self.resolve_build_strategy(context.build_target).await?;
+
         // Generate cache key and setup cache paths
-        let cache_key = self.generate_cache_key(context).await?;
+        let cache_key = self.generate_cache_key(context, strategy).await?;
         let cache_paths = self.get_cache_paths(context).await?;
 
         info!("Using cache key: {}", cache_key);
@@ -192,12 +257,6 @@ impl Toolchain for RustToolchain {
         // Try to restore cache if available
         cache_utils::restore_cache(context.cache_store.as_deref(), &cache_key, &cache_paths)
             .await?;
-
-        // Determine the build strategy based on target and host OS.
-        // - Linux musl: cargo zigbuild (zig provides the musl C toolchain)
-        // - Windows MSVC from non-Windows: cargo xwin build (xwin provides MSVC CRT/SDK)
-        // - Native (Windows on Windows, macOS on macOS): cargo build
-        let strategy = context.build_target.cargo_build_strategy();
 
         // Install the cross-compilation tool if needed
         if let Some(package) = strategy.install_package() {
@@ -662,8 +721,12 @@ version = "0.1.0"
             workload: crate::toolchain::WorkloadKind::Worker,
         };
 
-        let cache_key = toolchain.generate_cache_key(&context).await.unwrap();
+        let cache_key = toolchain
+            .generate_cache_key(&context, CargoBuildStrategy::Native)
+            .await
+            .unwrap();
         assert!(cache_key.contains("x86_64-unknown-linux-musl"));
+        assert!(cache_key.contains("build"));
         assert!(cache_key.contains("release"));
         assert!(cache_key.contains("test"));
     }
