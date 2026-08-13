@@ -337,11 +337,10 @@ impl BinaryTarget {
             BuildHost::LinuxX64 => Self::LinuxX64,
             BuildHost::LinuxArm64 => Self::LinuxArm64,
             BuildHost::DarwinArm64 => Self::DarwinArm64,
-            // Alien does not publish Darwin x64 or Windows ARM64 runtime artifacts yet.
-            // Preserve the historical Linux x64 fallback for these hosts and unknown hosts.
-            BuildHost::DarwinX64 | BuildHost::WindowsArm64 | BuildHost::Unsupported => {
-                Self::LinuxX64
-            }
+            BuildHost::DarwinX64 | BuildHost::WindowsArm64 | BuildHost::Unsupported => panic!(
+                "Alien does not support native binary targets for host {}",
+                host.id()
+            ),
         }
     }
 }
@@ -385,19 +384,15 @@ mod tests {
     }
 
     #[test]
-    fn hosts_without_a_native_runtime_target_use_the_compatible_fallback() {
-        assert_eq!(
-            BinaryTarget::current_os_for(BuildHost::DarwinX64),
-            BinaryTarget::LinuxX64
-        );
-        assert_eq!(
-            BinaryTarget::current_os_for(BuildHost::WindowsArm64),
-            BinaryTarget::LinuxX64
-        );
-        assert_eq!(
-            BinaryTarget::current_os_for(BuildHost::Unsupported),
-            BinaryTarget::LinuxX64
-        );
+    fn hosts_without_a_native_runtime_target_fail_instead_of_building_linux() {
+        for host in [
+            BuildHost::DarwinX64,
+            BuildHost::WindowsArm64,
+            BuildHost::Unsupported,
+        ] {
+            let failure = std::panic::catch_unwind(|| BinaryTarget::current_os_for(host));
+            assert!(failure.is_err(), "{} must be rejected", host.id());
+        }
     }
 
     #[test]
