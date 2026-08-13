@@ -29,7 +29,8 @@ pub enum BuildHost {
     WindowsX64,
     /// macOS ARM64.
     DarwinArm64,
-    /// A host Alien does not recognize.
+    /// A host Alien does not support. This includes Darwin x64 and Windows ARM64, for which
+    /// Alien does not publish native runtime targets.
     Unsupported,
 }
 
@@ -316,7 +317,10 @@ impl BinaryTarget {
         }
     }
 
-    /// Detect the current OS target
+    /// Detect the current supported OS target.
+    ///
+    /// Unsupported hosts fail explicitly because substituting a Linux target would produce an
+    /// executable that local workers and daemons cannot run.
     pub fn current_os() -> Self {
         Self::current_os_for(BuildHost::current())
     }
