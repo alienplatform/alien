@@ -525,7 +525,7 @@ async fn list_platform_deployments_task(
     json: bool,
 ) -> Result<()> {
     let (project_id, _) = ctx.resolve_project(project, !json).await?;
-    let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+    let workspace = ctx.resolve_workspace_query_with_bootstrap(!json).await?;
     let client = ctx.sdk_client().await?;
     let mut deployments = Vec::new();
     let mut cursor = None;
@@ -533,9 +533,11 @@ async fn list_platform_deployments_task(
     loop {
         let mut request = client
             .list_deployments()
-            .workspace(workspace.as_str())
             .project(project_id.as_str())
             .include(vec![ListDeploymentsIncludeItem::DeploymentGroup]);
+        if let Some(workspace) = workspace.as_deref() {
+            request = request.workspace(workspace);
+        }
         if let Some(next_cursor) = cursor.as_deref() {
             request = request.cursor(next_cursor);
         }
