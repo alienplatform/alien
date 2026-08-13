@@ -27,10 +27,6 @@ pub enum BuildHost {
     LinuxArm64,
     /// Windows x86-64.
     WindowsX64,
-    /// Windows ARM64.
-    WindowsArm64,
-    /// macOS x86-64.
-    DarwinX64,
     /// macOS ARM64.
     DarwinArm64,
     /// A host Alien does not recognize.
@@ -44,8 +40,6 @@ impl BuildHost {
             ("linux", "x86_64") => Self::LinuxX64,
             ("linux", "aarch64") => Self::LinuxArm64,
             ("windows", "x86_64") => Self::WindowsX64,
-            ("windows", "aarch64") => Self::WindowsArm64,
-            ("macos", "x86_64") => Self::DarwinX64,
             ("macos", "aarch64") => Self::DarwinArm64,
             _ => Self::Unsupported,
         }
@@ -57,8 +51,6 @@ impl BuildHost {
             Self::LinuxX64 => "linux-x64",
             Self::LinuxArm64 => "linux-arm64",
             Self::WindowsX64 => "windows-x64",
-            Self::WindowsArm64 => "windows-arm64",
-            Self::DarwinX64 => "darwin-x64",
             Self::DarwinArm64 => "darwin-arm64",
             Self::Unsupported => "unsupported",
         }
@@ -194,9 +186,7 @@ impl BinaryTarget {
             (Self::LinuxX64, BuildHost::LinuxX64)
             | (Self::LinuxArm64, BuildHost::LinuxArm64)
             | (Self::WindowsX64, BuildHost::WindowsX64)
-            | (Self::DarwinArm64, BuildHost::DarwinArm64 | BuildHost::DarwinX64) => {
-                CargoBuildStrategy::Native
-            }
+            | (Self::DarwinArm64, BuildHost::DarwinArm64) => CargoBuildStrategy::Native,
             (Self::WindowsX64, _) => CargoBuildStrategy::Xwin,
             (Self::LinuxX64 | Self::LinuxArm64, _) => CargoBuildStrategy::Zigbuild,
             // The Rust target alone is insufficient off macOS: an Apple SDK is also required.
@@ -337,7 +327,7 @@ impl BinaryTarget {
             BuildHost::LinuxX64 => Self::LinuxX64,
             BuildHost::LinuxArm64 => Self::LinuxArm64,
             BuildHost::DarwinArm64 => Self::DarwinArm64,
-            BuildHost::DarwinX64 | BuildHost::WindowsArm64 | BuildHost::Unsupported => panic!(
+            BuildHost::Unsupported => panic!(
                 "Alien does not support native binary targets for host {}",
                 host.id()
             ),
@@ -385,14 +375,9 @@ mod tests {
 
     #[test]
     fn hosts_without_a_native_runtime_target_fail_instead_of_building_linux() {
-        for host in [
-            BuildHost::DarwinX64,
-            BuildHost::WindowsArm64,
-            BuildHost::Unsupported,
-        ] {
-            let failure = std::panic::catch_unwind(|| BinaryTarget::current_os_for(host));
-            assert!(failure.is_err(), "{} must be rejected", host.id());
-        }
+        let host = BuildHost::Unsupported;
+        let failure = std::panic::catch_unwind(|| BinaryTarget::current_os_for(host));
+        assert!(failure.is_err(), "{} must be rejected", host.id());
     }
 
     #[test]
@@ -456,7 +441,7 @@ mod tests {
             CargoBuildStrategy::Xwin
         );
         assert_eq!(
-            BinaryTarget::DarwinArm64.cargo_build_strategy_for(BuildHost::DarwinX64),
+            BinaryTarget::DarwinArm64.cargo_build_strategy_for(BuildHost::DarwinArm64),
             CargoBuildStrategy::Native
         );
     }

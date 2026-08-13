@@ -117,7 +117,7 @@ impl RustToolchain {
     async fn resolve_build_strategy(&self, target: BinaryTarget) -> Result<CargoBuildStrategy> {
         let host = BuildHost::current();
         if target == BinaryTarget::DarwinArm64
-            && !matches!(host, BuildHost::DarwinArm64 | BuildHost::DarwinX64)
+            && !matches!(host, BuildHost::DarwinArm64)
         {
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
                 resource_name: self.binary_name.clone(),
