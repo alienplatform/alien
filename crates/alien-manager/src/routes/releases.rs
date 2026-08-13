@@ -303,7 +303,7 @@ async fn create_release(
     ),
     responses(
         (status = 200, description = "Release found", body = ReleaseResponse),
-        (status = 404, description = "Release not found")
+        (status = 404, description = "Release not found", body = alien_error::AlienError)
     ),
     security(
         ("bearer" = [])

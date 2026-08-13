@@ -8,6 +8,7 @@ use alien_core::DeploymentStatus;
 use alien_error::Context;
 use alien_manager_api::types::{DeploymentResponse, ReleaseResponse, StackByPlatform};
 use alien_manager_api::SdkResultExt as _;
+use alien_manager_api::SdkResultExtReadingBody as _;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
@@ -25,7 +26,7 @@ pub enum ReleasesCmd {
         /// Project to list releases for (optional, uses linked project by default)
         #[arg(long)]
         project: Option<String>,
-        /// Only show releases selected by this channel (defaults to production in platform mode)
+        /// Only show releases that have been selected by this channel (defaults to production in platform mode)
         #[arg(long, conflicts_with = "all_channels")]
         channel: Option<String>,
         /// Include releases that are not currently selected by any channel
@@ -553,7 +554,8 @@ async fn get_release_task(client: &alien_manager_api::Client, id: &str, json: bo
         .id(id)
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: format!("fetching release '{id}'"),
             url: None,

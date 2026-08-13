@@ -14,9 +14,9 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, GetDeploymentId, GetDeploymentWorkspace, NewDeploymentRequest,
-    PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
-    PinReleaseRequestReleaseId,
+    CreateDeploymentWorkspace, DeploymentListItemResponse, GetDeploymentId, GetDeploymentWorkspace,
+    ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
+    PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -200,8 +200,12 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
     ctx.ensure_ready().await?;
 
     match args.cmd {
-        // --- Manager API operations (all modes: dev, standalone, platform) ---
+        // Platform mode lists canonical platform records; local modes list manager records.
         DeploymentsCmd::Ls { project, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                return list_platform_deployments_task(&ctx, project.as_deref(), json).await;
+            }
             let manager = resolve_manager_client(&ctx, project.as_deref(), !json).await?;
             list_deployments_task(&manager, json).await
         }
@@ -512,6 +516,113 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
     print_table(table);
 
     Ok(())
+}
+
+#[cfg(feature = "platform")]
+async fn list_platform_deployments_task(
+    ctx: &ExecutionMode,
+    project: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let (project_id, _) = ctx.resolve_project(project, !json).await?;
+    let workspace = ctx.resolve_workspace_query_with_bootstrap(!json).await?;
+    let client = ctx.sdk_client().await?;
+    let mut deployments = Vec::new();
+    let mut cursor = None;
+
+    loop {
+        let mut request = client
+            .list_deployments()
+            .project(project_id.as_str())
+            .include(vec![ListDeploymentsIncludeItem::DeploymentGroup]);
+        if let Some(workspace) = workspace.as_deref() {
+            request = request.workspace(workspace);
+        }
+        if let Some(next_cursor) = cursor.as_deref() {
+            request = request.cursor(next_cursor);
+        }
+        let response = request
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "listing deployments".to_string(),
+                url: None,
+            })?
+            .into_inner();
+        deployments.extend(response.items);
+        cursor = response.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    if json {
+        return print_json(&deployments);
+    }
+
+    if deployments.is_empty() {
+        println!("(no deployments)");
+        return Ok(());
+    }
+
+    let mut table = make_table(&[
+        "Reference",
+        "ID",
+        "Status",
+        "Platform",
+        "Current release",
+        "Desired release",
+        "Updated",
+    ]);
+    for deployment in &deployments {
+        let status = deployment.status.to_string();
+        table.add_row(vec![
+            platform_deployment_reference(deployment).into(),
+            deployment.id.to_string().into(),
+            status_cell(&status),
+            deployment.platform.to_string().into(),
+            deployment
+                .current_release_id
+                .as_ref()
+                .map(|id| String::from(id.clone()))
+                .unwrap_or_else(|| "—".to_string())
+                .into(),
+            platform_desired_release_cell(deployment).into(),
+            deployment.updated_at.to_string().into(),
+        ]);
+    }
+    print_table(table);
+
+    Ok(())
+}
+
+fn platform_deployment_reference(deployment: &DeploymentListItemResponse) -> String {
+    deployment
+        .deployment_group
+        .as_ref()
+        .map(|group| {
+            let group_name = String::from(group.name.clone());
+            format!("{group_name}/{}", deployment.name)
+        })
+        .unwrap_or_else(|| deployment.id.to_string())
+}
+
+fn platform_desired_release_cell(deployment: &DeploymentListItemResponse) -> String {
+    let Some(desired) = deployment.desired_release_id.as_ref() else {
+        return "—".to_string();
+    };
+    let desired = String::from(desired.clone());
+    if deployment
+        .current_release_id
+        .as_ref()
+        .map(|id| String::from(id.clone()))
+        == Some(desired.clone())
+    {
+        "—".to_string()
+    } else {
+        desired
+    }
 }
 
 fn deployment_reference(deployment: &DeploymentResponse) -> String {
