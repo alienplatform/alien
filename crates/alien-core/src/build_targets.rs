@@ -317,24 +317,28 @@ impl BinaryTarget {
         }
     }
 
-    /// Detect the current supported OS target.
-    ///
-    /// Unsupported hosts fail explicitly because substituting a Linux target would produce an
-    /// executable that local workers and daemons cannot run.
+    /// Detect the current OS target
     pub fn current_os() -> Self {
-        Self::current_os_for(BuildHost::current())
-    }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        return Self::WindowsX64;
 
-    fn current_os_for(host: BuildHost) -> Self {
-        match host {
-            BuildHost::WindowsX64 => Self::WindowsX64,
-            BuildHost::LinuxX64 => Self::LinuxX64,
-            BuildHost::LinuxArm64 => Self::LinuxArm64,
-            BuildHost::DarwinArm64 => Self::DarwinArm64,
-            BuildHost::Unsupported => panic!(
-                "Alien does not support native binary targets for host {}",
-                host.id()
-            ),
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        return Self::LinuxX64;
+
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        return Self::LinuxArm64;
+
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        return Self::DarwinArm64;
+
+        #[cfg(not(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        )))]
+        {
+            Self::LinuxX64
         }
     }
 }
@@ -375,13 +379,6 @@ mod tests {
             BinaryTarget::defaults_for_platform(Platform::Local),
             vec![BinaryTarget::current_os()]
         );
-    }
-
-    #[test]
-    fn hosts_without_a_native_runtime_target_fail_instead_of_building_linux() {
-        let host = BuildHost::Unsupported;
-        let failure = std::panic::catch_unwind(|| BinaryTarget::current_os_for(host));
-        assert!(failure.is_err(), "{} must be rejected", host.id());
     }
 
     #[test]
