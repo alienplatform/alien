@@ -10,8 +10,8 @@
 use std::net::Ipv4Addr;
 
 use alien_ai_gateway::{
-    build_router, route_from_direct_anthropic, AmbientCred, AwsSigV4Cred, BearerTokenCred,
-    GatewayRoute, GatewayTarget,
+    build_router, route_from_direct_anthropic, route_from_direct_openai, AmbientCred, AwsSigV4Cred,
+    BearerTokenCred, GatewayRoute, GatewayTarget,
 };
 use alien_core::Platform;
 use aws_credential_types::provider::SharedCredentialsProvider;

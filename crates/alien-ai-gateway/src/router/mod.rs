@@ -1119,6 +1119,28 @@ async fn proxy_direct_anthropic_at(
     forward_response(upstream).await
 }
 
+async fn proxy_direct_openai(
+    client: &reqwest::Client,
+    route: &GatewayRoute,
+    mut payload: Value,
+    model: &str,
+    path: &str,
+) -> Result<Response> {
+    payload["model"] = Value::String(model.to_string());
+    let body = serde_json::to_vec(&payload)
+        .into_alien_error()
+        .context(ErrorData::Other {
+            message: "could not serialize the OpenAI request".to_string(),
+        })?;
+    let base = route
+        .upstream_base_override
+        .as_deref()
+        .unwrap_or("https://api.openai.com");
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
+    let upstream = sign_and_execute(client, &route.cred, &url, "", body, &[]).await?;
+    forward_response(upstream).await
+}
+
 /// The error for a binding missing a field a handler needs.
 pub(crate) fn missing_field(route: &GatewayRoute, field: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::BindingConfigInvalid {
