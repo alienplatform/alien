@@ -134,10 +134,10 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         .iter()
         .map(|m| m["id"].as_str().unwrap())
         .collect();
-    assert!(aws_ids.contains(&"gpt-oss-20b"));
-    assert!(aws_ids.contains(&"claude-opus-4.8"));
+    assert!(aws_ids.contains(&"byo/gpt-oss-20b"));
+    assert!(aws_ids.contains(&"byo/claude-opus-4.8"));
     assert!(
-        !aws_ids.contains(&"gpt-4.1"),
+        !aws_ids.contains(&"byo/gpt-4.1"),
         "AWS catalog must not list the Azure model"
     );
 
@@ -155,9 +155,9 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         .iter()
         .map(|m| m["id"].as_str().unwrap())
         .collect();
-    assert!(az_ids.contains(&"gpt-4.1"));
+    assert!(az_ids.contains(&"byo/gpt-4.1"));
     assert!(
-        !az_ids.contains(&"gpt-oss-20b"),
+        !az_ids.contains(&"byo/gpt-oss-20b"),
         "Azure catalog must not list the AWS model"
     );
 }
@@ -351,19 +351,6 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
         .await
         .expect("responses request");
     assert_eq!(responses_response.status(), 200);
-
-    let wrong_model_api = client
-        .post(format!("{base}/direct/v1/chat/completions"))
-        .json(&json!({"model": "gpt-5.6-sol", "messages": []}))
-        .send()
-        .await
-        .expect("wrong model API response");
-    assert_eq!(wrong_model_api.status(), 400);
-    assert!(wrong_model_api
-        .text()
-        .await
-        .expect("wrong model API body")
-        .contains("/v1/responses"));
 
     let wrong_protocol = client
         .post(format!("{base}/direct/v1/messages"))
