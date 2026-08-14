@@ -105,7 +105,9 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
     // The operations catalog is project-scoped: the platform requires a
     // `project` alongside `workspace`. Resolve the linked project (or the
     // `--project` override) the same way the other project-scoped commands do.
-    let (_, project_link) = ctx.resolve_project(args.project.as_deref(), !args.json).await?;
+    let (_, project_link) = ctx
+        .resolve_project(args.project.as_deref(), !args.json)
+        .await?;
     let project = project_link.project_id;
 
     match args.action {
@@ -126,18 +128,26 @@ async fn publish_task(
     bundle_path: &PathBuf,
     json: bool,
 ) -> Result<()> {
-    let bytes = std::fs::read(bundle_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("could not read bundle '{}'", bundle_path.display()),
-        })?;
+    let bytes =
+        std::fs::read(bundle_path)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("could not read bundle '{}'", bundle_path.display()),
+            })?;
 
     let (metadata_value, metadata) = read_bundle_metadata(&bytes, bundle_path)?;
-    let tier = metadata.tier.clone().unwrap_or_else(|| "destructive".to_string());
+    let tier = metadata
+        .tier
+        .clone()
+        .unwrap_or_else(|| "destructive".to_string());
 
     // Step 1: get a presigned S3 PUT URL for this plugin's bundle.
-    let upload_url_endpoint =
-        api_url(&auth.base_url, "/v1/operations/plugins/upload-url", workspace, project)?;
+    let upload_url_endpoint = api_url(
+        &auth.base_url,
+        "/v1/operations/plugins/upload-url",
+        workspace,
+        project,
+    )?;
     let presign_response = auth
         .reqwest_client()
         .request(Method::POST, upload_url_endpoint.clone())
@@ -222,7 +232,10 @@ async fn publish_task(
 
     if json {
         let body: Value = response.json().await.unwrap_or(Value::Null);
-        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
     } else {
         println!(
             "Published plugin '{}' v{} to workspace '{}'.",
@@ -260,7 +273,10 @@ async fn list_task(
 
     let body: Value = response.json().await.unwrap_or(Value::Null);
     if json {
-        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
     } else {
         let plugins = body.get("plugins").and_then(Value::as_array);
         match plugins {
@@ -284,11 +300,12 @@ async fn list_task(
 /// JSON value (forwarded verbatim) plus the fields the CLI needs.
 fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, BundleMetadata)> {
     let reader = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("'{}' is not a valid ZIP bundle", path.display()),
-        })?;
+    let mut archive =
+        zip::ZipArchive::new(reader)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("'{}' is not a valid ZIP bundle", path.display()),
+            })?;
     let mut file = archive.by_name("metadata.json").map_err(|_| {
         AlienError::new(ErrorData::ConfigurationError {
             message: format!("bundle '{}' has no metadata.json", path.display()),
@@ -300,12 +317,11 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, BundleMe
         .context(ErrorData::ConfigurationError {
             message: "could not read metadata.json from bundle".to_string(),
         })?;
-    let value: Value =
-        serde_json::from_str(&contents)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "metadata.json is not valid JSON".to_string(),
-            })?;
+    let value: Value = serde_json::from_str(&contents).into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "metadata.json is not valid JSON".to_string(),
+        },
+    )?;
     let metadata: BundleMetadata = serde_json::from_value(value.clone())
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
@@ -315,11 +331,11 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, BundleMe
 }
 
 fn api_url(base_url: &str, path: &str, workspace: &str, project: &str) -> Result<reqwest::Url> {
-    let mut url = reqwest::Url::parse(base_url)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
+    let mut url = reqwest::Url::parse(base_url).into_alien_error().context(
+        ErrorData::ConfigurationError {
             message: "platform base URL is invalid".to_string(),
-        })?;
+        },
+    )?;
     url.set_path(path);
     url.query_pairs_mut()
         .append_pair("workspace", workspace)
@@ -371,7 +387,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            zip.start_file("binary", SimpleFileOptions::default()).unwrap();
+            zip.start_file("binary", SimpleFileOptions::default())
+                .unwrap();
             zip.write_all(b"#!/bin/sh\n").unwrap();
             zip.finish().unwrap();
         }

@@ -68,6 +68,8 @@ pub enum OnboardSetupItem {
     Application,
     Models,
     Keys,
+    Storage,
+    Registry,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -208,6 +210,8 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                         OnboardSetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::AlienStack,
                         OnboardSetupItem::Models => alien_platform_api::types::DeploymentSetupItemSelectionItem::Models,
                         OnboardSetupItem::Keys => alien_platform_api::types::DeploymentSetupItemSelectionItem::Keys,
+                        OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Storage,
+                        OnboardSetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
                     },
                     release_channel: None,
                     required: true,
@@ -311,6 +315,8 @@ async fn fetch_available_setup(
             DeploymentLinkSetupResponseSetupItemsItem::AlienStack => OnboardSetupItem::Application,
             DeploymentLinkSetupResponseSetupItemsItem::Models => OnboardSetupItem::Models,
             DeploymentLinkSetupResponseSetupItemsItem::Keys => OnboardSetupItem::Keys,
+            DeploymentLinkSetupResponseSetupItemsItem::Storage => OnboardSetupItem::Storage,
+            DeploymentLinkSetupResponseSetupItemsItem::Registry => OnboardSetupItem::Registry,
         })
         .collect();
     let supported_platforms = setup
