@@ -83,7 +83,6 @@ beforeAll(async () => {
       json(response, 200, {
         id: deploymentId,
         name: "remote-storage-test",
-        purpose: "application",
         status: "running",
         projectId,
         platform: "local",
