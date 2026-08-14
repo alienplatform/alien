@@ -12,14 +12,12 @@ mod error;
 mod router;
 mod usage;
 pub use config::{bindings_from_env, bindings_from_env_map, route_from_remote_ai_lease};
-pub use creds::{
-    AmbientCred, AnthropicApiKeyCred, AwsSigV4Cred, BearerTokenCred, OpenAiApiKeyCred,
-};
+pub use creds::{AmbientCred, AnthropicApiKeyCred, AwsSigV4Cred, BearerTokenCred};
 pub use error::{ErrorData, Result};
 pub use router::{
     build_router, build_router_with_availability, build_router_with_availability_and_observer,
-    build_router_with_observer, route_from_direct_anthropic, route_from_direct_openai,
-    AvailableModels, GatewayRoute, GatewayTarget,
+    build_router_with_observer, route_from_direct_anthropic, AvailableModels, GatewayRoute,
+    GatewayTarget,
 };
 pub use usage::{
     parse_ai_token_usage, AiTokenUsage, AiUsageClientApi, AiUsageEvent, AiUsageObserver,

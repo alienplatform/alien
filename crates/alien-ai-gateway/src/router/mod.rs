@@ -20,7 +20,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use crate::creds::{AmbientCred, AnthropicApiKeyCred, OpenAiApiKeyCred};
+use crate::creds::{AmbientCred, AnthropicApiKeyCred};
 use crate::error::{ErrorData, Result};
 use crate::usage::{
     observe_response, AiUsageClientApi, AiUsageContext, AiUsageObserver, AiUsageProvider,
@@ -405,37 +405,6 @@ async fn proxy(
                 descriptor,
             ));
         }
-        GatewayTarget::DirectOpenAi => {
-            ensure_model_available(&state, &binding, &model)?;
-            if client_api != ClientApi::OpenAiChatCompletions {
-                return Err(AlienError::new(ErrorData::InvalidRequest {
-                    message: format!(
-                        "direct OpenAI chat completions use /{binding}/v1/chat/completions"
-                    ),
-                }));
-            }
-            let descriptor = AiUsageContext::new(
-                &binding,
-                AiUsageProvider::OpenAi,
-                &model,
-                &model,
-                usage_client_api(client_api),
-                None,
-            );
-            let response = proxy_direct_openai(
-                &state.client,
-                route,
-                payload,
-                &model,
-                "/v1/chat/completions",
-            )
-            .await?;
-            return Ok(observe_response(
-                response,
-                state.usage_observer.as_ref(),
-                descriptor,
-            ));
-        }
         GatewayTarget::Cloud(_) => {}
     }
     let cloud = match route.target {
@@ -567,24 +536,6 @@ async fn proxy_responses(
                 model,
                 binding,
             }))
-        }
-        GatewayTarget::DirectOpenAi => {
-            ensure_model_available(&state, &binding, &model)?;
-            let descriptor = AiUsageContext::new(
-                &binding,
-                AiUsageProvider::OpenAi,
-                &model,
-                &model,
-                AiUsageClientApi::OpenAiResponses,
-                None,
-            );
-            let response =
-                proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await?;
-            return Ok(observe_response(
-                response,
-                state.usage_observer.as_ref(),
-                descriptor,
-            ));
         }
     };
     let catalog_model = ai_catalog::resolve_for(&model, cloud)
@@ -842,8 +793,6 @@ fn parse_stream_flag(value: Option<Value>) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
-    use std::sync::mpsc;
-    use std::time::Duration;
 
     use aws_credential_types::provider::SharedCredentialsProvider;
     use aws_credential_types::Credentials;
@@ -854,15 +803,6 @@ mod tests {
 
     use super::*;
     use crate::creds::{AwsSigV4Cred, BearerTokenCred};
-    use crate::usage::{AiTokenUsage, AiUsageEvent, AiUsageOutcome};
-
-    struct TestUsageObserver(mpsc::Sender<AiUsageEvent>);
-
-    impl AiUsageObserver for TestUsageObserver {
-        fn observe(&self, event: AiUsageEvent) {
-            let _ = self.0.send(event);
-        }
-    }
 
     fn test_aws_cred() -> AmbientCred {
         let creds = Credentials::new(
@@ -911,100 +851,6 @@ mod tests {
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
         }
-    }
-
-    fn direct_openai_route(upstream: &str) -> GatewayRoute {
-        let mut route = route_from_direct_openai("llm", "sk-test").expect("direct OpenAI route");
-        route.upstream_base_override = Some(upstream.to_string());
-        route
-    }
-
-    #[tokio::test]
-    async fn observes_usage_from_a_completed_response_body() {
-        let server = MockServer::start_async().await;
-        let upstream = server
-            .mock_async(|when, then| {
-                when.method(POST).path("/v1/chat/completions");
-                then.status(200)
-                    .header("content-type", "application/json")
-                    .json_body(json!({
-                        "id": "response",
-                        "usage": {
-                            "prompt_tokens": 13,
-                            "completion_tokens": 5,
-                            "prompt_tokens_details": { "cached_tokens": 3 }
-                        }
-                    }));
-            })
-            .await;
-        let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
-        let url = serve(build_router_with_observer(
-            vec![direct_openai_route(&server.base_url())],
-            observer,
-        ))
-        .await;
-
-        let response = reqwest::Client::new()
-            .post(format!("{url}/llm/v1/chat/completions"))
-            .json(&json!({ "model": "gpt-5-mini", "messages": [] }))
-            .send()
-            .await
-            .expect("proxy response");
-        let body = response.bytes().await.expect("response body");
-        assert!(body
-            .windows(b"prompt_tokens".len())
-            .any(|part| part == b"prompt_tokens"));
-
-        let event = receiver
-            .recv_timeout(Duration::from_secs(1))
-            .expect("completed usage observation");
-        assert_eq!(event.provider, AiUsageProvider::OpenAi);
-        assert_eq!(event.public_model, "gpt-5-mini");
-        assert_eq!(event.client_api, AiUsageClientApi::OpenAiChatCompletions);
-        assert_eq!(event.outcome, AiUsageOutcome::Success);
-        assert_eq!(event.status, 200);
-        assert_eq!(event.tokens.input_tokens, Some(13));
-        assert_eq!(event.tokens.output_tokens, Some(5));
-        assert_eq!(event.tokens.cache_read_tokens, Some(3));
-        upstream.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn observes_sanitized_provider_failures_without_parsing_the_error_body() {
-        let server = MockServer::start_async().await;
-        server
-            .mock_async(|when, then| {
-                when.method(POST).path("/v1/chat/completions");
-                then.status(429)
-                    .header("retry-after", "2")
-                    .json_body(json!({ "secret_provider_detail": "must not escape" }));
-            })
-            .await;
-        let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
-        let url = serve(build_router_with_observer(
-            vec![direct_openai_route(&server.base_url())],
-            observer,
-        ))
-        .await;
-
-        let response = reqwest::Client::new()
-            .post(format!("{url}/llm/v1/chat/completions"))
-            .json(&json!({ "model": "gpt-5-mini", "messages": [] }))
-            .send()
-            .await
-            .expect("proxy response");
-        assert_eq!(response.status(), 429);
-        let body = response.text().await.expect("safe error body");
-        assert!(!body.contains("secret_provider_detail"));
-
-        let event = receiver
-            .recv_timeout(Duration::from_secs(1))
-            .expect("provider error observation");
-        assert_eq!(event.outcome, AiUsageOutcome::ProviderError);
-        assert_eq!(event.status, 429);
-        assert_eq!(event.tokens, AiTokenUsage::default());
     }
 
     #[test]
