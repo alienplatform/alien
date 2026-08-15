@@ -12,13 +12,13 @@ export type CreateDeploymentTokenRequest = {
   /**
    * Optional expiration date for the deployment token
    */
-  expiresAt?: Date | undefined;
+  expiresAt?: Date | null | undefined;
 };
 
 /** @internal */
 export type CreateDeploymentTokenRequest$Outbound = {
   description: string | null;
-  expiresAt?: string | undefined;
+  expiresAt?: string | null | undefined;
 };
 
 /** @internal */
@@ -27,7 +27,7 @@ export const CreateDeploymentTokenRequest$outboundSchema: z.ZodType<
   CreateDeploymentTokenRequest
 > = z.object({
   description: z.nullable(z.string()),
-  expiresAt: z.date().transform(v => v.toISOString()).optional(),
+  expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
 });
 
 export function createDeploymentTokenRequestToJSON(

@@ -5,7 +5,7 @@
 //! binding topology together with materialized, short-lived credentials.
 
 use alien_bindings::{
-    traits::ArtifactRegistry as ArtifactRegistryApi, BindingsProvider, BindingsProviderApi,
+    BindingsProvider, BindingsProviderApi, traits::ArtifactRegistry as ArtifactRegistryApi,
 };
 use alien_core::{
     Ai, AiBinding, ArtifactRegistry, ArtifactRegistryBinding, AwsClientConfig, AwsCredentials,
@@ -15,24 +15,24 @@ use alien_core::{
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
+    Router,
     extract::{Json, State},
-    http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
+    http::{HeaderMap, header::CACHE_CONTROL, header::PRAGMA},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
-use super::{auth, current_release_resource, load_current_release, AppState};
+use super::{AppState, auth, current_release_resource, load_current_release};
 use crate::credential_materialization::{
-    materialize_remote_binding_lease, MaterializedCredentialLease, RemoteBindingCredentialScope,
+    MaterializedCredentialLease, RemoteBindingCredentialScope, materialize_remote_binding_lease,
 };
 use crate::error::ErrorData;
 use crate::traits::{
-    deployment_status_from_record, CredentialResolver, DeploymentRecord, DeploymentStore,
-    ReleaseStore,
+    CredentialResolver, DeploymentRecord, DeploymentStore, ReleaseStore,
+    deployment_status_from_record,
 };
 
 /// The remote client refreshes five minutes before this server-provided hint.
@@ -649,7 +649,7 @@ async fn resolve_binding(
             return ErrorData::bad_request(
                 "Specify exactly one of resourceId or kind when resolving a remote binding",
             )
-            .into_response()
+            .into_response();
         }
     };
     if !state
@@ -694,11 +694,11 @@ async fn resolve_binding(
         alien_core::remote_bindings::RemoteBindingKind::Ai => {
             remote_ai_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Ai)
         }
-        alien_core::remote_bindings::RemoteBindingKind::ArtifactRegistry => Err(
-            ErrorData::bad_request(
+        alien_core::remote_bindings::RemoteBindingKind::ArtifactRegistry => {
+            Err(ErrorData::bad_request(
                 "Remote ArtifactRegistry credentials are available only to the Manager's local OCI operation broker",
-            ),
-        ),
+            ))
+        }
     };
     let binding = match binding {
         Ok(binding) => binding,
@@ -718,7 +718,7 @@ async fn resolve_binding(
                     deployment_id: deployment.id.clone(),
                     platform: deployment.platform,
                 })
-                .into_response()
+                .into_response();
         }
     };
     let lease = match materialize_remote_binding_lease(resolved, scope).await {
@@ -1015,7 +1015,7 @@ impl LocalArtifactRegistryResolver {
             other => {
                 return Err(ErrorData::bad_request(format!(
                     "Remote ArtifactRegistry is not supported for deployment platform '{other}'"
-                )))
+                )));
             }
         };
         let source = self

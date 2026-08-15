@@ -1,5 +1,7 @@
 # DataLocal8
 
+Local embedded Postgres backend.
+
 ## Example Usage
 
 ```typescript

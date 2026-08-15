@@ -6,7 +6,7 @@
 import { DeploymentSetupItemSelection } from "@alienplatform/platform-api/models";
 
 let value: DeploymentSetupItemSelection = {
-  item: "alien-stack",
+  item: "deployment",
   required: true,
 };
 ```

@@ -26,16 +26,16 @@ pub mod auth;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_bindings::traits::Kv;
 use alien_bindings::BindingsProviderApi;
+use alien_bindings::traits::Kv;
 use alien_commands::server::{CommandServer, HasCommandServer};
 use alien_core::{Platform, ResourceEntry, Stack};
 use alien_error::{AlienError, Context};
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
-use http::{header, Method};
+use http::{Method, header};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::auth::{Authz, Subject};
@@ -71,7 +71,7 @@ pub struct AppState {
     /// Routing table mapping repo path prefixes to upstream registries.
     pub registry_routing_table: Arc<registry_proxy::RegistryRoutingTable>,
     /// Optional private adapter for the disjoint `customer/` OCI namespace.
-    pub customer_registry_broker: Option<Arc<dyn registry_proxy::CustomerRegistryBroker>>,
+    pub external_registry_broker: Option<Arc<dyn registry_proxy::ExternalRegistryBroker>>,
     /// Registry of per-`(ResourceType, Platform)` importers used by the
     /// stack-import endpoint to translate setup-artifact payloads
     /// (CFN Custom Resource, Terraform provider, Helm chart) into typed

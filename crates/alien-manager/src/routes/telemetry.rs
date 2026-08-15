@@ -4,18 +4,18 @@
 //! Deployment ID is extracted from the auth subject (deployment token).
 
 use axum::{
+    Json,
     body::Bytes,
     extract::State,
     http::HeaderMap,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 
 use crate::error::ErrorData;
 use crate::traits::{TelemetryCaller, TelemetrySignal};
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 #[derive(Debug, Serialize)]
 pub struct TelemetryResponse {
@@ -80,7 +80,7 @@ async fn ingest(
         } => (deployment_id.clone(), project_id.clone()),
         _ => {
             return ErrorData::forbidden("Telemetry ingestion requires a deployment token")
-                .into_response()
+                .into_response();
         }
     };
 

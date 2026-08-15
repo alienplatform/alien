@@ -6,7 +6,7 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 /**
- * Operational purpose of this deployment within its customer environment.
+ * Filter by deployment purpose
  */
 export const DeploymentPurpose = {
   Application: "application",
@@ -16,7 +16,7 @@ export const DeploymentPurpose = {
   ContainerRegistry: "container-registry",
 } as const;
 /**
- * Operational purpose of this deployment within its customer environment.
+ * Filter by deployment purpose
  */
 export type DeploymentPurpose = ClosedEnum<typeof DeploymentPurpose>;
 
@@ -24,3 +24,7 @@ export type DeploymentPurpose = ClosedEnum<typeof DeploymentPurpose>;
 export const DeploymentPurpose$inboundSchema: z.ZodEnum<
   typeof DeploymentPurpose
 > = z.enum(DeploymentPurpose);
+/** @internal */
+export const DeploymentPurpose$outboundSchema: z.ZodEnum<
+  typeof DeploymentPurpose
+> = DeploymentPurpose$inboundSchema;

@@ -6,6 +6,7 @@ import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
 export type RedeployDeploymentRequest = {
   /**
@@ -23,6 +24,7 @@ export type RedeployDeploymentRequest = {
  */
 export type RedeployDeploymentResponse = {
   message: string;
+  operation: models.DeploymentUpdateOperationSummary | null;
 };
 
 /** @internal */
@@ -54,6 +56,7 @@ export const RedeployDeploymentResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
+  operation: z.nullable(models.DeploymentUpdateOperationSummary$inboundSchema),
 });
 
 export function redeployDeploymentResponseFromJSON(

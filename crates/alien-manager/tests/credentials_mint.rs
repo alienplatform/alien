@@ -20,37 +20,37 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use http::header;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
+use alien_bindings::BindingsProviderApi;
 use alien_bindings::error::{ErrorData as BindingErrorData, Result as BindingResult};
 use alien_bindings::traits::{
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, GcpServiceAccountInfo,
     ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
-use alien_bindings::BindingsProviderApi;
 use alien_bindings::{providers::kv::local::LocalKv, providers::storage::local::LocalStorage};
+use alien_commands::InMemoryCommandRegistry;
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
-use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig, Container,
-    ContainerCode, GcpClientConfig, GcpCredentials, PermissionProfile, Platform, Resource,
-    ResourceLifecycle, ResourceSpec, ResourceStatus, RuntimeMetadata,
-    ServiceAccount as ServiceAccountResource, Stack, StackResourceState, StackSettings, StackState,
-    Storage, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
+    CURRENT_DEPLOYMENT_PROTOCOL_VERSION, ClientConfig, Container, ContainerCode, GcpClientConfig,
+    GcpCredentials, PermissionProfile, Platform, Resource, ResourceLifecycle, ResourceSpec,
+    ResourceStatus, RuntimeMetadata, ServiceAccount as ServiceAccountResource, Stack,
+    StackResourceState, StackSettings, StackState, Storage,
 };
 use alien_error::AlienError;
 use alien_manager::auth::{Authz, Subject};
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::{NullTelemetryBackend, OssAuthz};
+use alien_manager::routes::AppState;
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
 };
-use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
@@ -486,7 +486,7 @@ async fn build(
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
-        customer_registry_broker: None,
+        external_registry_broker: None,
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 

@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::future::join_all;
-use object_store::path::Path;
 use object_store::PutPayload;
+use object_store::path::Path;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -24,7 +24,7 @@ const DEPLOYMENT_GROUP_ID: &str = "dg_dddddddddddddddddddddddddddd";
 const WORKSPACE_ID: &str = "ws_eeeeeeeeeeeeeeeeeeeeeeee";
 const PLATFORM_TOKEN: &str = "platform-secret-token";
 const GENERATED_MANAGER_TOKEN: &str = "generated-manager-token";
-const EXTERNAL_ID: &str = "customer_123";
+const EXTERNAL_ID: &str = "environment_123";
 
 #[derive(Clone)]
 struct ManagerAssignment {
@@ -171,11 +171,11 @@ impl Fixture {
         )
     }
 
-    async fn remote_customer_provider(&self) -> Arc<RemoteBindingsProvider> {
+    async fn remote_environment_provider(&self) -> Arc<RemoteBindingsProvider> {
         let clock: Arc<dyn Clock> = self.clock.clone();
         Arc::new(RemoteBindingsProvider {
             source: Arc::new(
-                RemoteBindingSource::discover_customer(
+                RemoteBindingSource::discover_external_environment(
                     PROJECT_ID,
                     EXTERNAL_ID,
                     PLATFORM_TOKEN,
@@ -184,7 +184,7 @@ impl Fixture {
                     clock.clone(),
                 )
                 .await
-                .expect("discover customer manager access"),
+                .expect("discover external environment manager access"),
             ),
             resolvers: RwLock::new(HashMap::new()),
             clock,
@@ -969,9 +969,11 @@ fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
     let error = validate_aws_remote_client_config(&aws, at(3600))
         .expect_err("AWS credentials expiring before the lease must fail closed");
     assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
-    assert!(error
-        .message
-        .contains("credential expires before its lease"));
+    assert!(
+        error
+            .message
+            .contains("credential expires before its lease")
+    );
 
     let aws = alien_core::AwsClientConfig {
         account_id: "123456789012".to_string(),

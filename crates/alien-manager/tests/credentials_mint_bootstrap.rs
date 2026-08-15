@@ -32,29 +32,28 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use tracing_subscriber::fmt::MakeWriter;
 
+use alien_bindings::BindingsProvider;
 use alien_bindings::providers::kv::local::LocalKv;
 use alien_bindings::providers::storage::local::LocalStorage;
 use alien_bindings::traits::BindingsProviderApi;
-use alien_bindings::BindingsProvider;
+use alien_commands::InMemoryCommandRegistry;
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
-use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    Container, ContainerCode, PermissionProfile, Platform, ResourceLifecycle, ResourceSpec,
-    RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState,
-    CURRENT_DEPLOYMENT_PROTOCOL_VERSION, ENV_ALIEN_DEPLOYMENT_ID,
+    CURRENT_DEPLOYMENT_PROTOCOL_VERSION, Container, ContainerCode, ENV_ALIEN_DEPLOYMENT_ID,
     ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT, ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_DEPLOYMENT_TYPE,
-    ENV_ALIEN_MANAGER_URL, ENV_ALIEN_RESOURCE_ID,
+    ENV_ALIEN_MANAGER_URL, ENV_ALIEN_RESOURCE_ID, PermissionProfile, Platform, ResourceLifecycle,
+    ResourceSpec, RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState,
 };
 use alien_manager::auth::Subject;
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::local_credentials::LocalCredentialResolver;
 use alien_manager::providers::token_db_validator::TokenDbValidator;
 use alien_manager::providers::{NullTelemetryBackend, OssAuthz};
+use alien_manager::routes::AppState;
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
 };
-use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
@@ -192,7 +191,7 @@ async fn build() -> Fixture {
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
-        customer_registry_broker: None,
+        external_registry_broker: None,
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 

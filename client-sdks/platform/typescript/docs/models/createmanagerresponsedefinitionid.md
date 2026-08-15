@@ -11,5 +11,5 @@ let value: CreateManagerResponseDefinitionId = "customer-ai";
 ## Values
 
 ```typescript
-"customer-ai" | "customer-key"
+"customer-ai" | "customer-key" | "customer-storage" | "customer-registry"
 ```

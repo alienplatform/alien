@@ -21,13 +21,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -35,10 +35,10 @@ use tokio::sync::OwnedSemaphorePermit;
 use tracing::{debug, warn};
 use url::Url;
 
+use alien_bindings::BindingsProviderApi;
 use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
 };
-use alien_bindings::BindingsProviderApi;
 use alien_core::Platform;
 
 use super::AppState;
@@ -53,16 +53,16 @@ const UPLOAD_SESSION_REPO_PARAM: &str = "_alien_repo";
 const UPLOAD_SESSION_EXPIRES_PARAM: &str = "_alien_exp";
 const UPLOAD_SESSION_SIGNATURE_PARAM: &str = "_alien_sig";
 const UPLOAD_SESSION_SIGNING_CONTEXT: &[u8] = b"registry-upload-session-signing";
-const CUSTOMER_UPLOAD_SESSION_PREFIX: &str = "customer-v1:";
+const EXTERNAL_UPLOAD_SESSION_PREFIX: &str = "external-v1:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CustomerRegistryOperation {
+pub enum ExternalRegistryOperation {
     Pull,
     Push,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CustomerRegistryAccessError {
+pub enum ExternalRegistryAccessError {
     Unauthorized,
     Denied,
     NotFound,
@@ -71,18 +71,18 @@ pub enum CustomerRegistryAccessError {
 }
 
 /// Opaque admission permits held until the proxied response body finishes.
-pub struct CustomerRegistryAdmission {
+pub struct ExternalRegistryAdmission {
     _permits: Vec<OwnedSemaphorePermit>,
 }
 
-impl CustomerRegistryAdmission {
+impl ExternalRegistryAdmission {
     pub fn new(permits: Vec<OwnedSemaphorePermit>) -> Self {
         Self { _permits: permits }
     }
 }
 
 #[derive(Clone)]
-pub struct CustomerRegistryTarget {
+pub struct ExternalRegistryTarget {
     pub route_id: String,
     pub credential_id: String,
     pub desired_revision: u64,
@@ -91,25 +91,25 @@ pub struct CustomerRegistryTarget {
     pub external_repository: String,
     pub upstream_repository: String,
     pub artifact_registry: Arc<dyn ArtifactRegistry>,
-    pub admission: Option<Arc<CustomerRegistryAdmission>>,
+    pub admission: Option<Arc<ExternalRegistryAdmission>>,
 }
 
-/// Private embedders may authorize the reserved `customer/` namespace and
+/// Private embedders may authorize the reserved `external/` namespace and
 /// return an in-memory upstream. Implementations must retain only bounded,
 /// short-lived cloud credentials and must not return them to the OCI client.
 #[async_trait]
-pub trait CustomerRegistryBroker: Send + Sync {
+pub trait ExternalRegistryBroker: Send + Sync {
     async fn authenticate_probe(
         &self,
         authorization: Option<&str>,
-    ) -> Result<(), CustomerRegistryAccessError>;
+    ) -> Result<(), ExternalRegistryAccessError>;
 
     async fn authorize(
         &self,
         authorization: Option<&str>,
         repository: &str,
-        operation: CustomerRegistryOperation,
-    ) -> Result<CustomerRegistryTarget, CustomerRegistryAccessError>;
+        operation: ExternalRegistryOperation,
+    ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError>;
 
     /// Resolve a still-active route for a Manager-signed upload-session URL.
     /// The session HMAC authenticates the request; this call rechecks current
@@ -118,14 +118,14 @@ pub trait CustomerRegistryBroker: Send + Sync {
         &self,
         repository: &str,
         credential_id: &str,
-    ) -> Result<CustomerRegistryTarget, CustomerRegistryAccessError>;
+    ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError>;
 
     /// Record one successful manifest operation. Private adapters may use a
     /// matching push+pull digest as their end-to-end readiness signal.
     async fn record_manifest_success(
         &self,
-        target: &CustomerRegistryTarget,
-        operation: CustomerRegistryOperation,
+        target: &ExternalRegistryTarget,
+        operation: ExternalRegistryOperation,
         digest: &str,
     );
 }
@@ -222,9 +222,9 @@ impl RegistryRoutingTable {
     fn validate_unique_prefixes(routes: &[RegistryRoute]) -> Result<(), String> {
         let mut seen: HashMap<&str, &RegistryRoute> = HashMap::new();
         for route in routes {
-            if route.prefix == "customer" || route.prefix.starts_with("customer/") {
+            if route.prefix == "external" || route.prefix.starts_with("external/") {
                 return Err(format!(
-                    "Artifact registry prefix '{}' overlaps the reserved customer namespace",
+                    "Artifact registry prefix '{}' overlaps the reserved external namespace",
                     route.prefix
                 ));
             }
@@ -269,11 +269,7 @@ fn project_id_after_prefix<'a>(repo_name: &'a str, prefix: &str) -> Option<&'a s
         &rest[1..]
     };
     let pid = suffix.split('/').next()?;
-    if pid.is_empty() {
-        None
-    } else {
-        Some(pid)
-    }
+    if pid.is_empty() { None } else { Some(pid) }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,8 +476,8 @@ fn oci_error(status: StatusCode, code: &'static str, message: impl Into<String>)
 
 /// `GET /v2/` — OCI Distribution spec requires this endpoint to exist.
 async fn version_check(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let customer_error = if basic_authorization(&headers).is_some() {
-        if let Some(broker) = &state.customer_registry_broker {
+    let external_error = if basic_authorization(&headers).is_some() {
+        if let Some(broker) = &state.external_registry_broker {
             match broker
                 .authenticate_probe(
                     headers
@@ -500,14 +496,14 @@ async fn version_check(State(state): State<AppState>, headers: HeaderMap) -> Res
         None
     };
     // Docker uses Basic auth for both ordinary Deployment-token pulls and the
-    // reserved customer registry. The version probe has no repository path to
+    // reserved external registry. The version probe has no repository path to
     // distinguish them, so accept either credential system here. Repository
     // requests remain authorized by their exact namespace-specific path.
     if super::auth::require_auth(&state, &headers).await.is_ok() {
         return (StatusCode::OK, "{}").into_response();
     }
-    if let Some(error) = customer_error {
-        return customer_registry_error(error);
+    if let Some(error) = external_error {
+        return external_registry_error(error);
     }
     oci_error(
         StatusCode::UNAUTHORIZED,
@@ -571,8 +567,8 @@ async fn proxy_push(
         // Signed-URL bypass: the path's repo is implied by the signature,
         // not by Bearer auth. Trust the signature's repo.
         session.repository.clone()
-    } else if is_customer_repository(&unsigned_repo_name) {
-        // The private customer broker owns authentication for its reserved
+    } else if is_external_repository(&unsigned_repo_name) {
+        // The private external broker owns authentication for its reserved
         // namespace. An OCI Basic credential is intentionally not an Alien
         // API token and must never be sent through the internal token store.
         unsigned_repo_name
@@ -587,15 +583,15 @@ async fn proxy_push(
         unsigned_repo_name
     };
 
-    if is_customer_repository(&repo_name) {
-        if let Err(response) = validate_customer_request_target(&original_uri, &headers) {
+    if is_external_repository(&repo_name) {
+        if let Err(response) = validate_external_request_target(&original_uri, &headers) {
             return response;
         }
-        let Some(broker) = &state.customer_registry_broker else {
-            return customer_registry_error(CustomerRegistryAccessError::NotFound);
+        let Some(broker) = &state.external_registry_broker else {
+            return external_registry_error(ExternalRegistryAccessError::NotFound);
         };
         let target = if let Some(session) = &signed_session {
-            let Some(credential_id) = session.customer_credential_id() else {
+            let Some(credential_id) = session.external_credential_id() else {
                 return invalid_upload_session_auth();
             };
             broker
@@ -608,13 +604,13 @@ async fn proxy_push(
                         .get("authorization")
                         .and_then(|value| value.to_str().ok()),
                     &repo_name,
-                    CustomerRegistryOperation::Push,
+                    ExternalRegistryOperation::Push,
                 )
                 .await
         };
         let target = match target {
             Ok(target) => target,
-            Err(error) => return customer_registry_error(error),
+            Err(error) => return external_registry_error(error),
         };
         if let Some(session) = &signed_session {
             if !session.matches(&target) {
@@ -629,9 +625,9 @@ async fn proxy_push(
         if signed_session.is_some()
             && (upstream_query.contains_key("mount") || upstream_query.contains_key("from"))
         {
-            return customer_registry_error(CustomerRegistryAccessError::Denied);
+            return external_registry_error(ExternalRegistryAccessError::Denied);
         }
-        if let Err(error) = authorize_and_rewrite_customer_mount(
+        if let Err(error) = authorize_and_rewrite_external_mount(
             broker,
             headers
                 .get("authorization")
@@ -643,7 +639,7 @@ async fn proxy_push(
         )
         .await
         {
-            return customer_registry_error(error);
+            return external_registry_error(error);
         }
         let qs = query_string(&upstream_query);
         let oci_path = format!("{}{}", oci_path_str, qs);
@@ -651,10 +647,10 @@ async fn proxy_push(
             // Axum strips the nested `/v2/` route prefix before this handler.
             // The signed path may be provider-internal rather than the logical
             // repository (GAR uses `pkg` for an upload session). Its HMAC and
-            // embedded customer identity bind it to this exact target, while
+            // embedded external identity bind it to this exact target, while
             // raw forwarding remains pinned to the configured endpoint.
             let upstream_path = format!("/v2/{oci_path}");
-            return forward_customer_to_upstream_raw(
+            return forward_external_to_upstream_raw(
                 &state,
                 &method,
                 &upstream_path,
@@ -664,7 +660,7 @@ async fn proxy_push(
             )
             .await;
         }
-        return forward_customer_to_upstream(
+        return forward_external_to_upstream(
             &state,
             &method,
             &oci_path,
@@ -747,14 +743,14 @@ async fn proxy_upload_session(
     };
     let repo_name = session.repository.clone();
 
-    if is_customer_repository(&repo_name) {
-        if let Err(response) = validate_customer_request_target(&original_uri, &headers) {
+    if is_external_repository(&repo_name) {
+        if let Err(response) = validate_external_request_target(&original_uri, &headers) {
             return response;
         }
-        let Some(broker) = &state.customer_registry_broker else {
-            return customer_registry_error(CustomerRegistryAccessError::NotFound);
+        let Some(broker) = &state.external_registry_broker else {
+            return external_registry_error(ExternalRegistryAccessError::NotFound);
         };
-        let Some(credential_id) = session.customer_credential_id() else {
+        let Some(credential_id) = session.external_credential_id() else {
             return invalid_upload_session_auth();
         };
         let target = match broker
@@ -762,7 +758,7 @@ async fn proxy_upload_session(
             .await
         {
             Ok(target) => target,
-            Err(error) => return customer_registry_error(error),
+            Err(error) => return external_registry_error(error),
         };
         if !session.matches(&target) {
             return invalid_upload_session_auth();
@@ -770,7 +766,7 @@ async fn proxy_upload_session(
         let upstream_query = strip_upload_session_auth_params(&query);
         let qs = query_string(&upstream_query);
         let full_path = format!("{}{}", original_uri.path(), qs);
-        return forward_customer_to_upstream_raw(
+        return forward_external_to_upstream_raw(
             &state,
             &method,
             &full_path,
@@ -821,12 +817,12 @@ async fn proxy_pull(
 ) -> Response {
     let oci_path_str = path.trim_start_matches('/');
     let repo_name = extract_repo_name(oci_path_str);
-    if is_customer_repository(&repo_name) {
-        if let Err(response) = validate_customer_request_target(&original_uri, &headers) {
+    if is_external_repository(&repo_name) {
+        if let Err(response) = validate_external_request_target(&original_uri, &headers) {
             return response;
         }
-        let Some(broker) = &state.customer_registry_broker else {
-            return customer_registry_error(CustomerRegistryAccessError::NotFound);
+        let Some(broker) = &state.external_registry_broker else {
+            return external_registry_error(ExternalRegistryAccessError::NotFound);
         };
         let target = match broker
             .authorize(
@@ -834,15 +830,15 @@ async fn proxy_pull(
                     .get("authorization")
                     .and_then(|value| value.to_str().ok()),
                 &repo_name,
-                CustomerRegistryOperation::Pull,
+                ExternalRegistryOperation::Pull,
             )
             .await
         {
             Ok(target) => target,
-            Err(error) => return customer_registry_error(error),
+            Err(error) => return external_registry_error(error),
         };
         let oci_path = format!("{}{}", oci_path_str, query_string(&query));
-        return forward_customer_to_upstream(&state, &method, &oci_path, &headers, None, &target)
+        return forward_external_to_upstream(&state, &method, &oci_path, &headers, None, &target)
             .await;
     }
     let subject = match super::auth::require_auth(&state, &headers).await {
@@ -858,8 +854,8 @@ async fn proxy_pull(
     forward_to_upstream(&state, &method, &oci_path, &headers, None, None).await
 }
 
-fn is_customer_repository(repository: &str) -> bool {
-    repository == "customer" || repository.starts_with("customer/")
+fn is_external_repository(repository: &str) -> bool {
+    repository == "external" || repository.starts_with("external/")
 }
 
 fn basic_authorization(headers: &HeaderMap) -> Option<&str> {
@@ -869,29 +865,29 @@ fn basic_authorization(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| value.starts_with("Basic "))
 }
 
-fn customer_registry_error(error: CustomerRegistryAccessError) -> Response {
+fn external_registry_error(error: ExternalRegistryAccessError) -> Response {
     match error {
-        CustomerRegistryAccessError::Unauthorized => oci_error(
+        ExternalRegistryAccessError::Unauthorized => oci_error(
             StatusCode::UNAUTHORIZED,
             "UNAUTHORIZED",
             "Invalid container registry credential",
         ),
-        CustomerRegistryAccessError::Denied => oci_error(
+        ExternalRegistryAccessError::Denied => oci_error(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Container registry access denied",
         ),
-        CustomerRegistryAccessError::NotFound => oci_error(
+        ExternalRegistryAccessError::NotFound => oci_error(
             StatusCode::NOT_FOUND,
             "NAME_UNKNOWN",
             "Container repository not found",
         ),
-        CustomerRegistryAccessError::Unavailable => oci_error(
+        ExternalRegistryAccessError::Unavailable => oci_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "UNAVAILABLE",
             "Container registry route is unavailable",
         ),
-        CustomerRegistryAccessError::RateLimited => oci_error(
+        ExternalRegistryAccessError::RateLimited => oci_error(
             StatusCode::TOO_MANY_REQUESTS,
             "TOOMANYREQUESTS",
             "Container registry concurrency limit reached",
@@ -899,7 +895,7 @@ fn customer_registry_error(error: CustomerRegistryAccessError) -> Response {
     }
 }
 
-fn validate_customer_request_target(
+fn validate_external_request_target(
     uri: &axum::http::Uri,
     headers: &HeaderMap,
 ) -> Result<(), Response> {
@@ -927,7 +923,7 @@ fn validate_customer_request_target(
             .split('/')
             .any(|component| component == "." || component == "..")
     {
-        return Err(customer_registry_error(CustomerRegistryAccessError::Denied));
+        return Err(external_registry_error(ExternalRegistryAccessError::Denied));
     }
 
     let header_bytes = headers
@@ -937,42 +933,42 @@ fn validate_customer_request_target(
     if header_bytes > MAX_HEADER_BYTES
         || (headers.contains_key("content-length") && headers.contains_key("transfer-encoding"))
     {
-        return Err(customer_registry_error(CustomerRegistryAccessError::Denied));
+        return Err(external_registry_error(ExternalRegistryAccessError::Denied));
     }
 
     let mut keys = std::collections::HashSet::new();
     for parameter in query.split('&').filter(|parameter| !parameter.is_empty()) {
         let raw_key = parameter.split_once('=').map_or(parameter, |(key, _)| key);
         let key = urlencoding::decode(raw_key)
-            .map_err(|_| customer_registry_error(CustomerRegistryAccessError::Denied))?;
+            .map_err(|_| external_registry_error(ExternalRegistryAccessError::Denied))?;
         if !keys.insert(key.into_owned()) {
-            return Err(customer_registry_error(CustomerRegistryAccessError::Denied));
+            return Err(external_registry_error(ExternalRegistryAccessError::Denied));
         }
     }
     Ok(())
 }
 
-async fn forward_customer_to_upstream(
+async fn forward_external_to_upstream(
     state: &AppState,
     method: &axum::http::Method,
     oci_path: &str,
     original_headers: &HeaderMap,
     body: Option<Body>,
-    target: &CustomerRegistryTarget,
+    target: &ExternalRegistryTarget,
 ) -> Response {
     let Some(rewritten) = rewrite_oci_repository(
         oci_path,
         &target.external_repository,
         &target.upstream_repository,
     ) else {
-        return customer_registry_error(CustomerRegistryAccessError::Denied);
+        return external_registry_error(ExternalRegistryAccessError::Denied);
     };
     let operation = if *method == axum::http::Method::GET || *method == axum::http::Method::HEAD {
-        CustomerRegistryOperation::Pull
+        ExternalRegistryOperation::Pull
     } else {
-        CustomerRegistryOperation::Push
+        ExternalRegistryOperation::Push
     };
-    let upload_session_identity = customer_upload_session_identity(target);
+    let upload_session_identity = external_upload_session_identity(target);
     let response = forward_with_artifact_registry(
         state,
         method,
@@ -992,7 +988,7 @@ async fn forward_customer_to_upstream(
                 .get("docker-content-digest")
                 .and_then(|value| value.to_str().ok())
                 .filter(|value| valid_manifest_digest(value)),
-            &state.customer_registry_broker,
+            &state.external_registry_broker,
         ) {
             broker
                 .record_manifest_success(target, operation, digest)
@@ -1002,15 +998,15 @@ async fn forward_customer_to_upstream(
     response
 }
 
-async fn forward_customer_to_upstream_raw(
+async fn forward_external_to_upstream_raw(
     state: &AppState,
     method: &axum::http::Method,
     raw_path: &str,
     original_headers: &HeaderMap,
     body: Option<Body>,
-    target: &CustomerRegistryTarget,
+    target: &ExternalRegistryTarget,
 ) -> Response {
-    let upload_session_identity = customer_upload_session_identity(target);
+    let upload_session_identity = external_upload_session_identity(target);
     forward_raw_with_artifact_registry(
         state,
         method,
@@ -1039,14 +1035,14 @@ fn valid_manifest_digest(digest: &str) -> bool {
         && digest[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-async fn authorize_and_rewrite_customer_mount(
-    broker: &Arc<dyn CustomerRegistryBroker>,
+async fn authorize_and_rewrite_external_mount(
+    broker: &Arc<dyn ExternalRegistryBroker>,
     authorization: Option<&str>,
     method: &axum::http::Method,
     path: &str,
-    destination: &CustomerRegistryTarget,
+    destination: &ExternalRegistryTarget,
     query: &mut HashMap<String, String>,
-) -> Result<(), CustomerRegistryAccessError> {
+) -> Result<(), ExternalRegistryAccessError> {
     let mount = query.get("mount");
     let source = query.get("from");
     if mount.is_none() && source.is_none() {
@@ -1056,19 +1052,19 @@ async fn authorize_and_rewrite_customer_mount(
         || !path.ends_with("/blobs/uploads/")
         || !mount.is_some_and(|digest| valid_manifest_digest(digest))
     {
-        return Err(CustomerRegistryAccessError::Denied);
+        return Err(ExternalRegistryAccessError::Denied);
     }
-    let source = source.ok_or(CustomerRegistryAccessError::Denied)?;
-    let external_source = if is_customer_repository(source) {
+    let source = source.ok_or(ExternalRegistryAccessError::Denied)?;
+    let external_source = if is_external_repository(source) {
         source.clone()
     } else {
-        format!("customer/{}/{}", destination.route_id, source)
+        format!("external/{}/{}", destination.route_id, source)
     };
     let source = broker
         .authorize(
             authorization,
             &external_source,
-            CustomerRegistryOperation::Pull,
+            ExternalRegistryOperation::Pull,
         )
         .await?;
     if source.route_id != destination.route_id
@@ -1077,7 +1073,7 @@ async fn authorize_and_rewrite_customer_mount(
         || source.artifact_registry.registry_endpoint()
             != destination.artifact_registry.registry_endpoint()
     {
-        return Err(CustomerRegistryAccessError::Denied);
+        return Err(ExternalRegistryAccessError::Denied);
     }
     query.insert("from".to_string(), source.upstream_repository);
     Ok(())
@@ -1128,7 +1124,7 @@ async fn forward_with_artifact_registry(
     upload_session_repo: Option<&str>,
     artifact_registry: Arc<dyn ArtifactRegistry>,
     upstream_repository: &str,
-    admission: Option<Arc<CustomerRegistryAdmission>>,
+    admission: Option<Arc<ExternalRegistryAdmission>>,
 ) -> Response {
     let upstream_endpoint = artifact_registry.registry_endpoint();
 
@@ -1248,7 +1244,7 @@ async fn forward_raw_with_artifact_registry(
     upload_session_repo: Option<&str>,
     artifact_registry: Arc<dyn ArtifactRegistry>,
     upstream_repository: &str,
-    admission: Option<Arc<CustomerRegistryAdmission>>,
+    admission: Option<Arc<ExternalRegistryAdmission>>,
 ) -> Response {
     let upstream_endpoint = artifact_registry.registry_endpoint();
     if upstream_endpoint.is_empty() {
@@ -1331,7 +1327,7 @@ async fn forward_request(
     original_headers: &HeaderMap,
     body: Option<Body>,
     upload_session_repo: Option<&str>,
-    admission: Option<Arc<CustomerRegistryAdmission>>,
+    admission: Option<Arc<ExternalRegistryAdmission>>,
 ) -> Response {
     debug!(%method, "Forwarding registry request to upstream");
 
@@ -1472,7 +1468,7 @@ fn upload_session_proxy_base(
     upload_session_repo: Option<&str>,
 ) -> String {
     if upload_session_repo
-        .is_some_and(|repository| repository.starts_with(CUSTOMER_UPLOAD_SESSION_PREFIX))
+        .is_some_and(|repository| repository.starts_with(EXTERNAL_UPLOAD_SESSION_PREFIX))
     {
         configured_base_url.to_string()
     } else {
@@ -1565,7 +1561,7 @@ fn rewrite_location_with_upload_session_auth(
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CustomerUploadSessionContext {
+struct ExternalUploadSessionContext {
     repository: String,
     route_id: String,
     credential_id: String,
@@ -1577,18 +1573,18 @@ struct CustomerUploadSessionContext {
 
 struct VerifiedUploadSession {
     repository: String,
-    customer: Option<CustomerUploadSessionContext>,
+    external: Option<ExternalUploadSessionContext>,
 }
 
 impl VerifiedUploadSession {
-    fn customer_credential_id(&self) -> Option<&str> {
-        self.customer
+    fn external_credential_id(&self) -> Option<&str> {
+        self.external
             .as_ref()
             .map(|context| context.credential_id.as_str())
     }
 
-    fn matches(&self, target: &CustomerRegistryTarget) -> bool {
-        self.customer.as_ref().is_none_or(|context| {
+    fn matches(&self, target: &ExternalRegistryTarget) -> bool {
+        self.external.as_ref().is_none_or(|context| {
             context.repository == target.external_repository
                 && context.route_id == target.route_id
                 && context.credential_id == target.credential_id
@@ -1600,8 +1596,8 @@ impl VerifiedUploadSession {
     }
 }
 
-fn customer_upload_session_identity(target: &CustomerRegistryTarget) -> String {
-    let context = CustomerUploadSessionContext {
+fn external_upload_session_identity(target: &ExternalRegistryTarget) -> String {
+    let context = ExternalUploadSessionContext {
         repository: target.external_repository.clone(),
         route_id: target.route_id.clone(),
         credential_id: target.credential_id.clone(),
@@ -1610,26 +1606,26 @@ fn customer_upload_session_identity(target: &CustomerRegistryTarget) -> String {
         upstream_repository: target.upstream_repository.clone(),
         upstream_endpoint: target.artifact_registry.registry_endpoint(),
     };
-    let encoded = serde_json::to_vec(&context).expect("customer upload session context serializes");
+    let encoded = serde_json::to_vec(&context).expect("external upload session context serializes");
     format!(
         "{}{}",
-        CUSTOMER_UPLOAD_SESSION_PREFIX,
+        EXTERNAL_UPLOAD_SESSION_PREFIX,
         URL_SAFE_NO_PAD.encode(encoded)
     )
 }
 
 fn parse_upload_session_identity(identity: &str) -> Option<VerifiedUploadSession> {
-    let Some(encoded) = identity.strip_prefix(CUSTOMER_UPLOAD_SESSION_PREFIX) else {
+    let Some(encoded) = identity.strip_prefix(EXTERNAL_UPLOAD_SESSION_PREFIX) else {
         return Some(VerifiedUploadSession {
             repository: identity.to_string(),
-            customer: None,
+            external: None,
         });
     };
     let encoded = URL_SAFE_NO_PAD.decode(encoded).ok()?;
-    let customer = serde_json::from_slice::<CustomerUploadSessionContext>(&encoded).ok()?;
+    let external = serde_json::from_slice::<ExternalUploadSessionContext>(&encoded).ok()?;
     Some(VerifiedUploadSession {
-        repository: customer.repository.clone(),
-        customer: Some(customer),
+        repository: external.repository.clone(),
+        external: Some(external),
     })
 }
 
@@ -1789,14 +1785,14 @@ async fn validate_pull_access(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Registry proxy pulls require a deployment token",
-            ))
+            ));
         }
         Scope::Commands { .. } => {
             return Err(oci_error(
                 StatusCode::FORBIDDEN,
                 "DENIED",
                 "Command credentials cannot access the registry proxy",
-            ))
+            ));
         }
         Scope::Deployment {
             project_id,
@@ -2212,14 +2208,14 @@ mod tests {
         }
     }
 
-    fn customer_target() -> CustomerRegistryTarget {
-        CustomerRegistryTarget {
+    fn external_target() -> ExternalRegistryTarget {
+        ExternalRegistryTarget {
             route_id: "rgw_route".to_string(),
             credential_id: "rgc_credential".to_string(),
             desired_revision: 7,
             resource_revision: "rel_resource".to_string(),
             logical_repository: "api".to_string(),
-            external_repository: "customer/rgw_route/api".to_string(),
+            external_repository: "external/rgw_route/api".to_string(),
             upstream_repository: "upstream-api".to_string(),
             artifact_registry: Arc::new(SessionTestRegistry("https://registry.example")),
             admission: None,
@@ -2229,11 +2225,11 @@ mod tests {
     struct SessionTestBroker;
 
     #[async_trait]
-    impl CustomerRegistryBroker for SessionTestBroker {
+    impl ExternalRegistryBroker for SessionTestBroker {
         async fn authenticate_probe(
             &self,
             _: Option<&str>,
-        ) -> Result<(), CustomerRegistryAccessError> {
+        ) -> Result<(), ExternalRegistryAccessError> {
             Ok(())
         }
 
@@ -2241,13 +2237,13 @@ mod tests {
             &self,
             _: Option<&str>,
             repository: &str,
-            _: CustomerRegistryOperation,
-        ) -> Result<CustomerRegistryTarget, CustomerRegistryAccessError> {
+            _: ExternalRegistryOperation,
+        ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError> {
             let parts = repository.split('/').collect::<Vec<_>>();
-            if parts.len() != 3 || parts[0] != "customer" {
-                return Err(CustomerRegistryAccessError::NotFound);
+            if parts.len() != 3 || parts[0] != "external" {
+                return Err(ExternalRegistryAccessError::NotFound);
             }
-            let mut target = customer_target();
+            let mut target = external_target();
             target.route_id = parts[1].to_string();
             target.logical_repository = parts[2].to_string();
             target.external_repository = repository.to_string();
@@ -2259,14 +2255,14 @@ mod tests {
             &self,
             _: &str,
             _: &str,
-        ) -> Result<CustomerRegistryTarget, CustomerRegistryAccessError> {
+        ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError> {
             unimplemented!()
         }
 
         async fn record_manifest_success(
             &self,
-            _: &CustomerRegistryTarget,
-            _: CustomerRegistryOperation,
+            _: &ExternalRegistryTarget,
+            _: ExternalRegistryOperation,
             _: &str,
         ) {
         }
@@ -2379,11 +2375,11 @@ mod tests {
     }
 
     #[test]
-    fn customer_upload_continuations_ignore_forwarded_origin() {
+    fn external_upload_continuations_ignore_forwarded_origin() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-host", "attacker.example".parse().unwrap());
         headers.insert("x-forwarded-proto", "https".parse().unwrap());
-        let identity = customer_upload_session_identity(&customer_target());
+        let identity = external_upload_session_identity(&external_target());
 
         assert_eq!(
             upload_session_proxy_base(&headers, "https://manager.example.com", Some(&identity)),
@@ -2436,9 +2432,11 @@ mod tests {
         }
 
         assert_eq!(generation_count.load(Ordering::SeqCst), 1);
-        assert!(cache
-            .get("https://ecr.example.test:alien-e2e:PushPull")
-            .is_some());
+        assert!(
+            cache
+                .get("https://ecr.example.test:alien-e2e:PushPull")
+                .is_some()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2602,32 +2600,32 @@ mod tests {
     }
 
     #[test]
-    fn registry_routing_table_reserves_customer_namespace_for_private_adapter() {
+    fn registry_routing_table_reserves_external_namespace_for_private_adapter() {
         let result = RegistryRoutingTable::new(vec![registry_route(
-            "customer/internal",
+            "external/internal",
             Platform::Aws,
             "aws",
         )]);
         let Err(error) = result else {
-            panic!("customer namespace must be reserved");
+            panic!("external namespace must be reserved");
         };
-        assert!(error.contains("reserved customer namespace"));
+        assert!(error.contains("reserved external namespace"));
     }
 
     #[test]
-    fn customer_repository_rewrite_changes_only_the_parsed_repository() {
+    fn external_repository_rewrite_changes_only_the_parsed_repository() {
         assert_eq!(
             rewrite_oci_repository(
-                "customer/route_1/team/api/manifests/latest",
-                "customer/route_1/team/api",
+                "external/route_1/team/api/manifests/latest",
+                "external/route_1/team/api",
                 "upstream/team-api"
             ),
             Some("upstream/team-api/manifests/latest".to_string())
         );
         assert_eq!(
             rewrite_oci_repository(
-                "customer/route_2/team/api/manifests/latest",
-                "customer/route_1/team/api",
+                "external/route_2/team/api/manifests/latest",
+                "external/route_1/team/api",
                 "upstream/team-api"
             ),
             None
@@ -2635,18 +2633,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn customer_cross_repository_mount_authorizes_and_rewrites_the_source() {
-        let broker: Arc<dyn CustomerRegistryBroker> = Arc::new(SessionTestBroker);
-        let destination = customer_target();
+    async fn external_cross_repository_mount_authorizes_and_rewrites_the_source() {
+        let broker: Arc<dyn ExternalRegistryBroker> = Arc::new(SessionTestBroker);
+        let destination = external_target();
         let mut query = HashMap::from([
             ("mount".to_string(), format!("sha256:{}", "a".repeat(64))),
             ("from".to_string(), "source".to_string()),
         ]);
-        authorize_and_rewrite_customer_mount(
+        authorize_and_rewrite_external_mount(
             &broker,
             Some("Basic unused"),
             &axum::http::Method::POST,
-            "customer/rgw_route/api/blobs/uploads/",
+            "external/rgw_route/api/blobs/uploads/",
             &destination,
             &mut query,
         )
@@ -2657,44 +2655,48 @@ mod tests {
             Some("upstream-source")
         );
 
-        query.insert("from".to_string(), "customer/rgw_other/source".to_string());
+        query.insert("from".to_string(), "external/rgw_other/source".to_string());
         assert_eq!(
-            authorize_and_rewrite_customer_mount(
+            authorize_and_rewrite_external_mount(
                 &broker,
                 Some("Basic unused"),
                 &axum::http::Method::POST,
-                "customer/rgw_route/api/blobs/uploads/",
+                "external/rgw_route/api/blobs/uploads/",
                 &destination,
                 &mut query,
             )
             .await,
-            Err(CustomerRegistryAccessError::Denied)
+            Err(ExternalRegistryAccessError::Denied)
         );
     }
 
     #[test]
-    fn customer_request_target_rejects_ambiguous_paths_queries_and_framing() {
+    fn external_request_target_rejects_ambiguous_paths_queries_and_framing() {
         let headers = HeaderMap::new();
-        assert!(validate_customer_request_target(
-            &"/v2/customer/rgw/api/manifests/latest".parse().unwrap(),
-            &headers,
-        )
-        .is_ok());
+        assert!(
+            validate_external_request_target(
+                &"/v2/external/rgw/api/manifests/latest".parse().unwrap(),
+                &headers,
+            )
+            .is_ok()
+        );
         for target in [
-            "/v2/customer/rgw/api%2Fescape/manifests/latest",
-            "/v2/customer/rgw/%2e%2e/manifests/latest",
-            "/v2/customer/rgw/api/manifests/latest?from=a&from=b",
+            "/v2/external/rgw/api%2Fescape/manifests/latest",
+            "/v2/external/rgw/%2e%2e/manifests/latest",
+            "/v2/external/rgw/api/manifests/latest?from=a&from=b",
         ] {
-            assert!(validate_customer_request_target(&target.parse().unwrap(), &headers).is_err());
+            assert!(validate_external_request_target(&target.parse().unwrap(), &headers).is_err());
         }
         let mut conflicting = HeaderMap::new();
         conflicting.insert("content-length", "1".parse().unwrap());
         conflicting.insert("transfer-encoding", "chunked".parse().unwrap());
-        assert!(validate_customer_request_target(
-            &"/v2/customer/rgw/api/blobs/uploads/".parse().unwrap(),
-            &conflicting,
-        )
-        .is_err());
+        assert!(
+            validate_external_request_target(
+                &"/v2/external/rgw/api/blobs/uploads/".parse().unwrap(),
+                &conflicting,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2872,11 +2874,11 @@ mod tests {
     }
 
     #[test]
-    fn customer_upload_session_is_bound_to_credential_route_revision_and_upstream() {
+    fn external_upload_session_is_bound_to_credential_route_revision_and_upstream() {
         let signing_key = b"test-registry-upload-session-key";
-        let path = "/v2/customer/rgw_route/api/blobs/uploads/session-1";
-        let target = customer_target();
-        let identity = customer_upload_session_identity(&target);
+        let path = "/v2/external/rgw_route/api/blobs/uploads/session-1";
+        let target = external_target();
+        let identity = external_upload_session_identity(&target);
         let expires_at = chrono::Utc::now().timestamp() + UPLOAD_SESSION_TTL_SECONDS;
         let signature = sign_upload_session(signing_key, path, &identity, expires_at);
         let query = HashMap::from([
@@ -2893,27 +2895,27 @@ mod tests {
         ]);
 
         let session = verify_upload_session_auth(signing_key, path, &query)
-            .expect("valid customer session should verify");
-        assert_eq!(session.customer_credential_id(), Some("rgc_credential"));
+            .expect("valid external session should verify");
+        assert_eq!(session.external_credential_id(), Some("rgc_credential"));
         assert!(session.matches(&target));
 
-        let mut changed = customer_target();
+        let mut changed = external_target();
         changed.credential_id = "rgc_rotated".to_string();
         assert!(!session.matches(&changed));
 
-        let mut changed = customer_target();
+        let mut changed = external_target();
         changed.desired_revision += 1;
         assert!(!session.matches(&changed));
 
-        let mut changed = customer_target();
+        let mut changed = external_target();
         changed.resource_revision = "rel_replaced".to_string();
         assert!(!session.matches(&changed));
 
-        let mut changed = customer_target();
+        let mut changed = external_target();
         changed.upstream_repository = "other-upstream".to_string();
         assert!(!session.matches(&changed));
 
-        let mut changed = customer_target();
+        let mut changed = external_target();
         changed.artifact_registry = Arc::new(SessionTestRegistry("https://other.example"));
         assert!(!session.matches(&changed));
     }

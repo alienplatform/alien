@@ -3,11 +3,11 @@
 
 ## Supported Types
 
-### `models.SetupItemStatusSourceApplicationRelease`
+### `models.SetupItemStatusSourceProjectRelease`
 
 ```typescript
-const value: models.SetupItemStatusSourceApplicationRelease = {
-  type: "application-release",
+const value: models.SetupItemStatusSourceProjectRelease = {
+  type: "project-release",
   releaseChannel: "<value>",
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

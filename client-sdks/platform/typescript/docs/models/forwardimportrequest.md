@@ -23,7 +23,11 @@ let value: ForwardImportRequest = {
       {
         id: "<id>",
         type: "<value>",
-        importData: {},
+        importData: {
+          "key": "<value>",
+          "key1": "<value>",
+          "key2": "<value>",
+        },
       },
     ],
   },

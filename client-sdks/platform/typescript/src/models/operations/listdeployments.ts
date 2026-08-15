@@ -94,6 +94,10 @@ export type ListDeploymentsRequest = {
    */
   managerId?: string | undefined;
   /**
+   * Filter by deployment purpose
+   */
+  purpose?: models.DeploymentPurpose | undefined;
+  /**
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
@@ -158,6 +162,7 @@ export type ListDeploymentsRequest$Outbound = {
   deploymentGroup?: string | undefined;
   name?: string | undefined;
   managerId?: string | undefined;
+  purpose?: string | undefined;
   workspace?: string | undefined;
   search?: string | undefined;
   status?: Array<string> | undefined;
@@ -176,6 +181,7 @@ export const ListDeploymentsRequest$outboundSchema: z.ZodType<
   deploymentGroup: z.string().optional(),
   name: z.string().optional(),
   managerId: z.string().optional(),
+  purpose: models.DeploymentPurpose$outboundSchema.optional(),
   workspace: z.string().optional(),
   search: z.string().optional(),
   status: z.array(ListDeploymentsStatus$outboundSchema).optional(),

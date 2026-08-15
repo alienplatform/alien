@@ -36,9 +36,11 @@ export type DeploymentInfoSetupConfigEnvironmentVariable = {
 };
 
 export const DeploymentInfoSetupConfigItemEnum = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 export type DeploymentInfoSetupConfigItemEnum = ClosedEnum<
   typeof DeploymentInfoSetupConfigItemEnum
@@ -47,6 +49,8 @@ export type DeploymentInfoSetupConfigItemEnum = ClosedEnum<
 export const DeploymentInfoSetupConfigDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
 } as const;
 export type DeploymentInfoSetupConfigDefinitionId = ClosedEnum<
   typeof DeploymentInfoSetupConfigDefinitionId
@@ -62,8 +66,8 @@ export type DeploymentInfoSetupConfigSourceBuiltIn = {
   sourceReleaseId: string;
 };
 
-export type DeploymentInfoSetupConfigSourceApplicationRelease = {
-  type: "application-release";
+export type DeploymentInfoSetupConfigSourceProjectRelease = {
+  type: "project-release";
   releaseChannel: string;
   /**
    * Unique identifier for the release.
@@ -73,7 +77,7 @@ export type DeploymentInfoSetupConfigSourceApplicationRelease = {
 };
 
 export type DeploymentInfoSetupConfigSourceUnion =
-  | DeploymentInfoSetupConfigSourceApplicationRelease
+  | DeploymentInfoSetupConfigSourceProjectRelease
   | DeploymentInfoSetupConfigSourceBuiltIn;
 
 export const DeploymentInfoSetupConfigAllowedProvider = {
@@ -81,6 +85,8 @@ export const DeploymentInfoSetupConfigAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
 } as const;
 export type DeploymentInfoSetupConfigAllowedProvider = ClosedEnum<
   typeof DeploymentInfoSetupConfigAllowedProvider
@@ -113,7 +119,7 @@ export type DeploymentInfoSetupConfigConfiguration = {
 export type DeploymentInfoSetupConfigItem = {
   item: DeploymentInfoSetupConfigItemEnum;
   source:
-    | DeploymentInfoSetupConfigSourceApplicationRelease
+    | DeploymentInfoSetupConfigSourceProjectRelease
     | DeploymentInfoSetupConfigSourceBuiltIn;
   required: boolean;
   configuration?: DeploymentInfoSetupConfigConfiguration | undefined;
@@ -434,28 +440,27 @@ export function deploymentInfoSetupConfigSourceBuiltInFromJSON(
 }
 
 /** @internal */
-export const DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema:
-  z.ZodType<DeploymentInfoSetupConfigSourceApplicationRelease, unknown> = z
-    .object({
-      type: z.literal("application-release"),
-      releaseChannel: z.string(),
-      releaseId: z.string(),
-      resourceId: z.string().optional(),
-    });
+export const DeploymentInfoSetupConfigSourceProjectRelease$inboundSchema:
+  z.ZodType<DeploymentInfoSetupConfigSourceProjectRelease, unknown> = z.object({
+    type: z.literal("project-release"),
+    releaseChannel: z.string(),
+    releaseId: z.string(),
+    resourceId: z.string().optional(),
+  });
 
-export function deploymentInfoSetupConfigSourceApplicationReleaseFromJSON(
+export function deploymentInfoSetupConfigSourceProjectReleaseFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  DeploymentInfoSetupConfigSourceApplicationRelease,
+  DeploymentInfoSetupConfigSourceProjectRelease,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema.parse(
+      DeploymentInfoSetupConfigSourceProjectRelease$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'DeploymentInfoSetupConfigSourceApplicationRelease' from JSON`,
+    `Failed to parse 'DeploymentInfoSetupConfigSourceProjectRelease' from JSON`,
   );
 }
 
@@ -464,7 +469,7 @@ export const DeploymentInfoSetupConfigSourceUnion$inboundSchema: z.ZodType<
   DeploymentInfoSetupConfigSourceUnion,
   unknown
 > = z.union([
-  z.lazy(() => DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema),
+  z.lazy(() => DeploymentInfoSetupConfigSourceProjectRelease$inboundSchema),
   z.lazy(() => DeploymentInfoSetupConfigSourceBuiltIn$inboundSchema),
 ]);
 
@@ -546,9 +551,7 @@ export const DeploymentInfoSetupConfigItem$inboundSchema: z.ZodType<
 > = z.object({
   item: DeploymentInfoSetupConfigItemEnum$inboundSchema,
   source: z.union([
-    z.lazy(() =>
-      DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema
-    ),
+    z.lazy(() => DeploymentInfoSetupConfigSourceProjectRelease$inboundSchema),
     z.lazy(() => DeploymentInfoSetupConfigSourceBuiltIn$inboundSchema),
   ]),
   required: z.boolean(),

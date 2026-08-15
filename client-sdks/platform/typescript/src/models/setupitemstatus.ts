@@ -9,15 +9,19 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const SetupItemStatusItem = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 export type SetupItemStatusItem = ClosedEnum<typeof SetupItemStatusItem>;
 
 export const SetupItemStatusDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
 } as const;
 export type SetupItemStatusDefinitionId = ClosedEnum<
   typeof SetupItemStatusDefinitionId
@@ -33,8 +37,8 @@ export type SetupItemStatusSourceBuiltIn = {
   sourceReleaseId: string;
 };
 
-export type SetupItemStatusSourceApplicationRelease = {
-  type: "application-release";
+export type SetupItemStatusSourceProjectRelease = {
+  type: "project-release";
   releaseChannel: string;
   /**
    * Unique identifier for the release.
@@ -44,7 +48,7 @@ export type SetupItemStatusSourceApplicationRelease = {
 };
 
 export type SetupItemStatusSourceUnion =
-  | SetupItemStatusSourceApplicationRelease
+  | SetupItemStatusSourceProjectRelease
   | SetupItemStatusSourceBuiltIn;
 
 export const SetupItemStatusAllowedProvider = {
@@ -52,6 +56,8 @@ export const SetupItemStatusAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
 } as const;
 export type SetupItemStatusAllowedProvider = ClosedEnum<
   typeof SetupItemStatusAllowedProvider
@@ -95,9 +101,7 @@ export type SetupItemStatusBlocker = {
 
 export type SetupItemStatus = {
   item: SetupItemStatusItem;
-  source:
-    | SetupItemStatusSourceApplicationRelease
-    | SetupItemStatusSourceBuiltIn;
+  source: SetupItemStatusSourceProjectRelease | SetupItemStatusSourceBuiltIn;
   required: boolean;
   configuration?: SetupItemStatusConfiguration | undefined;
   status: SetupItemStatusStatus;
@@ -137,29 +141,24 @@ export function setupItemStatusSourceBuiltInFromJSON(
 }
 
 /** @internal */
-export const SetupItemStatusSourceApplicationRelease$inboundSchema: z.ZodType<
-  SetupItemStatusSourceApplicationRelease,
+export const SetupItemStatusSourceProjectRelease$inboundSchema: z.ZodType<
+  SetupItemStatusSourceProjectRelease,
   unknown
 > = z.object({
-  type: z.literal("application-release"),
+  type: z.literal("project-release"),
   releaseChannel: z.string(),
   releaseId: z.string(),
   resourceId: z.string().optional(),
 });
 
-export function setupItemStatusSourceApplicationReleaseFromJSON(
+export function setupItemStatusSourceProjectReleaseFromJSON(
   jsonString: string,
-): SafeParseResult<
-  SetupItemStatusSourceApplicationRelease,
-  SDKValidationError
-> {
+): SafeParseResult<SetupItemStatusSourceProjectRelease, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      SetupItemStatusSourceApplicationRelease$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SetupItemStatusSourceApplicationRelease' from JSON`,
+      SetupItemStatusSourceProjectRelease$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SetupItemStatusSourceProjectRelease' from JSON`,
   );
 }
 
@@ -168,7 +167,7 @@ export const SetupItemStatusSourceUnion$inboundSchema: z.ZodType<
   SetupItemStatusSourceUnion,
   unknown
 > = z.union([
-  z.lazy(() => SetupItemStatusSourceApplicationRelease$inboundSchema),
+  z.lazy(() => SetupItemStatusSourceProjectRelease$inboundSchema),
   z.lazy(() => SetupItemStatusSourceBuiltIn$inboundSchema),
 ]);
 
@@ -265,7 +264,7 @@ export const SetupItemStatus$inboundSchema: z.ZodType<
 > = z.object({
   item: SetupItemStatusItem$inboundSchema,
   source: z.union([
-    z.lazy(() => SetupItemStatusSourceApplicationRelease$inboundSchema),
+    z.lazy(() => SetupItemStatusSourceProjectRelease$inboundSchema),
     z.lazy(() => SetupItemStatusSourceBuiltIn$inboundSchema),
   ]),
   required: z.boolean(),

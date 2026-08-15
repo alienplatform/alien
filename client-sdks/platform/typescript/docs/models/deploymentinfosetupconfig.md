@@ -12,12 +12,14 @@ let value: DeploymentInfoSetupConfig = {
   },
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [],
+    allowedSetupMethods: [
+      "google-oauth",
+    ],
   },
   environmentVariables: [],
   items: [
     {
-      item: "alien-stack",
+      item: "deployment",
       source: {
         type: "built-in",
         definitionId: "customer-ai",

@@ -30,11 +30,12 @@ use alien_gcp_clients::{
     ArtifactRegistryApi as GcpArtifactRegistryApi, ArtifactRegistryClient, GcpClientConfig,
     GcpCredentials,
 };
+use alien_manager::AlienManagerBuilder;
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::routes::registry_proxy::{
-    CustomerRegistryAccessError, CustomerRegistryBroker, CustomerRegistryOperation,
-    CustomerRegistryTarget,
+    ExternalRegistryAccessError, ExternalRegistryBroker, ExternalRegistryOperation,
+    ExternalRegistryTarget,
 };
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -43,7 +44,6 @@ use alien_manager::traits::{
     CreateDeploymentGroupParams, CreateDeploymentParams, CreateReleaseParams, CreateTokenParams,
     DeploymentStore, ReconcileData, ReleaseStore, TokenStore, TokenType,
 };
-use alien_manager::AlienManagerBuilder;
 use async_trait::async_trait;
 use futures_util::FutureExt as _;
 use sha2::{Digest, Sha256};
@@ -239,21 +239,21 @@ struct CloudProxyTest {
     _state_dir: tempfile::TempDir,
 }
 
-struct StaticCustomerBroker {
+struct StaticExternalBroker {
     authorization: String,
-    target: CustomerRegistryTarget,
+    target: ExternalRegistryTarget,
 }
 
 #[async_trait]
-impl CustomerRegistryBroker for StaticCustomerBroker {
+impl ExternalRegistryBroker for StaticExternalBroker {
     async fn authenticate_probe(
         &self,
         authorization: Option<&str>,
-    ) -> Result<(), CustomerRegistryAccessError> {
+    ) -> Result<(), ExternalRegistryAccessError> {
         if authorization == Some(self.authorization.as_str()) {
             Ok(())
         } else {
-            Err(CustomerRegistryAccessError::Unauthorized)
+            Err(ExternalRegistryAccessError::Unauthorized)
         }
     }
 
@@ -261,11 +261,11 @@ impl CustomerRegistryBroker for StaticCustomerBroker {
         &self,
         authorization: Option<&str>,
         repository: &str,
-        _operation: CustomerRegistryOperation,
-    ) -> Result<CustomerRegistryTarget, CustomerRegistryAccessError> {
+        _operation: ExternalRegistryOperation,
+    ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError> {
         self.authenticate_probe(authorization).await?;
         if repository != self.target.external_repository {
-            return Err(CustomerRegistryAccessError::NotFound);
+            return Err(ExternalRegistryAccessError::NotFound);
         }
         Ok(self.target.clone())
     }
@@ -274,19 +274,19 @@ impl CustomerRegistryBroker for StaticCustomerBroker {
         &self,
         repository: &str,
         credential_id: &str,
-    ) -> Result<CustomerRegistryTarget, CustomerRegistryAccessError> {
+    ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError> {
         if repository != self.target.external_repository
             || credential_id != self.target.credential_id
         {
-            return Err(CustomerRegistryAccessError::Denied);
+            return Err(ExternalRegistryAccessError::Denied);
         }
         Ok(self.target.clone())
     }
 
     async fn record_manifest_success(
         &self,
-        _target: &CustomerRegistryTarget,
-        _operation: CustomerRegistryOperation,
+        _target: &ExternalRegistryTarget,
+        _operation: ExternalRegistryOperation,
         _digest: &str,
     ) {
     }
@@ -313,7 +313,7 @@ impl CloudProxyTest {
         .await
     }
 
-    async fn start_customer(
+    async fn start_external(
         platform: Platform,
         binding_env_var: &str,
         binding_json: &str,
@@ -338,7 +338,7 @@ impl CloudProxyTest {
         binding_json: &str,
         env_vars: HashMap<String, String>,
         base_url_override: Option<(String, u16)>,
-        customer: Option<(String, String)>,
+        external: Option<(String, String)>,
     ) -> Self {
         let port = base_url_override
             .as_ref()
@@ -428,25 +428,25 @@ impl CloudProxyTest {
         };
 
         let toml_config = alien_manager::standalone_config::ManagerTomlConfig::default();
-        let customer_broker = if let Some((upstream_repository, password)) = customer {
+        let external_broker = if let Some((upstream_repository, password)) = external {
             let artifact_registry = bindings_provider
                 .load_artifact_registry("artifacts")
                 .await
-                .expect("Failed to load customer ArtifactRegistry binding");
-            Some(Arc::new(StaticCustomerBroker {
+                .expect("Failed to load external ArtifactRegistry binding");
+            Some(Arc::new(StaticExternalBroker {
                 authorization: format!("Basic {}", base64_encode(&format!("alien:{password}"))),
-                target: CustomerRegistryTarget {
+                target: ExternalRegistryTarget {
                     route_id: "cloudroute".to_string(),
                     credential_id: "cloudcredential".to_string(),
                     desired_revision: 1,
                     resource_revision: "cloud-resource-v1".to_string(),
                     logical_repository: "application".to_string(),
-                    external_repository: "customer/cloudroute/application".to_string(),
+                    external_repository: "external/cloudroute/application".to_string(),
                     upstream_repository,
                     artifact_registry,
                     admission: None,
                 },
-            }) as Arc<dyn CustomerRegistryBroker>)
+            }) as Arc<dyn ExternalRegistryBroker>)
         } else {
             None
         };
@@ -457,8 +457,8 @@ impl CloudProxyTest {
             .with_standalone_defaults(&toml_config)
             .await
             .unwrap();
-        if let Some(broker) = customer_broker {
-            builder = builder.customer_registry_broker(broker);
+        if let Some(broker) = external_broker {
+            builder = builder.external_registry_broker(broker);
         }
         let server = builder.build().await.unwrap();
 
@@ -670,9 +670,9 @@ impl CloudProxyTest {
         info!(%repo_name, %tag, "Pull through proxy with deployment token succeeded");
     }
 
-    async fn customer_push_and_pull(&self, password: &str, tag: &str) {
-        let repository = "customer/cloudroute/application";
-        println!("Customer registry test tag: {tag}");
+    async fn external_push_and_pull(&self, password: &str, tag: &str) {
+        let repository = "external/cloudroute/application";
+        println!("External registry test tag: {tag}");
         let manager_host = self.manager_url.trim_start_matches("http://");
         let client = reqwest::Client::new();
         let denied = client
@@ -683,17 +683,17 @@ impl CloudProxyTest {
             .basic_auth("alien", Some("wrong-password"))
             .send()
             .await
-            .expect("Denied customer request should complete");
+            .expect("Denied external request should complete");
         assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
         let wrong_route = client
             .get(format!(
-                "{}/v2/customer/other-route/application/manifests/missing",
+                "{}/v2/external/other-route/application/manifests/missing",
                 self.manager_url
             ))
             .basic_auth("alien", Some(password))
             .send()
             .await
-            .expect("Wrong-route customer request should complete");
+            .expect("Wrong-route external request should complete");
         assert_eq!(wrong_route.status(), reqwest::StatusCode::NOT_FOUND);
 
         let (image_name, tar_path) = build_test_image(manager_host, repository, &tag, 64).await;
@@ -709,7 +709,7 @@ impl CloudProxyTest {
                 },
             )
             .await
-            .expect("Customer push through proxy should succeed");
+            .expect("External push through proxy should succeed");
 
         let response = client
             .get(format!(
@@ -724,10 +724,10 @@ impl CloudProxyTest {
             )
             .send()
             .await
-            .expect("Customer manifest request should complete");
+            .expect("External manifest request should complete");
         assert!(
             response.status().is_success(),
-            "Customer manifest pull should succeed: {}",
+            "External manifest pull should succeed: {}",
             response.status()
         );
         let advertised_digest = response
@@ -742,8 +742,8 @@ impl CloudProxyTest {
             assert_eq!(advertised_digest, computed_digest);
         }
         serde_json::from_slice::<serde_json::Value>(&manifest)
-            .expect("Pulled customer manifest should be valid JSON");
-        info!(%repository, %tag, %computed_digest, "Customer push and pull succeeded");
+            .expect("Pulled external manifest should be valid JSON");
+        info!(%repository, %tag, %computed_digest, "External push and pull succeeded");
     }
 }
 
@@ -780,10 +780,10 @@ async fn delete_ecr_test_image(
                 .build(),
         )
         .await
-        .expect("AWS customer registry test image should be deleted");
+        .expect("AWS external registry test image should be deleted");
     assert!(
         response.failures.is_empty(),
-        "AWS customer registry cleanup failed: {:?}",
+        "AWS external registry cleanup failed: {:?}",
         response.failures
     );
 }
@@ -813,11 +813,11 @@ async fn delete_gar_test_package(
             package.to_string(),
         )
         .await
-        .expect("GCP customer registry test package deletion should start");
+        .expect("GCP external registry test package deletion should start");
 }
 
 fn base64_encode(input: &str) -> String {
-    use base64::engine::{general_purpose::STANDARD, Engine};
+    use base64::engine::{Engine, general_purpose::STANDARD};
     STANDARD.encode(input.as_bytes())
 }
 
@@ -864,7 +864,7 @@ async fn test_proxy_push_pull_ecr() {
 }
 
 #[tokio::test]
-async fn test_customer_proxy_push_pull_ecr() {
+async fn test_external_proxy_push_pull_ecr() {
     let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
@@ -888,8 +888,8 @@ async fn test_customer_proxy_push_pull_ecr() {
         ("ALIEN_DEPLOYMENT_TYPE".into(), "aws".into()),
     ]);
     let password = format!("registry-{}", uuid::Uuid::new_v4());
-    let tag = format!("customer-cloud-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let test = CloudProxyTest::start_customer(
+    let tag = format!("external-cloud-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let test = CloudProxyTest::start_external(
         Platform::Aws,
         "ALIEN_AWS_ARTIFACTS_BINDING",
         &binding.to_string(),
@@ -898,7 +898,7 @@ async fn test_customer_proxy_push_pull_ecr() {
         password.clone(),
     )
     .await;
-    let result = std::panic::AssertUnwindSafe(test.customer_push_and_pull(&password, &tag))
+    let result = std::panic::AssertUnwindSafe(test.external_push_and_pull(&password, &tag))
         .catch_unwind()
         .await;
     delete_ecr_test_image(
@@ -965,7 +965,7 @@ async fn test_proxy_push_pull_gar() {
 }
 
 #[tokio::test]
-async fn test_customer_proxy_push_pull_gar() {
+async fn test_external_proxy_push_pull_gar() {
     let _guard = cloud_proxy_env_lock().await;
     load_test_env();
 
@@ -976,7 +976,7 @@ async fn test_customer_proxy_push_pull_gar() {
     let push_sa = require_env!("E2E_GCP_AR_PUSH_SA_EMAIL");
     let pull_sa = require_env!("E2E_GCP_AR_PULL_SA_EMAIL");
     let gar_repo_name = gar_repo_url.rsplit('/').next().unwrap_or("alien-e2e");
-    let package = format!("customer-cloud-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let package = format!("external-cloud-{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let binding = serde_json::json!({
         "service": "gar",
         "repositoryName": gar_repo_name,
@@ -990,7 +990,7 @@ async fn test_customer_proxy_push_pull_gar() {
         ("ALIEN_DEPLOYMENT_TYPE".into(), "gcp".into()),
     ]);
     let password = format!("registry-{}", uuid::Uuid::new_v4());
-    let test = CloudProxyTest::start_customer(
+    let test = CloudProxyTest::start_external(
         Platform::Gcp,
         "ALIEN_GCP_ARTIFACTS_BINDING",
         &binding.to_string(),
@@ -999,7 +999,7 @@ async fn test_customer_proxy_push_pull_gar() {
         password.clone(),
     )
     .await;
-    let result = std::panic::AssertUnwindSafe(test.customer_push_and_pull(&password, "verified"))
+    let result = std::panic::AssertUnwindSafe(test.external_push_and_pull(&password, "verified"))
         .catch_unwind()
         .await;
     delete_gar_test_package(

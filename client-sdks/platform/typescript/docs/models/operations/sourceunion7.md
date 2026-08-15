@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `operations.GetResourceDeploymentDetailSource7`
+### `operations.SourceEvent7`
 
 ```typescript
-const value: operations.GetResourceDeploymentDetailSource7 = {};
+const value: operations.SourceEvent7 = {};
 ```
 
 ### `any`

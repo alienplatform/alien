@@ -72,3 +72,12 @@ const value: models.SyncAcquireResponseDeploymentExternalBindingsUnion6 = {
 };
 ```
 
+### `models.SyncAcquireResponseDeploymentExternalBindingsAi`
+
+```typescript
+const value: models.SyncAcquireResponseDeploymentExternalBindingsAi = {
+  provider: "<value>",
+  type: "ai",
+};
+```
+

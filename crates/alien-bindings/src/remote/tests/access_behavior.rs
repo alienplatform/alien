@@ -3,17 +3,17 @@ use super::*;
 #[tokio::test]
 async fn customer_access_uses_external_id_and_refreshes_the_manager_lease() {
     let fixture = Fixture::new(at(0), at(3600)).await;
-    let provider = fixture.remote_customer_provider().await;
+    let provider = fixture.remote_environment_provider().await;
 
     provider
         .load_storage("storage")
         .await
-        .expect("customer Storage should resolve");
+        .expect("external environment Storage should resolve");
     fixture.clock.set(at(270));
     provider
         .load_storage("archive")
         .await
-        .expect("customer manager access should refresh");
+        .expect("external environment manager access should refresh");
 
     let requests = fixture
         .platform_requests

@@ -1,18 +1,18 @@
 //! Token management REST API endpoints.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::Serialize;
 
 use crate::error::ErrorData;
 use crate::traits::TokenRecord;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 // --- Response types ---
 

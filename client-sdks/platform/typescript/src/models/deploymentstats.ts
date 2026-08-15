@@ -7,6 +7,14 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+/**
+ * Count of deployments introduced through each deployment path.
+ */
+export type ByOrigin = {
+  framework?: number | undefined;
+  remoteOperator?: number | undefined;
+};
+
 export type DeploymentStats = {
   /**
    * Total number of deployments matching filters
@@ -28,7 +36,27 @@ export type DeploymentStats = {
    * Count of deployments by pinnedReleaseId among deployments that are pinned. Excludes unpinned deployments.
    */
   byPinnedRelease: { [k: string]: number };
+  /**
+   * Count of deployments introduced through each deployment path.
+   */
+  byOrigin: ByOrigin;
 };
+
+/** @internal */
+export const ByOrigin$inboundSchema: z.ZodType<ByOrigin, unknown> = z.object({
+  framework: z.number().optional(),
+  remoteOperator: z.number().optional(),
+});
+
+export function byOriginFromJSON(
+  jsonString: string,
+): SafeParseResult<ByOrigin, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ByOrigin$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ByOrigin' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentStats$inboundSchema: z.ZodType<
@@ -40,6 +68,7 @@ export const DeploymentStats$inboundSchema: z.ZodType<
   byPlatform: z.record(z.string(), z.number()),
   byCurrentRelease: z.record(z.string(), z.number()),
   byPinnedRelease: z.record(z.string(), z.number()),
+  byOrigin: z.lazy(() => ByOrigin$inboundSchema),
 });
 
 export function deploymentStatsFromJSON(

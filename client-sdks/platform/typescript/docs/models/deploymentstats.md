@@ -25,6 +25,7 @@ let value: DeploymentStats = {
     "key": 2517.74,
     "key1": 3235.28,
   },
+  byOrigin: {},
 };
 ```
 
@@ -37,3 +38,4 @@ let value: DeploymentStats = {
 | `byPlatform`                                                                                                                          | Record<string, *number*>                                                                                                              | :heavy_check_mark:                                                                                                                    | Count of deployments by platform (only includes platforms with non-zero counts)                                                       |
 | `byCurrentRelease`                                                                                                                    | Record<string, *number*>                                                                                                              | :heavy_check_mark:                                                                                                                    | Count of deployments by currentReleaseId. The empty string key represents deployments with no current release (initial provisioning). |
 | `byPinnedRelease`                                                                                                                     | Record<string, *number*>                                                                                                              | :heavy_check_mark:                                                                                                                    | Count of deployments by pinnedReleaseId among deployments that are pinned. Excludes unpinned deployments.                             |
+| `byOrigin`                                                                                                                            | [models.ByOrigin](../models/byorigin.md)                                                                                              | :heavy_check_mark:                                                                                                                    | Count of deployments introduced through each deployment path.                                                                         |

@@ -5,11 +5,11 @@
 ```typescript
 import { CreateProjectAllowedProvider } from "@alienplatform/platform-api/models/operations";
 
-let value: CreateProjectAllowedProvider = "gcp-vertex";
+let value: CreateProjectAllowedProvider = "azure-foundry";
 ```
 
 ## Values
 
 ```typescript
-"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic"
+"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic" | "databricks" | "openai"
 ```

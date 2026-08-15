@@ -7,7 +7,7 @@ import { DeploymentInfoSetupConfigSourceBuiltIn } from "@alienplatform/platform-
 
 let value: DeploymentInfoSetupConfigSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-key",
+  definitionId: "customer-storage",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

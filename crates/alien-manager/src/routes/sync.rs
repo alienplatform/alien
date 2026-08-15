@@ -1,11 +1,11 @@
 //! State sync endpoints for deployment loop coordination.
 
 use axum::{
+    Router,
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -15,9 +15,9 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::{OperatorCapabilityReport, TargetDeployment},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
+    sync::{OperatorCapabilityReport, TargetDeployment},
 };
 use alien_error::AlienError;
 
@@ -28,7 +28,7 @@ use crate::traits::{
     DeploymentRecord, ReconcileData, ReleaseRecord, TokenType,
 };
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 // --- Request / Response types ---
 
@@ -568,9 +568,9 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
-        ExternalBindings, Platform, ResourceHeartbeatData, RuntimeMetadata, StackSettings,
-        StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION, DeploymentConfig, DeploymentState, DeploymentStatus,
+        EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceHeartbeatData,
+        RuntimeMetadata, StackSettings, StackState,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -579,11 +579,11 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
+        AgentSyncRequest, InitialDesiredRelease, InitializeRequest, ReconcileRequest,
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
         deployment_target_release_id, management_platform, preserve_recorded_gate_answers,
         release_stack_platform, should_ignore_agent_state_report,
         should_return_current_state_for_agent_sync, validate_initialize_base_platform,
-        AgentSyncRequest, InitialDesiredRelease, InitializeRequest, ReconcileRequest,
     };
 
     #[test]

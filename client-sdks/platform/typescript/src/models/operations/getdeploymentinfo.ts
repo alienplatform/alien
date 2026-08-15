@@ -25,9 +25,11 @@ export type GetDeploymentInfoPlatform = ClosedEnum<
 >;
 
 export const GetDeploymentInfoSetupItem = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 export type GetDeploymentInfoSetupItem = ClosedEnum<
   typeof GetDeploymentInfoSetupItem

@@ -5,11 +5,11 @@
 ```typescript
 import { ListResourceOverviewArea } from "@alienplatform/platform-api/models/operations";
 
-let value: ListResourceOverviewArea = "daemon";
+let value: ListResourceOverviewArea = "ai";
 ```
 
 ## Values
 
 ```typescript
-"container" | "worker" | "daemon"
+"container" | "worker" | "daemon" | "ai"
 ```

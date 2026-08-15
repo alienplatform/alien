@@ -1,18 +1,18 @@
 //! Deployment REST API endpoints.
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{request::Parts, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
-    DeploymentModel, EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings,
-    StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
+    ContainerOutputs, DaemonOutputs, DeploymentModel, EnvironmentVariable, Platform,
+    PublicEndpointOutput, RESOURCE_PREFIX_ERROR_MESSAGE, StackSettings, StackState, WorkerOutputs,
+    import::ImportSourceKind, is_valid_resource_prefix,
 };
 
 use crate::error::ErrorData;
@@ -21,7 +21,7 @@ use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, TokenType,
 };
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 // --- Request / Response types ---
 
@@ -941,8 +941,10 @@ mod tests {
         let error = stack_settings_for_platform(Platform::Machines, Some(requested))
             .expect_err("machines deployments should reject pull mode");
 
-        assert!(error
-            .to_string()
-            .contains("must use deploymentModel 'push'"));
+        assert!(
+            error
+                .to_string()
+                .contains("must use deploymentModel 'push'")
+        );
     }
 }

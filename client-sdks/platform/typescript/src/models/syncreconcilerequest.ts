@@ -1428,6 +1428,17 @@ export type SyncReconcileRequestCurrentReleaseResources = {
    */
   dependencies: Array<SyncReconcileRequestCurrentReleaseDependency>;
   /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
   lifecycle: CurrentReleaseStateLifecycle;
@@ -1756,6 +1767,1552 @@ export const SyncReconcileRequestPlatform = {
 export type SyncReconcileRequestPlatform = ClosedEnum<
   typeof SyncReconcileRequestPlatform
 >;
+
+/**
+ * Actor that owns structural work during the initial setup phase.
+ */
+export const SyncReconcileRequestInitialSetupAuthority = {
+  ImportedHandoff: "importedHandoff",
+  DirectSetup: "directSetup",
+} as const;
+/**
+ * Actor that owns structural work during the initial setup phase.
+ */
+export type SyncReconcileRequestInitialSetupAuthority = ClosedEnum<
+  typeof SyncReconcileRequestInitialSetupAuthority
+>;
+
+export const SyncReconcileRequestPendingPreparedStackTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncReconcileRequestPendingPreparedStackTypeStringList = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackTypeStringList
+>;
+
+export type SyncReconcileRequestPendingPreparedStackDefaultStringList = {
+  type: SyncReconcileRequestPendingPreparedStackTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncReconcileRequestPendingPreparedStackTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncReconcileRequestPendingPreparedStackTypeBoolean = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackTypeBoolean
+>;
+
+export type SyncReconcileRequestPendingPreparedStackDefaultBoolean = {
+  type: SyncReconcileRequestPendingPreparedStackTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncReconcileRequestPendingPreparedStackTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncReconcileRequestPendingPreparedStackTypeNumber = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackTypeNumber
+>;
+
+export type SyncReconcileRequestPendingPreparedStackDefaultNumber = {
+  type: SyncReconcileRequestPendingPreparedStackTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncReconcileRequestPendingPreparedStackTypeString = {
+  String: "string",
+} as const;
+export type SyncReconcileRequestPendingPreparedStackTypeString = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackTypeString
+>;
+
+export type SyncReconcileRequestPendingPreparedStackDefaultString = {
+  type: SyncReconcileRequestPendingPreparedStackTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncReconcileRequestPendingPreparedStackDefaultUnion =
+  | SyncReconcileRequestPendingPreparedStackDefaultString
+  | SyncReconcileRequestPendingPreparedStackDefaultNumber
+  | SyncReconcileRequestPendingPreparedStackDefaultBoolean
+  | SyncReconcileRequestPendingPreparedStackDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncReconcileRequestPendingPreparedStackTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncReconcileRequestPendingPreparedStackTypeEnvEnum = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackTypeEnvEnum
+>;
+
+export type SyncReconcileRequestPendingPreparedStackTypeUnion =
+  | SyncReconcileRequestPendingPreparedStackTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncReconcileRequestPendingPreparedStackEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?:
+    | SyncReconcileRequestPendingPreparedStackTypeEnvEnum
+    | any
+    | null
+    | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const PendingPreparedStackStateKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type PendingPreparedStackStateKind = ClosedEnum<
+  typeof PendingPreparedStackStateKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestPendingPreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestPendingPreparedStackPlatform = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncReconcileRequestPendingPreparedStackProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncReconcileRequestPendingPreparedStackProvidedBy = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncReconcileRequestPendingPreparedStackValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncReconcileRequestPendingPreparedStackValidationUnion =
+  | SyncReconcileRequestPendingPreparedStackValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncReconcileRequestPendingPreparedStackInput = {
+  default?:
+    | SyncReconcileRequestPendingPreparedStackDefaultString
+    | SyncReconcileRequestPendingPreparedStackDefaultNumber
+    | SyncReconcileRequestPendingPreparedStackDefaultBoolean
+    | SyncReconcileRequestPendingPreparedStackDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncReconcileRequestPendingPreparedStackEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: PendingPreparedStackStateKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncReconcileRequestPendingPreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncReconcileRequestPendingPreparedStackProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestPendingPreparedStackValidation
+    | any
+    | null
+    | undefined;
+};
+
+export const SyncReconcileRequestPendingPreparedStackManagementEnum = {
+  Auto: "auto",
+} as const;
+export type SyncReconcileRequestPendingPreparedStackManagementEnum = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackManagementEnum
+>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type PendingPreparedStackOverrideStateAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: PendingPreparedStackOverrideStateAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackOverrideAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestPendingPreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackOverrideEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackOverrideAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestPendingPreparedStackOverrideEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type PendingPreparedStackOverrideStateAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: PendingPreparedStackOverrideStateAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?:
+    | SyncReconcileRequestPendingPreparedStackOverrideAzureStack
+    | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackOverrideAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PendingPreparedStackOverrideConditionStateResource = {
+  expression: string;
+  title: string;
+};
+
+export type PendingPreparedStackOverrideStateResourceConditionUnion =
+  | PendingPreparedStackOverrideConditionStateResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type PendingPreparedStackOverrideStateGcpResource = {
+  condition?:
+    | PendingPreparedStackOverrideConditionStateResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PendingPreparedStackOverrideConditionStateStack = {
+  expression: string;
+  title: string;
+};
+
+export type PendingPreparedStackOverrideStateStackConditionUnion =
+  | PendingPreparedStackOverrideConditionStateStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcpStack = {
+  condition?:
+    | PendingPreparedStackOverrideConditionStateStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: PendingPreparedStackOverrideStateGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackOverrideGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackOverrideGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncReconcileRequestPendingPreparedStackOverridePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<SyncReconcileRequestPendingPreparedStackOverrideAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<SyncReconcileRequestPendingPreparedStackOverrideAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<SyncReconcileRequestPendingPreparedStackOverrideGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncReconcileRequestPendingPreparedStackOverride = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncReconcileRequestPendingPreparedStackOverridePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncReconcileRequestPendingPreparedStackOverrideUnion =
+  | SyncReconcileRequestPendingPreparedStackOverride
+  | string;
+
+export type SyncReconcileRequestPendingPreparedStackManagement2 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  override: {
+    [k: string]: Array<
+      SyncReconcileRequestPendingPreparedStackOverride | string
+    >;
+  };
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type PendingPreparedStackExtendStateAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: PendingPreparedStackExtendStateAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackExtendAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestPendingPreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendEffect = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackExtendEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackExtendAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestPendingPreparedStackExtendEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type PendingPreparedStackExtendStateAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: PendingPreparedStackExtendStateAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackExtendAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackExtendAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PendingPreparedStackExtendConditionStateResource = {
+  expression: string;
+  title: string;
+};
+
+export type PendingPreparedStackExtendStateResourceConditionUnion =
+  | PendingPreparedStackExtendConditionStateResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type PendingPreparedStackExtendStateGcpResource = {
+  condition?:
+    | PendingPreparedStackExtendConditionStateResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PendingPreparedStackExtendConditionStateStack = {
+  expression: string;
+  title: string;
+};
+
+export type PendingPreparedStackExtendStateStackConditionUnion =
+  | PendingPreparedStackExtendConditionStateStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendGcpStack = {
+  condition?:
+    | PendingPreparedStackExtendConditionStateStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: PendingPreparedStackExtendStateGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackExtendGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackExtendGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<SyncReconcileRequestPendingPreparedStackExtendAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<SyncReconcileRequestPendingPreparedStackExtendAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<SyncReconcileRequestPendingPreparedStackExtendGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncReconcileRequestPendingPreparedStackExtend = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncReconcileRequestPendingPreparedStackExtendPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncReconcileRequestPendingPreparedStackExtendUnion =
+  | SyncReconcileRequestPendingPreparedStackExtend
+  | string;
+
+export type SyncReconcileRequestPendingPreparedStackManagement1 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  extend: {
+    [k: string]: Array<SyncReconcileRequestPendingPreparedStackExtend | string>;
+  };
+};
+
+/**
+ * Management permissions configuration for stack management access
+ */
+export type SyncReconcileRequestPendingPreparedStackManagementUnion =
+  | SyncReconcileRequestPendingPreparedStackManagement1
+  | SyncReconcileRequestPendingPreparedStackManagement2
+  | SyncReconcileRequestPendingPreparedStackManagementEnum;
+
+/**
+ * AWS-specific binding specification
+ */
+export type PendingPreparedStackProfileStateAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: PendingPreparedStackProfileStateAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackProfileAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncReconcileRequestPendingPreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileEffect = ClosedEnum<
+  typeof SyncReconcileRequestPendingPreparedStackProfileEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackProfileAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncReconcileRequestPendingPreparedStackProfileEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type PendingPreparedStackProfileStateAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: PendingPreparedStackProfileStateAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackProfileAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackProfileAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PendingPreparedStackProfileConditionStateResource = {
+  expression: string;
+  title: string;
+};
+
+export type PendingPreparedStackProfileStateResourceConditionUnion =
+  | PendingPreparedStackProfileConditionStateResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type PendingPreparedStackProfileStateGcpResource = {
+  condition?:
+    | PendingPreparedStackProfileConditionStateResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type PendingPreparedStackProfileConditionStateStack = {
+  expression: string;
+  title: string;
+};
+
+export type PendingPreparedStackProfileStateStackConditionUnion =
+  | PendingPreparedStackProfileConditionStateStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileGcpStack = {
+  condition?:
+    | PendingPreparedStackProfileConditionStateStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: PendingPreparedStackProfileStateGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: SyncReconcileRequestPendingPreparedStackProfileGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncReconcileRequestPendingPreparedStackProfileGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncReconcileRequestPendingPreparedStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncReconcileRequestPendingPreparedStackProfilePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<SyncReconcileRequestPendingPreparedStackProfileAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<SyncReconcileRequestPendingPreparedStackProfileAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<SyncReconcileRequestPendingPreparedStackProfileGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncReconcileRequestPendingPreparedStackProfile = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncReconcileRequestPendingPreparedStackProfilePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncReconcileRequestPendingPreparedStackProfileUnion =
+  | SyncReconcileRequestPendingPreparedStackProfile
+  | string;
+
+/**
+ * Combined permissions configuration that contains both profiles and management
+ */
+export type SyncReconcileRequestPendingPreparedStackPermissions = {
+  /**
+   * Management permissions configuration for stack management access
+   */
+  management?:
+    | SyncReconcileRequestPendingPreparedStackManagement1
+    | SyncReconcileRequestPendingPreparedStackManagement2
+    | SyncReconcileRequestPendingPreparedStackManagementEnum
+    | undefined;
+  /**
+   * Permission profiles that define access control for compute services
+   *
+   * @remarks
+   * Key is the profile name, value is the permission configuration
+   */
+  profiles: {
+    [k: string]: {
+      [k: string]: Array<
+        SyncReconcileRequestPendingPreparedStackProfile | string
+      >;
+    };
+  };
+};
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type SyncReconcileRequestPendingPreparedStackConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+/**
+ * Reference to a resource by its stable id and resource type.
+ */
+export type SyncReconcileRequestPendingPreparedStackDependency = {
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+};
+
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export const PendingPreparedStackStateLifecycle = {
+  Frozen: "frozen",
+  Live: "live",
+} as const;
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export type PendingPreparedStackStateLifecycle = ClosedEnum<
+  typeof PendingPreparedStackStateLifecycle
+>;
+
+export type SyncReconcileRequestPendingPreparedStackResources = {
+  /**
+   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+   */
+  config: SyncReconcileRequestPendingPreparedStackConfig;
+  /**
+   * Additional dependencies for this resource beyond those defined in the resource itself.
+   *
+   * @remarks
+   * The total dependencies are: resource.get_dependencies() + this list
+   */
+  dependencies: Array<SyncReconcileRequestPendingPreparedStackDependency>;
+  /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
+   * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+   */
+  lifecycle: PendingPreparedStackStateLifecycle;
+  /**
+   * Enable remote bindings for this resource (BYOB use case).
+   *
+   * @remarks
+   * When true, binding params are synced to StackState's `remote_binding_params`.
+   * Default: false (prevents sensitive data in synced state).
+   */
+  remoteAccess?: boolean | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileRequestPendingPreparedStackSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileRequestPendingPreparedStackSupportedPlatform =
+  ClosedEnum<typeof SyncReconcileRequestPendingPreparedStackSupportedPlatform>;
+
+/**
+ * A bag of resources, unaware of any cloud.
+ */
+export type SyncReconcileRequestPendingPreparedStack = {
+  /**
+   * Unique identifier for the stack
+   */
+  id: string;
+  /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncReconcileRequestPendingPreparedStackInput> | undefined;
+  /**
+   * Combined permissions configuration that contains both profiles and management
+   */
+  permissions?: SyncReconcileRequestPendingPreparedStackPermissions | undefined;
+  /**
+   * Map of resource IDs to their configurations and lifecycle settings
+   */
+  resources: { [k: string]: SyncReconcileRequestPendingPreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncReconcileRequestPendingPreparedStackSupportedPlatform>
+    | null
+    | undefined;
+};
+
+export type SyncReconcileRequestPendingPreparedStackUnion =
+  | SyncReconcileRequestPendingPreparedStack
+  | any;
 
 export const SyncReconcileRequestPreparedStackTypeStringList = {
   StringList: "stringList",
@@ -3172,6 +4729,17 @@ export type SyncReconcileRequestPreparedStackResources = {
    */
   dependencies: Array<SyncReconcileRequestPreparedStackDependency>;
   /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
   lifecycle: PreparedStackStateLifecycle;
@@ -3238,6 +4806,44 @@ export type SyncReconcileRequestPreparedStackUnion =
   | any;
 
 /**
+ * One-shot authority for a setup re-import to replace setup-owned resources.
+ */
+export type SyncReconcileRequestSetupUpdateAuthorization = {
+  /**
+   * Frozen resource projection from the last successful deployment.
+   */
+  baselineFrozenDigest: string;
+  /**
+   * Unique revision used by persistence layers for compare-and-swap updates.
+   */
+  nonce: string;
+  /**
+   * Release whose stack was prepared by setup.
+   */
+  releaseId: string;
+  /**
+   * Exact setup artifact revision that authored this authority.
+   */
+  setupFingerprint: string;
+  /**
+   * Setup fingerprint contract version.
+   */
+  setupFingerprintVersion: number;
+  /**
+   * Stable setup target recorded on the imported deployment.
+   */
+  setupTarget: string;
+  /**
+   * Frozen resource projection prepared by the setup re-import.
+   */
+  targetFrozenDigest: string;
+};
+
+export type SyncReconcileRequestSetupUpdateAuthorizationUnion =
+  | SyncReconcileRequestSetupUpdateAuthorization
+  | any;
+
+/**
  * Runtime metadata for deployment
  *
  * @remarks
@@ -3245,6 +4851,10 @@ export type SyncReconcileRequestPreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileRequestRuntimeMetadata = {
+  /**
+   * Actor that owns structural work during the initial setup phase.
+   */
+  initialSetupAuthority?: SyncReconcileRequestInitialSetupAuthority | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -3260,6 +4870,23 @@ export type SyncReconcileRequestRuntimeMetadata = {
    * touching unrelated values in the same vault.
    */
   lastSyncedSecretNames?: Array<string> | undefined;
+  pendingPreparedStack?:
+    | SyncReconcileRequestPendingPreparedStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Canonical resolved answers for inputs that gate Frozen resources,
+   *
+   * @remarks
+   * keyed by input id, recorded when the deployment is created or its
+   * setup import registers.
+   *
+   * A frozen gate's answer is fixed for the deployment's lifetime: the
+   * update path refuses input values that conflict with these, and a Live
+   * resource sharing such an input resolves the persisted answer forever.
+   */
+  persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?: SyncReconcileRequestPreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -3270,6 +4897,11 @@ export type SyncReconcileRequestRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
+  setupUpdateAuthorization?:
+    | SyncReconcileRequestSetupUpdateAuthorization
+    | any
+    | null
+    | undefined;
 };
 
 export type SyncReconcileRequestRuntimeMetadataUnion =
@@ -5040,6 +6672,17 @@ export type SyncReconcileRequestTargetReleaseResources = {
    */
   dependencies: Array<SyncReconcileRequestTargetReleaseDependency>;
   /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
   lifecycle: TargetReleaseStateLifecycle;
@@ -5222,6 +6865,777 @@ export const ResourceHeartbeatControllerPlatform = {
 export type ResourceHeartbeatControllerPlatform = ClosedEnum<
   typeof ResourceHeartbeatControllerPlatform
 >;
+
+export const DataHealth72 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth72 = ClosedEnum<typeof DataHealth72>;
+
+export const StatusLifecycle72 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle72 = ClosedEnum<typeof StatusLifecycle72>;
+
+export type ResourceHeartbeatStatus72 = {
+  health: DataHealth72;
+  lifecycle: StatusLifecycle72;
+  message?: string | null | undefined;
+};
+
+export type SyncReconcileRequestData8 = {
+  enabled?: boolean | null | undefined;
+  keyId: string;
+  keyOperations: Array<string>;
+  keyType: string;
+  recoveryLevel?: string | null | undefined;
+  status: ResourceHeartbeatStatus72;
+};
+
+export type DataAzureKeyVault2 = {
+  data: SyncReconcileRequestData8;
+  provider: "azure-key-vault";
+};
+
+export const DataHealth71 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth71 = ClosedEnum<typeof DataHealth71>;
+
+export const StatusLifecycle71 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle71 = ClosedEnum<typeof StatusLifecycle71>;
+
+export type ResourceHeartbeatStatus71 = {
+  health: DataHealth71;
+  lifecycle: StatusLifecycle71;
+  message?: string | null | undefined;
+};
+
+export type SyncReconcileRequestData7 = {
+  algorithm?: string | null | undefined;
+  cryptoKeyName: string;
+  primaryState?: string | null | undefined;
+  primaryVersion?: string | null | undefined;
+  purpose: string;
+  status: ResourceHeartbeatStatus71;
+};
+
+export type DataGcpCloudKms = {
+  data: SyncReconcileRequestData7;
+  provider: "gcp-cloud-kms";
+};
+
+export const DataHealth70 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth70 = ClosedEnum<typeof DataHealth70>;
+
+export const StatusLifecycle70 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle70 = ClosedEnum<typeof StatusLifecycle70>;
+
+export type ResourceHeartbeatStatus70 = {
+  health: DataHealth70;
+  lifecycle: StatusLifecycle70;
+  message?: string | null | undefined;
+};
+
+export type SyncReconcileRequestData6 = {
+  enabled: boolean;
+  keyArn: string;
+  keySpec: string;
+  keyState: string;
+  keyUsage: string;
+  status: ResourceHeartbeatStatus70;
+};
+
+export type DataAwsKms = {
+  data: SyncReconcileRequestData6;
+  provider: "aws-kms";
+};
+
+export type SyncReconcileRequestDataUnion17 =
+  | DataAwsKms
+  | DataGcpCloudKms
+  | DataAzureKeyVault2;
+
+export type DataKey = {
+  data: DataAwsKms | DataGcpCloudKms | DataAzureKeyVault2;
+  resourceType: "key";
+};
+
+export const SyncReconcileRequestAccessTest4 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type SyncReconcileRequestAccessTest4 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest4
+>;
+
+export const SyncReconcileRequestModelAvailability4 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type SyncReconcileRequestModelAvailability4 = ClosedEnum<
+  typeof SyncReconcileRequestModelAvailability4
+>;
+
+export const SyncReconcileRequestBlockerEnum4 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type SyncReconcileRequestBlockerEnum4 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum4
+>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const SyncReconcileRequestClientApi4 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type SyncReconcileRequestClientApi4 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi4
+>;
+
+export type SyncReconcileRequestModel4 = {
+  accessTest: SyncReconcileRequestAccessTest4;
+  availability: SyncReconcileRequestModelAvailability4;
+  blockers: Array<SyncReconcileRequestBlockerEnum4>;
+  clientApis: Array<SyncReconcileRequestClientApi4>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SyncReconcileRequestAvailabilitySource4 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SyncReconcileRequestAvailabilitySource4 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource4
+>;
+
+export type SyncReconcileRequestAvailability4 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel4>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SyncReconcileRequestAvailabilitySource4;
+};
+
+export type Availability = SyncReconcileRequestAvailability4 | any;
+
+export const DataReason69 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason69 = ClosedEnum<typeof DataReason69>;
+
+export const StatusSeverity69 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity69 = ClosedEnum<typeof StatusSeverity69>;
+
+export type DataCollectionIssue69 = {
+  message: string;
+  reason: DataReason69;
+  severity: StatusSeverity69;
+  source: string;
+};
+
+export const DataHealth69 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth69 = ClosedEnum<typeof DataHealth69>;
+
+export const StatusLifecycle69 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle69 = ClosedEnum<typeof StatusLifecycle69>;
+
+export type ResourceHeartbeatStatus69 = {
+  collectionIssues: Array<DataCollectionIssue69>;
+  health: DataHealth69;
+  lifecycle: StatusLifecycle69;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataExternal = {
+  availability?: SyncReconcileRequestAvailability4 | any | null | undefined;
+  /**
+   * The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
+   *
+   * @remarks
+   * platform, where the app brings its own provider key instead of an ambient cloud.
+   */
+  provider: string;
+  status: ResourceHeartbeatStatus69;
+  backend: "external";
+};
+
+export const SyncReconcileRequestAccessTest3 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type SyncReconcileRequestAccessTest3 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest3
+>;
+
+export const SyncReconcileRequestModelAvailability3 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type SyncReconcileRequestModelAvailability3 = ClosedEnum<
+  typeof SyncReconcileRequestModelAvailability3
+>;
+
+export const SyncReconcileRequestBlockerEnum3 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type SyncReconcileRequestBlockerEnum3 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum3
+>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const SyncReconcileRequestClientApi3 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type SyncReconcileRequestClientApi3 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi3
+>;
+
+export type SyncReconcileRequestModel3 = {
+  accessTest: SyncReconcileRequestAccessTest3;
+  availability: SyncReconcileRequestModelAvailability3;
+  blockers: Array<SyncReconcileRequestBlockerEnum3>;
+  clientApis: Array<SyncReconcileRequestClientApi3>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SyncReconcileRequestAvailabilitySource3 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SyncReconcileRequestAvailabilitySource3 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource3
+>;
+
+export type SyncReconcileRequestAvailability3 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel3>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SyncReconcileRequestAvailabilitySource3;
+};
+
+export const DataReason68 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason68 = ClosedEnum<typeof DataReason68>;
+
+export const StatusSeverity68 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity68 = ClosedEnum<typeof StatusSeverity68>;
+
+export type DataCollectionIssue68 = {
+  message: string;
+  reason: DataReason68;
+  severity: StatusSeverity68;
+  source: string;
+};
+
+export const DataHealth68 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth68 = ClosedEnum<typeof DataHealth68>;
+
+export const StatusLifecycle68 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle68 = ClosedEnum<typeof StatusLifecycle68>;
+
+export type ResourceHeartbeatStatus68 = {
+  collectionIssues: Array<DataCollectionIssue68>;
+  health: DataHealth68;
+  lifecycle: StatusLifecycle68;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAzureFoundry = {
+  accountName: string;
+  availability: SyncReconcileRequestAvailability3;
+  endpoint?: string | null | undefined;
+  location?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  status: ResourceHeartbeatStatus68;
+  backend: "azureFoundry";
+};
+
+export const SyncReconcileRequestAccessTest2 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type SyncReconcileRequestAccessTest2 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest2
+>;
+
+export const SyncReconcileRequestModelAvailability2 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type SyncReconcileRequestModelAvailability2 = ClosedEnum<
+  typeof SyncReconcileRequestModelAvailability2
+>;
+
+export const SyncReconcileRequestBlockerEnum2 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type SyncReconcileRequestBlockerEnum2 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum2
+>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const SyncReconcileRequestClientApi2 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type SyncReconcileRequestClientApi2 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi2
+>;
+
+export type SyncReconcileRequestModel2 = {
+  accessTest: SyncReconcileRequestAccessTest2;
+  availability: SyncReconcileRequestModelAvailability2;
+  blockers: Array<SyncReconcileRequestBlockerEnum2>;
+  clientApis: Array<SyncReconcileRequestClientApi2>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SyncReconcileRequestAvailabilitySource2 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SyncReconcileRequestAvailabilitySource2 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource2
+>;
+
+export type SyncReconcileRequestAvailability2 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel2>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SyncReconcileRequestAvailabilitySource2;
+};
+
+export const DataReason67 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason67 = ClosedEnum<typeof DataReason67>;
+
+export const StatusSeverity67 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity67 = ClosedEnum<typeof StatusSeverity67>;
+
+export type DataCollectionIssue67 = {
+  message: string;
+  reason: DataReason67;
+  severity: StatusSeverity67;
+  source: string;
+};
+
+export const DataHealth67 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth67 = ClosedEnum<typeof DataHealth67>;
+
+export const StatusLifecycle67 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle67 = ClosedEnum<typeof StatusLifecycle67>;
+
+export type ResourceHeartbeatStatus67 = {
+  collectionIssues: Array<DataCollectionIssue67>;
+  health: DataHealth67;
+  lifecycle: StatusLifecycle67;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataGcpVertex = {
+  availability: SyncReconcileRequestAvailability2;
+  location: string;
+  project: string;
+  status: ResourceHeartbeatStatus67;
+  backend: "gcpVertex";
+};
+
+export const SyncReconcileRequestAccessTest1 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type SyncReconcileRequestAccessTest1 = ClosedEnum<
+  typeof SyncReconcileRequestAccessTest1
+>;
+
+export const SyncReconcileRequestModelAvailability1 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type SyncReconcileRequestModelAvailability1 = ClosedEnum<
+  typeof SyncReconcileRequestModelAvailability1
+>;
+
+export const SyncReconcileRequestBlockerEnum1 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type SyncReconcileRequestBlockerEnum1 = ClosedEnum<
+  typeof SyncReconcileRequestBlockerEnum1
+>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const SyncReconcileRequestClientApi1 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type SyncReconcileRequestClientApi1 = ClosedEnum<
+  typeof SyncReconcileRequestClientApi1
+>;
+
+export type SyncReconcileRequestModel1 = {
+  accessTest: SyncReconcileRequestAccessTest1;
+  availability: SyncReconcileRequestModelAvailability1;
+  blockers: Array<SyncReconcileRequestBlockerEnum1>;
+  clientApis: Array<SyncReconcileRequestClientApi1>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SyncReconcileRequestAvailabilitySource1 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SyncReconcileRequestAvailabilitySource1 = ClosedEnum<
+  typeof SyncReconcileRequestAvailabilitySource1
+>;
+
+export type SyncReconcileRequestAvailability1 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel1>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SyncReconcileRequestAvailabilitySource1;
+};
+
+export const DataReason66 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason66 = ClosedEnum<typeof DataReason66>;
+
+export const StatusSeverity66 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity66 = ClosedEnum<typeof StatusSeverity66>;
+
+export type DataCollectionIssue66 = {
+  message: string;
+  reason: DataReason66;
+  severity: StatusSeverity66;
+  source: string;
+};
+
+export const DataHealth66 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth66 = ClosedEnum<typeof DataHealth66>;
+
+export const StatusLifecycle66 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle66 = ClosedEnum<typeof StatusLifecycle66>;
+
+export type ResourceHeartbeatStatus66 = {
+  collectionIssues: Array<DataCollectionIssue66>;
+  health: DataHealth66;
+  lifecycle: StatusLifecycle66;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAwsBedrock = {
+  availability: SyncReconcileRequestAvailability1;
+  region: string;
+  status: ResourceHeartbeatStatus66;
+  backend: "awsBedrock";
+};
+
+export type SyncReconcileRequestDataUnion16 =
+  | DataAwsBedrock
+  | DataGcpVertex
+  | DataAzureFoundry
+  | DataExternal;
+
+export type DataAi = {
+  data: DataAwsBedrock | DataGcpVertex | DataAzureFoundry | DataExternal;
+  resourceType: "ai";
+};
 
 export const DataReason65 = {
   Forbidden: "forbidden",
@@ -5712,12 +8126,12 @@ export type InvolvedObject10 = {
 
 export type InvolvedObjectUnion10 = InvolvedObject10 | any;
 
-export type SyncReconcileRequestSource10 = {
+export type SourceEvent10 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion10 = SyncReconcileRequestSource10 | any;
+export type EventSourceUnion10 = SourceEvent10 | any;
 
 export type SyncReconcileRequestEvent13 = {
   count?: number | null | undefined;
@@ -5728,7 +8142,7 @@ export type SyncReconcileRequestEvent13 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource10 | any | null | undefined;
+  source?: SourceEvent10 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -6248,7 +8662,7 @@ export type DataGcpArtifactRegistry = {
   backend: "gcpArtifactRegistry";
 };
 
-export type Repository = {
+export type SyncReconcileRequestRepository = {
   createdAt: number;
   encryptionType?: string | null | undefined;
   imageTagMutability?: string | null | undefined;
@@ -6320,7 +8734,7 @@ export type DataAwsEcr = {
   region: string;
   registryId: string;
   registryUri: string;
-  repositories: Array<Repository>;
+  repositories: Array<SyncReconcileRequestRepository>;
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
@@ -7247,7 +9661,7 @@ export type ResourceHeartbeatStatus39 = {
   stale: boolean;
 };
 
-export type DataAzureKeyVault = {
+export type DataAzureKeyVault1 = {
   accessPolicyCount: number;
   location?: string | null | undefined;
   name: string;
@@ -7405,7 +9819,7 @@ export type DataAwsParameterStore = {
 export type SyncReconcileRequestDataUnion9 =
   | DataAwsParameterStore
   | DataGcpSecretManager
-  | DataAzureKeyVault
+  | DataAzureKeyVault1
   | DataKubernetesSecret
   | DataLocal9;
 
@@ -7413,7 +9827,7 @@ export type DataVault = {
   data:
     | DataAwsParameterStore
     | DataGcpSecretManager
-    | DataAzureKeyVault
+    | DataAzureKeyVault1
     | DataKubernetesSecret
     | DataLocal9;
   resourceType: "vault";
@@ -7473,6 +9887,9 @@ export type ResourceHeartbeatStatus36 = {
   stale: boolean;
 };
 
+/**
+ * Local embedded Postgres backend.
+ */
 export type DataLocal8 = {
   name: string;
   port?: number | null | undefined;
@@ -7536,6 +9953,9 @@ export type ResourceHeartbeatStatus35 = {
   stale: boolean;
 };
 
+/**
+ * Azure Flexible Server backend.
+ */
 export type DataFlexibleServer = {
   serverName: string;
   state?: string | null | undefined;
@@ -7598,6 +10018,9 @@ export type ResourceHeartbeatStatus34 = {
   stale: boolean;
 };
 
+/**
+ * GCP Cloud SQL backend.
+ */
 export type DataCloudSQL = {
   databaseVersion?: string | null | undefined;
   instanceName: string;
@@ -7660,6 +10083,9 @@ export type ResourceHeartbeatStatus33 = {
   stale: boolean;
 };
 
+/**
+ * AWS Aurora Serverless v2 backend.
+ */
 export type DataAurora = {
   clusterIdentifier: string;
   endpoint?: string | null | undefined;
@@ -8361,12 +10787,12 @@ export type InvolvedObject9 = {
 
 export type InvolvedObjectUnion9 = InvolvedObject9 | any;
 
-export type SyncReconcileRequestSource9 = {
+export type SourceEvent9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = SyncReconcileRequestSource9 | any;
+export type EventSourceUnion9 = SourceEvent9 | any;
 
 export type SyncReconcileRequestEvent12 = {
   count?: number | null | undefined;
@@ -8377,7 +10803,7 @@ export type SyncReconcileRequestEvent12 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource9 | any | null | undefined;
+  source?: SourceEvent9 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -8720,7 +11146,7 @@ export type CapacityBlocker4 = {
 
 export type CapacityBlockerUnion4 = CapacityBlocker4 | any;
 
-export type Blocker4 = {
+export type DrainProgressBlocker4 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -8736,7 +11162,7 @@ export const DrainProgressStatus4 = {
 export type DrainProgressStatus4 = ClosedEnum<typeof DrainProgressStatus4>;
 
 export type DrainProgress4 = {
-  blockers?: Array<Blocker4> | undefined;
+  blockers?: Array<DrainProgressBlocker4> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -8938,7 +11364,7 @@ export type CapacityBlocker3 = {
 
 export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
 
-export type Blocker3 = {
+export type DrainProgressBlocker3 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -8954,7 +11380,7 @@ export const DrainProgressStatus3 = {
 export type DrainProgressStatus3 = ClosedEnum<typeof DrainProgressStatus3>;
 
 export type DrainProgress3 = {
-  blockers?: Array<Blocker3> | undefined;
+  blockers?: Array<DrainProgressBlocker3> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -9138,7 +11564,7 @@ export type CapacityBlocker2 = {
 
 export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
 
-export type Blocker2 = {
+export type DrainProgressBlocker2 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -9154,7 +11580,7 @@ export const DrainProgressStatus2 = {
 export type DrainProgressStatus2 = ClosedEnum<typeof DrainProgressStatus2>;
 
 export type DrainProgress2 = {
-  blockers?: Array<Blocker2> | undefined;
+  blockers?: Array<DrainProgressBlocker2> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -9338,7 +11764,7 @@ export type CapacityBlocker1 = {
 
 export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
 
-export type Blocker1 = {
+export type DrainProgressBlocker1 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -9354,7 +11780,7 @@ export const DrainProgressStatus1 = {
 export type DrainProgressStatus1 = ClosedEnum<typeof DrainProgressStatus1>;
 
 export type DrainProgress1 = {
-  blockers?: Array<Blocker1> | undefined;
+  blockers?: Array<DrainProgressBlocker1> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -9712,12 +12138,12 @@ export type InvolvedObject8 = {
 
 export type InvolvedObjectUnion8 = InvolvedObject8 | any;
 
-export type SyncReconcileRequestSource8 = {
+export type SourceEvent8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = SyncReconcileRequestSource8 | any;
+export type EventSourceUnion8 = SourceEvent8 | any;
 
 export type SyncReconcileRequestEvent10 = {
   count?: number | null | undefined;
@@ -9728,7 +12154,7 @@ export type SyncReconcileRequestEvent10 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource8 | any | null | undefined;
+  source?: SourceEvent8 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -9972,12 +12398,12 @@ export type InvolvedObject7 = {
 
 export type InvolvedObjectUnion7 = InvolvedObject7 | any;
 
-export type SyncReconcileRequestSource7 = {
+export type SourceEvent7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = SyncReconcileRequestSource7 | any;
+export type EventSourceUnion7 = SourceEvent7 | any;
 
 export type SyncReconcileRequestEvent9 = {
   count?: number | null | undefined;
@@ -9990,7 +12416,7 @@ export type SyncReconcileRequestEvent9 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource7 | any | null | undefined;
+  source?: SourceEvent7 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -10062,6 +12488,7 @@ export type DataMachines1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus16;
   unavailableInstances: number;
   backend: "machines";
@@ -10135,12 +12562,12 @@ export type InvolvedObject6 = {
 
 export type InvolvedObjectUnion6 = InvolvedObject6 | any;
 
-export type SyncReconcileRequestSource6 = {
+export type SourceEvent6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = SyncReconcileRequestSource6 | any;
+export type EventSourceUnion6 = SourceEvent6 | any;
 
 export type SyncReconcileRequestEvent8 = {
   count?: number | null | undefined;
@@ -10153,7 +12580,7 @@ export type SyncReconcileRequestEvent8 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource6 | any | null | undefined;
+  source?: SourceEvent6 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -10225,6 +12652,7 @@ export type DataAzure1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus15;
   unavailableInstances: number;
   backend: "azure";
@@ -10298,12 +12726,12 @@ export type InvolvedObject5 = {
 
 export type InvolvedObjectUnion5 = InvolvedObject5 | any;
 
-export type SyncReconcileRequestSource5 = {
+export type SourceEvent5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = SyncReconcileRequestSource5 | any;
+export type EventSourceUnion5 = SourceEvent5 | any;
 
 export type SyncReconcileRequestEvent7 = {
   count?: number | null | undefined;
@@ -10316,7 +12744,7 @@ export type SyncReconcileRequestEvent7 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource5 | any | null | undefined;
+  source?: SourceEvent5 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -10388,6 +12816,7 @@ export type DataGcp1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus14;
   unavailableInstances: number;
   backend: "gcp";
@@ -10461,12 +12890,12 @@ export type InvolvedObject4 = {
 
 export type InvolvedObjectUnion4 = InvolvedObject4 | any;
 
-export type SyncReconcileRequestSource4 = {
+export type SourceEvent4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = SyncReconcileRequestSource4 | any;
+export type EventSourceUnion4 = SourceEvent4 | any;
 
 export type SyncReconcileRequestEvent6 = {
   count?: number | null | undefined;
@@ -10479,7 +12908,7 @@ export type SyncReconcileRequestEvent6 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource4 | any | null | undefined;
+  source?: SourceEvent4 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -10551,6 +12980,7 @@ export type DataAws1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus13;
   unavailableInstances: number;
   backend: "aws";
@@ -10793,12 +13223,12 @@ export type InvolvedObject3 = {
 
 export type InvolvedObjectUnion3 = InvolvedObject3 | any;
 
-export type SyncReconcileRequestSource3 = {
+export type SourceEvent3 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = SyncReconcileRequestSource3 | any;
+export type EventSourceUnion3 = SourceEvent3 | any;
 
 export type SyncReconcileRequestEvent4 = {
   count?: number | null | undefined;
@@ -10809,7 +13239,7 @@ export type SyncReconcileRequestEvent4 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource3 | any | null | undefined;
+  source?: SourceEvent3 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -11022,12 +13452,12 @@ export type InvolvedObject2 = {
 
 export type InvolvedObjectUnion2 = InvolvedObject2 | any;
 
-export type SyncReconcileRequestSource2 = {
+export type SourceEvent2 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = SyncReconcileRequestSource2 | any;
+export type EventSourceUnion2 = SourceEvent2 | any;
 
 export type SyncReconcileRequestEvent3 = {
   count?: number | null | undefined;
@@ -11040,7 +13470,7 @@ export type SyncReconcileRequestEvent3 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource2 | any | null | undefined;
+  source?: SourceEvent2 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -11192,7 +13622,9 @@ export type DataHorizonPlatform = {
   cpu?: Cpu3 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent3>;
   image?: string | null | undefined;
+  latestUpdateTimestamp?: string | null | undefined;
   memory?: Memory3 | any | null | undefined;
+  observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
@@ -11422,12 +13854,12 @@ export type InvolvedObject1 = {
 
 export type InvolvedObjectUnion1 = InvolvedObject1 | any;
 
-export type SyncReconcileRequestSource1 = {
+export type SourceEvent1 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = SyncReconcileRequestSource1 | any;
+export type EventSourceUnion1 = SourceEvent1 | any;
 
 export type SyncReconcileRequestEvent1 = {
   count?: number | null | undefined;
@@ -11438,7 +13870,7 @@ export type SyncReconcileRequestEvent1 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource1 | any | null | undefined;
+  source?: SourceEvent1 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -12175,7 +14607,7 @@ export type DataStorage = {
   resourceType: "storage";
 };
 
-export type SyncReconcileRequestDataUnion16 =
+export type SyncReconcileRequestDataUnion18 =
   | DataStorage
   | DataWorker
   | DataContainer
@@ -12195,7 +14627,9 @@ export type SyncReconcileRequestDataUnion16 =
   | DataAzureResourceGroup
   | DataAzureStorageAccount
   | DataAzureContainerAppsEnvironment
-  | DataAzureServiceBusNamespace;
+  | DataAzureServiceBusNamespace
+  | DataAi
+  | DataKey;
 
 export const ResourceHeartbeatFormat = {
   Json: "json",
@@ -12240,7 +14674,9 @@ export type ResourceHeartbeat = {
     | DataAzureResourceGroup
     | DataAzureStorageAccount
     | DataAzureContainerAppsEnvironment
-    | DataAzureServiceBusNamespace;
+    | DataAzureServiceBusNamespace
+    | DataAi
+    | DataKey;
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<ResourceHeartbeatRaw>;
@@ -15193,6 +17629,7 @@ export const CurrentReleaseStateLifecycle$outboundSchema: z.ZodEnum<
 export type SyncReconcileRequestCurrentReleaseResources$Outbound = {
   config: SyncReconcileRequestCurrentReleaseConfig$Outbound;
   dependencies: Array<SyncReconcileRequestCurrentReleaseDependency$Outbound>;
+  enabledWhen?: string | null | undefined;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
 };
@@ -15209,6 +17646,7 @@ export const SyncReconcileRequestCurrentReleaseResources$outboundSchema:
     dependencies: z.array(
       z.lazy(() => SyncReconcileRequestCurrentReleaseDependency$outboundSchema),
     ),
+    enabledWhen: z.nullable(z.string()).optional(),
     lifecycle: CurrentReleaseStateLifecycle$outboundSchema,
     remoteAccess: z.boolean().optional(),
   });
@@ -15590,6 +18028,2915 @@ export function syncReconcileRequestErrorUnionToJSON(
 export const SyncReconcileRequestPlatform$outboundSchema: z.ZodEnum<
   typeof SyncReconcileRequestPlatform
 > = z.enum(SyncReconcileRequestPlatform);
+
+/** @internal */
+export const SyncReconcileRequestInitialSetupAuthority$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestInitialSetupAuthority> = z.enum(
+    SyncReconcileRequestInitialSetupAuthority,
+  );
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackTypeStringList$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackTypeStringList> = z
+    .enum(SyncReconcileRequestPendingPreparedStackTypeStringList);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackDefaultStringList$Outbound =
+  {
+    type: string;
+    value: Array<string>;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackDefaultStringList$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackDefaultStringList$Outbound,
+    SyncReconcileRequestPendingPreparedStackDefaultStringList
+  > = z.object({
+    type: SyncReconcileRequestPendingPreparedStackTypeStringList$outboundSchema,
+    value: z.array(z.string()),
+  });
+
+export function syncReconcileRequestPendingPreparedStackDefaultStringListToJSON(
+  syncReconcileRequestPendingPreparedStackDefaultStringList:
+    SyncReconcileRequestPendingPreparedStackDefaultStringList,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackDefaultStringList$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackDefaultStringList),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackTypeBoolean$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackTypeBoolean> = z
+    .enum(SyncReconcileRequestPendingPreparedStackTypeBoolean);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackDefaultBoolean$Outbound = {
+  type: string;
+  value: boolean;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackDefaultBoolean$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackDefaultBoolean$Outbound,
+    SyncReconcileRequestPendingPreparedStackDefaultBoolean
+  > = z.object({
+    type: SyncReconcileRequestPendingPreparedStackTypeBoolean$outboundSchema,
+    value: z.boolean(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackDefaultBooleanToJSON(
+  syncReconcileRequestPendingPreparedStackDefaultBoolean:
+    SyncReconcileRequestPendingPreparedStackDefaultBoolean,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackDefaultBoolean$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackDefaultBoolean,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackTypeNumber$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackTypeNumber> = z.enum(
+    SyncReconcileRequestPendingPreparedStackTypeNumber,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackDefaultNumber$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackDefaultNumber$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackDefaultNumber$Outbound,
+    SyncReconcileRequestPendingPreparedStackDefaultNumber
+  > = z.object({
+    type: SyncReconcileRequestPendingPreparedStackTypeNumber$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackDefaultNumberToJSON(
+  syncReconcileRequestPendingPreparedStackDefaultNumber:
+    SyncReconcileRequestPendingPreparedStackDefaultNumber,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackDefaultNumber$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackDefaultNumber,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackTypeString$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackTypeString> = z.enum(
+    SyncReconcileRequestPendingPreparedStackTypeString,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackDefaultString$Outbound = {
+  type: string;
+  value: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackDefaultString$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackDefaultString$Outbound,
+    SyncReconcileRequestPendingPreparedStackDefaultString
+  > = z.object({
+    type: SyncReconcileRequestPendingPreparedStackTypeString$outboundSchema,
+    value: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackDefaultStringToJSON(
+  syncReconcileRequestPendingPreparedStackDefaultString:
+    SyncReconcileRequestPendingPreparedStackDefaultString,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackDefaultString$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackDefaultString,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackDefaultUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStackDefaultString$Outbound
+  | SyncReconcileRequestPendingPreparedStackDefaultNumber$Outbound
+  | SyncReconcileRequestPendingPreparedStackDefaultBoolean$Outbound
+  | SyncReconcileRequestPendingPreparedStackDefaultStringList$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackDefaultUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackDefaultUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackDefaultUnion
+  > = z.union([
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackDefaultString$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackDefaultNumber$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackDefaultBoolean$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackDefaultStringList$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackDefaultUnionToJSON(
+  syncReconcileRequestPendingPreparedStackDefaultUnion:
+    SyncReconcileRequestPendingPreparedStackDefaultUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackDefaultUnion$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackDefaultUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackTypeEnvEnum$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackTypeEnvEnum> = z
+    .enum(SyncReconcileRequestPendingPreparedStackTypeEnvEnum);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackTypeUnion$Outbound =
+  | string
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackTypeUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackTypeUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackTypeUnion
+  > = z.union([
+    SyncReconcileRequestPendingPreparedStackTypeEnvEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackTypeUnionToJSON(
+  syncReconcileRequestPendingPreparedStackTypeUnion:
+    SyncReconcileRequestPendingPreparedStackTypeUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackTypeUnion$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackTypeUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackEnv$Outbound = {
+  name: string;
+  targetResources?: Array<string> | null | undefined;
+  type?: string | any | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackEnv$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackEnv$Outbound,
+    SyncReconcileRequestPendingPreparedStackEnv
+  > = z.object({
+    name: z.string(),
+    targetResources: z.nullable(z.array(z.string())).optional(),
+    type: z.nullable(
+      z.union([
+        SyncReconcileRequestPendingPreparedStackTypeEnvEnum$outboundSchema,
+        z.any(),
+      ]),
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackEnvToJSON(
+  syncReconcileRequestPendingPreparedStackEnv:
+    SyncReconcileRequestPendingPreparedStackEnv,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackEnv$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackEnv,
+    ),
+  );
+}
+
+/** @internal */
+export const PendingPreparedStackStateKind$outboundSchema: z.ZodEnum<
+  typeof PendingPreparedStackStateKind
+> = z.enum(PendingPreparedStackStateKind);
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackPlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackPlatform> = z.enum(
+    SyncReconcileRequestPendingPreparedStackPlatform,
+  );
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProvidedBy$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackProvidedBy> = z.enum(
+    SyncReconcileRequestPendingPreparedStackProvidedBy,
+  );
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackValidation$Outbound = {
+  format?: string | null | undefined;
+  max?: string | null | undefined;
+  maxItems?: number | null | undefined;
+  maxLength?: number | null | undefined;
+  min?: string | null | undefined;
+  minItems?: number | null | undefined;
+  minLength?: number | null | undefined;
+  pattern?: string | null | undefined;
+  values?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackValidation$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackValidation$Outbound,
+    SyncReconcileRequestPendingPreparedStackValidation
+  > = z.object({
+    format: z.nullable(z.string()).optional(),
+    max: z.nullable(z.string()).optional(),
+    maxItems: z.nullable(z.int()).optional(),
+    maxLength: z.nullable(z.int()).optional(),
+    min: z.nullable(z.string()).optional(),
+    minItems: z.nullable(z.int()).optional(),
+    minLength: z.nullable(z.int()).optional(),
+    pattern: z.nullable(z.string()).optional(),
+    values: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackValidationToJSON(
+  syncReconcileRequestPendingPreparedStackValidation:
+    SyncReconcileRequestPendingPreparedStackValidation,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackValidation$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackValidation,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackValidationUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStackValidation$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackValidationUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackValidationUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackValidationUnion
+  > = z.union([
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackValidation$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackValidationUnionToJSON(
+  syncReconcileRequestPendingPreparedStackValidationUnion:
+    SyncReconcileRequestPendingPreparedStackValidationUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackValidationUnion$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackValidationUnion),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackInput$Outbound = {
+  default?:
+    | SyncReconcileRequestPendingPreparedStackDefaultString$Outbound
+    | SyncReconcileRequestPendingPreparedStackDefaultNumber$Outbound
+    | SyncReconcileRequestPendingPreparedStackDefaultBoolean$Outbound
+    | SyncReconcileRequestPendingPreparedStackDefaultStringList$Outbound
+    | any
+    | null
+    | undefined;
+  description: string;
+  env?: Array<SyncReconcileRequestPendingPreparedStackEnv$Outbound> | undefined;
+  id: string;
+  kind: string;
+  label: string;
+  placeholder?: string | null | undefined;
+  platforms?: Array<string> | null | undefined;
+  providedBy: Array<string>;
+  required: boolean;
+  validation?:
+    | SyncReconcileRequestPendingPreparedStackValidation$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackInput$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackInput$Outbound,
+    SyncReconcileRequestPendingPreparedStackInput
+  > = z.object({
+    default: z.nullable(
+      z.union([
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackDefaultString$outboundSchema
+        ),
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackDefaultNumber$outboundSchema
+        ),
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackDefaultBoolean$outboundSchema
+        ),
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackDefaultStringList$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    description: z.string(),
+    env: z.array(
+      z.lazy(() => SyncReconcileRequestPendingPreparedStackEnv$outboundSchema),
+    ).optional(),
+    id: z.string(),
+    kind: PendingPreparedStackStateKind$outboundSchema,
+    label: z.string(),
+    placeholder: z.nullable(z.string()).optional(),
+    platforms: z.nullable(
+      z.array(SyncReconcileRequestPendingPreparedStackPlatform$outboundSchema),
+    ).optional(),
+    providedBy: z.array(
+      SyncReconcileRequestPendingPreparedStackProvidedBy$outboundSchema,
+    ),
+    required: z.boolean(),
+    validation: z.nullable(
+      z.union([
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackValidation$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackInputToJSON(
+  syncReconcileRequestPendingPreparedStackInput:
+    SyncReconcileRequestPendingPreparedStackInput,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackInput$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackInput,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackManagementEnum$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackManagementEnum> = z
+    .enum(SyncReconcileRequestPendingPreparedStackManagementEnum);
+
+/** @internal */
+export type PendingPreparedStackOverrideStateAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const PendingPreparedStackOverrideStateAwResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideStateAwResource$Outbound,
+    PendingPreparedStackOverrideStateAwResource
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function pendingPreparedStackOverrideStateAwResourceToJSON(
+  pendingPreparedStackOverrideStateAwResource:
+    PendingPreparedStackOverrideStateAwResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideStateAwResource$outboundSchema.parse(
+      pendingPreparedStackOverrideStateAwResource,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAwStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAwStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAwStack
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAwStackToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAwStack:
+    SyncReconcileRequestPendingPreparedStackOverrideAwStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAwStack$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideAwStack),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAwBinding$Outbound =
+  {
+    resource?: PendingPreparedStackOverrideStateAwResource$Outbound | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackOverrideAwStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAwBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAwBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAwBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackOverrideStateAwResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideAwStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAwBindingToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAwBinding:
+    SyncReconcileRequestPendingPreparedStackOverrideAwBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAwBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideAwBinding),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackOverrideEffect> = z
+    .enum(SyncReconcileRequestPendingPreparedStackOverrideEffect);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAwGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAwGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAwGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAwGrantToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAwGrant:
+    SyncReconcileRequestPendingPreparedStackOverrideAwGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAwGrant$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideAwGrant),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAw$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAw$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAw$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAw
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideAwBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    effect:
+      SyncReconcileRequestPendingPreparedStackOverrideEffect$outboundSchema
+        .optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideAwGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAwToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAw:
+    SyncReconcileRequestPendingPreparedStackOverrideAw,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAw$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackOverrideAw,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackOverrideStateAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const PendingPreparedStackOverrideStateAzureResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideStateAzureResource$Outbound,
+    PendingPreparedStackOverrideStateAzureResource
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function pendingPreparedStackOverrideStateAzureResourceToJSON(
+  pendingPreparedStackOverrideStateAzureResource:
+    PendingPreparedStackOverrideStateAzureResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideStateAzureResource$outboundSchema.parse(
+      pendingPreparedStackOverrideStateAzureResource,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzureStack$Outbound =
+  {
+    scope: string;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAzureStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAzureStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAzureStack
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAzureStackToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAzureStack:
+    SyncReconcileRequestPendingPreparedStackOverrideAzureStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAzureStack$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideAzureStack),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzureBinding$Outbound =
+  {
+    resource?:
+      | PendingPreparedStackOverrideStateAzureResource$Outbound
+      | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackOverrideAzureStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAzureBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAzureBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAzureBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackOverrideStateAzureResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideAzureStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAzureBindingToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAzureBinding:
+    SyncReconcileRequestPendingPreparedStackOverrideAzureBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAzureBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideAzureBinding),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzureGrant$Outbound =
+  {
+    actions?: Array<string> | null | undefined;
+    dataActions?: Array<string> | null | undefined;
+    permissions?: Array<string> | null | undefined;
+    predefinedRoles?: Array<string> | null | undefined;
+    residualPermissions?: Array<string> | null | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAzureGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAzureGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAzureGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAzureGrantToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAzureGrant:
+    SyncReconcileRequestPendingPreparedStackOverrideAzureGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAzureGrant$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideAzureGrant),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideAzure$Outbound = {
+  binding:
+    SyncReconcileRequestPendingPreparedStackOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideAzure$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideAzure$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideAzure
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideAzureBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideAzureGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideAzureToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideAzure:
+    SyncReconcileRequestPendingPreparedStackOverrideAzure,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideAzure$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackOverrideAzure,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackOverrideConditionStateResource$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PendingPreparedStackOverrideConditionStateResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideConditionStateResource$Outbound,
+    PendingPreparedStackOverrideConditionStateResource
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function pendingPreparedStackOverrideConditionStateResourceToJSON(
+  pendingPreparedStackOverrideConditionStateResource:
+    PendingPreparedStackOverrideConditionStateResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideConditionStateResource$outboundSchema.parse(
+      pendingPreparedStackOverrideConditionStateResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackOverrideStateResourceConditionUnion$Outbound =
+  | PendingPreparedStackOverrideConditionStateResource$Outbound
+  | any;
+
+/** @internal */
+export const PendingPreparedStackOverrideStateResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideStateResourceConditionUnion$Outbound,
+    PendingPreparedStackOverrideStateResourceConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PendingPreparedStackOverrideConditionStateResource$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function pendingPreparedStackOverrideStateResourceConditionUnionToJSON(
+  pendingPreparedStackOverrideStateResourceConditionUnion:
+    PendingPreparedStackOverrideStateResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideStateResourceConditionUnion$outboundSchema
+      .parse(pendingPreparedStackOverrideStateResourceConditionUnion),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackOverrideStateGcpResource$Outbound = {
+  condition?:
+    | PendingPreparedStackOverrideConditionStateResource$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PendingPreparedStackOverrideStateGcpResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideStateGcpResource$Outbound,
+    PendingPreparedStackOverrideStateGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PendingPreparedStackOverrideConditionStateResource$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function pendingPreparedStackOverrideStateGcpResourceToJSON(
+  pendingPreparedStackOverrideStateGcpResource:
+    PendingPreparedStackOverrideStateGcpResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideStateGcpResource$outboundSchema.parse(
+      pendingPreparedStackOverrideStateGcpResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackOverrideConditionStateStack$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PendingPreparedStackOverrideConditionStateStack$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideConditionStateStack$Outbound,
+    PendingPreparedStackOverrideConditionStateStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function pendingPreparedStackOverrideConditionStateStackToJSON(
+  pendingPreparedStackOverrideConditionStateStack:
+    PendingPreparedStackOverrideConditionStateStack,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideConditionStateStack$outboundSchema.parse(
+      pendingPreparedStackOverrideConditionStateStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackOverrideStateStackConditionUnion$Outbound =
+  | PendingPreparedStackOverrideConditionStateStack$Outbound
+  | any;
+
+/** @internal */
+export const PendingPreparedStackOverrideStateStackConditionUnion$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackOverrideStateStackConditionUnion$Outbound,
+    PendingPreparedStackOverrideStateStackConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PendingPreparedStackOverrideConditionStateStack$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function pendingPreparedStackOverrideStateStackConditionUnionToJSON(
+  pendingPreparedStackOverrideStateStackConditionUnion:
+    PendingPreparedStackOverrideStateStackConditionUnion,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackOverrideStateStackConditionUnion$outboundSchema.parse(
+      pendingPreparedStackOverrideStateStackConditionUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcpStack$Outbound =
+  {
+    condition?:
+      | PendingPreparedStackOverrideConditionStateStack$Outbound
+      | any
+      | null
+      | undefined;
+    scope: string;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideGcpStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideGcpStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideGcpStack
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PendingPreparedStackOverrideConditionStateStack$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideGcpStackToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideGcpStack:
+    SyncReconcileRequestPendingPreparedStackOverrideGcpStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideGcpStack$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideGcpStack),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcpBinding$Outbound =
+  {
+    resource?:
+      | PendingPreparedStackOverrideStateGcpResource$Outbound
+      | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackOverrideGcpStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideGcpBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideGcpBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideGcpBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackOverrideStateGcpResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideGcpStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideGcpBindingToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideGcpBinding:
+    SyncReconcileRequestPendingPreparedStackOverrideGcpBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideGcpBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideGcpBinding),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcpGrant$Outbound =
+  {
+    actions?: Array<string> | null | undefined;
+    dataActions?: Array<string> | null | undefined;
+    permissions?: Array<string> | null | undefined;
+    predefinedRoles?: Array<string> | null | undefined;
+    residualPermissions?: Array<string> | null | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideGcpGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideGcpGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideGcpGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideGcpGrantToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideGcpGrant:
+    SyncReconcileRequestPendingPreparedStackOverrideGcpGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideGcpGrant$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverrideGcpGrant),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideGcp$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideGcp$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideGcp$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideGcp
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideGcpBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverrideGcpGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideGcpToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideGcp:
+    SyncReconcileRequestPendingPreparedStackOverrideGcp,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideGcp$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackOverrideGcp,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverridePlatforms$Outbound =
+  {
+    aws?:
+      | Array<SyncReconcileRequestPendingPreparedStackOverrideAw$Outbound>
+      | null
+      | undefined;
+    azure?:
+      | Array<SyncReconcileRequestPendingPreparedStackOverrideAzure$Outbound>
+      | null
+      | undefined;
+    gcp?:
+      | Array<SyncReconcileRequestPendingPreparedStackOverrideGcp$Outbound>
+      | null
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverridePlatforms$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverridePlatforms$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverridePlatforms
+  > = z.object({
+    aws: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackOverrideAw$outboundSchema
+      )),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackOverrideAzure$outboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackOverrideGcp$outboundSchema
+      )),
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverridePlatformsToJSON(
+  syncReconcileRequestPendingPreparedStackOverridePlatforms:
+    SyncReconcileRequestPendingPreparedStackOverridePlatforms,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverridePlatforms$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackOverridePlatforms),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverride$Outbound = {
+  description: string;
+  id: string;
+  platforms: SyncReconcileRequestPendingPreparedStackOverridePlatforms$Outbound;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverride$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverride$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverride
+  > = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverridePlatforms$outboundSchema
+    ),
+  });
+
+export function syncReconcileRequestPendingPreparedStackOverrideToJSON(
+  syncReconcileRequestPendingPreparedStackOverride:
+    SyncReconcileRequestPendingPreparedStackOverride,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverride$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackOverride,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackOverrideUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStackOverride$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackOverrideUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackOverrideUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackOverrideUnion
+  > = z.union([
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackOverride$outboundSchema
+    ),
+    z.string(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackOverrideUnionToJSON(
+  syncReconcileRequestPendingPreparedStackOverrideUnion:
+    SyncReconcileRequestPendingPreparedStackOverrideUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackOverrideUnion$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackOverrideUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackManagement2$Outbound = {
+  override: {
+    [k: string]: Array<
+      SyncReconcileRequestPendingPreparedStackOverride$Outbound | string
+    >;
+  };
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackManagement2$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackManagement2$Outbound,
+    SyncReconcileRequestPendingPreparedStackManagement2
+  > = z.object({
+    override: z.record(
+      z.string(),
+      z.array(z.union([
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackOverride$outboundSchema
+        ),
+        z.string(),
+      ])),
+    ),
+  });
+
+export function syncReconcileRequestPendingPreparedStackManagement2ToJSON(
+  syncReconcileRequestPendingPreparedStackManagement2:
+    SyncReconcileRequestPendingPreparedStackManagement2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackManagement2$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackManagement2,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendStateAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const PendingPreparedStackExtendStateAwResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendStateAwResource$Outbound,
+    PendingPreparedStackExtendStateAwResource
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function pendingPreparedStackExtendStateAwResourceToJSON(
+  pendingPreparedStackExtendStateAwResource:
+    PendingPreparedStackExtendStateAwResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendStateAwResource$outboundSchema.parse(
+      pendingPreparedStackExtendStateAwResource,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAwStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAwStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAwStack
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAwStackToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAwStack:
+    SyncReconcileRequestPendingPreparedStackExtendAwStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAwStack$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendAwStack,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAwBinding$Outbound = {
+  resource?: PendingPreparedStackExtendStateAwResource$Outbound | undefined;
+  stack?:
+    | SyncReconcileRequestPendingPreparedStackExtendAwStack$Outbound
+    | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAwBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAwBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAwBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackExtendStateAwResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendAwStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAwBindingToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAwBinding:
+    SyncReconcileRequestPendingPreparedStackExtendAwBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAwBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackExtendAwBinding),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackExtendEffect> = z
+    .enum(SyncReconcileRequestPendingPreparedStackExtendEffect);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAwGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAwGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAwGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAwGrantToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAwGrant:
+    SyncReconcileRequestPendingPreparedStackExtendAwGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAwGrant$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendAwGrant,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAw$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackExtendAwBinding$Outbound;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackExtendAwGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAw$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAw$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAw
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendAwBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    effect: SyncReconcileRequestPendingPreparedStackExtendEffect$outboundSchema
+      .optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendAwGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAwToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAw:
+    SyncReconcileRequestPendingPreparedStackExtendAw,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAw$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendAw,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendStateAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const PendingPreparedStackExtendStateAzureResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendStateAzureResource$Outbound,
+    PendingPreparedStackExtendStateAzureResource
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function pendingPreparedStackExtendStateAzureResourceToJSON(
+  pendingPreparedStackExtendStateAzureResource:
+    PendingPreparedStackExtendStateAzureResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendStateAzureResource$outboundSchema.parse(
+      pendingPreparedStackExtendStateAzureResource,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAzureStack$Outbound =
+  {
+    scope: string;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAzureStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAzureStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAzureStack
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAzureStackToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAzureStack:
+    SyncReconcileRequestPendingPreparedStackExtendAzureStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAzureStack$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackExtendAzureStack),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAzureBinding$Outbound =
+  {
+    resource?:
+      | PendingPreparedStackExtendStateAzureResource$Outbound
+      | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackExtendAzureStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAzureBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAzureBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAzureBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackExtendStateAzureResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendAzureStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAzureBindingToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAzureBinding:
+    SyncReconcileRequestPendingPreparedStackExtendAzureBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAzureBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackExtendAzureBinding),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAzureGrant$Outbound =
+  {
+    actions?: Array<string> | null | undefined;
+    dataActions?: Array<string> | null | undefined;
+    permissions?: Array<string> | null | undefined;
+    predefinedRoles?: Array<string> | null | undefined;
+    residualPermissions?: Array<string> | null | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAzureGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAzureGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAzureGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAzureGrantToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAzureGrant:
+    SyncReconcileRequestPendingPreparedStackExtendAzureGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAzureGrant$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackExtendAzureGrant),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendAzure$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendAzure$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendAzure$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendAzure
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendAzureBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendAzureGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendAzureToJSON(
+  syncReconcileRequestPendingPreparedStackExtendAzure:
+    SyncReconcileRequestPendingPreparedStackExtendAzure,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendAzure$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendAzure,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendConditionStateResource$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PendingPreparedStackExtendConditionStateResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendConditionStateResource$Outbound,
+    PendingPreparedStackExtendConditionStateResource
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function pendingPreparedStackExtendConditionStateResourceToJSON(
+  pendingPreparedStackExtendConditionStateResource:
+    PendingPreparedStackExtendConditionStateResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendConditionStateResource$outboundSchema.parse(
+      pendingPreparedStackExtendConditionStateResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendStateResourceConditionUnion$Outbound =
+  | PendingPreparedStackExtendConditionStateResource$Outbound
+  | any;
+
+/** @internal */
+export const PendingPreparedStackExtendStateResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendStateResourceConditionUnion$Outbound,
+    PendingPreparedStackExtendStateResourceConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PendingPreparedStackExtendConditionStateResource$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function pendingPreparedStackExtendStateResourceConditionUnionToJSON(
+  pendingPreparedStackExtendStateResourceConditionUnion:
+    PendingPreparedStackExtendStateResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendStateResourceConditionUnion$outboundSchema.parse(
+      pendingPreparedStackExtendStateResourceConditionUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendStateGcpResource$Outbound = {
+  condition?:
+    | PendingPreparedStackExtendConditionStateResource$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PendingPreparedStackExtendStateGcpResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendStateGcpResource$Outbound,
+    PendingPreparedStackExtendStateGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PendingPreparedStackExtendConditionStateResource$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function pendingPreparedStackExtendStateGcpResourceToJSON(
+  pendingPreparedStackExtendStateGcpResource:
+    PendingPreparedStackExtendStateGcpResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendStateGcpResource$outboundSchema.parse(
+      pendingPreparedStackExtendStateGcpResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendConditionStateStack$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PendingPreparedStackExtendConditionStateStack$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendConditionStateStack$Outbound,
+    PendingPreparedStackExtendConditionStateStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function pendingPreparedStackExtendConditionStateStackToJSON(
+  pendingPreparedStackExtendConditionStateStack:
+    PendingPreparedStackExtendConditionStateStack,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendConditionStateStack$outboundSchema.parse(
+      pendingPreparedStackExtendConditionStateStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackExtendStateStackConditionUnion$Outbound =
+  | PendingPreparedStackExtendConditionStateStack$Outbound
+  | any;
+
+/** @internal */
+export const PendingPreparedStackExtendStateStackConditionUnion$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackExtendStateStackConditionUnion$Outbound,
+    PendingPreparedStackExtendStateStackConditionUnion
+  > = z.union([
+    z.lazy(() => PendingPreparedStackExtendConditionStateStack$outboundSchema),
+    z.any(),
+  ]);
+
+export function pendingPreparedStackExtendStateStackConditionUnionToJSON(
+  pendingPreparedStackExtendStateStackConditionUnion:
+    PendingPreparedStackExtendStateStackConditionUnion,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackExtendStateStackConditionUnion$outboundSchema.parse(
+      pendingPreparedStackExtendStateStackConditionUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendGcpStack$Outbound = {
+  condition?:
+    | PendingPreparedStackExtendConditionStateStack$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendGcpStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendGcpStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendGcpStack
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PendingPreparedStackExtendConditionStateStack$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendGcpStackToJSON(
+  syncReconcileRequestPendingPreparedStackExtendGcpStack:
+    SyncReconcileRequestPendingPreparedStackExtendGcpStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendGcpStack$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendGcpStack,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendGcpBinding$Outbound =
+  {
+    resource?: PendingPreparedStackExtendStateGcpResource$Outbound | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackExtendGcpStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendGcpBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendGcpBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendGcpBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackExtendStateGcpResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendGcpStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendGcpBindingToJSON(
+  syncReconcileRequestPendingPreparedStackExtendGcpBinding:
+    SyncReconcileRequestPendingPreparedStackExtendGcpBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendGcpBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackExtendGcpBinding),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendGcpGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendGcpGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendGcpGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendGcpGrantToJSON(
+  syncReconcileRequestPendingPreparedStackExtendGcpGrant:
+    SyncReconcileRequestPendingPreparedStackExtendGcpGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendGcpGrant$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendGcpGrant,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendGcp$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendGcp$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendGcp$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendGcp
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendGcpBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendGcpGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendGcpToJSON(
+  syncReconcileRequestPendingPreparedStackExtendGcp:
+    SyncReconcileRequestPendingPreparedStackExtendGcp,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendGcp$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendGcp,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendPlatforms$Outbound = {
+  aws?:
+    | Array<SyncReconcileRequestPendingPreparedStackExtendAw$Outbound>
+    | null
+    | undefined;
+  azure?:
+    | Array<SyncReconcileRequestPendingPreparedStackExtendAzure$Outbound>
+    | null
+    | undefined;
+  gcp?:
+    | Array<SyncReconcileRequestPendingPreparedStackExtendGcp$Outbound>
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendPlatforms$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendPlatforms$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendPlatforms
+  > = z.object({
+    aws: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackExtendAw$outboundSchema
+      )),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackExtendAzure$outboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackExtendGcp$outboundSchema
+      )),
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendPlatformsToJSON(
+  syncReconcileRequestPendingPreparedStackExtendPlatforms:
+    SyncReconcileRequestPendingPreparedStackExtendPlatforms,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendPlatforms$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackExtendPlatforms),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtend$Outbound = {
+  description: string;
+  id: string;
+  platforms: SyncReconcileRequestPendingPreparedStackExtendPlatforms$Outbound;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtend$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtend$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtend
+  > = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackExtendPlatforms$outboundSchema
+    ),
+  });
+
+export function syncReconcileRequestPendingPreparedStackExtendToJSON(
+  syncReconcileRequestPendingPreparedStackExtend:
+    SyncReconcileRequestPendingPreparedStackExtend,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtend$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtend,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackExtendUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStackExtend$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackExtendUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackExtendUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackExtendUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestPendingPreparedStackExtend$outboundSchema),
+    z.string(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackExtendUnionToJSON(
+  syncReconcileRequestPendingPreparedStackExtendUnion:
+    SyncReconcileRequestPendingPreparedStackExtendUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackExtendUnion$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackExtendUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackManagement1$Outbound = {
+  extend: {
+    [k: string]: Array<
+      SyncReconcileRequestPendingPreparedStackExtend$Outbound | string
+    >;
+  };
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackManagement1$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackManagement1$Outbound,
+    SyncReconcileRequestPendingPreparedStackManagement1
+  > = z.object({
+    extend: z.record(
+      z.string(),
+      z.array(z.union([
+        z.lazy(() =>
+          SyncReconcileRequestPendingPreparedStackExtend$outboundSchema
+        ),
+        z.string(),
+      ])),
+    ),
+  });
+
+export function syncReconcileRequestPendingPreparedStackManagement1ToJSON(
+  syncReconcileRequestPendingPreparedStackManagement1:
+    SyncReconcileRequestPendingPreparedStackManagement1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackManagement1$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackManagement1,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackManagementUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStackManagement1$Outbound
+  | SyncReconcileRequestPendingPreparedStackManagement2$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackManagementUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackManagementUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackManagementUnion
+  > = z.union([
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackManagement1$outboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackManagement2$outboundSchema
+    ),
+    SyncReconcileRequestPendingPreparedStackManagementEnum$outboundSchema,
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackManagementUnionToJSON(
+  syncReconcileRequestPendingPreparedStackManagementUnion:
+    SyncReconcileRequestPendingPreparedStackManagementUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackManagementUnion$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackManagementUnion),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileStateAwResource$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const PendingPreparedStackProfileStateAwResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileStateAwResource$Outbound,
+    PendingPreparedStackProfileStateAwResource
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function pendingPreparedStackProfileStateAwResourceToJSON(
+  pendingPreparedStackProfileStateAwResource:
+    PendingPreparedStackProfileStateAwResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileStateAwResource$outboundSchema.parse(
+      pendingPreparedStackProfileStateAwResource,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAwStack$Outbound = {
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  resources: Array<string>;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAwStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAwStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAwStack
+  > = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAwStackToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAwStack:
+    SyncReconcileRequestPendingPreparedStackProfileAwStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAwStack$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfileAwStack,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAwBinding$Outbound =
+  {
+    resource?: PendingPreparedStackProfileStateAwResource$Outbound | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackProfileAwStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAwBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAwBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAwBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackProfileStateAwResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileAwStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAwBindingToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAwBinding:
+    SyncReconcileRequestPendingPreparedStackProfileAwBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAwBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileAwBinding),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileEffect$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackProfileEffect> = z
+    .enum(SyncReconcileRequestPendingPreparedStackProfileEffect);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAwGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAwGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAwGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAwGrantToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAwGrant:
+    SyncReconcileRequestPendingPreparedStackProfileAwGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAwGrant$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfileAwGrant,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAw$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackProfileAwBinding$Outbound;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackProfileAwGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAw$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAw$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAw
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileAwBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    effect: SyncReconcileRequestPendingPreparedStackProfileEffect$outboundSchema
+      .optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileAwGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAwToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAw:
+    SyncReconcileRequestPendingPreparedStackProfileAw,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAw$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfileAw,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileStateAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const PendingPreparedStackProfileStateAzureResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileStateAzureResource$Outbound,
+    PendingPreparedStackProfileStateAzureResource
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function pendingPreparedStackProfileStateAzureResourceToJSON(
+  pendingPreparedStackProfileStateAzureResource:
+    PendingPreparedStackProfileStateAzureResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileStateAzureResource$outboundSchema.parse(
+      pendingPreparedStackProfileStateAzureResource,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAzureStack$Outbound =
+  {
+    scope: string;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAzureStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAzureStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAzureStack
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAzureStackToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAzureStack:
+    SyncReconcileRequestPendingPreparedStackProfileAzureStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAzureStack$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileAzureStack),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAzureBinding$Outbound =
+  {
+    resource?:
+      | PendingPreparedStackProfileStateAzureResource$Outbound
+      | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackProfileAzureStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAzureBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAzureBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAzureBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackProfileStateAzureResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileAzureStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAzureBindingToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAzureBinding:
+    SyncReconcileRequestPendingPreparedStackProfileAzureBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAzureBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileAzureBinding),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAzureGrant$Outbound =
+  {
+    actions?: Array<string> | null | undefined;
+    dataActions?: Array<string> | null | undefined;
+    permissions?: Array<string> | null | undefined;
+    predefinedRoles?: Array<string> | null | undefined;
+    residualPermissions?: Array<string> | null | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAzureGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAzureGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAzureGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAzureGrantToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAzureGrant:
+    SyncReconcileRequestPendingPreparedStackProfileAzureGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAzureGrant$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileAzureGrant),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileAzure$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileAzure$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileAzure$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileAzure
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileAzureBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileAzureGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileAzureToJSON(
+  syncReconcileRequestPendingPreparedStackProfileAzure:
+    SyncReconcileRequestPendingPreparedStackProfileAzure,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileAzure$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfileAzure,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileConditionStateResource$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PendingPreparedStackProfileConditionStateResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileConditionStateResource$Outbound,
+    PendingPreparedStackProfileConditionStateResource
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function pendingPreparedStackProfileConditionStateResourceToJSON(
+  pendingPreparedStackProfileConditionStateResource:
+    PendingPreparedStackProfileConditionStateResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileConditionStateResource$outboundSchema.parse(
+      pendingPreparedStackProfileConditionStateResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileStateResourceConditionUnion$Outbound =
+  | PendingPreparedStackProfileConditionStateResource$Outbound
+  | any;
+
+/** @internal */
+export const PendingPreparedStackProfileStateResourceConditionUnion$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileStateResourceConditionUnion$Outbound,
+    PendingPreparedStackProfileStateResourceConditionUnion
+  > = z.union([
+    z.lazy(() =>
+      PendingPreparedStackProfileConditionStateResource$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function pendingPreparedStackProfileStateResourceConditionUnionToJSON(
+  pendingPreparedStackProfileStateResourceConditionUnion:
+    PendingPreparedStackProfileStateResourceConditionUnion,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileStateResourceConditionUnion$outboundSchema.parse(
+      pendingPreparedStackProfileStateResourceConditionUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileStateGcpResource$Outbound = {
+  condition?:
+    | PendingPreparedStackProfileConditionStateResource$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const PendingPreparedStackProfileStateGcpResource$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileStateGcpResource$Outbound,
+    PendingPreparedStackProfileStateGcpResource
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PendingPreparedStackProfileConditionStateResource$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function pendingPreparedStackProfileStateGcpResourceToJSON(
+  pendingPreparedStackProfileStateGcpResource:
+    PendingPreparedStackProfileStateGcpResource,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileStateGcpResource$outboundSchema.parse(
+      pendingPreparedStackProfileStateGcpResource,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileConditionStateStack$Outbound = {
+  expression: string;
+  title: string;
+};
+
+/** @internal */
+export const PendingPreparedStackProfileConditionStateStack$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileConditionStateStack$Outbound,
+    PendingPreparedStackProfileConditionStateStack
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function pendingPreparedStackProfileConditionStateStackToJSON(
+  pendingPreparedStackProfileConditionStateStack:
+    PendingPreparedStackProfileConditionStateStack,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileConditionStateStack$outboundSchema.parse(
+      pendingPreparedStackProfileConditionStateStack,
+    ),
+  );
+}
+
+/** @internal */
+export type PendingPreparedStackProfileStateStackConditionUnion$Outbound =
+  | PendingPreparedStackProfileConditionStateStack$Outbound
+  | any;
+
+/** @internal */
+export const PendingPreparedStackProfileStateStackConditionUnion$outboundSchema:
+  z.ZodType<
+    PendingPreparedStackProfileStateStackConditionUnion$Outbound,
+    PendingPreparedStackProfileStateStackConditionUnion
+  > = z.union([
+    z.lazy(() => PendingPreparedStackProfileConditionStateStack$outboundSchema),
+    z.any(),
+  ]);
+
+export function pendingPreparedStackProfileStateStackConditionUnionToJSON(
+  pendingPreparedStackProfileStateStackConditionUnion:
+    PendingPreparedStackProfileStateStackConditionUnion,
+): string {
+  return JSON.stringify(
+    PendingPreparedStackProfileStateStackConditionUnion$outboundSchema.parse(
+      pendingPreparedStackProfileStateStackConditionUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileGcpStack$Outbound = {
+  condition?:
+    | PendingPreparedStackProfileConditionStateStack$Outbound
+    | any
+    | null
+    | undefined;
+  scope: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileGcpStack$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileGcpStack$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileGcpStack
+  > = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PendingPreparedStackProfileConditionStateStack$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileGcpStackToJSON(
+  syncReconcileRequestPendingPreparedStackProfileGcpStack:
+    SyncReconcileRequestPendingPreparedStackProfileGcpStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileGcpStack$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileGcpStack),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileGcpBinding$Outbound =
+  {
+    resource?: PendingPreparedStackProfileStateGcpResource$Outbound | undefined;
+    stack?:
+      | SyncReconcileRequestPendingPreparedStackProfileGcpStack$Outbound
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileGcpBinding$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileGcpBinding$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileGcpBinding
+  > = z.object({
+    resource: z.lazy(() =>
+      PendingPreparedStackProfileStateGcpResource$outboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileGcpStack$outboundSchema
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileGcpBindingToJSON(
+  syncReconcileRequestPendingPreparedStackProfileGcpBinding:
+    SyncReconcileRequestPendingPreparedStackProfileGcpBinding,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileGcpBinding$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileGcpBinding),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileGcpGrant$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileGcpGrant$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileGcpGrant
+  > = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileGcpGrantToJSON(
+  syncReconcileRequestPendingPreparedStackProfileGcpGrant:
+    SyncReconcileRequestPendingPreparedStackProfileGcpGrant,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileGcpGrant$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfileGcpGrant),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileGcp$Outbound = {
+  binding: SyncReconcileRequestPendingPreparedStackProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
+  grant: SyncReconcileRequestPendingPreparedStackProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileGcp$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileGcp$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileGcp
+  > = z.object({
+    binding: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileGcpBinding$outboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfileGcpGrant$outboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileGcpToJSON(
+  syncReconcileRequestPendingPreparedStackProfileGcp:
+    SyncReconcileRequestPendingPreparedStackProfileGcp,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileGcp$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfileGcp,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfilePlatforms$Outbound =
+  {
+    aws?:
+      | Array<SyncReconcileRequestPendingPreparedStackProfileAw$Outbound>
+      | null
+      | undefined;
+    azure?:
+      | Array<SyncReconcileRequestPendingPreparedStackProfileAzure$Outbound>
+      | null
+      | undefined;
+    gcp?:
+      | Array<SyncReconcileRequestPendingPreparedStackProfileGcp$Outbound>
+      | null
+      | undefined;
+  };
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfilePlatforms$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfilePlatforms$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfilePlatforms
+  > = z.object({
+    aws: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackProfileAw$outboundSchema
+      )),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackProfileAzure$outboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackProfileGcp$outboundSchema
+      )),
+    ).optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfilePlatformsToJSON(
+  syncReconcileRequestPendingPreparedStackProfilePlatforms:
+    SyncReconcileRequestPendingPreparedStackProfilePlatforms,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfilePlatforms$outboundSchema
+      .parse(syncReconcileRequestPendingPreparedStackProfilePlatforms),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfile$Outbound = {
+  description: string;
+  id: string;
+  platforms: SyncReconcileRequestPendingPreparedStackProfilePlatforms$Outbound;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfile$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfile$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfile
+  > = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfilePlatforms$outboundSchema
+    ),
+  });
+
+export function syncReconcileRequestPendingPreparedStackProfileToJSON(
+  syncReconcileRequestPendingPreparedStackProfile:
+    SyncReconcileRequestPendingPreparedStackProfile,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfile$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfile,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackProfileUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStackProfile$Outbound
+  | string;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackProfileUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackProfileUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackProfileUnion
+  > = z.union([
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackProfile$outboundSchema
+    ),
+    z.string(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackProfileUnionToJSON(
+  syncReconcileRequestPendingPreparedStackProfileUnion:
+    SyncReconcileRequestPendingPreparedStackProfileUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackProfileUnion$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackProfileUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackPermissions$Outbound = {
+  management?:
+    | SyncReconcileRequestPendingPreparedStackManagement1$Outbound
+    | SyncReconcileRequestPendingPreparedStackManagement2$Outbound
+    | string
+    | undefined;
+  profiles: {
+    [k: string]: {
+      [k: string]: Array<
+        SyncReconcileRequestPendingPreparedStackProfile$Outbound | string
+      >;
+    };
+  };
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackPermissions$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackPermissions$Outbound,
+    SyncReconcileRequestPendingPreparedStackPermissions
+  > = z.object({
+    management: z.union([
+      z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackManagement1$outboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackManagement2$outboundSchema
+      ),
+      SyncReconcileRequestPendingPreparedStackManagementEnum$outboundSchema,
+    ]).optional(),
+    profiles: z.record(
+      z.string(),
+      z.record(
+        z.string(),
+        z.array(
+          z.union([
+            z.lazy(() =>
+              SyncReconcileRequestPendingPreparedStackProfile$outboundSchema
+            ),
+            z.string(),
+          ]),
+        ),
+      ),
+    ),
+  });
+
+export function syncReconcileRequestPendingPreparedStackPermissionsToJSON(
+  syncReconcileRequestPendingPreparedStackPermissions:
+    SyncReconcileRequestPendingPreparedStackPermissions,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackPermissions$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackPermissions,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackConfig$Outbound = {
+  id: string;
+  type: string;
+  [additionalProperties: string]: unknown;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackConfig$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackConfig$Outbound,
+    SyncReconcileRequestPendingPreparedStackConfig
+  > = z.object({
+    id: z.string(),
+    type: z.string(),
+    additionalProperties: z.record(z.string(), z.nullable(z.any())).optional(),
+  }).transform((v) => {
+    return {
+      ...v.additionalProperties,
+      ...remap$(v, {
+        additionalProperties: null,
+      }),
+    };
+  });
+
+export function syncReconcileRequestPendingPreparedStackConfigToJSON(
+  syncReconcileRequestPendingPreparedStackConfig:
+    SyncReconcileRequestPendingPreparedStackConfig,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackConfig$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackConfig,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackDependency$Outbound = {
+  id: string;
+  type: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackDependency$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackDependency$Outbound,
+    SyncReconcileRequestPendingPreparedStackDependency
+  > = z.object({
+    id: z.string(),
+    type: z.string(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackDependencyToJSON(
+  syncReconcileRequestPendingPreparedStackDependency:
+    SyncReconcileRequestPendingPreparedStackDependency,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackDependency$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackDependency,
+    ),
+  );
+}
+
+/** @internal */
+export const PendingPreparedStackStateLifecycle$outboundSchema: z.ZodEnum<
+  typeof PendingPreparedStackStateLifecycle
+> = z.enum(PendingPreparedStackStateLifecycle);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackResources$Outbound = {
+  config: SyncReconcileRequestPendingPreparedStackConfig$Outbound;
+  dependencies: Array<
+    SyncReconcileRequestPendingPreparedStackDependency$Outbound
+  >;
+  enabledWhen?: string | null | undefined;
+  lifecycle: string;
+  remoteAccess?: boolean | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackResources$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackResources$Outbound,
+    SyncReconcileRequestPendingPreparedStackResources
+  > = z.object({
+    config: z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackConfig$outboundSchema
+    ),
+    dependencies: z.array(
+      z.lazy(() =>
+        SyncReconcileRequestPendingPreparedStackDependency$outboundSchema
+      ),
+    ),
+    enabledWhen: z.nullable(z.string()).optional(),
+    lifecycle: PendingPreparedStackStateLifecycle$outboundSchema,
+    remoteAccess: z.boolean().optional(),
+  });
+
+export function syncReconcileRequestPendingPreparedStackResourcesToJSON(
+  syncReconcileRequestPendingPreparedStackResources:
+    SyncReconcileRequestPendingPreparedStackResources,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackResources$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackResources,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackSupportedPlatform$outboundSchema:
+  z.ZodEnum<typeof SyncReconcileRequestPendingPreparedStackSupportedPlatform> =
+    z.enum(SyncReconcileRequestPendingPreparedStackSupportedPlatform);
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStack$Outbound = {
+  id: string;
+  inputs?:
+    | Array<SyncReconcileRequestPendingPreparedStackInput$Outbound>
+    | undefined;
+  permissions?:
+    | SyncReconcileRequestPendingPreparedStackPermissions$Outbound
+    | undefined;
+  resources: {
+    [k: string]: SyncReconcileRequestPendingPreparedStackResources$Outbound;
+  };
+  supportedPlatforms?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStack$outboundSchema: z.ZodType<
+  SyncReconcileRequestPendingPreparedStack$Outbound,
+  SyncReconcileRequestPendingPreparedStack
+> = z.object({
+  id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncReconcileRequestPendingPreparedStackInput$outboundSchema),
+  ).optional(),
+  permissions: z.lazy(() =>
+    SyncReconcileRequestPendingPreparedStackPermissions$outboundSchema
+  ).optional(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() =>
+      SyncReconcileRequestPendingPreparedStackResources$outboundSchema
+    ),
+  ),
+  supportedPlatforms: z.nullable(
+    z.array(
+      SyncReconcileRequestPendingPreparedStackSupportedPlatform$outboundSchema,
+    ),
+  ).optional(),
+});
+
+export function syncReconcileRequestPendingPreparedStackToJSON(
+  syncReconcileRequestPendingPreparedStack:
+    SyncReconcileRequestPendingPreparedStack,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStack$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStack,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestPendingPreparedStackUnion$Outbound =
+  | SyncReconcileRequestPendingPreparedStack$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestPendingPreparedStackUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestPendingPreparedStackUnion$Outbound,
+    SyncReconcileRequestPendingPreparedStackUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestPendingPreparedStack$outboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestPendingPreparedStackUnionToJSON(
+  syncReconcileRequestPendingPreparedStackUnion:
+    SyncReconcileRequestPendingPreparedStackUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestPendingPreparedStackUnion$outboundSchema.parse(
+      syncReconcileRequestPendingPreparedStackUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const SyncReconcileRequestPreparedStackTypeStringList$outboundSchema:
@@ -18290,6 +23637,7 @@ export const PreparedStackStateLifecycle$outboundSchema: z.ZodEnum<
 export type SyncReconcileRequestPreparedStackResources$Outbound = {
   config: SyncReconcileRequestPreparedStackConfig$Outbound;
   dependencies: Array<SyncReconcileRequestPreparedStackDependency$Outbound>;
+  enabledWhen?: string | null | undefined;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
 };
@@ -18306,6 +23654,7 @@ export const SyncReconcileRequestPreparedStackResources$outboundSchema:
     dependencies: z.array(
       z.lazy(() => SyncReconcileRequestPreparedStackDependency$outboundSchema),
     ),
+    enabledWhen: z.nullable(z.string()).optional(),
     lifecycle: PreparedStackStateLifecycle$outboundSchema,
     remoteAccess: z.boolean().optional(),
   });
@@ -18397,15 +23746,90 @@ export function syncReconcileRequestPreparedStackUnionToJSON(
 }
 
 /** @internal */
+export type SyncReconcileRequestSetupUpdateAuthorization$Outbound = {
+  baselineFrozenDigest: string;
+  nonce: string;
+  releaseId: string;
+  setupFingerprint: string;
+  setupFingerprintVersion: number;
+  setupTarget: string;
+  targetFrozenDigest: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestSetupUpdateAuthorization$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestSetupUpdateAuthorization$Outbound,
+    SyncReconcileRequestSetupUpdateAuthorization
+  > = z.object({
+    baselineFrozenDigest: z.string(),
+    nonce: z.string(),
+    releaseId: z.string(),
+    setupFingerprint: z.string(),
+    setupFingerprintVersion: z.int(),
+    setupTarget: z.string(),
+    targetFrozenDigest: z.string(),
+  });
+
+export function syncReconcileRequestSetupUpdateAuthorizationToJSON(
+  syncReconcileRequestSetupUpdateAuthorization:
+    SyncReconcileRequestSetupUpdateAuthorization,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSetupUpdateAuthorization$outboundSchema.parse(
+      syncReconcileRequestSetupUpdateAuthorization,
+    ),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestSetupUpdateAuthorizationUnion$Outbound =
+  | SyncReconcileRequestSetupUpdateAuthorization$Outbound
+  | any;
+
+/** @internal */
+export const SyncReconcileRequestSetupUpdateAuthorizationUnion$outboundSchema:
+  z.ZodType<
+    SyncReconcileRequestSetupUpdateAuthorizationUnion$Outbound,
+    SyncReconcileRequestSetupUpdateAuthorizationUnion
+  > = z.union([
+    z.lazy(() => SyncReconcileRequestSetupUpdateAuthorization$outboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileRequestSetupUpdateAuthorizationUnionToJSON(
+  syncReconcileRequestSetupUpdateAuthorizationUnion:
+    SyncReconcileRequestSetupUpdateAuthorizationUnion,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestSetupUpdateAuthorizationUnion$outboundSchema.parse(
+      syncReconcileRequestSetupUpdateAuthorizationUnion,
+    ),
+  );
+}
+
+/** @internal */
 export type SyncReconcileRequestRuntimeMetadata$Outbound = {
+  initialSetupAuthority?: string | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
   lastSyncedSecretNames?: Array<string> | undefined;
+  pendingPreparedStack?:
+    | SyncReconcileRequestPendingPreparedStack$Outbound
+    | any
+    | null
+    | undefined;
+  persistedGateAnswers?: { [k: string]: boolean } | undefined;
   preparedStack?:
     | SyncReconcileRequestPreparedStack$Outbound
     | any
     | null
     | undefined;
   registryAccessGranted?: boolean | undefined;
+  setupUpdateAuthorization?:
+    | SyncReconcileRequestSetupUpdateAuthorization$Outbound
+    | any
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -18413,8 +23837,17 @@ export const SyncReconcileRequestRuntimeMetadata$outboundSchema: z.ZodType<
   SyncReconcileRequestRuntimeMetadata$Outbound,
   SyncReconcileRequestRuntimeMetadata
 > = z.object({
+  initialSetupAuthority:
+    SyncReconcileRequestInitialSetupAuthority$outboundSchema.optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   lastSyncedSecretNames: z.array(z.string()).optional(),
+  pendingPreparedStack: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestPendingPreparedStack$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  persistedGateAnswers: z.record(z.string(), z.boolean()).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestPreparedStack$outboundSchema),
@@ -18422,6 +23855,12 @@ export const SyncReconcileRequestRuntimeMetadata$outboundSchema: z.ZodType<
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  setupUpdateAuthorization: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestSetupUpdateAuthorization$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
 });
 
 export function syncReconcileRequestRuntimeMetadataToJSON(
@@ -21583,6 +27022,7 @@ export const TargetReleaseStateLifecycle$outboundSchema: z.ZodEnum<
 export type SyncReconcileRequestTargetReleaseResources$Outbound = {
   config: SyncReconcileRequestTargetReleaseConfig$Outbound;
   dependencies: Array<SyncReconcileRequestTargetReleaseDependency$Outbound>;
+  enabledWhen?: string | null | undefined;
   lifecycle: string;
   remoteAccess?: boolean | undefined;
 };
@@ -21599,6 +27039,7 @@ export const SyncReconcileRequestTargetReleaseResources$outboundSchema:
     dependencies: z.array(
       z.lazy(() => SyncReconcileRequestTargetReleaseDependency$outboundSchema),
     ),
+    enabledWhen: z.nullable(z.string()).optional(),
     lifecycle: TargetReleaseStateLifecycle$outboundSchema,
     remoteAccess: z.boolean().optional(),
   });
@@ -21818,6 +27259,1151 @@ export const ResourceHeartbeatBackendEnum$outboundSchema: z.ZodEnum<
 export const ResourceHeartbeatControllerPlatform$outboundSchema: z.ZodEnum<
   typeof ResourceHeartbeatControllerPlatform
 > = z.enum(ResourceHeartbeatControllerPlatform);
+
+/** @internal */
+export const DataHealth72$outboundSchema: z.ZodEnum<typeof DataHealth72> = z
+  .enum(DataHealth72);
+
+/** @internal */
+export const StatusLifecycle72$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle72
+> = z.enum(StatusLifecycle72);
+
+/** @internal */
+export type ResourceHeartbeatStatus72$Outbound = {
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus72$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus72$Outbound,
+  ResourceHeartbeatStatus72
+> = z.object({
+  health: DataHealth72$outboundSchema,
+  lifecycle: StatusLifecycle72$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+});
+
+export function resourceHeartbeatStatus72ToJSON(
+  resourceHeartbeatStatus72: ResourceHeartbeatStatus72,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus72$outboundSchema.parse(resourceHeartbeatStatus72),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestData8$Outbound = {
+  enabled?: boolean | null | undefined;
+  keyId: string;
+  keyOperations: Array<string>;
+  keyType: string;
+  recoveryLevel?: string | null | undefined;
+  status: ResourceHeartbeatStatus72$Outbound;
+};
+
+/** @internal */
+export const SyncReconcileRequestData8$outboundSchema: z.ZodType<
+  SyncReconcileRequestData8$Outbound,
+  SyncReconcileRequestData8
+> = z.object({
+  enabled: z.nullable(z.boolean()).optional(),
+  keyId: z.string(),
+  keyOperations: z.array(z.string()),
+  keyType: z.string(),
+  recoveryLevel: z.nullable(z.string()).optional(),
+  status: z.lazy(() => ResourceHeartbeatStatus72$outboundSchema),
+});
+
+export function syncReconcileRequestData8ToJSON(
+  syncReconcileRequestData8: SyncReconcileRequestData8,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestData8$outboundSchema.parse(syncReconcileRequestData8),
+  );
+}
+
+/** @internal */
+export type DataAzureKeyVault2$Outbound = {
+  data: SyncReconcileRequestData8$Outbound;
+  provider: "azure-key-vault";
+};
+
+/** @internal */
+export const DataAzureKeyVault2$outboundSchema: z.ZodType<
+  DataAzureKeyVault2$Outbound,
+  DataAzureKeyVault2
+> = z.object({
+  data: z.lazy(() => SyncReconcileRequestData8$outboundSchema),
+  provider: z.literal("azure-key-vault"),
+});
+
+export function dataAzureKeyVault2ToJSON(
+  dataAzureKeyVault2: DataAzureKeyVault2,
+): string {
+  return JSON.stringify(
+    DataAzureKeyVault2$outboundSchema.parse(dataAzureKeyVault2),
+  );
+}
+
+/** @internal */
+export const DataHealth71$outboundSchema: z.ZodEnum<typeof DataHealth71> = z
+  .enum(DataHealth71);
+
+/** @internal */
+export const StatusLifecycle71$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle71
+> = z.enum(StatusLifecycle71);
+
+/** @internal */
+export type ResourceHeartbeatStatus71$Outbound = {
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus71$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus71$Outbound,
+  ResourceHeartbeatStatus71
+> = z.object({
+  health: DataHealth71$outboundSchema,
+  lifecycle: StatusLifecycle71$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+});
+
+export function resourceHeartbeatStatus71ToJSON(
+  resourceHeartbeatStatus71: ResourceHeartbeatStatus71,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus71$outboundSchema.parse(resourceHeartbeatStatus71),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestData7$Outbound = {
+  algorithm?: string | null | undefined;
+  cryptoKeyName: string;
+  primaryState?: string | null | undefined;
+  primaryVersion?: string | null | undefined;
+  purpose: string;
+  status: ResourceHeartbeatStatus71$Outbound;
+};
+
+/** @internal */
+export const SyncReconcileRequestData7$outboundSchema: z.ZodType<
+  SyncReconcileRequestData7$Outbound,
+  SyncReconcileRequestData7
+> = z.object({
+  algorithm: z.nullable(z.string()).optional(),
+  cryptoKeyName: z.string(),
+  primaryState: z.nullable(z.string()).optional(),
+  primaryVersion: z.nullable(z.string()).optional(),
+  purpose: z.string(),
+  status: z.lazy(() => ResourceHeartbeatStatus71$outboundSchema),
+});
+
+export function syncReconcileRequestData7ToJSON(
+  syncReconcileRequestData7: SyncReconcileRequestData7,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestData7$outboundSchema.parse(syncReconcileRequestData7),
+  );
+}
+
+/** @internal */
+export type DataGcpCloudKms$Outbound = {
+  data: SyncReconcileRequestData7$Outbound;
+  provider: "gcp-cloud-kms";
+};
+
+/** @internal */
+export const DataGcpCloudKms$outboundSchema: z.ZodType<
+  DataGcpCloudKms$Outbound,
+  DataGcpCloudKms
+> = z.object({
+  data: z.lazy(() => SyncReconcileRequestData7$outboundSchema),
+  provider: z.literal("gcp-cloud-kms"),
+});
+
+export function dataGcpCloudKmsToJSON(
+  dataGcpCloudKms: DataGcpCloudKms,
+): string {
+  return JSON.stringify(DataGcpCloudKms$outboundSchema.parse(dataGcpCloudKms));
+}
+
+/** @internal */
+export const DataHealth70$outboundSchema: z.ZodEnum<typeof DataHealth70> = z
+  .enum(DataHealth70);
+
+/** @internal */
+export const StatusLifecycle70$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle70
+> = z.enum(StatusLifecycle70);
+
+/** @internal */
+export type ResourceHeartbeatStatus70$Outbound = {
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus70$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus70$Outbound,
+  ResourceHeartbeatStatus70
+> = z.object({
+  health: DataHealth70$outboundSchema,
+  lifecycle: StatusLifecycle70$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+});
+
+export function resourceHeartbeatStatus70ToJSON(
+  resourceHeartbeatStatus70: ResourceHeartbeatStatus70,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus70$outboundSchema.parse(resourceHeartbeatStatus70),
+  );
+}
+
+/** @internal */
+export type SyncReconcileRequestData6$Outbound = {
+  enabled: boolean;
+  keyArn: string;
+  keySpec: string;
+  keyState: string;
+  keyUsage: string;
+  status: ResourceHeartbeatStatus70$Outbound;
+};
+
+/** @internal */
+export const SyncReconcileRequestData6$outboundSchema: z.ZodType<
+  SyncReconcileRequestData6$Outbound,
+  SyncReconcileRequestData6
+> = z.object({
+  enabled: z.boolean(),
+  keyArn: z.string(),
+  keySpec: z.string(),
+  keyState: z.string(),
+  keyUsage: z.string(),
+  status: z.lazy(() => ResourceHeartbeatStatus70$outboundSchema),
+});
+
+export function syncReconcileRequestData6ToJSON(
+  syncReconcileRequestData6: SyncReconcileRequestData6,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestData6$outboundSchema.parse(syncReconcileRequestData6),
+  );
+}
+
+/** @internal */
+export type DataAwsKms$Outbound = {
+  data: SyncReconcileRequestData6$Outbound;
+  provider: "aws-kms";
+};
+
+/** @internal */
+export const DataAwsKms$outboundSchema: z.ZodType<
+  DataAwsKms$Outbound,
+  DataAwsKms
+> = z.object({
+  data: z.lazy(() => SyncReconcileRequestData6$outboundSchema),
+  provider: z.literal("aws-kms"),
+});
+
+export function dataAwsKmsToJSON(dataAwsKms: DataAwsKms): string {
+  return JSON.stringify(DataAwsKms$outboundSchema.parse(dataAwsKms));
+}
+
+/** @internal */
+export type SyncReconcileRequestDataUnion17$Outbound =
+  | DataAwsKms$Outbound
+  | DataGcpCloudKms$Outbound
+  | DataAzureKeyVault2$Outbound;
+
+/** @internal */
+export const SyncReconcileRequestDataUnion17$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion17$Outbound,
+  SyncReconcileRequestDataUnion17
+> = z.union([
+  z.lazy(() => DataAwsKms$outboundSchema),
+  z.lazy(() => DataGcpCloudKms$outboundSchema),
+  z.lazy(() => DataAzureKeyVault2$outboundSchema),
+]);
+
+export function syncReconcileRequestDataUnion17ToJSON(
+  syncReconcileRequestDataUnion17: SyncReconcileRequestDataUnion17,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestDataUnion17$outboundSchema.parse(
+      syncReconcileRequestDataUnion17,
+    ),
+  );
+}
+
+/** @internal */
+export type DataKey$Outbound = {
+  data:
+    | DataAwsKms$Outbound
+    | DataGcpCloudKms$Outbound
+    | DataAzureKeyVault2$Outbound;
+  resourceType: "key";
+};
+
+/** @internal */
+export const DataKey$outboundSchema: z.ZodType<DataKey$Outbound, DataKey> = z
+  .object({
+    data: z.union([
+      z.lazy(() => DataAwsKms$outboundSchema),
+      z.lazy(() => DataGcpCloudKms$outboundSchema),
+      z.lazy(() => DataAzureKeyVault2$outboundSchema),
+    ]),
+    resourceType: z.literal("key"),
+  });
+
+export function dataKeyToJSON(dataKey: DataKey): string {
+  return JSON.stringify(DataKey$outboundSchema.parse(dataKey));
+}
+
+/** @internal */
+export const SyncReconcileRequestAccessTest4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest4
+> = z.enum(SyncReconcileRequestAccessTest4);
+
+/** @internal */
+export const SyncReconcileRequestModelAvailability4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestModelAvailability4
+> = z.enum(SyncReconcileRequestModelAvailability4);
+
+/** @internal */
+export const SyncReconcileRequestBlockerEnum4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum4
+> = z.enum(SyncReconcileRequestBlockerEnum4);
+
+/** @internal */
+export const SyncReconcileRequestClientApi4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi4
+> = z.enum(SyncReconcileRequestClientApi4);
+
+/** @internal */
+export type SyncReconcileRequestModel4$Outbound = {
+  accessTest: string;
+  availability: string;
+  blockers: Array<string>;
+  clientApis: Array<string>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestModel4$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel4$Outbound,
+  SyncReconcileRequestModel4
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest4$outboundSchema,
+  availability: SyncReconcileRequestModelAvailability4$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum4$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi4$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
+
+export function syncReconcileRequestModel4ToJSON(
+  syncReconcileRequestModel4: SyncReconcileRequestModel4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel4$outboundSchema.parse(syncReconcileRequestModel4),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestAvailabilitySource4$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource4
+> = z.enum(SyncReconcileRequestAvailabilitySource4);
+
+/** @internal */
+export type SyncReconcileRequestAvailability4$Outbound = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel4$Outbound>;
+  source: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestAvailability4$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability4$Outbound,
+  SyncReconcileRequestAvailability4
+> = z.object({
+  catalogRevision: z.string(),
+  location: z.nullable(z.string()).optional(),
+  models: z.array(z.lazy(() => SyncReconcileRequestModel4$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource4$outboundSchema,
+});
+
+export function syncReconcileRequestAvailability4ToJSON(
+  syncReconcileRequestAvailability4: SyncReconcileRequestAvailability4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability4$outboundSchema.parse(
+      syncReconcileRequestAvailability4,
+    ),
+  );
+}
+
+/** @internal */
+export type Availability$Outbound =
+  | SyncReconcileRequestAvailability4$Outbound
+  | any;
+
+/** @internal */
+export const Availability$outboundSchema: z.ZodType<
+  Availability$Outbound,
+  Availability
+> = z.union([
+  z.lazy(() => SyncReconcileRequestAvailability4$outboundSchema),
+  z.any(),
+]);
+
+export function availabilityToJSON(availability: Availability): string {
+  return JSON.stringify(Availability$outboundSchema.parse(availability));
+}
+
+/** @internal */
+export const DataReason69$outboundSchema: z.ZodEnum<typeof DataReason69> = z
+  .enum(DataReason69);
+
+/** @internal */
+export const StatusSeverity69$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity69
+> = z.enum(StatusSeverity69);
+
+/** @internal */
+export type DataCollectionIssue69$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue69$outboundSchema: z.ZodType<
+  DataCollectionIssue69$Outbound,
+  DataCollectionIssue69
+> = z.object({
+  message: z.string(),
+  reason: DataReason69$outboundSchema,
+  severity: StatusSeverity69$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue69ToJSON(
+  dataCollectionIssue69: DataCollectionIssue69,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue69$outboundSchema.parse(dataCollectionIssue69),
+  );
+}
+
+/** @internal */
+export const DataHealth69$outboundSchema: z.ZodEnum<typeof DataHealth69> = z
+  .enum(DataHealth69);
+
+/** @internal */
+export const StatusLifecycle69$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle69
+> = z.enum(StatusLifecycle69);
+
+/** @internal */
+export type ResourceHeartbeatStatus69$Outbound = {
+  collectionIssues: Array<DataCollectionIssue69$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus69$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus69$Outbound,
+  ResourceHeartbeatStatus69
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue69$outboundSchema)),
+  health: DataHealth69$outboundSchema,
+  lifecycle: StatusLifecycle69$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus69ToJSON(
+  resourceHeartbeatStatus69: ResourceHeartbeatStatus69,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus69$outboundSchema.parse(resourceHeartbeatStatus69),
+  );
+}
+
+/** @internal */
+export type DataExternal$Outbound = {
+  availability?:
+    | SyncReconcileRequestAvailability4$Outbound
+    | any
+    | null
+    | undefined;
+  provider: string;
+  status: ResourceHeartbeatStatus69$Outbound;
+  backend: "external";
+};
+
+/** @internal */
+export const DataExternal$outboundSchema: z.ZodType<
+  DataExternal$Outbound,
+  DataExternal
+> = z.object({
+  availability: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestAvailability4$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  provider: z.string(),
+  status: z.lazy(() => ResourceHeartbeatStatus69$outboundSchema),
+  backend: z.literal("external"),
+});
+
+export function dataExternalToJSON(dataExternal: DataExternal): string {
+  return JSON.stringify(DataExternal$outboundSchema.parse(dataExternal));
+}
+
+/** @internal */
+export const SyncReconcileRequestAccessTest3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest3
+> = z.enum(SyncReconcileRequestAccessTest3);
+
+/** @internal */
+export const SyncReconcileRequestModelAvailability3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestModelAvailability3
+> = z.enum(SyncReconcileRequestModelAvailability3);
+
+/** @internal */
+export const SyncReconcileRequestBlockerEnum3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum3
+> = z.enum(SyncReconcileRequestBlockerEnum3);
+
+/** @internal */
+export const SyncReconcileRequestClientApi3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi3
+> = z.enum(SyncReconcileRequestClientApi3);
+
+/** @internal */
+export type SyncReconcileRequestModel3$Outbound = {
+  accessTest: string;
+  availability: string;
+  blockers: Array<string>;
+  clientApis: Array<string>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestModel3$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel3$Outbound,
+  SyncReconcileRequestModel3
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest3$outboundSchema,
+  availability: SyncReconcileRequestModelAvailability3$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum3$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi3$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
+
+export function syncReconcileRequestModel3ToJSON(
+  syncReconcileRequestModel3: SyncReconcileRequestModel3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel3$outboundSchema.parse(syncReconcileRequestModel3),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestAvailabilitySource3$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource3
+> = z.enum(SyncReconcileRequestAvailabilitySource3);
+
+/** @internal */
+export type SyncReconcileRequestAvailability3$Outbound = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel3$Outbound>;
+  source: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestAvailability3$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability3$Outbound,
+  SyncReconcileRequestAvailability3
+> = z.object({
+  catalogRevision: z.string(),
+  location: z.nullable(z.string()).optional(),
+  models: z.array(z.lazy(() => SyncReconcileRequestModel3$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource3$outboundSchema,
+});
+
+export function syncReconcileRequestAvailability3ToJSON(
+  syncReconcileRequestAvailability3: SyncReconcileRequestAvailability3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability3$outboundSchema.parse(
+      syncReconcileRequestAvailability3,
+    ),
+  );
+}
+
+/** @internal */
+export const DataReason68$outboundSchema: z.ZodEnum<typeof DataReason68> = z
+  .enum(DataReason68);
+
+/** @internal */
+export const StatusSeverity68$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity68
+> = z.enum(StatusSeverity68);
+
+/** @internal */
+export type DataCollectionIssue68$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue68$outboundSchema: z.ZodType<
+  DataCollectionIssue68$Outbound,
+  DataCollectionIssue68
+> = z.object({
+  message: z.string(),
+  reason: DataReason68$outboundSchema,
+  severity: StatusSeverity68$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue68ToJSON(
+  dataCollectionIssue68: DataCollectionIssue68,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue68$outboundSchema.parse(dataCollectionIssue68),
+  );
+}
+
+/** @internal */
+export const DataHealth68$outboundSchema: z.ZodEnum<typeof DataHealth68> = z
+  .enum(DataHealth68);
+
+/** @internal */
+export const StatusLifecycle68$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle68
+> = z.enum(StatusLifecycle68);
+
+/** @internal */
+export type ResourceHeartbeatStatus68$Outbound = {
+  collectionIssues: Array<DataCollectionIssue68$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus68$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus68$Outbound,
+  ResourceHeartbeatStatus68
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue68$outboundSchema)),
+  health: DataHealth68$outboundSchema,
+  lifecycle: StatusLifecycle68$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus68ToJSON(
+  resourceHeartbeatStatus68: ResourceHeartbeatStatus68,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus68$outboundSchema.parse(resourceHeartbeatStatus68),
+  );
+}
+
+/** @internal */
+export type DataAzureFoundry$Outbound = {
+  accountName: string;
+  availability: SyncReconcileRequestAvailability3$Outbound;
+  endpoint?: string | null | undefined;
+  location?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  status: ResourceHeartbeatStatus68$Outbound;
+  backend: "azureFoundry";
+};
+
+/** @internal */
+export const DataAzureFoundry$outboundSchema: z.ZodType<
+  DataAzureFoundry$Outbound,
+  DataAzureFoundry
+> = z.object({
+  accountName: z.string(),
+  availability: z.lazy(() => SyncReconcileRequestAvailability3$outboundSchema),
+  endpoint: z.nullable(z.string()).optional(),
+  location: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  status: z.lazy(() => ResourceHeartbeatStatus68$outboundSchema),
+  backend: z.literal("azureFoundry"),
+});
+
+export function dataAzureFoundryToJSON(
+  dataAzureFoundry: DataAzureFoundry,
+): string {
+  return JSON.stringify(
+    DataAzureFoundry$outboundSchema.parse(dataAzureFoundry),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestAccessTest2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest2
+> = z.enum(SyncReconcileRequestAccessTest2);
+
+/** @internal */
+export const SyncReconcileRequestModelAvailability2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestModelAvailability2
+> = z.enum(SyncReconcileRequestModelAvailability2);
+
+/** @internal */
+export const SyncReconcileRequestBlockerEnum2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum2
+> = z.enum(SyncReconcileRequestBlockerEnum2);
+
+/** @internal */
+export const SyncReconcileRequestClientApi2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi2
+> = z.enum(SyncReconcileRequestClientApi2);
+
+/** @internal */
+export type SyncReconcileRequestModel2$Outbound = {
+  accessTest: string;
+  availability: string;
+  blockers: Array<string>;
+  clientApis: Array<string>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestModel2$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel2$Outbound,
+  SyncReconcileRequestModel2
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest2$outboundSchema,
+  availability: SyncReconcileRequestModelAvailability2$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum2$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi2$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
+
+export function syncReconcileRequestModel2ToJSON(
+  syncReconcileRequestModel2: SyncReconcileRequestModel2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel2$outboundSchema.parse(syncReconcileRequestModel2),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestAvailabilitySource2$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource2
+> = z.enum(SyncReconcileRequestAvailabilitySource2);
+
+/** @internal */
+export type SyncReconcileRequestAvailability2$Outbound = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel2$Outbound>;
+  source: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestAvailability2$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability2$Outbound,
+  SyncReconcileRequestAvailability2
+> = z.object({
+  catalogRevision: z.string(),
+  location: z.nullable(z.string()).optional(),
+  models: z.array(z.lazy(() => SyncReconcileRequestModel2$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource2$outboundSchema,
+});
+
+export function syncReconcileRequestAvailability2ToJSON(
+  syncReconcileRequestAvailability2: SyncReconcileRequestAvailability2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability2$outboundSchema.parse(
+      syncReconcileRequestAvailability2,
+    ),
+  );
+}
+
+/** @internal */
+export const DataReason67$outboundSchema: z.ZodEnum<typeof DataReason67> = z
+  .enum(DataReason67);
+
+/** @internal */
+export const StatusSeverity67$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity67
+> = z.enum(StatusSeverity67);
+
+/** @internal */
+export type DataCollectionIssue67$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue67$outboundSchema: z.ZodType<
+  DataCollectionIssue67$Outbound,
+  DataCollectionIssue67
+> = z.object({
+  message: z.string(),
+  reason: DataReason67$outboundSchema,
+  severity: StatusSeverity67$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue67ToJSON(
+  dataCollectionIssue67: DataCollectionIssue67,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue67$outboundSchema.parse(dataCollectionIssue67),
+  );
+}
+
+/** @internal */
+export const DataHealth67$outboundSchema: z.ZodEnum<typeof DataHealth67> = z
+  .enum(DataHealth67);
+
+/** @internal */
+export const StatusLifecycle67$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle67
+> = z.enum(StatusLifecycle67);
+
+/** @internal */
+export type ResourceHeartbeatStatus67$Outbound = {
+  collectionIssues: Array<DataCollectionIssue67$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus67$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus67$Outbound,
+  ResourceHeartbeatStatus67
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue67$outboundSchema)),
+  health: DataHealth67$outboundSchema,
+  lifecycle: StatusLifecycle67$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus67ToJSON(
+  resourceHeartbeatStatus67: ResourceHeartbeatStatus67,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus67$outboundSchema.parse(resourceHeartbeatStatus67),
+  );
+}
+
+/** @internal */
+export type DataGcpVertex$Outbound = {
+  availability: SyncReconcileRequestAvailability2$Outbound;
+  location: string;
+  project: string;
+  status: ResourceHeartbeatStatus67$Outbound;
+  backend: "gcpVertex";
+};
+
+/** @internal */
+export const DataGcpVertex$outboundSchema: z.ZodType<
+  DataGcpVertex$Outbound,
+  DataGcpVertex
+> = z.object({
+  availability: z.lazy(() => SyncReconcileRequestAvailability2$outboundSchema),
+  location: z.string(),
+  project: z.string(),
+  status: z.lazy(() => ResourceHeartbeatStatus67$outboundSchema),
+  backend: z.literal("gcpVertex"),
+});
+
+export function dataGcpVertexToJSON(dataGcpVertex: DataGcpVertex): string {
+  return JSON.stringify(DataGcpVertex$outboundSchema.parse(dataGcpVertex));
+}
+
+/** @internal */
+export const SyncReconcileRequestAccessTest1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAccessTest1
+> = z.enum(SyncReconcileRequestAccessTest1);
+
+/** @internal */
+export const SyncReconcileRequestModelAvailability1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestModelAvailability1
+> = z.enum(SyncReconcileRequestModelAvailability1);
+
+/** @internal */
+export const SyncReconcileRequestBlockerEnum1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestBlockerEnum1
+> = z.enum(SyncReconcileRequestBlockerEnum1);
+
+/** @internal */
+export const SyncReconcileRequestClientApi1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestClientApi1
+> = z.enum(SyncReconcileRequestClientApi1);
+
+/** @internal */
+export type SyncReconcileRequestModel1$Outbound = {
+  accessTest: string;
+  availability: string;
+  blockers: Array<string>;
+  clientApis: Array<string>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: string | null | undefined;
+};
+
+/** @internal */
+export const SyncReconcileRequestModel1$outboundSchema: z.ZodType<
+  SyncReconcileRequestModel1$Outbound,
+  SyncReconcileRequestModel1
+> = z.object({
+  accessTest: SyncReconcileRequestAccessTest1$outboundSchema,
+  availability: SyncReconcileRequestModelAvailability1$outboundSchema,
+  blockers: z.array(SyncReconcileRequestBlockerEnum1$outboundSchema),
+  clientApis: z.array(SyncReconcileRequestClientApi1$outboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+});
+
+export function syncReconcileRequestModel1ToJSON(
+  syncReconcileRequestModel1: SyncReconcileRequestModel1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestModel1$outboundSchema.parse(syncReconcileRequestModel1),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestAvailabilitySource1$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestAvailabilitySource1
+> = z.enum(SyncReconcileRequestAvailabilitySource1);
+
+/** @internal */
+export type SyncReconcileRequestAvailability1$Outbound = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<SyncReconcileRequestModel1$Outbound>;
+  source: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestAvailability1$outboundSchema: z.ZodType<
+  SyncReconcileRequestAvailability1$Outbound,
+  SyncReconcileRequestAvailability1
+> = z.object({
+  catalogRevision: z.string(),
+  location: z.nullable(z.string()).optional(),
+  models: z.array(z.lazy(() => SyncReconcileRequestModel1$outboundSchema)),
+  source: SyncReconcileRequestAvailabilitySource1$outboundSchema,
+});
+
+export function syncReconcileRequestAvailability1ToJSON(
+  syncReconcileRequestAvailability1: SyncReconcileRequestAvailability1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestAvailability1$outboundSchema.parse(
+      syncReconcileRequestAvailability1,
+    ),
+  );
+}
+
+/** @internal */
+export const DataReason66$outboundSchema: z.ZodEnum<typeof DataReason66> = z
+  .enum(DataReason66);
+
+/** @internal */
+export const StatusSeverity66$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity66
+> = z.enum(StatusSeverity66);
+
+/** @internal */
+export type DataCollectionIssue66$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue66$outboundSchema: z.ZodType<
+  DataCollectionIssue66$Outbound,
+  DataCollectionIssue66
+> = z.object({
+  message: z.string(),
+  reason: DataReason66$outboundSchema,
+  severity: StatusSeverity66$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue66ToJSON(
+  dataCollectionIssue66: DataCollectionIssue66,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue66$outboundSchema.parse(dataCollectionIssue66),
+  );
+}
+
+/** @internal */
+export const DataHealth66$outboundSchema: z.ZodEnum<typeof DataHealth66> = z
+  .enum(DataHealth66);
+
+/** @internal */
+export const StatusLifecycle66$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle66
+> = z.enum(StatusLifecycle66);
+
+/** @internal */
+export type ResourceHeartbeatStatus66$Outbound = {
+  collectionIssues: Array<DataCollectionIssue66$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus66$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus66$Outbound,
+  ResourceHeartbeatStatus66
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue66$outboundSchema)),
+  health: DataHealth66$outboundSchema,
+  lifecycle: StatusLifecycle66$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus66ToJSON(
+  resourceHeartbeatStatus66: ResourceHeartbeatStatus66,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus66$outboundSchema.parse(resourceHeartbeatStatus66),
+  );
+}
+
+/** @internal */
+export type DataAwsBedrock$Outbound = {
+  availability: SyncReconcileRequestAvailability1$Outbound;
+  region: string;
+  status: ResourceHeartbeatStatus66$Outbound;
+  backend: "awsBedrock";
+};
+
+/** @internal */
+export const DataAwsBedrock$outboundSchema: z.ZodType<
+  DataAwsBedrock$Outbound,
+  DataAwsBedrock
+> = z.object({
+  availability: z.lazy(() => SyncReconcileRequestAvailability1$outboundSchema),
+  region: z.string(),
+  status: z.lazy(() => ResourceHeartbeatStatus66$outboundSchema),
+  backend: z.literal("awsBedrock"),
+});
+
+export function dataAwsBedrockToJSON(dataAwsBedrock: DataAwsBedrock): string {
+  return JSON.stringify(DataAwsBedrock$outboundSchema.parse(dataAwsBedrock));
+}
+
+/** @internal */
+export type SyncReconcileRequestDataUnion16$Outbound =
+  | DataAwsBedrock$Outbound
+  | DataGcpVertex$Outbound
+  | DataAzureFoundry$Outbound
+  | DataExternal$Outbound;
+
+/** @internal */
+export const SyncReconcileRequestDataUnion16$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion16$Outbound,
+  SyncReconcileRequestDataUnion16
+> = z.union([
+  z.lazy(() => DataAwsBedrock$outboundSchema),
+  z.lazy(() => DataGcpVertex$outboundSchema),
+  z.lazy(() => DataAzureFoundry$outboundSchema),
+  z.lazy(() => DataExternal$outboundSchema),
+]);
+
+export function syncReconcileRequestDataUnion16ToJSON(
+  syncReconcileRequestDataUnion16: SyncReconcileRequestDataUnion16,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestDataUnion16$outboundSchema.parse(
+      syncReconcileRequestDataUnion16,
+    ),
+  );
+}
+
+/** @internal */
+export type DataAi$Outbound = {
+  data:
+    | DataAwsBedrock$Outbound
+    | DataGcpVertex$Outbound
+    | DataAzureFoundry$Outbound
+    | DataExternal$Outbound;
+  resourceType: "ai";
+};
+
+/** @internal */
+export const DataAi$outboundSchema: z.ZodType<DataAi$Outbound, DataAi> = z
+  .object({
+    data: z.union([
+      z.lazy(() => DataAwsBedrock$outboundSchema),
+      z.lazy(() => DataGcpVertex$outboundSchema),
+      z.lazy(() => DataAzureFoundry$outboundSchema),
+      z.lazy(() => DataExternal$outboundSchema),
+    ]),
+    resourceType: z.literal("ai"),
+  });
+
+export function dataAiToJSON(dataAi: DataAi): string {
+  return JSON.stringify(DataAi$outboundSchema.parse(dataAi));
+}
 
 /** @internal */
 export const DataReason65$outboundSchema: z.ZodEnum<typeof DataReason65> = z
@@ -22835,46 +29421,39 @@ export function involvedObjectUnion10ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource10$Outbound = {
+export type SourceEvent10$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource10$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource10$Outbound,
-  SyncReconcileRequestSource10
+export const SourceEvent10$outboundSchema: z.ZodType<
+  SourceEvent10$Outbound,
+  SourceEvent10
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource10ToJSON(
-  syncReconcileRequestSource10: SyncReconcileRequestSource10,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource10$outboundSchema.parse(
-      syncReconcileRequestSource10,
-    ),
-  );
+export function sourceEvent10ToJSON(sourceEvent10: SourceEvent10): string {
+  return JSON.stringify(SourceEvent10$outboundSchema.parse(sourceEvent10));
 }
 
 /** @internal */
-export type SourceUnion10$Outbound =
-  | SyncReconcileRequestSource10$Outbound
-  | any;
+export type EventSourceUnion10$Outbound = SourceEvent10$Outbound | any;
 
 /** @internal */
-export const SourceUnion10$outboundSchema: z.ZodType<
-  SourceUnion10$Outbound,
-  SourceUnion10
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource10$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion10$outboundSchema: z.ZodType<
+  EventSourceUnion10$Outbound,
+  EventSourceUnion10
+> = z.union([z.lazy(() => SourceEvent10$outboundSchema), z.any()]);
 
-export function sourceUnion10ToJSON(sourceUnion10: SourceUnion10): string {
-  return JSON.stringify(SourceUnion10$outboundSchema.parse(sourceUnion10));
+export function eventSourceUnion10ToJSON(
+  eventSourceUnion10: EventSourceUnion10,
+): string {
+  return JSON.stringify(
+    EventSourceUnion10$outboundSchema.parse(eventSourceUnion10),
+  );
 }
 
 /** @internal */
@@ -22887,7 +29466,7 @@ export type SyncReconcileRequestEvent13$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource10$Outbound | any | null | undefined;
+  source?: SourceEvent10$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -22909,10 +29488,7 @@ export const SyncReconcileRequestEvent13$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource10$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent10$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -23850,7 +30426,7 @@ export function dataGcpArtifactRegistryToJSON(
 }
 
 /** @internal */
-export type Repository$Outbound = {
+export type SyncReconcileRequestRepository$Outbound = {
   createdAt: number;
   encryptionType?: string | null | undefined;
   imageTagMutability?: string | null | undefined;
@@ -23863,9 +30439,9 @@ export type Repository$Outbound = {
 };
 
 /** @internal */
-export const Repository$outboundSchema: z.ZodType<
-  Repository$Outbound,
-  Repository
+export const SyncReconcileRequestRepository$outboundSchema: z.ZodType<
+  SyncReconcileRequestRepository$Outbound,
+  SyncReconcileRequestRepository
 > = z.object({
   createdAt: z.number(),
   encryptionType: z.nullable(z.string()).optional(),
@@ -23878,8 +30454,14 @@ export const Repository$outboundSchema: z.ZodType<
   scanOnPush: z.nullable(z.boolean()).optional(),
 });
 
-export function repositoryToJSON(repository: Repository): string {
-  return JSON.stringify(Repository$outboundSchema.parse(repository));
+export function syncReconcileRequestRepositoryToJSON(
+  syncReconcileRequestRepository: SyncReconcileRequestRepository,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestRepository$outboundSchema.parse(
+      syncReconcileRequestRepository,
+    ),
+  );
 }
 
 /** @internal */
@@ -23965,7 +30547,7 @@ export type DataAwsEcr$Outbound = {
   region: string;
   registryId: string;
   registryUri: string;
-  repositories: Array<Repository$Outbound>;
+  repositories: Array<SyncReconcileRequestRepository$Outbound>;
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
@@ -23983,7 +30565,9 @@ export const DataAwsEcr$outboundSchema: z.ZodType<
   region: z.string(),
   registryId: z.string(),
   registryUri: z.string(),
-  repositories: z.array(z.lazy(() => Repository$outboundSchema)),
+  repositories: z.array(
+    z.lazy(() => SyncReconcileRequestRepository$outboundSchema),
+  ),
   repositoriesTruncated: z.boolean(),
   repositoryCount: z.int(),
   repositoryPrefix: z.string(),
@@ -25675,7 +32259,7 @@ export function resourceHeartbeatStatus39ToJSON(
 }
 
 /** @internal */
-export type DataAzureKeyVault$Outbound = {
+export type DataAzureKeyVault1$Outbound = {
   accessPolicyCount: number;
   location?: string | null | undefined;
   name: string;
@@ -25697,9 +32281,9 @@ export type DataAzureKeyVault$Outbound = {
 };
 
 /** @internal */
-export const DataAzureKeyVault$outboundSchema: z.ZodType<
-  DataAzureKeyVault$Outbound,
-  DataAzureKeyVault
+export const DataAzureKeyVault1$outboundSchema: z.ZodType<
+  DataAzureKeyVault1$Outbound,
+  DataAzureKeyVault1
 > = z.object({
   accessPolicyCount: z.int(),
   location: z.nullable(z.string()).optional(),
@@ -25721,11 +32305,11 @@ export const DataAzureKeyVault$outboundSchema: z.ZodType<
   backend: z.literal("azureKeyVault"),
 });
 
-export function dataAzureKeyVaultToJSON(
-  dataAzureKeyVault: DataAzureKeyVault,
+export function dataAzureKeyVault1ToJSON(
+  dataAzureKeyVault1: DataAzureKeyVault1,
 ): string {
   return JSON.stringify(
-    DataAzureKeyVault$outboundSchema.parse(dataAzureKeyVault),
+    DataAzureKeyVault1$outboundSchema.parse(dataAzureKeyVault1),
   );
 }
 
@@ -25964,7 +32548,7 @@ export function dataAwsParameterStoreToJSON(
 export type SyncReconcileRequestDataUnion9$Outbound =
   | DataAwsParameterStore$Outbound
   | DataGcpSecretManager$Outbound
-  | DataAzureKeyVault$Outbound
+  | DataAzureKeyVault1$Outbound
   | DataKubernetesSecret$Outbound
   | DataLocal9$Outbound;
 
@@ -25975,7 +32559,7 @@ export const SyncReconcileRequestDataUnion9$outboundSchema: z.ZodType<
 > = z.union([
   z.lazy(() => DataAwsParameterStore$outboundSchema),
   z.lazy(() => DataGcpSecretManager$outboundSchema),
-  z.lazy(() => DataAzureKeyVault$outboundSchema),
+  z.lazy(() => DataAzureKeyVault1$outboundSchema),
   z.lazy(() => DataKubernetesSecret$outboundSchema),
   z.lazy(() => DataLocal9$outboundSchema),
 ]);
@@ -25995,7 +32579,7 @@ export type DataVault$Outbound = {
   data:
     | DataAwsParameterStore$Outbound
     | DataGcpSecretManager$Outbound
-    | DataAzureKeyVault$Outbound
+    | DataAzureKeyVault1$Outbound
     | DataKubernetesSecret$Outbound
     | DataLocal9$Outbound;
   resourceType: "vault";
@@ -26009,7 +32593,7 @@ export const DataVault$outboundSchema: z.ZodType<
   data: z.union([
     z.lazy(() => DataAwsParameterStore$outboundSchema),
     z.lazy(() => DataGcpSecretManager$outboundSchema),
-    z.lazy(() => DataAzureKeyVault$outboundSchema),
+    z.lazy(() => DataAzureKeyVault1$outboundSchema),
     z.lazy(() => DataKubernetesSecret$outboundSchema),
     z.lazy(() => DataLocal9$outboundSchema),
   ]),
@@ -27759,44 +34343,39 @@ export function involvedObjectUnion9ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource9$Outbound = {
+export type SourceEvent9$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource9$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource9$Outbound,
-  SyncReconcileRequestSource9
+export const SourceEvent9$outboundSchema: z.ZodType<
+  SourceEvent9$Outbound,
+  SourceEvent9
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource9ToJSON(
-  syncReconcileRequestSource9: SyncReconcileRequestSource9,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource9$outboundSchema.parse(
-      syncReconcileRequestSource9,
-    ),
-  );
+export function sourceEvent9ToJSON(sourceEvent9: SourceEvent9): string {
+  return JSON.stringify(SourceEvent9$outboundSchema.parse(sourceEvent9));
 }
 
 /** @internal */
-export type SourceUnion9$Outbound = SyncReconcileRequestSource9$Outbound | any;
+export type EventSourceUnion9$Outbound = SourceEvent9$Outbound | any;
 
 /** @internal */
-export const SourceUnion9$outboundSchema: z.ZodType<
-  SourceUnion9$Outbound,
-  SourceUnion9
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource9$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion9$outboundSchema: z.ZodType<
+  EventSourceUnion9$Outbound,
+  EventSourceUnion9
+> = z.union([z.lazy(() => SourceEvent9$outboundSchema), z.any()]);
 
-export function sourceUnion9ToJSON(sourceUnion9: SourceUnion9): string {
-  return JSON.stringify(SourceUnion9$outboundSchema.parse(sourceUnion9));
+export function eventSourceUnion9ToJSON(
+  eventSourceUnion9: EventSourceUnion9,
+): string {
+  return JSON.stringify(
+    EventSourceUnion9$outboundSchema.parse(eventSourceUnion9),
+  );
 }
 
 /** @internal */
@@ -27809,7 +34388,7 @@ export type SyncReconcileRequestEvent12$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource9$Outbound | any | null | undefined;
+  source?: SourceEvent9$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -27831,10 +34410,7 @@ export const SyncReconcileRequestEvent12$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource9$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent9$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -28652,7 +35228,7 @@ export function capacityBlockerUnion4ToJSON(
 }
 
 /** @internal */
-export type Blocker4$Outbound = {
+export type DrainProgressBlocker4$Outbound = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -28661,17 +35237,23 @@ export type Blocker4$Outbound = {
 };
 
 /** @internal */
-export const Blocker4$outboundSchema: z.ZodType<Blocker4$Outbound, Blocker4> = z
-  .object({
-    reason: z.string(),
-    replicaId: z.string(),
-    schedulingMode: z.string(),
-    state: z.string(),
-    workloadName: z.string(),
-  });
+export const DrainProgressBlocker4$outboundSchema: z.ZodType<
+  DrainProgressBlocker4$Outbound,
+  DrainProgressBlocker4
+> = z.object({
+  reason: z.string(),
+  replicaId: z.string(),
+  schedulingMode: z.string(),
+  state: z.string(),
+  workloadName: z.string(),
+});
 
-export function blocker4ToJSON(blocker4: Blocker4): string {
-  return JSON.stringify(Blocker4$outboundSchema.parse(blocker4));
+export function drainProgressBlocker4ToJSON(
+  drainProgressBlocker4: DrainProgressBlocker4,
+): string {
+  return JSON.stringify(
+    DrainProgressBlocker4$outboundSchema.parse(drainProgressBlocker4),
+  );
 }
 
 /** @internal */
@@ -28681,7 +35263,7 @@ export const DrainProgressStatus4$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type DrainProgress4$Outbound = {
-  blockers?: Array<Blocker4$Outbound> | undefined;
+  blockers?: Array<DrainProgressBlocker4$Outbound> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -28697,7 +35279,8 @@ export const DrainProgress4$outboundSchema: z.ZodType<
   DrainProgress4$Outbound,
   DrainProgress4
 > = z.object({
-  blockers: z.array(z.lazy(() => Blocker4$outboundSchema)).optional(),
+  blockers: z.array(z.lazy(() => DrainProgressBlocker4$outboundSchema))
+    .optional(),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainRequestedAt: z.nullable(z.string()).optional(),
   drainedAt: z.nullable(z.string()).optional(),
@@ -29181,7 +35764,7 @@ export function capacityBlockerUnion3ToJSON(
 }
 
 /** @internal */
-export type Blocker3$Outbound = {
+export type DrainProgressBlocker3$Outbound = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -29190,17 +35773,23 @@ export type Blocker3$Outbound = {
 };
 
 /** @internal */
-export const Blocker3$outboundSchema: z.ZodType<Blocker3$Outbound, Blocker3> = z
-  .object({
-    reason: z.string(),
-    replicaId: z.string(),
-    schedulingMode: z.string(),
-    state: z.string(),
-    workloadName: z.string(),
-  });
+export const DrainProgressBlocker3$outboundSchema: z.ZodType<
+  DrainProgressBlocker3$Outbound,
+  DrainProgressBlocker3
+> = z.object({
+  reason: z.string(),
+  replicaId: z.string(),
+  schedulingMode: z.string(),
+  state: z.string(),
+  workloadName: z.string(),
+});
 
-export function blocker3ToJSON(blocker3: Blocker3): string {
-  return JSON.stringify(Blocker3$outboundSchema.parse(blocker3));
+export function drainProgressBlocker3ToJSON(
+  drainProgressBlocker3: DrainProgressBlocker3,
+): string {
+  return JSON.stringify(
+    DrainProgressBlocker3$outboundSchema.parse(drainProgressBlocker3),
+  );
 }
 
 /** @internal */
@@ -29210,7 +35799,7 @@ export const DrainProgressStatus3$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type DrainProgress3$Outbound = {
-  blockers?: Array<Blocker3$Outbound> | undefined;
+  blockers?: Array<DrainProgressBlocker3$Outbound> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -29226,7 +35815,8 @@ export const DrainProgress3$outboundSchema: z.ZodType<
   DrainProgress3$Outbound,
   DrainProgress3
 > = z.object({
-  blockers: z.array(z.lazy(() => Blocker3$outboundSchema)).optional(),
+  blockers: z.array(z.lazy(() => DrainProgressBlocker3$outboundSchema))
+    .optional(),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainRequestedAt: z.nullable(z.string()).optional(),
   drainedAt: z.nullable(z.string()).optional(),
@@ -29660,7 +36250,7 @@ export function capacityBlockerUnion2ToJSON(
 }
 
 /** @internal */
-export type Blocker2$Outbound = {
+export type DrainProgressBlocker2$Outbound = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -29669,17 +36259,23 @@ export type Blocker2$Outbound = {
 };
 
 /** @internal */
-export const Blocker2$outboundSchema: z.ZodType<Blocker2$Outbound, Blocker2> = z
-  .object({
-    reason: z.string(),
-    replicaId: z.string(),
-    schedulingMode: z.string(),
-    state: z.string(),
-    workloadName: z.string(),
-  });
+export const DrainProgressBlocker2$outboundSchema: z.ZodType<
+  DrainProgressBlocker2$Outbound,
+  DrainProgressBlocker2
+> = z.object({
+  reason: z.string(),
+  replicaId: z.string(),
+  schedulingMode: z.string(),
+  state: z.string(),
+  workloadName: z.string(),
+});
 
-export function blocker2ToJSON(blocker2: Blocker2): string {
-  return JSON.stringify(Blocker2$outboundSchema.parse(blocker2));
+export function drainProgressBlocker2ToJSON(
+  drainProgressBlocker2: DrainProgressBlocker2,
+): string {
+  return JSON.stringify(
+    DrainProgressBlocker2$outboundSchema.parse(drainProgressBlocker2),
+  );
 }
 
 /** @internal */
@@ -29689,7 +36285,7 @@ export const DrainProgressStatus2$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type DrainProgress2$Outbound = {
-  blockers?: Array<Blocker2$Outbound> | undefined;
+  blockers?: Array<DrainProgressBlocker2$Outbound> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -29705,7 +36301,8 @@ export const DrainProgress2$outboundSchema: z.ZodType<
   DrainProgress2$Outbound,
   DrainProgress2
 > = z.object({
-  blockers: z.array(z.lazy(() => Blocker2$outboundSchema)).optional(),
+  blockers: z.array(z.lazy(() => DrainProgressBlocker2$outboundSchema))
+    .optional(),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainRequestedAt: z.nullable(z.string()).optional(),
   drainedAt: z.nullable(z.string()).optional(),
@@ -30137,7 +36734,7 @@ export function capacityBlockerUnion1ToJSON(
 }
 
 /** @internal */
-export type Blocker1$Outbound = {
+export type DrainProgressBlocker1$Outbound = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -30146,17 +36743,23 @@ export type Blocker1$Outbound = {
 };
 
 /** @internal */
-export const Blocker1$outboundSchema: z.ZodType<Blocker1$Outbound, Blocker1> = z
-  .object({
-    reason: z.string(),
-    replicaId: z.string(),
-    schedulingMode: z.string(),
-    state: z.string(),
-    workloadName: z.string(),
-  });
+export const DrainProgressBlocker1$outboundSchema: z.ZodType<
+  DrainProgressBlocker1$Outbound,
+  DrainProgressBlocker1
+> = z.object({
+  reason: z.string(),
+  replicaId: z.string(),
+  schedulingMode: z.string(),
+  state: z.string(),
+  workloadName: z.string(),
+});
 
-export function blocker1ToJSON(blocker1: Blocker1): string {
-  return JSON.stringify(Blocker1$outboundSchema.parse(blocker1));
+export function drainProgressBlocker1ToJSON(
+  drainProgressBlocker1: DrainProgressBlocker1,
+): string {
+  return JSON.stringify(
+    DrainProgressBlocker1$outboundSchema.parse(drainProgressBlocker1),
+  );
 }
 
 /** @internal */
@@ -30166,7 +36769,7 @@ export const DrainProgressStatus1$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type DrainProgress1$Outbound = {
-  blockers?: Array<Blocker1$Outbound> | undefined;
+  blockers?: Array<DrainProgressBlocker1$Outbound> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -30182,7 +36785,8 @@ export const DrainProgress1$outboundSchema: z.ZodType<
   DrainProgress1$Outbound,
   DrainProgress1
 > = z.object({
-  blockers: z.array(z.lazy(() => Blocker1$outboundSchema)).optional(),
+  blockers: z.array(z.lazy(() => DrainProgressBlocker1$outboundSchema))
+    .optional(),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainRequestedAt: z.nullable(z.string()).optional(),
   drainedAt: z.nullable(z.string()).optional(),
@@ -31070,44 +37674,39 @@ export function involvedObjectUnion8ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource8$Outbound = {
+export type SourceEvent8$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource8$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource8$Outbound,
-  SyncReconcileRequestSource8
+export const SourceEvent8$outboundSchema: z.ZodType<
+  SourceEvent8$Outbound,
+  SourceEvent8
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource8ToJSON(
-  syncReconcileRequestSource8: SyncReconcileRequestSource8,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource8$outboundSchema.parse(
-      syncReconcileRequestSource8,
-    ),
-  );
+export function sourceEvent8ToJSON(sourceEvent8: SourceEvent8): string {
+  return JSON.stringify(SourceEvent8$outboundSchema.parse(sourceEvent8));
 }
 
 /** @internal */
-export type SourceUnion8$Outbound = SyncReconcileRequestSource8$Outbound | any;
+export type EventSourceUnion8$Outbound = SourceEvent8$Outbound | any;
 
 /** @internal */
-export const SourceUnion8$outboundSchema: z.ZodType<
-  SourceUnion8$Outbound,
-  SourceUnion8
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource8$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion8$outboundSchema: z.ZodType<
+  EventSourceUnion8$Outbound,
+  EventSourceUnion8
+> = z.union([z.lazy(() => SourceEvent8$outboundSchema), z.any()]);
 
-export function sourceUnion8ToJSON(sourceUnion8: SourceUnion8): string {
-  return JSON.stringify(SourceUnion8$outboundSchema.parse(sourceUnion8));
+export function eventSourceUnion8ToJSON(
+  eventSourceUnion8: EventSourceUnion8,
+): string {
+  return JSON.stringify(
+    EventSourceUnion8$outboundSchema.parse(eventSourceUnion8),
+  );
 }
 
 /** @internal */
@@ -31120,7 +37719,7 @@ export type SyncReconcileRequestEvent10$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource8$Outbound | any | null | undefined;
+  source?: SourceEvent8$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -31142,10 +37741,7 @@ export const SyncReconcileRequestEvent10$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource8$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent8$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -31752,44 +38348,39 @@ export function involvedObjectUnion7ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource7$Outbound = {
+export type SourceEvent7$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource7$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource7$Outbound,
-  SyncReconcileRequestSource7
+export const SourceEvent7$outboundSchema: z.ZodType<
+  SourceEvent7$Outbound,
+  SourceEvent7
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource7ToJSON(
-  syncReconcileRequestSource7: SyncReconcileRequestSource7,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource7$outboundSchema.parse(
-      syncReconcileRequestSource7,
-    ),
-  );
+export function sourceEvent7ToJSON(sourceEvent7: SourceEvent7): string {
+  return JSON.stringify(SourceEvent7$outboundSchema.parse(sourceEvent7));
 }
 
 /** @internal */
-export type SourceUnion7$Outbound = SyncReconcileRequestSource7$Outbound | any;
+export type EventSourceUnion7$Outbound = SourceEvent7$Outbound | any;
 
 /** @internal */
-export const SourceUnion7$outboundSchema: z.ZodType<
-  SourceUnion7$Outbound,
-  SourceUnion7
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource7$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion7$outboundSchema: z.ZodType<
+  EventSourceUnion7$Outbound,
+  EventSourceUnion7
+> = z.union([z.lazy(() => SourceEvent7$outboundSchema), z.any()]);
 
-export function sourceUnion7ToJSON(sourceUnion7: SourceUnion7): string {
-  return JSON.stringify(SourceUnion7$outboundSchema.parse(sourceUnion7));
+export function eventSourceUnion7ToJSON(
+  eventSourceUnion7: EventSourceUnion7,
+): string {
+  return JSON.stringify(
+    EventSourceUnion7$outboundSchema.parse(eventSourceUnion7),
+  );
 }
 
 /** @internal */
@@ -31804,7 +38395,7 @@ export type SyncReconcileRequestEvent9$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource7$Outbound | any | null | undefined;
+  source?: SourceEvent7$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -31828,10 +38419,7 @@ export const SyncReconcileRequestEvent9$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource7$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent7$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -31935,6 +38523,7 @@ export type DataMachines1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus16$Outbound;
   unavailableInstances: number;
   backend: "machines";
@@ -31958,6 +38547,7 @@ export const DataMachines1$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus16$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("machines"),
@@ -32165,44 +38755,39 @@ export function involvedObjectUnion6ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource6$Outbound = {
+export type SourceEvent6$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource6$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource6$Outbound,
-  SyncReconcileRequestSource6
+export const SourceEvent6$outboundSchema: z.ZodType<
+  SourceEvent6$Outbound,
+  SourceEvent6
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource6ToJSON(
-  syncReconcileRequestSource6: SyncReconcileRequestSource6,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource6$outboundSchema.parse(
-      syncReconcileRequestSource6,
-    ),
-  );
+export function sourceEvent6ToJSON(sourceEvent6: SourceEvent6): string {
+  return JSON.stringify(SourceEvent6$outboundSchema.parse(sourceEvent6));
 }
 
 /** @internal */
-export type SourceUnion6$Outbound = SyncReconcileRequestSource6$Outbound | any;
+export type EventSourceUnion6$Outbound = SourceEvent6$Outbound | any;
 
 /** @internal */
-export const SourceUnion6$outboundSchema: z.ZodType<
-  SourceUnion6$Outbound,
-  SourceUnion6
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource6$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion6$outboundSchema: z.ZodType<
+  EventSourceUnion6$Outbound,
+  EventSourceUnion6
+> = z.union([z.lazy(() => SourceEvent6$outboundSchema), z.any()]);
 
-export function sourceUnion6ToJSON(sourceUnion6: SourceUnion6): string {
-  return JSON.stringify(SourceUnion6$outboundSchema.parse(sourceUnion6));
+export function eventSourceUnion6ToJSON(
+  eventSourceUnion6: EventSourceUnion6,
+): string {
+  return JSON.stringify(
+    EventSourceUnion6$outboundSchema.parse(eventSourceUnion6),
+  );
 }
 
 /** @internal */
@@ -32217,7 +38802,7 @@ export type SyncReconcileRequestEvent8$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource6$Outbound | any | null | undefined;
+  source?: SourceEvent6$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -32241,10 +38826,7 @@ export const SyncReconcileRequestEvent8$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource6$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent6$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -32348,6 +38930,7 @@ export type DataAzure1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus15$Outbound;
   unavailableInstances: number;
   backend: "azure";
@@ -32371,6 +38954,7 @@ export const DataAzure1$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus15$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("azure"),
@@ -32578,44 +39162,39 @@ export function involvedObjectUnion5ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource5$Outbound = {
+export type SourceEvent5$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource5$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource5$Outbound,
-  SyncReconcileRequestSource5
+export const SourceEvent5$outboundSchema: z.ZodType<
+  SourceEvent5$Outbound,
+  SourceEvent5
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource5ToJSON(
-  syncReconcileRequestSource5: SyncReconcileRequestSource5,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource5$outboundSchema.parse(
-      syncReconcileRequestSource5,
-    ),
-  );
+export function sourceEvent5ToJSON(sourceEvent5: SourceEvent5): string {
+  return JSON.stringify(SourceEvent5$outboundSchema.parse(sourceEvent5));
 }
 
 /** @internal */
-export type SourceUnion5$Outbound = SyncReconcileRequestSource5$Outbound | any;
+export type EventSourceUnion5$Outbound = SourceEvent5$Outbound | any;
 
 /** @internal */
-export const SourceUnion5$outboundSchema: z.ZodType<
-  SourceUnion5$Outbound,
-  SourceUnion5
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource5$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion5$outboundSchema: z.ZodType<
+  EventSourceUnion5$Outbound,
+  EventSourceUnion5
+> = z.union([z.lazy(() => SourceEvent5$outboundSchema), z.any()]);
 
-export function sourceUnion5ToJSON(sourceUnion5: SourceUnion5): string {
-  return JSON.stringify(SourceUnion5$outboundSchema.parse(sourceUnion5));
+export function eventSourceUnion5ToJSON(
+  eventSourceUnion5: EventSourceUnion5,
+): string {
+  return JSON.stringify(
+    EventSourceUnion5$outboundSchema.parse(eventSourceUnion5),
+  );
 }
 
 /** @internal */
@@ -32630,7 +39209,7 @@ export type SyncReconcileRequestEvent7$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource5$Outbound | any | null | undefined;
+  source?: SourceEvent5$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -32654,10 +39233,7 @@ export const SyncReconcileRequestEvent7$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource5$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent5$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -32761,6 +39337,7 @@ export type DataGcp1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus14$Outbound;
   unavailableInstances: number;
   backend: "gcp";
@@ -32782,6 +39359,7 @@ export const DataGcp1$outboundSchema: z.ZodType<DataGcp1$Outbound, DataGcp1> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
+    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => ResourceHeartbeatStatus14$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("gcp"),
@@ -32989,44 +39567,39 @@ export function involvedObjectUnion4ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource4$Outbound = {
+export type SourceEvent4$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource4$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource4$Outbound,
-  SyncReconcileRequestSource4
+export const SourceEvent4$outboundSchema: z.ZodType<
+  SourceEvent4$Outbound,
+  SourceEvent4
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource4ToJSON(
-  syncReconcileRequestSource4: SyncReconcileRequestSource4,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource4$outboundSchema.parse(
-      syncReconcileRequestSource4,
-    ),
-  );
+export function sourceEvent4ToJSON(sourceEvent4: SourceEvent4): string {
+  return JSON.stringify(SourceEvent4$outboundSchema.parse(sourceEvent4));
 }
 
 /** @internal */
-export type SourceUnion4$Outbound = SyncReconcileRequestSource4$Outbound | any;
+export type EventSourceUnion4$Outbound = SourceEvent4$Outbound | any;
 
 /** @internal */
-export const SourceUnion4$outboundSchema: z.ZodType<
-  SourceUnion4$Outbound,
-  SourceUnion4
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource4$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion4$outboundSchema: z.ZodType<
+  EventSourceUnion4$Outbound,
+  EventSourceUnion4
+> = z.union([z.lazy(() => SourceEvent4$outboundSchema), z.any()]);
 
-export function sourceUnion4ToJSON(sourceUnion4: SourceUnion4): string {
-  return JSON.stringify(SourceUnion4$outboundSchema.parse(sourceUnion4));
+export function eventSourceUnion4ToJSON(
+  eventSourceUnion4: EventSourceUnion4,
+): string {
+  return JSON.stringify(
+    EventSourceUnion4$outboundSchema.parse(eventSourceUnion4),
+  );
 }
 
 /** @internal */
@@ -33041,7 +39614,7 @@ export type SyncReconcileRequestEvent6$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource4$Outbound | any | null | undefined;
+  source?: SourceEvent4$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -33065,10 +39638,7 @@ export const SyncReconcileRequestEvent6$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource4$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent4$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -33172,6 +39742,7 @@ export type DataAws1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus13$Outbound;
   unavailableInstances: number;
   backend: "aws";
@@ -33193,6 +39764,7 @@ export const DataAws1$outboundSchema: z.ZodType<DataAws1$Outbound, DataAws1> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
+    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => ResourceHeartbeatStatus13$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("aws"),
@@ -33785,44 +40357,39 @@ export function involvedObjectUnion3ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource3$Outbound = {
+export type SourceEvent3$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource3$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource3$Outbound,
-  SyncReconcileRequestSource3
+export const SourceEvent3$outboundSchema: z.ZodType<
+  SourceEvent3$Outbound,
+  SourceEvent3
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource3ToJSON(
-  syncReconcileRequestSource3: SyncReconcileRequestSource3,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource3$outboundSchema.parse(
-      syncReconcileRequestSource3,
-    ),
-  );
+export function sourceEvent3ToJSON(sourceEvent3: SourceEvent3): string {
+  return JSON.stringify(SourceEvent3$outboundSchema.parse(sourceEvent3));
 }
 
 /** @internal */
-export type SourceUnion3$Outbound = SyncReconcileRequestSource3$Outbound | any;
+export type EventSourceUnion3$Outbound = SourceEvent3$Outbound | any;
 
 /** @internal */
-export const SourceUnion3$outboundSchema: z.ZodType<
-  SourceUnion3$Outbound,
-  SourceUnion3
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource3$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion3$outboundSchema: z.ZodType<
+  EventSourceUnion3$Outbound,
+  EventSourceUnion3
+> = z.union([z.lazy(() => SourceEvent3$outboundSchema), z.any()]);
 
-export function sourceUnion3ToJSON(sourceUnion3: SourceUnion3): string {
-  return JSON.stringify(SourceUnion3$outboundSchema.parse(sourceUnion3));
+export function eventSourceUnion3ToJSON(
+  eventSourceUnion3: EventSourceUnion3,
+): string {
+  return JSON.stringify(
+    EventSourceUnion3$outboundSchema.parse(eventSourceUnion3),
+  );
 }
 
 /** @internal */
@@ -33835,7 +40402,7 @@ export type SyncReconcileRequestEvent4$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource3$Outbound | any | null | undefined;
+  source?: SourceEvent3$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -33857,10 +40424,7 @@ export const SyncReconcileRequestEvent4$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource3$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent3$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -34352,44 +40916,39 @@ export function involvedObjectUnion2ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource2$Outbound = {
+export type SourceEvent2$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource2$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource2$Outbound,
-  SyncReconcileRequestSource2
+export const SourceEvent2$outboundSchema: z.ZodType<
+  SourceEvent2$Outbound,
+  SourceEvent2
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource2ToJSON(
-  syncReconcileRequestSource2: SyncReconcileRequestSource2,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource2$outboundSchema.parse(
-      syncReconcileRequestSource2,
-    ),
-  );
+export function sourceEvent2ToJSON(sourceEvent2: SourceEvent2): string {
+  return JSON.stringify(SourceEvent2$outboundSchema.parse(sourceEvent2));
 }
 
 /** @internal */
-export type SourceUnion2$Outbound = SyncReconcileRequestSource2$Outbound | any;
+export type EventSourceUnion2$Outbound = SourceEvent2$Outbound | any;
 
 /** @internal */
-export const SourceUnion2$outboundSchema: z.ZodType<
-  SourceUnion2$Outbound,
-  SourceUnion2
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource2$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion2$outboundSchema: z.ZodType<
+  EventSourceUnion2$Outbound,
+  EventSourceUnion2
+> = z.union([z.lazy(() => SourceEvent2$outboundSchema), z.any()]);
 
-export function sourceUnion2ToJSON(sourceUnion2: SourceUnion2): string {
-  return JSON.stringify(SourceUnion2$outboundSchema.parse(sourceUnion2));
+export function eventSourceUnion2ToJSON(
+  eventSourceUnion2: EventSourceUnion2,
+): string {
+  return JSON.stringify(
+    EventSourceUnion2$outboundSchema.parse(eventSourceUnion2),
+  );
 }
 
 /** @internal */
@@ -34404,7 +40963,7 @@ export type SyncReconcileRequestEvent3$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource2$Outbound | any | null | undefined;
+  source?: SourceEvent2$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -34428,10 +40987,7 @@ export const SyncReconcileRequestEvent3$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource2$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent2$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -34734,7 +41290,9 @@ export type DataHorizonPlatform$Outbound = {
   cpu?: Cpu3$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent3$Outbound>;
   image?: string | null | undefined;
+  latestUpdateTimestamp?: string | null | undefined;
   memory?: Memory3$Outbound | any | null | undefined;
+  observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit$Outbound>;
   replicas: Replicas2$Outbound;
   schedulingMode: string;
@@ -34753,8 +41311,10 @@ export const DataHorizonPlatform$outboundSchema: z.ZodType<
     .optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent3$outboundSchema)),
   image: z.nullable(z.string()).optional(),
+  latestUpdateTimestamp: z.nullable(z.string()).optional(),
   memory: z.nullable(z.union([z.lazy(() => Memory3$outboundSchema), z.any()]))
     .optional(),
+  observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$outboundSchema)),
   replicas: z.lazy(() => Replicas2$outboundSchema),
   schedulingMode: SchedulingMode$outboundSchema,
@@ -35313,44 +41873,39 @@ export function involvedObjectUnion1ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestSource1$Outbound = {
+export type SourceEvent1$Outbound = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
 /** @internal */
-export const SyncReconcileRequestSource1$outboundSchema: z.ZodType<
-  SyncReconcileRequestSource1$Outbound,
-  SyncReconcileRequestSource1
+export const SourceEvent1$outboundSchema: z.ZodType<
+  SourceEvent1$Outbound,
+  SourceEvent1
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function syncReconcileRequestSource1ToJSON(
-  syncReconcileRequestSource1: SyncReconcileRequestSource1,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestSource1$outboundSchema.parse(
-      syncReconcileRequestSource1,
-    ),
-  );
+export function sourceEvent1ToJSON(sourceEvent1: SourceEvent1): string {
+  return JSON.stringify(SourceEvent1$outboundSchema.parse(sourceEvent1));
 }
 
 /** @internal */
-export type SourceUnion1$Outbound = SyncReconcileRequestSource1$Outbound | any;
+export type EventSourceUnion1$Outbound = SourceEvent1$Outbound | any;
 
 /** @internal */
-export const SourceUnion1$outboundSchema: z.ZodType<
-  SourceUnion1$Outbound,
-  SourceUnion1
-> = z.union([
-  z.lazy(() => SyncReconcileRequestSource1$outboundSchema),
-  z.any(),
-]);
+export const EventSourceUnion1$outboundSchema: z.ZodType<
+  EventSourceUnion1$Outbound,
+  EventSourceUnion1
+> = z.union([z.lazy(() => SourceEvent1$outboundSchema), z.any()]);
 
-export function sourceUnion1ToJSON(sourceUnion1: SourceUnion1): string {
-  return JSON.stringify(SourceUnion1$outboundSchema.parse(sourceUnion1));
+export function eventSourceUnion1ToJSON(
+  eventSourceUnion1: EventSourceUnion1,
+): string {
+  return JSON.stringify(
+    EventSourceUnion1$outboundSchema.parse(eventSourceUnion1),
+  );
 }
 
 /** @internal */
@@ -35363,7 +41918,7 @@ export type SyncReconcileRequestEvent1$Outbound = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: SyncReconcileRequestSource1$Outbound | any | null | undefined;
+  source?: SourceEvent1$Outbound | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -35385,10 +41940,7 @@ export const SyncReconcileRequestEvent1$outboundSchema: z.ZodType<
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => SyncReconcileRequestSource1$outboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent1$outboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -36821,7 +43373,7 @@ export function dataStorageToJSON(dataStorage: DataStorage): string {
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion16$Outbound =
+export type SyncReconcileRequestDataUnion18$Outbound =
   | DataStorage$Outbound
   | DataWorker$Outbound
   | DataContainer$Outbound
@@ -36841,12 +43393,14 @@ export type SyncReconcileRequestDataUnion16$Outbound =
   | DataAzureResourceGroup$Outbound
   | DataAzureStorageAccount$Outbound
   | DataAzureContainerAppsEnvironment$Outbound
-  | DataAzureServiceBusNamespace$Outbound;
+  | DataAzureServiceBusNamespace$Outbound
+  | DataAi$Outbound
+  | DataKey$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion16$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion16$Outbound,
-  SyncReconcileRequestDataUnion16
+export const SyncReconcileRequestDataUnion18$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion18$Outbound,
+  SyncReconcileRequestDataUnion18
 > = z.union([
   z.lazy(() => DataStorage$outboundSchema),
   z.lazy(() => DataWorker$outboundSchema),
@@ -36868,14 +43422,16 @@ export const SyncReconcileRequestDataUnion16$outboundSchema: z.ZodType<
   z.lazy(() => DataAzureStorageAccount$outboundSchema),
   z.lazy(() => DataAzureContainerAppsEnvironment$outboundSchema),
   z.lazy(() => DataAzureServiceBusNamespace$outboundSchema),
+  z.lazy(() => DataAi$outboundSchema),
+  z.lazy(() => DataKey$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion16ToJSON(
-  syncReconcileRequestDataUnion16: SyncReconcileRequestDataUnion16,
+export function syncReconcileRequestDataUnion18ToJSON(
+  syncReconcileRequestDataUnion18: SyncReconcileRequestDataUnion18,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion16$outboundSchema.parse(
-      syncReconcileRequestDataUnion16,
+    SyncReconcileRequestDataUnion18$outboundSchema.parse(
+      syncReconcileRequestDataUnion18,
     ),
   );
 }
@@ -36938,7 +43494,9 @@ export type ResourceHeartbeat$Outbound = {
     | DataAzureResourceGroup$Outbound
     | DataAzureStorageAccount$Outbound
     | DataAzureContainerAppsEnvironment$Outbound
-    | DataAzureServiceBusNamespace$Outbound;
+    | DataAzureServiceBusNamespace$Outbound
+    | DataAi$Outbound
+    | DataKey$Outbound;
   deploymentId?: string | null | undefined;
   observedAt: string;
   raw: Array<ResourceHeartbeatRaw$Outbound>;
@@ -36974,6 +43532,8 @@ export const ResourceHeartbeat$outboundSchema: z.ZodType<
     z.lazy(() => DataAzureStorageAccount$outboundSchema),
     z.lazy(() => DataAzureContainerAppsEnvironment$outboundSchema),
     z.lazy(() => DataAzureServiceBusNamespace$outboundSchema),
+    z.lazy(() => DataAi$outboundSchema),
+    z.lazy(() => DataKey$outboundSchema),
   ]),
   deploymentId: z.nullable(z.string()).optional(),
   observedAt: z.date().transform(v => v.toISOString()),

@@ -6,9 +6,9 @@
 import { SetupItemStatus } from "@alienplatform/platform-api/models";
 
 let value: SetupItemStatus = {
-  item: "keys",
+  item: "registry",
   source: {
-    type: "application-release",
+    type: "project-release",
     releaseChannel: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   },

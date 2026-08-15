@@ -12,16 +12,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use http::header;
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+use alien_commands::InMemoryCommandRegistry;
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
-use alien_commands::InMemoryCommandRegistry;
 use alien_core::import::{
     ImportSourceKind, ImportedResource, KubernetesClusterImportData, StackImportRequest,
     StackImportResponse,
@@ -39,10 +39,10 @@ use alien_core::{
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::{NullTelemetryBackend, OssAuthz};
+use alien_manager::routes::AppState;
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
 };
-use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
@@ -192,7 +192,7 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
         ),
-        customer_registry_broker: None,
+        external_registry_broker: None,
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 

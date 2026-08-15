@@ -12,6 +12,6 @@ let value: EventState = {
 
 ## Fields
 
-| Field                                | Type                                 | Required                             | Description                          |
-| ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
-| `failed`                             | [models.Failed](../models/failed.md) | :heavy_check_mark:                   | Event failed with an error           |
+| Field                                          | Type                                           | Required                                       | Description                                    |
+| ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
+| `failed`                                       | [models.EventFailed](../models/eventfailed.md) | :heavy_check_mark:                             | Event failed with an error                     |

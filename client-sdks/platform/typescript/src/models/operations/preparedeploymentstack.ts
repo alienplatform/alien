@@ -8,9 +8,11 @@ import { ClosedEnum } from "../../types/enums.js";
 import * as models from "../index.js";
 
 export const PrepareDeploymentStackSetupItem = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 export type PrepareDeploymentStackSetupItem = ClosedEnum<
   typeof PrepareDeploymentStackSetupItem

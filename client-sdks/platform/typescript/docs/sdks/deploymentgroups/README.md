@@ -15,9 +15,9 @@
 * [setDeploymentGroupExternalId](#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](#createfirstpartydeploymentsession) - Create first-party deployment session
-* [getDirectAnthropicBinding](#getdirectanthropicbinding) - Get direct Anthropic connection state
-* [putDirectAnthropicBinding](#putdirectanthropicbinding) - Connect or rotate a direct Anthropic workspace key
-* [deleteDirectAnthropicBinding](#deletedirectanthropicbinding) - Revoke the direct Anthropic connection
+* [getExternalAIBinding](#getexternalaibinding) - Get external AI connection state
+* [putExternalAIBinding](#putexternalaibinding) - Connect or rotate an external AI provider key
+* [deleteExternalAIBinding](#deleteexternalaibinding) - Revoke the external AI connection
 
 ## createDeploymentGroup
 
@@ -365,7 +365,6 @@ const alien = new Alien({
 async function run() {
   const result = await alien.deploymentGroups.getDeploymentGroupByExternalId({
     workspace: "my-workspace",
-    project: "my-project",
     externalId: "ext_example_01",
   });
 
@@ -392,7 +391,6 @@ const alien = new AlienCore({
 async function run() {
   const res = await deploymentGroupsGetDeploymentGroupByExternalId(alien, {
     workspace: "my-workspace",
-    project: "my-project",
     externalId: "ext_example_01",
   });
   if (res.ok) {
@@ -937,13 +935,13 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## getDirectAnthropicBinding
+## getExternalAIBinding
 
-Get direct Anthropic connection state
+Get external AI connection state
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="getDirectAnthropicBinding" method="get" path="/v1/deployment-groups/{id}/ai/anthropic" -->
+<!-- UsageSnippet language="typescript" operationID="getExternalAIBinding" method="get" path="/v1/deployment-groups/{id}/ai/external" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -952,7 +950,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deploymentGroups.getDirectAnthropicBinding({
+  const result = await alien.deploymentGroups.getExternalAIBinding({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
   });
@@ -969,7 +967,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsGetDirectAnthropicBinding } from "@alienplatform/platform-api/funcs/deploymentGroupsGetDirectAnthropicBinding.js";
+import { deploymentGroupsGetExternalAIBinding } from "@alienplatform/platform-api/funcs/deploymentGroupsGetExternalAIBinding.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -978,7 +976,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentGroupsGetDirectAnthropicBinding(alien, {
+  const res = await deploymentGroupsGetExternalAIBinding(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
   });
@@ -986,7 +984,7 @@ async function run() {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("deploymentGroupsGetDirectAnthropicBinding failed:", res.error);
+    console.log("deploymentGroupsGetExternalAIBinding failed:", res.error);
   }
 }
 
@@ -997,14 +995,14 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GetDirectAnthropicBindingRequest](../../models/operations/getdirectanthropicbindingrequest.md)                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.GetExternalAIBindingRequest](../../models/operations/getexternalaibindingrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[models.DirectAnthropicBindingState](../../models/directanthropicbindingstate.md)\>**
+**Promise\<[models.ExternalAIBindingState](../../models/externalaibindingstate.md)\>**
 
 ### Errors
 
@@ -1014,13 +1012,13 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## putDirectAnthropicBinding
+## putExternalAIBinding
 
-Connect or rotate a direct Anthropic workspace key
+Connect or rotate an external AI provider key
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="putDirectAnthropicBinding" method="put" path="/v1/deployment-groups/{id}/ai/anthropic" -->
+<!-- UsageSnippet language="typescript" operationID="putExternalAIBinding" method="put" path="/v1/deployment-groups/{id}/ai/external" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1029,10 +1027,11 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deploymentGroups.putDirectAnthropicBinding({
+  const result = await alien.deploymentGroups.putExternalAIBinding({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
-    putDirectAnthropicBindingRequest: {
+    putExternalAIBindingRequest: {
+      provider: "anthropic",
       apiKey: "<value>",
       acknowledgeAlienCredentialAccess: true,
     },
@@ -1050,7 +1049,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsPutDirectAnthropicBinding } from "@alienplatform/platform-api/funcs/deploymentGroupsPutDirectAnthropicBinding.js";
+import { deploymentGroupsPutExternalAIBinding } from "@alienplatform/platform-api/funcs/deploymentGroupsPutExternalAIBinding.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -1059,10 +1058,11 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentGroupsPutDirectAnthropicBinding(alien, {
+  const res = await deploymentGroupsPutExternalAIBinding(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
-    putDirectAnthropicBindingRequest: {
+    putExternalAIBindingRequest: {
+      provider: "anthropic",
       apiKey: "<value>",
       acknowledgeAlienCredentialAccess: true,
     },
@@ -1071,7 +1071,7 @@ async function run() {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("deploymentGroupsPutDirectAnthropicBinding failed:", res.error);
+    console.log("deploymentGroupsPutExternalAIBinding failed:", res.error);
   }
 }
 
@@ -1082,14 +1082,14 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.PutDirectAnthropicBindingRequest](../../models/operations/putdirectanthropicbindingrequest.md)                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.PutExternalAIBindingRequest](../../models/operations/putexternalaibindingrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[models.DirectAnthropicBinding](../../models/directanthropicbinding.md)\>**
+**Promise\<[models.ExternalAIBinding](../../models/externalaibinding.md)\>**
 
 ### Errors
 
@@ -1099,13 +1099,13 @@ run();
 | errors.APIError          | 500, 503                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## deleteDirectAnthropicBinding
+## deleteExternalAIBinding
 
-Revoke the direct Anthropic connection
+Revoke the external AI connection
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="deleteDirectAnthropicBinding" method="delete" path="/v1/deployment-groups/{id}/ai/anthropic" -->
+<!-- UsageSnippet language="typescript" operationID="deleteExternalAIBinding" method="delete" path="/v1/deployment-groups/{id}/ai/external" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1114,7 +1114,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  await alien.deploymentGroups.deleteDirectAnthropicBinding({
+  await alien.deploymentGroups.deleteExternalAIBinding({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
   });
@@ -1131,7 +1131,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsDeleteDirectAnthropicBinding } from "@alienplatform/platform-api/funcs/deploymentGroupsDeleteDirectAnthropicBinding.js";
+import { deploymentGroupsDeleteExternalAIBinding } from "@alienplatform/platform-api/funcs/deploymentGroupsDeleteExternalAIBinding.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -1140,7 +1140,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentGroupsDeleteDirectAnthropicBinding(alien, {
+  const res = await deploymentGroupsDeleteExternalAIBinding(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
   });
@@ -1148,7 +1148,7 @@ async function run() {
     const { value: result } = res;
 
   } else {
-    console.log("deploymentGroupsDeleteDirectAnthropicBinding failed:", res.error);
+    console.log("deploymentGroupsDeleteExternalAIBinding failed:", res.error);
   }
 }
 
@@ -1159,7 +1159,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.DeleteDirectAnthropicBindingRequest](../../models/operations/deletedirectanthropicbindingrequest.md)                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.DeleteExternalAIBindingRequest](../../models/operations/deleteexternalaibindingrequest.md)                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

@@ -28,19 +28,31 @@ let value: ListAPIKeysResponse = {
       deploymentSetupConfig: {
         metadata: {
           "key": "<value>",
-          "key1": "<value>",
-          "key2": "<value>",
         },
         policy: {
           allowedPlatforms: [],
-          allowedSetupMethods: [],
+          allowedSetupMethods: [
+            "google-oauth",
+          ],
         },
         environmentVariables: [],
+        items: [
+          {
+            item: "keys",
+            source: {
+              type: "built-in",
+              definitionId: "customer-registry",
+              version: "<value>",
+              sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+            },
+            required: false,
+          },
+        ],
       },
       createdByUser: {
         id: "<id>",
-        email: "Rhett78@hotmail.com",
-        image: "https://picsum.photos/seed/PS5fO/2447/1335",
+        email: "Sydnee_Fahey-Satterfield@gmail.com",
+        image: "https://picsum.photos/seed/MtBCj/2624/1426",
       },
     },
   ],

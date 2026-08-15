@@ -39,7 +39,7 @@ enum PlatformAccessSelector {
     Deployment {
         deployment_id: String,
     },
-    Customer {
+    ExternalEnvironment {
         project: String,
         external_id: String,
     },
@@ -135,7 +135,7 @@ impl RemoteBindingSource {
         })
     }
 
-    pub(super) async fn discover_customer(
+    pub(super) async fn discover_external_environment(
         project: &str,
         external_id: &str,
         platform_token: &str,
@@ -155,7 +155,7 @@ impl RemoteBindingSource {
             #[cfg(test)]
             ManagerResolverKind::LocalFixture => Arc::new(LocalFixtureManagerBindingResolver),
         };
-        let manager = discover_customer_manager_access(
+        let manager = discover_external_environment_manager_access(
             &platform,
             project,
             external_id,
@@ -166,7 +166,7 @@ impl RemoteBindingSource {
         .await?;
 
         Ok(Self {
-            access_selector: PlatformAccessSelector::Customer {
+            access_selector: PlatformAccessSelector::ExternalEnvironment {
                 project: project.to_string(),
                 external_id: external_id.to_string(),
             },
@@ -255,11 +255,11 @@ impl RemoteBindingSource {
                 )
                 .await?
             }
-            PlatformAccessSelector::Customer {
+            PlatformAccessSelector::ExternalEnvironment {
                 project,
                 external_id,
             } => {
-                discover_customer_manager_access(
+                discover_external_environment_manager_access(
                     platform,
                     project,
                     external_id,
@@ -473,7 +473,7 @@ async fn discover_manager_access(
     })
 }
 
-async fn discover_customer_manager_access(
+async fn discover_external_environment_manager_access(
     platform: &alien_platform_api::Client,
     project: &str,
     external_id: &str,
@@ -483,12 +483,12 @@ async fn discover_customer_manager_access(
 ) -> Result<DiscoveredManager> {
     let requested_at = clock.now();
     let response = platform
-        .create_remote_bindings_customer_access()
+        .create_remote_bindings_external_access()
         .id_or_name(project)
         .body(
-            alien_platform_api::types::RemoteBindingsCustomerAccessRequest::builder()
+            alien_platform_api::types::RemoteBindingsExternalAccessRequest::builder()
                 .capability(
-                    alien_platform_api::types::RemoteBindingsCustomerAccessRequestCapability::Storage,
+                    alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability::Storage,
                 )
                 .external_id(external_id),
         )
@@ -499,14 +499,16 @@ async fn discover_customer_manager_access(
         .into_inner();
 
     let expires_in = response.expires_in.ok_or_else(|| {
-        invalid_manager_access_response("customer access response omitted its expiry")
+        invalid_manager_access_response("external environment access response omitted its expiry")
     })?;
     let lifetime_millis = positive_duration_millis(expires_in).ok_or_else(|| {
-        invalid_manager_access_response("customer access response has an invalid expiry")
+        invalid_manager_access_response(
+            "external environment access response has an invalid expiry",
+        )
     })?;
     if response.access_token.trim().is_empty() {
         return Err(invalid_manager_access_response(
-            "customer access response returned an empty token",
+            "external environment access response returned an empty token",
         ));
     }
     let manager_url = validate_manager_url(&response.manager_url, allow_insecure)?;
