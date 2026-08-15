@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
-use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
+use crate::ui::{FixedSteps, accent, command, contextual_heading, dim_label, success_line};
 use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
@@ -213,10 +213,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 .iter()
                 .map(|item| alien_platform_api::types::DeploymentSetupItemSelection {
                     item: match item {
-                        OnboardSetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::AlienStack,
+                        OnboardSetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::Deployment,
                         OnboardSetupItem::Models => alien_platform_api::types::DeploymentSetupItemSelectionItem::Models,
                         OnboardSetupItem::Keys => alien_platform_api::types::DeploymentSetupItemSelectionItem::Keys,
-                        OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Storage,
+                        OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Bucket,
                         OnboardSetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
                     },
                     release_channel: None,
@@ -308,8 +308,8 @@ async fn fetch_available_setup(
     workspace_query: Option<&str>,
     project_id: &str,
 ) -> Result<AvailableSetup> {
-    use alien_platform_api::types::DeploymentLinkSetupResponseSetupItemsItem;
     use alien_platform_api::SdkResultExt;
+    use alien_platform_api::types::DeploymentLinkSetupResponseSetupItemsItem;
 
     let mut request = client
         .get_project_deployment_link_setup()
@@ -330,10 +330,10 @@ async fn fetch_available_setup(
         .setup_items
         .iter()
         .map(|item| match item {
-            DeploymentLinkSetupResponseSetupItemsItem::AlienStack => OnboardSetupItem::Application,
+            DeploymentLinkSetupResponseSetupItemsItem::Deployment => OnboardSetupItem::Application,
             DeploymentLinkSetupResponseSetupItemsItem::Models => OnboardSetupItem::Models,
             DeploymentLinkSetupResponseSetupItemsItem::Keys => OnboardSetupItem::Keys,
-            DeploymentLinkSetupResponseSetupItemsItem::Storage => OnboardSetupItem::Storage,
+            DeploymentLinkSetupResponseSetupItemsItem::Bucket => OnboardSetupItem::Storage,
             DeploymentLinkSetupResponseSetupItemsItem::Registry => OnboardSetupItem::Registry,
         })
         .collect();
@@ -372,7 +372,9 @@ fn validate_setup_items(
                 field: "setup-items".to_string(),
                 message: format!(
                     "{} is not configured for this Project. Configure it in the Dashboard before creating the setup link.",
-                    item.to_possible_value().expect("ValueEnum variants have names").get_name()
+                    item.to_possible_value()
+                        .expect("ValueEnum variants have names")
+                        .get_name()
                 ),
             }));
         }
@@ -1009,8 +1011,8 @@ fn platform_setup_environment_variables(
 
 /// Standalone/Dev mode: use manager API, show CLI command.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
-    use alien_manager_api::types::CreateDeploymentGroupRequest;
     use alien_manager_api::SdkResultExt;
+    use alien_manager_api::types::CreateDeploymentGroupRequest;
 
     if !args.env_vars.is_empty() || !args.secret_vars.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1318,9 +1320,10 @@ mod tests {
         .expect_err("missing required input should fail");
 
         assert!(err.to_string().contains("Missing developer input"));
-        assert!(err
-            .to_string()
-            .contains("--secret-input controlPlaneApiKey=..."));
+        assert!(
+            err.to_string()
+                .contains("--secret-input controlPlaneApiKey=...")
+        );
     }
 
     #[test]
@@ -1361,9 +1364,10 @@ mod tests {
         )
         .expect_err("missing required local input should fail");
 
-        assert!(err
-            .to_string()
-            .contains("--secret-input tailscaleAuthKey=..."));
+        assert!(
+            err.to_string()
+                .contains("--secret-input tailscaleAuthKey=...")
+        );
         assert!(err.to_string().contains("--platforms aws"));
     }
 
