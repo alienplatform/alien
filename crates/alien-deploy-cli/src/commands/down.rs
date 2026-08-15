@@ -87,7 +87,10 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         }
     };
 
-    output::header("Alien Deploy — Destroy");
+    let display_name = embedded_config
+        .and_then(|config| config.display_name.as_deref())
+        .unwrap_or("Alien Deploy");
+    output::header(&format!("{display_name} — Destroy"));
     output::status("Name:", &args.name);
     output::status("Manager:", &manager_url);
 

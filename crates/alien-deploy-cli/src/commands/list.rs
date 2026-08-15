@@ -69,7 +69,12 @@ pub async fn list_command(args: ListArgs, embedded_config: Option<&DeployCliConf
     let deployments = tracker.list();
 
     if deployments.is_empty() {
-        output::info("No tracked deployments. Use 'alien-deploy deploy' to create one.");
+        let command_name = embedded_config
+            .and_then(|config| config.name.as_deref())
+            .unwrap_or("alien-deploy");
+        output::info(&format!(
+            "No tracked deployments. Use '{command_name} deploy' to create one."
+        ));
         return Ok(());
     }
 

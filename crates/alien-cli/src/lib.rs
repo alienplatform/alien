@@ -25,6 +25,8 @@ use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
 use crate::commands::operations::{operations_task, OperationsArgs};
 #[cfg(feature = "platform")]
+use crate::commands::packages::{packages_task, PackagesArgs};
+#[cfg(feature = "platform")]
 use crate::commands::platform::{
     link_task, login_task, logout_task, project_task, unlink_task, workspace_task, PlatformCommand,
 };
@@ -118,6 +120,8 @@ impl Cli {
             Some(Commands::Managers(args)) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::Operations(args)) => args.json,
+            #[cfg(feature = "platform")]
+            Some(Commands::Packages(args)) => args.json,
             _ => false,
         }
     }
@@ -173,6 +177,10 @@ pub enum Commands {
     #[cfg(feature = "platform")]
     #[command(alias = "operation")]
     Operations(OperationsArgs),
+
+    /// List, inspect, and download project packages
+    #[cfg(feature = "platform")]
+    Packages(PackagesArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -507,6 +515,41 @@ mod tests {
                 "1.2.3",
             ])
             .expect("dev release --version should parse");
+    }
+
+    #[cfg(feature = "platform")]
+    #[test]
+    fn packages_list_flags_parse() {
+        Cli::command()
+            .try_get_matches_from([
+                "alien",
+                "packages",
+                "list",
+                "--project",
+                "demo",
+                "--type",
+                "cli",
+                "--json",
+            ])
+            .expect("packages list flags should parse");
+    }
+
+    #[cfg(feature = "platform")]
+    #[test]
+    fn packages_download_flags_parse() {
+        Cli::command()
+            .try_get_matches_from([
+                "alien",
+                "packages",
+                "download",
+                "pkg_abc",
+                "--artifact",
+                "linux-x64",
+                "--output",
+                "tool",
+                "--force",
+            ])
+            .expect("packages download flags should parse");
     }
 }
 
@@ -1523,6 +1566,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Managers(args)) => managers_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::Operations(args)) => operations_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::Packages(args)) => packages_task(args, ctx).await?,
         }
 
         Ok(())

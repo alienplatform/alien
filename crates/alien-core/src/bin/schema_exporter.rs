@@ -249,5 +249,8 @@ fn main() {
     let mut file = File::create(&args.gateability_output).unwrap();
     file.write_all(serde_json::to_string_pretty(&manifest).unwrap().as_bytes())
         .unwrap();
-    println!("Gateability manifest exported to {}", args.gateability_output);
+    println!(
+        "Gateability manifest exported to {}",
+        args.gateability_output
+    );
 }
