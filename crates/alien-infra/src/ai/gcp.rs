@@ -33,6 +33,10 @@ pub struct GcpAiController {
 
 const AVAILABILITY_REFRESH_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
 
+/// Vertex location used for inference. See `create_start` for why this is not
+/// the deployment's region.
+const VERTEX_LOCATION: &str = "global";
+
 fn publisher_model_present(models: &[PublisherModel], publisher: &str, upstream_id: &str) -> bool {
     let model_id = upstream_id
         .strip_prefix("google/")
@@ -169,7 +173,20 @@ impl GcpAiController {
         let config = ctx.desired_resource_config::<Ai>()?;
 
         self.project = Some(gcp_config.project_id.clone());
-        self.location = Some(gcp_config.region.clone());
+        // Vertex serves models per location, and the deployment's own region is
+        // usually the wrong one: verified live 2026-08-09 against
+        // alien-test-target, `claude-haiku-4.5` resolves in `us-central1` but
+        // 404s in `us-east4`, `us-east5`, and `europe-west1`, while every
+        // catalog model — including Gemini 3.x, which Google serves nowhere
+        // else — resolves on `global`. Availability is observed against the
+        // global Model Garden, so routing anywhere else reports models as
+        // available and then fails the request.
+        //
+        // `global` is also Google's recommended endpoint and carries no pricing
+        // premium; regional and multi-region endpoints add 10%. A deployment
+        // that needs single-region data residency for inference will need an
+        // explicit opt-in here rather than silently losing most of the catalog.
+        self.location = Some(VERTEX_LOCATION.to_string());
 
         info!(
             id = %config.id,

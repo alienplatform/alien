@@ -5,11 +5,11 @@
 ```typescript
 import { DeploymentInfoSetupConfigItemEnum } from "@alienplatform/platform-api/models";
 
-let value: DeploymentInfoSetupConfigItemEnum = "alien-stack";
+let value: DeploymentInfoSetupConfigItemEnum = "deployment";
 ```
 
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"deployment" | "models" | "keys" | "bucket" | "registry"
 ```

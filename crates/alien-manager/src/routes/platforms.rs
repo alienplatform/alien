@@ -4,15 +4,15 @@
 //! so the CLI can auto-discover which platforms to build and release for.
 
 use axum::{
+    Json, Router,
     extract::State,
     http::HeaderMap,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::Serialize;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 use crate::error::ErrorData;
 
 #[derive(Debug, Serialize)]

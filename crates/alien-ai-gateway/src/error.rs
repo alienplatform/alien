@@ -48,12 +48,39 @@ pub enum ErrorData {
     /// The requested model is not in the catalog for this binding's cloud.
     #[error(
         code = "GATEWAY_MODEL_NOT_AVAILABLE",
-        message = "Model '{model}' is not available on binding '{binding}'",
+        message = "Model '{model}' is not available for this customer's AI connection",
         retryable = "false",
         internal = "false",
-        http_status_code = 404
+        http_status_code = 404,
+        hint = "Choose a model returned by GET /v1/models, or update the customer's provider access."
     )]
     ModelNotAvailable { model: String, binding: String },
+
+    /// The provider reports that the model exists but customer action is required.
+    #[error(
+        code = "GATEWAY_MODEL_ACCESS_REQUIRED",
+        message = "Model '{model}' requires customer action: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403,
+        hint = "Update the customer's provider access, then wait for Alien to verify the model."
+    )]
+    ModelAccessRequired {
+        model: String,
+        binding: String,
+        reason: String,
+    },
+
+    /// The last provider observation could not determine whether the model is usable.
+    #[error(
+        code = "GATEWAY_MODEL_AVAILABILITY_UNKNOWN",
+        message = "Alien could not verify whether model '{model}' is available for this customer",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503,
+        hint = "Retry after the customer's model availability is checked again."
+    )]
+    ModelAvailabilityUnknown { model: String, binding: String },
 
     /// The upstream cloud endpoint could not be reached. Not internal: the 502 and
     /// its message (a cloud endpoint host, never a credential) are safe to surface,

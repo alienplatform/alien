@@ -6,9 +6,11 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 export const DeploymentSetupItemSelectionItem = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 export type DeploymentSetupItemSelectionItem = ClosedEnum<
   typeof DeploymentSetupItemSelectionItem

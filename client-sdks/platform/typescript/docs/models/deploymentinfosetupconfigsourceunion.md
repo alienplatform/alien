@@ -3,11 +3,11 @@
 
 ## Supported Types
 
-### `models.DeploymentInfoSetupConfigSourceApplicationRelease`
+### `models.DeploymentInfoSetupConfigSourceProjectRelease`
 
 ```typescript
-const value: models.DeploymentInfoSetupConfigSourceApplicationRelease = {
-  type: "application-release",
+const value: models.DeploymentInfoSetupConfigSourceProjectRelease = {
+  type: "project-release",
   releaseChannel: "<value>",
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
@@ -18,7 +18,7 @@ const value: models.DeploymentInfoSetupConfigSourceApplicationRelease = {
 ```typescript
 const value: models.DeploymentInfoSetupConfigSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-key",
+  definitionId: "customer-storage",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

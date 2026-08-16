@@ -70,9 +70,46 @@ describe("remote Storage smoke", () => {
     ).toEqual({
       apiUrl: "https://api.example.com",
       apiKey: "token_123",
-      deploymentId: "dep_123",
+      selector: { type: "deployment", deploymentId: "dep_123" },
       storageBinding: "archive",
     })
+  })
+
+  it("accepts a stable Project and external-ID selector", () => {
+    expect(
+      readRemoteStorageSmokeConfig({
+        ALIEN_API_URL: "https://api.example.com",
+        ALIEN_API_KEY: "token_123",
+        ALIEN_PROJECT: "customer-files",
+        ALIEN_EXTERNAL_ID: "customer_123",
+        ALIEN_STORAGE_BINDING: "storage",
+      }),
+    ).toMatchObject({
+      selector: {
+        type: "customer",
+        project: "customer-files",
+        externalId: "customer_123",
+      },
+    })
+  })
+
+  it("rejects missing or ambiguous selectors", () => {
+    const common = {
+      ALIEN_API_URL: "https://api.example.com",
+      ALIEN_API_KEY: "token_123",
+      ALIEN_STORAGE_BINDING: "storage",
+    }
+    expect(() => readRemoteStorageSmokeConfig(common)).toThrow(
+      "Set either ALIEN_DEPLOYMENT_ID or both ALIEN_PROJECT and ALIEN_EXTERNAL_ID",
+    )
+    expect(() =>
+      readRemoteStorageSmokeConfig({
+        ...common,
+        ALIEN_DEPLOYMENT_ID: "dep_123",
+        ALIEN_PROJECT: "customer-files",
+        ALIEN_EXTERNAL_ID: "customer_123",
+      }),
+    ).toThrow("Set either ALIEN_DEPLOYMENT_ID or both ALIEN_PROJECT and ALIEN_EXTERNAL_ID")
   })
 
   it("checks every remote operation and verifies deletion", async () => {

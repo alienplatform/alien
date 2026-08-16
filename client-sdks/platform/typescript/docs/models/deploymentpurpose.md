@@ -1,6 +1,6 @@
 # DeploymentPurpose
 
-Operational purpose of this deployment within its customer environment.
+Filter by deployment purpose
 
 ## Example Usage
 

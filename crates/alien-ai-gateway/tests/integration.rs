@@ -134,10 +134,10 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         .iter()
         .map(|m| m["id"].as_str().unwrap())
         .collect();
-    assert!(aws_ids.contains(&"gpt-oss-20b"));
-    assert!(aws_ids.contains(&"claude-opus-4.8"));
+    assert!(aws_ids.contains(&"byo/gpt-oss-20b"));
+    assert!(aws_ids.contains(&"byo/claude-opus-4.8"));
     assert!(
-        !aws_ids.contains(&"gpt-4.1"),
+        !aws_ids.contains(&"byo/gpt-4.1"),
         "AWS catalog must not list the Azure model"
     );
 
@@ -155,9 +155,9 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
         .iter()
         .map(|m| m["id"].as_str().unwrap())
         .collect();
-    assert!(az_ids.contains(&"gpt-4.1"));
+    assert!(az_ids.contains(&"byo/gpt-4.1"));
     assert!(
-        !az_ids.contains(&"gpt-oss-20b"),
+        !az_ids.contains(&"byo/gpt-oss-20b"),
         "Azure catalog must not list the AWS model"
     );
 }
@@ -312,7 +312,7 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
             when.method(POST)
                 .path("/v1/chat/completions")
                 .header("authorization", "Bearer sk-proj-test-secret")
-                .body_contains("gpt-5");
+                .body_contains("gpt-4.1-mini");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(r#"{"id":"chat_direct","choices":[]}"#);
@@ -323,7 +323,7 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
             when.method(POST)
                 .path("/v1/responses")
                 .header("authorization", "Bearer sk-proj-test-secret")
-                .body_contains("gpt-5");
+                .body_contains("gpt-4.1-mini");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(r#"{"id":"resp_direct","output":[]}"#);
@@ -338,7 +338,7 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
 
     let chat_response = client
         .post(format!("{base}/direct/v1/chat/completions"))
-        .json(&json!({"model": "gpt-5", "messages": []}))
+        .json(&json!({"model": "gpt-4.1-mini", "messages": []}))
         .send()
         .await
         .expect("chat request");
@@ -346,7 +346,7 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
 
     let responses_response = client
         .post(format!("{base}/direct/v1/responses"))
-        .json(&json!({"model": "gpt-5", "input": "hello"}))
+        .json(&json!({"model": "gpt-4.1-mini", "input": "hello"}))
         .send()
         .await
         .expect("responses request");
@@ -354,11 +354,12 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
 
     let wrong_protocol = client
         .post(format!("{base}/direct/v1/messages"))
-        .json(&json!({"model": "gpt-5", "messages": []}))
+        .json(&json!({"model": "gpt-4.1-mini", "messages": []}))
         .send()
         .await
         .expect("wrong protocol response");
     assert_eq!(wrong_protocol.status(), 400);
+    assert_eq!(chat.hits_async().await, 1);
     chat.assert_async().await;
     responses.assert_async().await;
     assert!(route_from_direct_openai("direct", "contains whitespace").is_err());

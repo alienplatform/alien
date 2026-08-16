@@ -8,20 +8,20 @@
 //! `GET  /v1/deployments/{id}/vault/{vault_name}/secrets/{key}` — get a secret
 
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{bindings::VaultBinding, ManagementPermissions, Platform, Stack, StackState};
+use alien_core::{ManagementPermissions, Platform, Stack, StackState, bindings::VaultBinding};
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::HeaderMap,
     routing::put,
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tracing::{error, info};
 
-use super::auth;
 use super::AppState;
+use super::auth;
 use crate::error::{ErrorData, Result};
 use crate::traits::DeploymentRecord;
 
@@ -284,8 +284,8 @@ async fn get_secret(
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        bindings::VaultBinding, permissions::PermissionProfile, Resource, ResourceStatus, Stack,
-        StackResourceState, Vault,
+        Resource, ResourceStatus, Stack, StackResourceState, Vault, bindings::VaultBinding,
+        permissions::PermissionProfile,
     };
 
     use super::*;

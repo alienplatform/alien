@@ -1,15 +1,15 @@
 //! Credential resolution and minting endpoints.
 
-use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::ServiceAccountInfo;
+use alien_bindings::traits::ImpersonationRequest;
 use alien_core::{ClientConfig, Container, Daemon, Platform, ServiceAccount, Worker};
 use alien_error::ContextError;
 use axum::{
+    Router,
     extract::{Json, State},
-    http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
+    http::{HeaderMap, header::CACHE_CONTROL, header::PRAGMA},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use crate::error::ErrorData;
 use crate::ids::sha256_hash;
 use crate::traits::DeploymentRecord;
 
-use super::{auth, current_release_resource, load_current_release, AppState};
+use super::{AppState, auth, current_release_resource, load_current_release};
 
 // --- Mint constants ---
 
@@ -191,7 +191,7 @@ async fn mint_credentials(
                         "Service-account binding '{}' not available for {}: {}",
                         req.binding_name, platform, e.message
                     ))
-                    .into_response()
+                    .into_response();
                 }
             };
 
@@ -209,7 +209,7 @@ async fn mint_credentials(
                                 req.binding_name
                             ),
                         })
-                        .into_response()
+                        .into_response();
                 }
             };
 
@@ -230,7 +230,7 @@ async fn mint_credentials(
                                 req.binding_name
                             ),
                         })
-                        .into_response()
+                        .into_response();
                 }
             };
 
@@ -264,7 +264,7 @@ async fn mint_credentials(
                     return ErrorData::internal(
                         "Local credential mint fallback returned a non-local client config",
                     )
-                    .into_response()
+                    .into_response();
                 }
                 Err(e) => return e.into_response(),
             }
@@ -465,8 +465,8 @@ fn principal_from_client_config(config: &ClientConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_duration, mint_session_name, principal_from_client_config, principal_from_info,
-        truncate_session_name, MintCredentialsResponse, MAX_SESSION_NAME_LEN,
+        MAX_SESSION_NAME_LEN, MintCredentialsResponse, clamp_duration, mint_session_name,
+        principal_from_client_config, principal_from_info, truncate_session_name,
     };
     use alien_bindings::ServiceAccountInfo;
     use alien_bindings::{

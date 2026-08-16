@@ -2,9 +2,9 @@
 //! `ObjectStore` supertrait plus the inherent presigned-request methods.
 
 use crate::error::{map_alien_error, map_object_store_error};
+use alien_bindings::Storage;
 use alien_bindings::error::ErrorData;
 use alien_bindings::presigned::PresignedRequest;
-use alien_bindings::Storage;
 use alien_error::AlienError;
 use futures::StreamExt;
 use napi::bindgen_prelude::Buffer;

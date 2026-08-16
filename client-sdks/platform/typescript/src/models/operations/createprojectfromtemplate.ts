@@ -13,7 +13,7 @@ import * as models from "../index.js";
 /**
  * Template root directory inside alienplatform/alien
  */
-export const TemplatePathRequest = {
+export const CreateProjectFromTemplateTemplatePathRequest = {
   ExamplesCustomerModelsTs: "examples/customer-models-ts",
   ExamplesRemoteWorkerTs: "examples/remote-worker-ts",
   ExamplesGithubAgentPackagesRemoteAgent:
@@ -24,7 +24,9 @@ export const TemplatePathRequest = {
 /**
  * Template root directory inside alienplatform/alien
  */
-export type TemplatePathRequest = ClosedEnum<typeof TemplatePathRequest>;
+export type CreateProjectFromTemplateTemplatePathRequest = ClosedEnum<
+  typeof CreateProjectFromTemplateTemplatePathRequest
+>;
 
 /**
  * Target OS and architecture for compiled binaries.
@@ -201,7 +203,7 @@ export type CreateProjectFromTemplateRequestBody = {
   /**
    * Template root directory inside alienplatform/alien
    */
-  templatePath: TemplatePathRequest;
+  templatePath: CreateProjectFromTemplateTemplatePathRequest;
   /**
    * The name of a directory or relative path to the source code of your project. When null is used it will default to the project root
    */
@@ -481,6 +483,10 @@ export type CreateProjectFromTemplateDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type CreateProjectFromTemplateDeployments = {
+  enabled: boolean;
+};
+
 export type CreateProjectFromTemplateKeys = {
   enabled: boolean;
   applicationEncryption: boolean;
@@ -491,6 +497,8 @@ export const CreateProjectFromTemplateAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
 } as const;
 export type CreateProjectFromTemplateAllowedProvider = ClosedEnum<
   typeof CreateProjectFromTemplateAllowedProvider
@@ -517,17 +525,46 @@ export type CreateProjectFromTemplateModels = {
   requirements: Array<CreateProjectFromTemplateRequirement>;
 };
 
-export type CreateProjectFromTemplateConnections = {
+export const CreateProjectFromTemplateAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type CreateProjectFromTemplateAccess = ClosedEnum<
+  typeof CreateProjectFromTemplateAccess
+>;
+
+export type CreateProjectFromTemplateBuckets = {
+  enabled: boolean;
+  access: CreateProjectFromTemplateAccess;
+};
+
+export const CreateProjectFromTemplateCredentialPolicy = {
+  PullOnly: "pull-only",
+  PushAndPull: "push-and-pull",
+} as const;
+export type CreateProjectFromTemplateCredentialPolicy = ClosedEnum<
+  typeof CreateProjectFromTemplateCredentialPolicy
+>;
+
+export type CreateProjectFromTemplateRegistry = {
+  enabled: boolean;
+  repositories: Array<string>;
+  credentialPolicy: CreateProjectFromTemplateCredentialPolicy;
+};
+
+export type CreateProjectFromTemplateCapabilities = {
+  deployments?: CreateProjectFromTemplateDeployments | undefined;
   keys?: CreateProjectFromTemplateKeys | undefined;
   models?: CreateProjectFromTemplateModels | undefined;
+  buckets?: CreateProjectFromTemplateBuckets | undefined;
+  registry?: CreateProjectFromTemplateRegistry | undefined;
 };
 
 /**
- * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+ * Capabilities this Project may offer through setup links.
  */
-export type CreateProjectFromTemplateCustomerConnections = {
+export type CreateProjectFromTemplateProjectCapabilities = {
   schemaVersion: number;
-  connections: CreateProjectFromTemplateConnections;
+  capabilities: CreateProjectFromTemplateCapabilities;
 };
 
 export type CreateProjectFromTemplateGithubSetup = {
@@ -541,15 +578,17 @@ export type CreateProjectFromTemplateGithubSetup = {
   workflowUrl: string;
 };
 
-export const SourceRepository = {
+export const CreateProjectFromTemplateSourceRepository = {
   AlienplatformAlien: "alienplatform/alien",
 } as const;
-export type SourceRepository = ClosedEnum<typeof SourceRepository>;
+export type CreateProjectFromTemplateSourceRepository = ClosedEnum<
+  typeof CreateProjectFromTemplateSourceRepository
+>;
 
 /**
  * Template root directory inside alienplatform/alien
  */
-export const TemplatePathResponse = {
+export const CreateProjectFromTemplateTemplatePathResponse = {
   ExamplesCustomerModelsTs: "examples/customer-models-ts",
   ExamplesRemoteWorkerTs: "examples/remote-worker-ts",
   ExamplesGithubAgentPackagesRemoteAgent:
@@ -560,10 +599,12 @@ export const TemplatePathResponse = {
 /**
  * Template root directory inside alienplatform/alien
  */
-export type TemplatePathResponse = ClosedEnum<typeof TemplatePathResponse>;
+export type CreateProjectFromTemplateTemplatePathResponse = ClosedEnum<
+  typeof CreateProjectFromTemplateTemplatePathResponse
+>;
 
-export type Template = {
-  sourceRepository: SourceRepository;
+export type CreateProjectFromTemplateTemplate = {
+  sourceRepository: CreateProjectFromTemplateSourceRepository;
   /**
    * Fork repository in <owner>/<repo> format
    */
@@ -571,7 +612,7 @@ export type Template = {
   /**
    * Template root directory inside alienplatform/alien
    */
-  templatePath: TemplatePathResponse;
+  templatePath: CreateProjectFromTemplateTemplatePathResponse;
   resolvedRootDirectory: string;
 };
 
@@ -618,10 +659,10 @@ export type CreateProjectFromTemplateResponse = {
    */
   defaultManagers?: CreateProjectFromTemplateDefaultManagers | null | undefined;
   /**
-   * Customer infrastructure offered by this Project through exact built-in or application-authored sources.
+   * Capabilities this Project may offer through setup links.
    */
-  customerConnections?:
-    | CreateProjectFromTemplateCustomerConnections
+  projectCapabilities?:
+    | CreateProjectFromTemplateProjectCapabilities
     | null
     | undefined;
   createdAt: Date;
@@ -631,13 +672,14 @@ export type CreateProjectFromTemplateResponse = {
   workspaceId: string;
   githubSetup?: CreateProjectFromTemplateGithubSetup | undefined;
   gitRepositoryWarning?: models.APIError | undefined;
-  template: Template;
+  template: CreateProjectFromTemplateTemplate;
 };
 
 /** @internal */
-export const TemplatePathRequest$outboundSchema: z.ZodEnum<
-  typeof TemplatePathRequest
-> = z.enum(TemplatePathRequest);
+export const CreateProjectFromTemplateTemplatePathRequest$outboundSchema:
+  z.ZodEnum<typeof CreateProjectFromTemplateTemplatePathRequest> = z.enum(
+    CreateProjectFromTemplateTemplatePathRequest,
+  );
 
 /** @internal */
 export const CreateProjectFromTemplateBinaryTargetRequest$outboundSchema:
@@ -867,7 +909,7 @@ export const CreateProjectFromTemplateRequestBody$outboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   targetNamespace: z.string(),
-  templatePath: TemplatePathRequest$outboundSchema,
+  templatePath: CreateProjectFromTemplateTemplatePathRequest$outboundSchema,
   rootDirectory: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectFromTemplatePackagesConfigRequest$outboundSchema),
@@ -1173,6 +1215,25 @@ export function createProjectFromTemplateDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateDeployments$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateDeployments,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+});
+
+export function createProjectFromTemplateDeploymentsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateDeployments, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateDeployments$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateDeployments' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectFromTemplateKeys$inboundSchema: z.ZodType<
   CreateProjectFromTemplateKeys,
   unknown
@@ -1247,48 +1308,103 @@ export function createProjectFromTemplateModelsFromJSON(
 }
 
 /** @internal */
-export const CreateProjectFromTemplateConnections$inboundSchema: z.ZodType<
-  CreateProjectFromTemplateConnections,
+export const CreateProjectFromTemplateAccess$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateAccess
+> = z.enum(CreateProjectFromTemplateAccess);
+
+/** @internal */
+export const CreateProjectFromTemplateBuckets$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateBuckets,
   unknown
 > = z.object({
-  keys: z.lazy(() => CreateProjectFromTemplateKeys$inboundSchema).optional(),
-  models: z.lazy(() => CreateProjectFromTemplateModels$inboundSchema)
-    .optional(),
+  enabled: z.boolean(),
+  access: CreateProjectFromTemplateAccess$inboundSchema,
 });
 
-export function createProjectFromTemplateConnectionsFromJSON(
+export function createProjectFromTemplateBucketsFromJSON(
   jsonString: string,
-): SafeParseResult<CreateProjectFromTemplateConnections, SDKValidationError> {
+): SafeParseResult<CreateProjectFromTemplateBuckets, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      CreateProjectFromTemplateConnections$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateProjectFromTemplateConnections' from JSON`,
+    (x) => CreateProjectFromTemplateBuckets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateBuckets' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateProjectFromTemplateCustomerConnections$inboundSchema:
-  z.ZodType<CreateProjectFromTemplateCustomerConnections, unknown> = z.object({
+export const CreateProjectFromTemplateCredentialPolicy$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateCredentialPolicy
+> = z.enum(CreateProjectFromTemplateCredentialPolicy);
+
+/** @internal */
+export const CreateProjectFromTemplateRegistry$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateRegistry,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  repositories: z.array(z.string()),
+  credentialPolicy: CreateProjectFromTemplateCredentialPolicy$inboundSchema,
+});
+
+export function createProjectFromTemplateRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectFromTemplateRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateCapabilities$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateCapabilities,
+  unknown
+> = z.object({
+  deployments: z.lazy(() => CreateProjectFromTemplateDeployments$inboundSchema)
+    .optional(),
+  keys: z.lazy(() => CreateProjectFromTemplateKeys$inboundSchema).optional(),
+  models: z.lazy(() => CreateProjectFromTemplateModels$inboundSchema)
+    .optional(),
+  buckets: z.lazy(() => CreateProjectFromTemplateBuckets$inboundSchema)
+    .optional(),
+  registry: z.lazy(() => CreateProjectFromTemplateRegistry$inboundSchema)
+    .optional(),
+});
+
+export function createProjectFromTemplateCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateCapabilities, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateCapabilities$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectFromTemplateProjectCapabilities$inboundSchema:
+  z.ZodType<CreateProjectFromTemplateProjectCapabilities, unknown> = z.object({
     schemaVersion: z.number(),
-    connections: z.lazy(() =>
-      CreateProjectFromTemplateConnections$inboundSchema
+    capabilities: z.lazy(() =>
+      CreateProjectFromTemplateCapabilities$inboundSchema
     ),
   });
 
-export function createProjectFromTemplateCustomerConnectionsFromJSON(
+export function createProjectFromTemplateProjectCapabilitiesFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  CreateProjectFromTemplateCustomerConnections,
+  CreateProjectFromTemplateProjectCapabilities,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      CreateProjectFromTemplateCustomerConnections$inboundSchema.parse(
+      CreateProjectFromTemplateProjectCapabilities$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'CreateProjectFromTemplateCustomerConnections' from JSON`,
+    `Failed to parse 'CreateProjectFromTemplateProjectCapabilities' from JSON`,
   );
 }
 
@@ -1313,30 +1429,34 @@ export function createProjectFromTemplateGithubSetupFromJSON(
 }
 
 /** @internal */
-export const SourceRepository$inboundSchema: z.ZodEnum<
-  typeof SourceRepository
-> = z.enum(SourceRepository);
+export const CreateProjectFromTemplateSourceRepository$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateSourceRepository
+> = z.enum(CreateProjectFromTemplateSourceRepository);
 
 /** @internal */
-export const TemplatePathResponse$inboundSchema: z.ZodEnum<
-  typeof TemplatePathResponse
-> = z.enum(TemplatePathResponse);
+export const CreateProjectFromTemplateTemplatePathResponse$inboundSchema:
+  z.ZodEnum<typeof CreateProjectFromTemplateTemplatePathResponse> = z.enum(
+    CreateProjectFromTemplateTemplatePathResponse,
+  );
 
 /** @internal */
-export const Template$inboundSchema: z.ZodType<Template, unknown> = z.object({
-  sourceRepository: SourceRepository$inboundSchema,
+export const CreateProjectFromTemplateTemplate$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateTemplate,
+  unknown
+> = z.object({
+  sourceRepository: CreateProjectFromTemplateSourceRepository$inboundSchema,
   forkRepository: z.string(),
-  templatePath: TemplatePathResponse$inboundSchema,
+  templatePath: CreateProjectFromTemplateTemplatePathResponse$inboundSchema,
   resolvedRootDirectory: z.string(),
 });
 
-export function templateFromJSON(
+export function createProjectFromTemplateTemplateFromJSON(
   jsonString: string,
-): SafeParseResult<Template, SDKValidationError> {
+): SafeParseResult<CreateProjectFromTemplateTemplate, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Template$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Template' from JSON`,
+    (x) => CreateProjectFromTemplateTemplate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateTemplate' from JSON`,
   );
 }
 
@@ -1363,15 +1483,15 @@ export const CreateProjectFromTemplateResponse$inboundSchema: z.ZodType<
   defaultManagers: z.nullable(
     z.lazy(() => CreateProjectFromTemplateDefaultManagers$inboundSchema),
   ).optional(),
-  customerConnections: z.nullable(
-    z.lazy(() => CreateProjectFromTemplateCustomerConnections$inboundSchema),
+  projectCapabilities: z.nullable(
+    z.lazy(() => CreateProjectFromTemplateProjectCapabilities$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
   githubSetup: z.lazy(() => CreateProjectFromTemplateGithubSetup$inboundSchema)
     .optional(),
   gitRepositoryWarning: models.APIError$inboundSchema.optional(),
-  template: z.lazy(() => Template$inboundSchema),
+  template: z.lazy(() => CreateProjectFromTemplateTemplate$inboundSchema),
 });
 
 export function createProjectFromTemplateResponseFromJSON(

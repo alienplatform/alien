@@ -54,7 +54,7 @@ typescript:
   compileCommand:
     - bash
     - -c
-    - NODE_OPTIONS=--max-old-space-size=8192 pnpm build
+    - NODE_OPTIONS=--max-old-space-size=16384 pnpm build
   constFieldsAlwaysOptional: false
   defaultErrorName: AlienDefaultError
   enableCustomCodeRegions: false

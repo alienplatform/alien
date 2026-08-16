@@ -26,9 +26,11 @@ export type ForwardImportRequestMode = ClosedEnum<
  * Exact item selected from a tailored customer setup link.
  */
 export const ForwardImportRequestSetupItem = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 /**
  * Exact item selected from a tailored customer setup link.

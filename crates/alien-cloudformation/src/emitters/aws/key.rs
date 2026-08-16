@@ -3,7 +3,9 @@ use crate::{
     emitters::aws::helpers::{required_logical_id, resource_config, tags},
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, ErrorData, Key, RemoteBindings, Result};
+use alien_core::{
+    import::EmitContext, ErrorData, Key, RemoteBindings, RemoteStackManagement, Result,
+};
 use alien_error::AlienError;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -29,6 +31,9 @@ impl CfEmitter for AwsKeyEmitter {
         key.update_replace_policy = Some("Retain".to_string());
 
         let mut resources = vec![key];
+        if management_has_key_permission(ctx) {
+            resources.push(management_metadata_policy(ctx, logical_id)?);
+        }
         if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
             resources.push(remote_access_policy(ctx, logical_id)?);
         }
@@ -51,6 +56,73 @@ impl CfEmitter for AwsKeyEmitter {
             ("region", CfExpression::ref_("AWS::Region")),
         ])))
     }
+}
+
+fn management_has_key_permission(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack
+        .management()
+        .profile()
+        .and_then(|profile| profile.0.get(ctx.resource_id))
+        .is_some_and(|refs| {
+            refs.iter()
+                .any(|reference| reference.id() == "key/management")
+        })
+}
+
+fn management_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+            .then(|| {
+                ctx.name_for(id).map(|logical_id| {
+                    if logical_id == "Management" {
+                        "ManagementRole".to_string()
+                    } else {
+                        format!("{logical_id}Role")
+                    }
+                })
+            })
+            .flatten()
+    })
+}
+
+fn management_metadata_policy(ctx: &EmitContext<'_>, key_id: &str) -> Result<CfResource> {
+    let role_id = management_role_id(ctx).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "managed Key has no Management identity".to_string(),
+        })
+    })?;
+    let mut policy = CfResource::new(
+        format!("{key_id}ManagementMetadataPolicy"),
+        "AWS::IAM::Policy".to_string(),
+    );
+    policy.properties.insert(
+        "PolicyName".to_string(),
+        CfExpression::sub(format!(
+            "${{AWS::StackName}}-{}-key-metadata",
+            ctx.resource_id
+        )),
+    );
+    policy.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(&role_id)]),
+    );
+    policy.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list([CfExpression::object([
+                    ("Effect", CfExpression::from("Allow")),
+                    ("Action", CfExpression::from("kms:DescribeKey")),
+                    ("Resource", CfExpression::get_att(key_id, "Arn")),
+                ])]),
+            ),
+        ]),
+    );
+    policy.depends_on.push(role_id);
+    policy.depends_on.push(key_id.to_string());
+    Ok(policy)
 }
 
 fn root_key_policy() -> CfExpression {

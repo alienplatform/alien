@@ -17,9 +17,11 @@ import {
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const APIKeyDeploymentSetupConfigItemEnum = {
-  AlienStack: "alien-stack",
+  Deployment: "deployment",
   Models: "models",
   Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
 } as const;
 export type APIKeyDeploymentSetupConfigItemEnum = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigItemEnum
@@ -28,6 +30,8 @@ export type APIKeyDeploymentSetupConfigItemEnum = ClosedEnum<
 export const APIKeyDeploymentSetupConfigDefinitionId = {
   CustomerAi: "customer-ai",
   CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
 } as const;
 export type APIKeyDeploymentSetupConfigDefinitionId = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigDefinitionId
@@ -43,8 +47,8 @@ export type APIKeyDeploymentSetupConfigSourceBuiltIn = {
   sourceReleaseId: string;
 };
 
-export type APIKeyDeploymentSetupConfigSourceApplicationRelease = {
-  type: "application-release";
+export type APIKeyDeploymentSetupConfigSourceProjectRelease = {
+  type: "project-release";
   releaseChannel: string;
   /**
    * Unique identifier for the release.
@@ -54,7 +58,7 @@ export type APIKeyDeploymentSetupConfigSourceApplicationRelease = {
 };
 
 export type APIKeyDeploymentSetupConfigSourceUnion =
-  | APIKeyDeploymentSetupConfigSourceApplicationRelease
+  | APIKeyDeploymentSetupConfigSourceProjectRelease
   | APIKeyDeploymentSetupConfigSourceBuiltIn;
 
 export const APIKeyDeploymentSetupConfigAllowedProvider = {
@@ -62,6 +66,8 @@ export const APIKeyDeploymentSetupConfigAllowedProvider = {
   GcpVertex: "gcp-vertex",
   AzureFoundry: "azure-foundry",
   Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
 } as const;
 export type APIKeyDeploymentSetupConfigAllowedProvider = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigAllowedProvider
@@ -94,7 +100,7 @@ export type APIKeyDeploymentSetupConfigConfiguration = {
 export type APIKeyDeploymentSetupConfigItem = {
   item: APIKeyDeploymentSetupConfigItemEnum;
   source:
-    | APIKeyDeploymentSetupConfigSourceApplicationRelease
+    | APIKeyDeploymentSetupConfigSourceProjectRelease
     | APIKeyDeploymentSetupConfigSourceBuiltIn;
   required: boolean;
   configuration?: APIKeyDeploymentSetupConfigConfiguration | undefined;
@@ -145,28 +151,28 @@ export function apiKeyDeploymentSetupConfigSourceBuiltInFromJSON(
 }
 
 /** @internal */
-export const APIKeyDeploymentSetupConfigSourceApplicationRelease$inboundSchema:
-  z.ZodType<APIKeyDeploymentSetupConfigSourceApplicationRelease, unknown> = z
+export const APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema:
+  z.ZodType<APIKeyDeploymentSetupConfigSourceProjectRelease, unknown> = z
     .object({
-      type: z.literal("application-release"),
+      type: z.literal("project-release"),
       releaseChannel: z.string(),
       releaseId: z.string(),
       resourceId: z.string().optional(),
     });
 
-export function apiKeyDeploymentSetupConfigSourceApplicationReleaseFromJSON(
+export function apiKeyDeploymentSetupConfigSourceProjectReleaseFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  APIKeyDeploymentSetupConfigSourceApplicationRelease,
+  APIKeyDeploymentSetupConfigSourceProjectRelease,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      APIKeyDeploymentSetupConfigSourceApplicationRelease$inboundSchema.parse(
+      APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'APIKeyDeploymentSetupConfigSourceApplicationRelease' from JSON`,
+    `Failed to parse 'APIKeyDeploymentSetupConfigSourceProjectRelease' from JSON`,
   );
 }
 
@@ -175,9 +181,7 @@ export const APIKeyDeploymentSetupConfigSourceUnion$inboundSchema: z.ZodType<
   APIKeyDeploymentSetupConfigSourceUnion,
   unknown
 > = z.union([
-  z.lazy(() =>
-    APIKeyDeploymentSetupConfigSourceApplicationRelease$inboundSchema
-  ),
+  z.lazy(() => APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema),
   z.lazy(() => APIKeyDeploymentSetupConfigSourceBuiltIn$inboundSchema),
 ]);
 
@@ -263,9 +267,7 @@ export const APIKeyDeploymentSetupConfigItem$inboundSchema: z.ZodType<
 > = z.object({
   item: APIKeyDeploymentSetupConfigItemEnum$inboundSchema,
   source: z.union([
-    z.lazy(() =>
-      APIKeyDeploymentSetupConfigSourceApplicationRelease$inboundSchema
-    ),
+    z.lazy(() => APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema),
     z.lazy(() => APIKeyDeploymentSetupConfigSourceBuiltIn$inboundSchema),
   ]),
   required: z.boolean(),

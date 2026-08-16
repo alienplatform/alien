@@ -16,6 +16,10 @@ import {
 } from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  SetupItemStatus,
+  SetupItemStatus$inboundSchema,
+} from "./setupitemstatus.js";
+import {
   SupportedCloudRegions,
   SupportedCloudRegions$inboundSchema,
 } from "./supportedcloudregions.js";
@@ -106,6 +110,10 @@ export type StackSummaryPlatform = ClosedEnum<typeof StackSummaryPlatform>;
 export type ResourceCounts = {
   workers: number;
   containers: number;
+  /**
+   * Daemon resources that run on managed runtime machines
+   */
+  daemons?: number | undefined;
   /**
    * Resources that declare managed public HTTPS endpoint setup
    */
@@ -690,6 +698,111 @@ export type DeploymentInfoInstallContext = {
   targets: { [k: string]: InstallContextTargets };
 };
 
+export const ModelAvailabilitySourceStatus = {
+  Current: "current",
+  Stale: "stale",
+  Invalid: "invalid",
+} as const;
+export type ModelAvailabilitySourceStatus = ClosedEnum<
+  typeof ModelAvailabilitySourceStatus
+>;
+
+export const DeploymentInfoAccessTest = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type DeploymentInfoAccessTest = ClosedEnum<
+  typeof DeploymentInfoAccessTest
+>;
+
+export const DeploymentInfoModelAvailability = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type DeploymentInfoModelAvailability = ClosedEnum<
+  typeof DeploymentInfoModelAvailability
+>;
+
+export const DeploymentInfoBlocker = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type DeploymentInfoBlocker = ClosedEnum<typeof DeploymentInfoBlocker>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const DeploymentInfoClientApi = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type DeploymentInfoClientApi = ClosedEnum<
+  typeof DeploymentInfoClientApi
+>;
+
+export type DeploymentInfoModel = {
+  accessTest: DeploymentInfoAccessTest;
+  availability: DeploymentInfoModelAvailability;
+  blockers: Array<DeploymentInfoBlocker>;
+  clientApis: Array<DeploymentInfoClientApi>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const DeploymentInfoSource = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type DeploymentInfoSource = ClosedEnum<typeof DeploymentInfoSource>;
+
+export type DeploymentInfoAvailability = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<DeploymentInfoModel>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: DeploymentInfoSource;
+};
+
+export type ModelAvailabilitySource = {
+  deploymentId: string;
+  resourceId: string;
+  observedAt: Date;
+  status: ModelAvailabilitySourceStatus;
+  availability?: DeploymentInfoAvailability | undefined;
+};
+
 export const ReadinessStatus = {
   Ready: "ready",
   NotReady: "notReady",
@@ -735,6 +848,8 @@ export type DeploymentInfo = {
   packages: Packages;
   installContext: DeploymentInfoInstallContext;
   supportedRegions: SupportedCloudRegions;
+  modelAvailabilitySources: Array<ModelAvailabilitySource>;
+  setupItems?: Array<SetupItemStatus> | undefined;
   setupConfig?: DeploymentInfoSetupConfig | undefined;
   readiness?: Readiness | undefined;
 };
@@ -833,6 +948,7 @@ export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
   z.object({
     workers: z.int(),
     containers: z.int(),
+    daemons: z.int().optional(),
     publicHttpsEndpoints: z.int(),
     externalInfra: z.int(),
     total: z.int(),
@@ -1503,6 +1619,106 @@ export function deploymentInfoInstallContextFromJSON(
 }
 
 /** @internal */
+export const ModelAvailabilitySourceStatus$inboundSchema: z.ZodEnum<
+  typeof ModelAvailabilitySourceStatus
+> = z.enum(ModelAvailabilitySourceStatus);
+
+/** @internal */
+export const DeploymentInfoAccessTest$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoAccessTest
+> = z.enum(DeploymentInfoAccessTest);
+
+/** @internal */
+export const DeploymentInfoModelAvailability$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoModelAvailability
+> = z.enum(DeploymentInfoModelAvailability);
+
+/** @internal */
+export const DeploymentInfoBlocker$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoBlocker
+> = z.enum(DeploymentInfoBlocker);
+
+/** @internal */
+export const DeploymentInfoClientApi$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoClientApi
+> = z.enum(DeploymentInfoClientApi);
+
+/** @internal */
+export const DeploymentInfoModel$inboundSchema: z.ZodType<
+  DeploymentInfoModel,
+  unknown
+> = z.object({
+  accessTest: DeploymentInfoAccessTest$inboundSchema,
+  availability: DeploymentInfoModelAvailability$inboundSchema,
+  blockers: z.array(DeploymentInfoBlocker$inboundSchema),
+  clientApis: z.array(DeploymentInfoClientApi$inboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function deploymentInfoModelFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoModel, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoModel$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoModel' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSource$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoSource
+> = z.enum(DeploymentInfoSource);
+
+/** @internal */
+export const DeploymentInfoAvailability$inboundSchema: z.ZodType<
+  DeploymentInfoAvailability,
+  unknown
+> = z.object({
+  catalogRevision: z.string(),
+  location: z.nullable(z.string()).optional(),
+  models: z.array(z.lazy(() => DeploymentInfoModel$inboundSchema)),
+  source: DeploymentInfoSource$inboundSchema,
+});
+
+export function deploymentInfoAvailabilityFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoAvailability, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoAvailability$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoAvailability' from JSON`,
+  );
+}
+
+/** @internal */
+export const ModelAvailabilitySource$inboundSchema: z.ZodType<
+  ModelAvailabilitySource,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  resourceId: z.string(),
+  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  status: ModelAvailabilitySourceStatus$inboundSchema,
+  availability: z.lazy(() => DeploymentInfoAvailability$inboundSchema)
+    .optional(),
+});
+
+export function modelAvailabilitySourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ModelAvailabilitySource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ModelAvailabilitySource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ModelAvailabilitySource' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReadinessStatus$inboundSchema: z.ZodEnum<typeof ReadinessStatus> =
   z.enum(ReadinessStatus);
 
@@ -1557,6 +1773,10 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     packages: z.lazy(() => Packages$inboundSchema),
     installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
     supportedRegions: SupportedCloudRegions$inboundSchema,
+    modelAvailabilitySources: z.array(
+      z.lazy(() => ModelAvailabilitySource$inboundSchema),
+    ),
+    setupItems: z.array(SetupItemStatus$inboundSchema).optional(),
     setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
     readiness: z.lazy(() => Readiness$inboundSchema).optional(),
   });

@@ -94,6 +94,13 @@ function fakeRemoteAddon() {
   }
 
   class FakeRemoteBindingsHandle implements RawRemoteBindingsHandle {
+    static forCustomer: (
+      project: string,
+      externalId: string,
+      token: string,
+      apiBaseUrl?: string,
+    ) => Promise<RawRemoteBindingsHandle>
+
     static forDeployment: (
       deploymentId: string,
       token: string,
@@ -110,6 +117,15 @@ function fakeRemoteAddon() {
   const forRemoteDeployment = vi.fn<
     (deploymentId: string, token: string, apiBaseUrl?: string) => Promise<RawRemoteBindingsHandle>
   >(async () => new FakeRemoteBindingsHandle())
+  const forRemoteCustomer = vi.fn<
+    (
+      project: string,
+      externalId: string,
+      token: string,
+      apiBaseUrl?: string,
+    ) => Promise<RawRemoteBindingsHandle>
+  >(async () => new FakeRemoteBindingsHandle())
+  FakeRemoteBindingsHandle.forCustomer = forRemoteCustomer
   FakeRemoteBindingsHandle.forDeployment = forRemoteDeployment
 
   return {
@@ -118,6 +134,7 @@ function fakeRemoteAddon() {
       RemoteBindingsHandle: FakeRemoteBindingsHandle,
       version: () => "test",
     },
+    forRemoteCustomer,
     forRemoteDeployment,
     resolveStorage,
     head,
@@ -129,6 +146,28 @@ function fakeRemoteAddon() {
 
 beforeEach(() => {
   loadAddon.mockReset()
+})
+
+describe("Bindings.forRemoteCustomer", () => {
+  it("forwards the Project, external ID, token, and API base URL", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+
+    const bindings = await Bindings.forRemoteCustomer({
+      project: "customer-files",
+      externalId: "customer_123",
+      token: "token_123",
+      apiBaseUrl: "https://api.example.com",
+    })
+
+    expect(fixture.forRemoteCustomer).toHaveBeenCalledWith(
+      "customer-files",
+      "customer_123",
+      "token_123",
+      "https://api.example.com",
+    )
+    expect(bindings.storage("storage")).toBeDefined()
+  })
 })
 
 describe("Bindings.forRemoteDeployment", () => {

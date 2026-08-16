@@ -84,7 +84,15 @@ async fn observe_bedrock_availability(
     region: &str,
 ) -> AiAvailabilityObservation {
     let tested_at = Utc::now();
-    let candidates = ai_catalog::models_for(Platform::Aws);
+    // The GPT-5 family is served by bedrock-mantle, which has no foundation-model
+    // record: `GetFoundationModelAvailability` rejects those ids outright
+    // (verified live 2026-08-09 — `openai.gpt-5.6-sol` returns
+    // ValidationException while `openai.gpt-oss-20b-1:0` returns AVAILABLE).
+    // Probing them anyway reported every one as a failed observation on every
+    // account, so they are reported unknown-but-not-broken instead.
+    let (mantle_only, candidates): (Vec<_>, Vec<_>) = ai_catalog::models_for(Platform::Aws)
+        .into_iter()
+        .partition(|model| model.provider_api == ai_catalog::ProviderApi::OpenAiResponses);
     // The qualified catalog contains many models. Keep the observation fast but
     // avoid turning one heartbeat into an unbounded provider request burst.
     let mut responses = Vec::with_capacity(candidates.len());
@@ -102,24 +110,36 @@ async fn observe_bedrock_availability(
         });
         responses.extend(futures::future::join_all(requests).await);
     }
-    let models = responses
+    let mut models: Vec<AiModelAvailabilityObservation> = mantle_only
         .into_iter()
-        .map(|(model, result)| match result {
-            Ok(response) => classify_bedrock_availability(model, &response, tested_at),
-            Err(error) => {
-                warn!(model = model.public_id, %error, "Bedrock availability observation failed");
-                AiModelAvailabilityObservation {
-                    public_model_id: model.public_id.to_string(),
-                    client_apis: model.client_apis.to_vec(),
-                    availability: AiModelAvailability::Unknown,
-                    blockers: vec![AiAvailabilityBlocker::ObservationFailed],
-                    access_test: AiAccessTest::NotChecked,
-                    tested_at: Some(tested_at),
-                    error_code: Some("bedrock-observation-failed".to_string()),
-                }
-            }
+        .map(|model| AiModelAvailabilityObservation {
+            public_model_id: model.public_id.to_string(),
+            client_apis: model.client_apis.to_vec(),
+            availability: AiModelAvailability::Unknown,
+            // No blocker: nothing is wrong with the account, the control plane
+            // simply cannot answer for a mantle-served model. The gateway's own
+            // call is the first authoritative signal.
+            blockers: Vec::new(),
+            access_test: AiAccessTest::NotChecked,
+            tested_at: Some(tested_at),
+            error_code: None,
         })
         .collect();
+    models.extend(responses.into_iter().map(|(model, result)| match result {
+        Ok(response) => classify_bedrock_availability(model, &response, tested_at),
+        Err(error) => {
+            warn!(model = model.public_id, %error, "Bedrock availability observation failed");
+            AiModelAvailabilityObservation {
+                public_model_id: model.public_id.to_string(),
+                client_apis: model.client_apis.to_vec(),
+                availability: AiModelAvailability::Unknown,
+                blockers: vec![AiAvailabilityBlocker::ObservationFailed],
+                access_test: AiAccessTest::NotChecked,
+                tested_at: Some(tested_at),
+                error_code: Some("bedrock-observation-failed".to_string()),
+            }
+        }
+    }));
     AiAvailabilityObservation {
         source: AiAvailabilitySource::AwsBedrock,
         catalog_revision: ai_catalog::AI_CATALOG_REVISION.to_string(),

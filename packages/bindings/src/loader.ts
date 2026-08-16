@@ -199,6 +199,12 @@ export interface RawBindingsHandleConstructor {
 
 /** Native remote bindings class. */
 export interface RawRemoteBindingsHandleConstructor {
+  forCustomer(
+    project: string,
+    externalId: string,
+    token: string,
+    apiBaseUrl?: string,
+  ): Promise<RawRemoteBindingsHandle>
   forDeployment(
     deploymentId: string,
     token: string,

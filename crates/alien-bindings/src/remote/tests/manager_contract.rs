@@ -89,6 +89,7 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
     let adapter = GeneratedManagerBindingResolver;
     let manager_url = reqwest::Url::parse(&manager_url).expect("valid manager URL");
     let manager = DiscoveredManager {
+        deployment_id: DEPLOYMENT_ID.to_string(),
         url: manager_url,
         http: authenticated_http_client(GENERATED_MANAGER_TOKEN, "generated manager fixture")
             .expect("build generated contract client"),

@@ -13,6 +13,7 @@ export const ProjectRole = {
   ProjectDeveloper: "project.developer",
   ProjectEncryption: "project.encryption",
   ProjectAiGateway: "project.ai-gateway",
+  ProjectRemoteBindings: "project.remote-bindings",
 } as const;
 /**
  * Role for project-scoped service accounts

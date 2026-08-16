@@ -20,27 +20,31 @@ let value: HeartbeatAvailable = {
     controllerPlatform: "gcp",
     data: {
       data: {
-        name: "<value>",
-        privateEndpointConnectionCount: 152029,
-        status: {
-          collectionIssues: [
-            {
-              message: "<value>",
-              reason: "not-installed",
-              severity: "info",
-              source: "<value>",
-            },
-          ],
-          health: "unknown",
-          lifecycle: "running",
-          partial: false,
-          stale: true,
+        data: {
+          enabled: true,
+          keyArn: "<value>",
+          keySpec: "<value>",
+          keyState: "<value>",
+          keyUsage: "<value>",
+          status: {
+            health: "healthy",
+            lifecycle: "failed",
+          },
         },
+        provider: "aws-kms",
       },
-      resourceType: "azure_service_bus_namespace",
+      resourceType: "key",
     },
-    observedAt: new Date("2024-03-08T08:46:36.237Z"),
-    raw: [],
+    observedAt: new Date("2024-04-26T23:19:48.455Z"),
+    raw: [
+      {
+        body: "<value>",
+        collectedAt: new Date("2025-01-29T23:35:36.058Z"),
+        format: "json",
+        source: "<value>",
+        truncated: true,
+      },
+    ],
     resourceId: "<id>",
     resourceType: "<value>",
   },

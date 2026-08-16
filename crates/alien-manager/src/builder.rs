@@ -50,8 +50,8 @@ pub struct AlienManagerBuilder {
     /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
-    customer_registry_broker:
-        Option<Arc<dyn crate::routes::registry_proxy::CustomerRegistryBroker>>,
+    external_registry_broker:
+        Option<Arc<dyn crate::routes::registry_proxy::ExternalRegistryBroker>>,
 }
 
 impl AlienManagerBuilder {
@@ -75,7 +75,7 @@ impl AlienManagerBuilder {
             bindings_provider_override: None,
             target_bindings_providers_override: None,
             import_registry: None,
-            customer_registry_broker: None,
+            external_registry_broker: None,
         }
     }
 
@@ -182,12 +182,12 @@ impl AlienManagerBuilder {
         self
     }
 
-    /// Install a private authorization/routing adapter for customer OCI paths.
-    pub fn customer_registry_broker(
+    /// Install a private authorization/routing adapter for external OCI paths.
+    pub fn external_registry_broker(
         mut self,
-        broker: Arc<dyn crate::routes::registry_proxy::CustomerRegistryBroker>,
+        broker: Arc<dyn crate::routes::registry_proxy::ExternalRegistryBroker>,
     ) -> Self {
-        self.customer_registry_broker = Some(broker);
+        self.external_registry_broker = Some(broker);
         self
     }
 
@@ -610,7 +610,7 @@ impl AlienManagerBuilder {
     /// or via a convenience method like `with_standalone_defaults()`). Missing
     /// providers produce a clear error.
     pub async fn build(self) -> crate::error::Result<AlienManager> {
-        validate_customer_registry_base_url(&self.config, self.customer_registry_broker.is_some())?;
+        validate_external_registry_base_url(&self.config, self.external_registry_broker.is_some())?;
 
         macro_rules! require_provider {
             ($field:expr, $name:literal) => {
@@ -661,30 +661,30 @@ impl AlienManagerBuilder {
             self.platform_routes,
             self.dev_status_tx,
             self.import_registry,
-            self.customer_registry_broker,
+            self.external_registry_broker,
         )
         .await
     }
 }
 
-fn validate_customer_registry_base_url(
+fn validate_external_registry_base_url(
     config: &ManagerConfig,
-    customer_registry_enabled: bool,
+    external_registry_enabled: bool,
 ) -> crate::error::Result<()> {
-    if !customer_registry_enabled {
+    if !external_registry_enabled {
         return Ok(());
     }
 
     let base_url = config.base_url.as_deref().ok_or_else(|| {
         AlienError::new(ErrorData::ServerInitFailed {
             reason:
-                "base_url must be explicitly configured when customer registry routing is enabled"
+                "base_url must be explicitly configured when external registry routing is enabled"
                     .to_string(),
         })
     })?;
     let parsed = reqwest::Url::parse(base_url).map_err(|_| {
         AlienError::new(ErrorData::ServerInitFailed {
-            reason: "base_url must be an absolute HTTP or HTTPS URL when customer registry routing is enabled"
+            reason: "base_url must be an absolute HTTP or HTTPS URL when external registry routing is enabled"
                 .to_string(),
         })
     })?;
@@ -697,7 +697,7 @@ fn validate_customer_registry_base_url(
         || parsed.fragment().is_some()
     {
         return Err(AlienError::new(ErrorData::ServerInitFailed {
-            reason: "base_url must be an origin-only HTTP or HTTPS URL when customer registry routing is enabled"
+            reason: "base_url must be an origin-only HTTP or HTTPS URL when external registry routing is enabled"
                 .to_string(),
         }));
     }
@@ -706,34 +706,36 @@ fn validate_customer_registry_base_url(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_customer_registry_base_url;
+    use super::validate_external_registry_base_url;
     use crate::config::ManagerConfig;
 
     #[test]
-    fn customer_registry_requires_an_explicit_origin() {
+    fn external_registry_requires_an_explicit_origin() {
         let config = ManagerConfig::default();
-        assert!(validate_customer_registry_base_url(&config, false).is_ok());
+        assert!(validate_external_registry_base_url(&config, false).is_ok());
 
-        let error = validate_customer_registry_base_url(&config, true)
-            .expect_err("customer registry must not advertise the localhost fallback");
-        assert!(error
-            .to_string()
-            .contains("base_url must be explicitly configured"));
+        let error = validate_external_registry_base_url(&config, true)
+            .expect_err("external registry must not advertise the localhost fallback");
+        assert!(
+            error
+                .to_string()
+                .contains("base_url must be explicitly configured")
+        );
 
         let mut configured = config;
         configured.base_url = Some("https://manager.example.com".to_string());
-        validate_customer_registry_base_url(&configured, true)
+        validate_external_registry_base_url(&configured, true)
             .expect("an explicit HTTPS manager origin is valid");
 
         configured.base_url = Some("https://manager.example.com/".to_string());
-        validate_customer_registry_base_url(&configured, true)
+        validate_external_registry_base_url(&configured, true)
             .expect("a trailing root slash is still an origin-only URL");
 
         configured.base_url = Some("https://manager.example.com/path".to_string());
-        assert!(validate_customer_registry_base_url(&configured, true).is_err());
+        assert!(validate_external_registry_base_url(&configured, true).is_err());
 
         configured.base_url = Some("https://user@manager.example.com/path".to_string());
-        assert!(validate_customer_registry_base_url(&configured, true).is_err());
+        assert!(validate_external_registry_base_url(&configured, true).is_err());
     }
 }
 
@@ -786,8 +788,8 @@ async fn finalize(
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
-    customer_registry_broker: Option<
-        Arc<dyn crate::routes::registry_proxy::CustomerRegistryBroker>,
+    external_registry_broker: Option<
+        Arc<dyn crate::routes::registry_proxy::ExternalRegistryBroker>,
     >,
 ) -> crate::error::Result<AlienManager> {
     use alien_commands::server::CommandServer;
@@ -830,7 +832,7 @@ async fn finalize(
         credential_cache: Arc::new(crate::routes::registry_proxy::CredentialCache::new()),
         pull_validation_cache: Arc::new(crate::routes::registry_proxy::PullValidationCache::new()),
         registry_routing_table: server_bindings.registry_routing_table.clone(),
-        customer_registry_broker,
+        external_registry_broker,
         // Built-in importer registry covers every OSS `(ResourceType,
         // Platform)` pair across AWS / GCP / Azure (see
         // `alien_infra::ImporterRegistry::built_in`). Embedders that need

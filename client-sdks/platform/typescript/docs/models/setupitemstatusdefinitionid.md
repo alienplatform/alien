@@ -5,11 +5,11 @@
 ```typescript
 import { SetupItemStatusDefinitionId } from "@alienplatform/platform-api/models";
 
-let value: SetupItemStatusDefinitionId = "customer-key";
+let value: SetupItemStatusDefinitionId = "customer-registry";
 ```
 
 ## Values
 
 ```typescript
-"customer-ai" | "customer-key"
+"customer-ai" | "customer-key" | "customer-storage" | "customer-registry"
 ```

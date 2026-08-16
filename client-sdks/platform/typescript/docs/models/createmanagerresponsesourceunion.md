@@ -3,11 +3,11 @@
 
 ## Supported Types
 
-### `models.CreateManagerResponseSourceApplicationRelease`
+### `models.CreateManagerResponseSourceProjectRelease`
 
 ```typescript
-const value: models.CreateManagerResponseSourceApplicationRelease = {
-  type: "application-release",
+const value: models.CreateManagerResponseSourceProjectRelease = {
+  type: "project-release",
   releaseChannel: "<value>",
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };
@@ -18,7 +18,7 @@ const value: models.CreateManagerResponseSourceApplicationRelease = {
 ```typescript
 const value: models.CreateManagerResponseSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-key",
+  definitionId: "customer-registry",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

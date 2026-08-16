@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::future::join_all;
-use object_store::path::Path;
 use object_store::PutPayload;
+use object_store::path::Path;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -24,6 +24,7 @@ const DEPLOYMENT_GROUP_ID: &str = "dg_dddddddddddddddddddddddddddd";
 const WORKSPACE_ID: &str = "ws_eeeeeeeeeeeeeeeeeeeeeeee";
 const PLATFORM_TOKEN: &str = "platform-secret-token";
 const GENERATED_MANAGER_TOKEN: &str = "generated-manager-token";
+const EXTERNAL_ID: &str = "environment_123";
 
 #[derive(Clone)]
 struct ManagerAssignment {
@@ -170,6 +171,26 @@ impl Fixture {
         )
     }
 
+    async fn remote_environment_provider(&self) -> Arc<RemoteBindingsProvider> {
+        let clock: Arc<dyn Clock> = self.clock.clone();
+        Arc::new(RemoteBindingsProvider {
+            source: Arc::new(
+                RemoteBindingSource::discover_external_environment(
+                    PROJECT_ID,
+                    EXTERNAL_ID,
+                    PLATFORM_TOKEN,
+                    Some(&self.api_url),
+                    ManagerResolverKind::LocalFixture,
+                    clock.clone(),
+                )
+                .await
+                .expect("discover external environment manager access"),
+            ),
+            resolvers: RwLock::new(HashMap::new()),
+            clock,
+        })
+    }
+
     fn set_manager_expiry(&self, expires_at: DateTime<Utc>) {
         *self
             .manager
@@ -240,11 +261,64 @@ async fn spawn_platform_server(state: PlatformFixtureState) -> String {
     let app = Router::new()
         .route("/v1/deployments/{id}", get(deployment_handler))
         .route(
+            "/v1/projects/{id}/remote-bindings/access",
+            post(customer_access_handler),
+        )
+        .route(
             "/v1/managers/{id}/binding-token",
             post(binding_token_handler),
         )
         .with_state(state);
     spawn_server(app).await
+}
+
+async fn customer_access_handler(
+    State(state): State<PlatformFixtureState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    state
+        .requests
+        .lock()
+        .expect("platform requests lock")
+        .push(RecordedRequest {
+            method: "POST".to_string(),
+            path: format!("/v1/projects/{id}/remote-bindings/access"),
+            authorization: authorization(&headers),
+            body: Some(body.clone()),
+        });
+    let expected_authorization = format!("Bearer {PLATFORM_TOKEN}");
+    if authorization(&headers).as_deref() != Some(expected_authorization.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if id != PROJECT_ID || body != json!({ "externalId": EXTERNAL_ID, "capability": "storage" }) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let assignment = state
+        .assignment
+        .read()
+        .expect("manager assignment read lock")
+        .clone();
+    let token_number = state.token_calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let access_token = format!("manager-binding-token-{token_number}");
+    *assignment
+        .expected_token
+        .write()
+        .expect("expected manager token write lock") = access_token.clone();
+    let expires_in = *state
+        .token_expires_in
+        .read()
+        .expect("binding token expiry read lock");
+    Json(json!({
+        "deploymentId": DEPLOYMENT_ID,
+        "resourceId": "storage",
+        "accessToken": access_token,
+        "expiresIn": expires_in,
+        "tokenType": "Bearer",
+        "managerUrl": assignment.url,
+    }))
+    .into_response()
 }
 
 async fn spawn_manager_server(state: ManagerFixtureState) -> String {
@@ -895,9 +969,11 @@ fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
     let error = validate_aws_remote_client_config(&aws, at(3600))
         .expect_err("AWS credentials expiring before the lease must fail closed");
     assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
-    assert!(error
-        .message
-        .contains("credential expires before its lease"));
+    assert!(
+        error
+            .message
+            .contains("credential expires before its lease")
+    );
 
     let aws = alien_core::AwsClientConfig {
         account_id: "123456789012".to_string(),

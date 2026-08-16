@@ -12,6 +12,7 @@ export const ListResourceOverviewArea = {
   Container: "container",
   Worker: "worker",
   Daemon: "daemon",
+  Ai: "ai",
 } as const;
 export type ListResourceOverviewArea = ClosedEnum<
   typeof ListResourceOverviewArea

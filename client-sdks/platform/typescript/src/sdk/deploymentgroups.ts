@@ -6,14 +6,14 @@ import { deploymentGroupsCreateDeploymentGroup } from "../funcs/deploymentGroups
 import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
 import { deploymentGroupsCreateFirstPartyDeploymentSession } from "../funcs/deploymentGroupsCreateFirstPartyDeploymentSession.js";
 import { deploymentGroupsDeleteDeploymentGroup } from "../funcs/deploymentGroupsDeleteDeploymentGroup.js";
-import { deploymentGroupsDeleteDirectAnthropicBinding } from "../funcs/deploymentGroupsDeleteDirectAnthropicBinding.js";
+import { deploymentGroupsDeleteExternalAIBinding } from "../funcs/deploymentGroupsDeleteExternalAIBinding.js";
 import { deploymentGroupsEnsureDeploymentGroupByExternalId } from "../funcs/deploymentGroupsEnsureDeploymentGroupByExternalId.js";
 import { deploymentGroupsEnsureDeploymentGroupByName } from "../funcs/deploymentGroupsEnsureDeploymentGroupByName.js";
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
 import { deploymentGroupsGetDeploymentGroupByExternalId } from "../funcs/deploymentGroupsGetDeploymentGroupByExternalId.js";
-import { deploymentGroupsGetDirectAnthropicBinding } from "../funcs/deploymentGroupsGetDirectAnthropicBinding.js";
+import { deploymentGroupsGetExternalAIBinding } from "../funcs/deploymentGroupsGetExternalAIBinding.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
-import { deploymentGroupsPutDirectAnthropicBinding } from "../funcs/deploymentGroupsPutDirectAnthropicBinding.js";
+import { deploymentGroupsPutExternalAIBinding } from "../funcs/deploymentGroupsPutExternalAIBinding.js";
 import { deploymentGroupsSetDeploymentGroupExternalId } from "../funcs/deploymentGroupsSetDeploymentGroupExternalId.js";
 import { deploymentGroupsUpdateDeploymentGroup } from "../funcs/deploymentGroupsUpdateDeploymentGroup.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -183,13 +183,13 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Get direct Anthropic connection state
+   * Get external AI connection state
    */
-  async getDirectAnthropicBinding(
-    request: operations.GetDirectAnthropicBindingRequest,
+  async getExternalAIBinding(
+    request: operations.GetExternalAIBindingRequest,
     options?: RequestOptions,
-  ): Promise<models.DirectAnthropicBindingState> {
-    return unwrapAsync(deploymentGroupsGetDirectAnthropicBinding(
+  ): Promise<models.ExternalAIBindingState> {
+    return unwrapAsync(deploymentGroupsGetExternalAIBinding(
       this,
       request,
       options,
@@ -197,13 +197,13 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Connect or rotate a direct Anthropic workspace key
+   * Connect or rotate an external AI provider key
    */
-  async putDirectAnthropicBinding(
-    request: operations.PutDirectAnthropicBindingRequest,
+  async putExternalAIBinding(
+    request: operations.PutExternalAIBindingRequest,
     options?: RequestOptions,
-  ): Promise<models.DirectAnthropicBinding> {
-    return unwrapAsync(deploymentGroupsPutDirectAnthropicBinding(
+  ): Promise<models.ExternalAIBinding> {
+    return unwrapAsync(deploymentGroupsPutExternalAIBinding(
       this,
       request,
       options,
@@ -211,13 +211,13 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Revoke the direct Anthropic connection
+   * Revoke the external AI connection
    */
-  async deleteDirectAnthropicBinding(
-    request: operations.DeleteDirectAnthropicBindingRequest,
+  async deleteExternalAIBinding(
+    request: operations.DeleteExternalAIBindingRequest,
     options?: RequestOptions,
   ): Promise<void> {
-    return unwrapAsync(deploymentGroupsDeleteDirectAnthropicBinding(
+    return unwrapAsync(deploymentGroupsDeleteExternalAIBinding(
       this,
       request,
       options,

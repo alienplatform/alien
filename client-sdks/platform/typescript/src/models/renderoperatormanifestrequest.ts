@@ -22,14 +22,16 @@ export type RenderOperatorManifestRequestFormat = ClosedEnum<
 /**
  * namespace: a namespaced Role that manages the install namespace. cluster: a ClusterRole that manages every namespace.
  */
-export const ScopeEnum = {
+export const RenderOperatorManifestRequestScope = {
   Namespace: "namespace",
   Cluster: "cluster",
 } as const;
 /**
  * namespace: a namespaced Role that manages the install namespace. cluster: a ClusterRole that manages every namespace.
  */
-export type ScopeEnum = ClosedEnum<typeof ScopeEnum>;
+export type RenderOperatorManifestRequestScope = ClosedEnum<
+  typeof RenderOperatorManifestRequestScope
+>;
 
 /**
  * Operator permission tier
@@ -69,7 +71,7 @@ export type RenderOperatorManifestRequest = {
   /**
    * namespace: a namespaced Role that manages the install namespace. cluster: a ClusterRole that manages every namespace.
    */
-  scope?: ScopeEnum | undefined;
+  scope?: RenderOperatorManifestRequestScope | undefined;
   /**
    * Optional Kubernetes label selector narrowing what is managed, applied within the scope.
    */
@@ -98,9 +100,9 @@ export const RenderOperatorManifestRequestFormat$outboundSchema: z.ZodEnum<
 > = z.enum(RenderOperatorManifestRequestFormat);
 
 /** @internal */
-export const ScopeEnum$outboundSchema: z.ZodEnum<typeof ScopeEnum> = z.enum(
-  ScopeEnum,
-);
+export const RenderOperatorManifestRequestScope$outboundSchema: z.ZodEnum<
+  typeof RenderOperatorManifestRequestScope
+> = z.enum(RenderOperatorManifestRequestScope);
 
 /** @internal */
 export const Permission$outboundSchema: z.ZodEnum<typeof Permission> = z.enum(
@@ -147,7 +149,7 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   format: RenderOperatorManifestRequestFormat$outboundSchema.default("raw"),
   environmentName: z.string().optional(),
   namespace: z.string().optional(),
-  scope: ScopeEnum$outboundSchema.default("namespace"),
+  scope: RenderOperatorManifestRequestScope$outboundSchema.default("namespace"),
   labelSelector: z.string().optional(),
   permission: Permission$outboundSchema.default("observe"),
   operatorImagePackageId: z.string().optional(),

@@ -3,11 +3,11 @@
 
 ## Supported Types
 
-### `models.APIKeyDeploymentSetupConfigSourceApplicationRelease`
+### `models.APIKeyDeploymentSetupConfigSourceProjectRelease`
 
 ```typescript
-const value: models.APIKeyDeploymentSetupConfigSourceApplicationRelease = {
-  type: "application-release",
+const value: models.APIKeyDeploymentSetupConfigSourceProjectRelease = {
+  type: "project-release",
   releaseChannel: "<value>",
   releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

@@ -73,3 +73,12 @@ const value: models.SyncReconcileResponseExternalBindingsUnion6 = {
 };
 ```
 
+### `models.SyncReconcileResponseExternalBindingsAi`
+
+```typescript
+const value: models.SyncReconcileResponseExternalBindingsAi = {
+  provider: "<value>",
+  type: "ai",
+};
+```
+

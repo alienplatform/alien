@@ -17,7 +17,7 @@ use alien_core::{
     PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
     ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
-use alien_terraform::{TerraformOptions, TerraformTarget, TfRegistry, generate_terraform_module};
+use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
 fn resource_group() -> AzureResourceGroup {
     AzureResourceGroup::new("default-resource-group".to_string()).build()

@@ -24,20 +24,20 @@ let value: KeyInfo = {
   deploymentSetupConfig: {
     metadata: {
       "key": "<value>",
-      "key1": "<value>",
-      "key2": "<value>",
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
     },
     environmentVariables: [],
     items: [
       {
-        item: "models",
+        item: "keys",
         source: {
           type: "built-in",
-          definitionId: "customer-key",
+          definitionId: "customer-registry",
           version: "<value>",
           sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },

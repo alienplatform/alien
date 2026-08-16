@@ -4,15 +4,15 @@
 //! determine where to push images without hardcoding the repo path.
 
 use axum::{
+    Json, Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 use crate::error::ErrorData;
 
 #[derive(Debug, Deserialize)]
@@ -57,7 +57,7 @@ async fn get_build_config(
                     StatusCode::BAD_REQUEST,
                     format!("Unknown platform: {}", platform_str),
                 )
-                    .into_response()
+                    .into_response();
             }
         };
 

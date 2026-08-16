@@ -22,7 +22,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, Ai, ErrorData, PermissionProfile, PermissionSetReference, RemoteBindings,
-    Result,
+    RemoteStackManagement, Result,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -130,6 +130,15 @@ fn ai_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSet
             owners.push((role_id, refs));
         }
     }
+    if let (Some(profile), Some(role_id)) = (
+        ctx.stack.management().profile(),
+        remote_stack_management_role_id(ctx),
+    ) {
+        let refs = ai_management_permission_refs(profile);
+        if !refs.is_empty() {
+            owners.push((role_id, refs));
+        }
+    }
     if let (Some(definition), Some(role_id)) = (
         alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
         remote_bindings_role_id(ctx),
@@ -140,6 +149,33 @@ fn ai_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSet
         ));
     }
     owners
+}
+
+fn ai_management_permission_refs(profile: &PermissionProfile) -> Vec<PermissionSetReference> {
+    profile
+        .0
+        .get("*")
+        .into_iter()
+        .flatten()
+        .filter(|permission_ref| permission_ref.id().starts_with("ai/"))
+        .cloned()
+        .collect()
+}
+
+fn remote_stack_management_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+            .then(|| {
+                ctx.name_for(id).map(|logical_id| {
+                    if logical_id == "Management" {
+                        "ManagementRole".to_string()
+                    } else {
+                        format!("{logical_id}Role")
+                    }
+                })
+            })
+            .flatten()
+    })
 }
 
 fn remote_bindings_role_id(ctx: &EmitContext<'_>) -> Option<String> {

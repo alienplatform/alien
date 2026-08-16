@@ -12,6 +12,7 @@ export const GetResourceDeploymentDetailArea = {
   Container: "container",
   Worker: "worker",
   Daemon: "daemon",
+  Ai: "ai",
 } as const;
 export type GetResourceDeploymentDetailArea = ClosedEnum<
   typeof GetResourceDeploymentDetailArea
@@ -89,14 +90,768 @@ export const ControllerPlatform = {
  */
 export type ControllerPlatform = ClosedEnum<typeof ControllerPlatform>;
 
-export const Reason65 = {
+export const Health72 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health72 = ClosedEnum<typeof Health72>;
+
+export const Lifecycle72 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle72 = ClosedEnum<typeof Lifecycle72>;
+
+export type DataStatus72 = {
+  health: Health72;
+  lifecycle: Lifecycle72;
+  message?: string | null | undefined;
+};
+
+export type Data8 = {
+  enabled?: boolean | null | undefined;
+  keyId: string;
+  keyOperations: Array<string>;
+  keyType: string;
+  recoveryLevel?: string | null | undefined;
+  status: DataStatus72;
+};
+
+export type DataAzureKeyVault2 = {
+  data: Data8;
+  provider: "azure-key-vault";
+};
+
+export const Health71 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health71 = ClosedEnum<typeof Health71>;
+
+export const Lifecycle71 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle71 = ClosedEnum<typeof Lifecycle71>;
+
+export type DataStatus71 = {
+  health: Health71;
+  lifecycle: Lifecycle71;
+  message?: string | null | undefined;
+};
+
+export type Data7 = {
+  algorithm?: string | null | undefined;
+  cryptoKeyName: string;
+  primaryState?: string | null | undefined;
+  primaryVersion?: string | null | undefined;
+  purpose: string;
+  status: DataStatus71;
+};
+
+export type DataGcpCloudKms = {
+  data: Data7;
+  provider: "gcp-cloud-kms";
+};
+
+export const Health70 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health70 = ClosedEnum<typeof Health70>;
+
+export const Lifecycle70 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle70 = ClosedEnum<typeof Lifecycle70>;
+
+export type DataStatus70 = {
+  health: Health70;
+  lifecycle: Lifecycle70;
+  message?: string | null | undefined;
+};
+
+export type Data6 = {
+  enabled: boolean;
+  keyArn: string;
+  keySpec: string;
+  keyState: string;
+  keyUsage: string;
+  status: DataStatus70;
+};
+
+export type DataAwsKms = {
+  data: Data6;
+  provider: "aws-kms";
+};
+
+export type DataUnion17 = DataAwsKms | DataGcpCloudKms | DataAzureKeyVault2;
+
+export type DataKey = {
+  data: DataAwsKms | DataGcpCloudKms | DataAzureKeyVault2;
+  resourceType: "key";
+};
+
+export const AccessTest4 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type AccessTest4 = ClosedEnum<typeof AccessTest4>;
+
+export const AvailabilityEnum4 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type AvailabilityEnum4 = ClosedEnum<typeof AvailabilityEnum4>;
+
+export const BlockerEnum4 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type BlockerEnum4 = ClosedEnum<typeof BlockerEnum4>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const GetResourceDeploymentDetailClientApi4 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type GetResourceDeploymentDetailClientApi4 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi4
+>;
+
+export type GetResourceDeploymentDetailModel4 = {
+  accessTest: AccessTest4;
+  availability: AvailabilityEnum4;
+  blockers: Array<BlockerEnum4>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi4>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SourceEnum4 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SourceEnum4 = ClosedEnum<typeof SourceEnum4>;
+
+export type Availability4 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<GetResourceDeploymentDetailModel4>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SourceEnum4;
+};
+
+export type AvailabilityUnion = Availability4 | any;
+
+export const GetResourceDeploymentDetailReason69 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason65 = ClosedEnum<typeof Reason65>;
+export type GetResourceDeploymentDetailReason69 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason69
+>;
+
+export const CollectionIssueSeverity69 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity69 = ClosedEnum<
+  typeof CollectionIssueSeverity69
+>;
+
+export type CollectionIssue69 = {
+  message: string;
+  reason: GetResourceDeploymentDetailReason69;
+  severity: CollectionIssueSeverity69;
+  source: string;
+};
+
+export const Health69 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health69 = ClosedEnum<typeof Health69>;
+
+export const Lifecycle69 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle69 = ClosedEnum<typeof Lifecycle69>;
+
+export type DataStatus69 = {
+  collectionIssues: Array<CollectionIssue69>;
+  health: Health69;
+  lifecycle: Lifecycle69;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataExternal = {
+  availability?: Availability4 | any | null | undefined;
+  /**
+   * The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
+   *
+   * @remarks
+   * platform, where the app brings its own provider key instead of an ambient cloud.
+   */
+  provider: string;
+  status: DataStatus69;
+  backend: "external";
+};
+
+export const AccessTest3 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type AccessTest3 = ClosedEnum<typeof AccessTest3>;
+
+export const AvailabilityEnum3 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type AvailabilityEnum3 = ClosedEnum<typeof AvailabilityEnum3>;
+
+export const BlockerEnum3 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type BlockerEnum3 = ClosedEnum<typeof BlockerEnum3>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const GetResourceDeploymentDetailClientApi3 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type GetResourceDeploymentDetailClientApi3 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi3
+>;
+
+export type GetResourceDeploymentDetailModel3 = {
+  accessTest: AccessTest3;
+  availability: AvailabilityEnum3;
+  blockers: Array<BlockerEnum3>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi3>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SourceEnum3 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SourceEnum3 = ClosedEnum<typeof SourceEnum3>;
+
+export type Availability3 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<GetResourceDeploymentDetailModel3>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SourceEnum3;
+};
+
+export const GetResourceDeploymentDetailReason68 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type GetResourceDeploymentDetailReason68 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason68
+>;
+
+export const CollectionIssueSeverity68 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity68 = ClosedEnum<
+  typeof CollectionIssueSeverity68
+>;
+
+export type CollectionIssue68 = {
+  message: string;
+  reason: GetResourceDeploymentDetailReason68;
+  severity: CollectionIssueSeverity68;
+  source: string;
+};
+
+export const Health68 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health68 = ClosedEnum<typeof Health68>;
+
+export const Lifecycle68 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle68 = ClosedEnum<typeof Lifecycle68>;
+
+export type DataStatus68 = {
+  collectionIssues: Array<CollectionIssue68>;
+  health: Health68;
+  lifecycle: Lifecycle68;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAzureFoundry = {
+  accountName: string;
+  availability: Availability3;
+  endpoint?: string | null | undefined;
+  location?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  status: DataStatus68;
+  backend: "azureFoundry";
+};
+
+export const AccessTest2 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type AccessTest2 = ClosedEnum<typeof AccessTest2>;
+
+export const AvailabilityEnum2 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type AvailabilityEnum2 = ClosedEnum<typeof AvailabilityEnum2>;
+
+export const BlockerEnum2 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type BlockerEnum2 = ClosedEnum<typeof BlockerEnum2>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const GetResourceDeploymentDetailClientApi2 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type GetResourceDeploymentDetailClientApi2 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi2
+>;
+
+export type GetResourceDeploymentDetailModel2 = {
+  accessTest: AccessTest2;
+  availability: AvailabilityEnum2;
+  blockers: Array<BlockerEnum2>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi2>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SourceEnum2 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SourceEnum2 = ClosedEnum<typeof SourceEnum2>;
+
+export type Availability2 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<GetResourceDeploymentDetailModel2>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SourceEnum2;
+};
+
+export const GetResourceDeploymentDetailReason67 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type GetResourceDeploymentDetailReason67 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason67
+>;
+
+export const CollectionIssueSeverity67 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity67 = ClosedEnum<
+  typeof CollectionIssueSeverity67
+>;
+
+export type CollectionIssue67 = {
+  message: string;
+  reason: GetResourceDeploymentDetailReason67;
+  severity: CollectionIssueSeverity67;
+  source: string;
+};
+
+export const Health67 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health67 = ClosedEnum<typeof Health67>;
+
+export const Lifecycle67 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle67 = ClosedEnum<typeof Lifecycle67>;
+
+export type DataStatus67 = {
+  collectionIssues: Array<CollectionIssue67>;
+  health: Health67;
+  lifecycle: Lifecycle67;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataGcpVertex = {
+  availability: Availability2;
+  location: string;
+  project: string;
+  status: DataStatus67;
+  backend: "gcpVertex";
+};
+
+export const AccessTest1 = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type AccessTest1 = ClosedEnum<typeof AccessTest1>;
+
+export const AvailabilityEnum1 = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type AvailabilityEnum1 = ClosedEnum<typeof AvailabilityEnum1>;
+
+export const BlockerEnum1 = {
+  AgreementRequired: "agreement-required",
+  EntitlementRequired: "entitlement-required",
+  ModelActivationRequired: "model-activation-required",
+  DeploymentRequired: "deployment-required",
+  QuotaConfigurationRequired: "quota-configuration-required",
+  RegionUnavailable: "region-unavailable",
+  AccessDenied: "access-denied",
+  ObservationFailed: "observation-failed",
+} as const;
+export type BlockerEnum1 = ClosedEnum<typeof BlockerEnum1>;
+
+/**
+ * A public API accepted from an application client.
+ */
+export const GetResourceDeploymentDetailClientApi1 = {
+  OpenAiChatCompletions: "open-ai-chat-completions",
+  OpenAiResponses: "open-ai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+/**
+ * A public API accepted from an application client.
+ */
+export type GetResourceDeploymentDetailClientApi1 = ClosedEnum<
+  typeof GetResourceDeploymentDetailClientApi1
+>;
+
+export type GetResourceDeploymentDetailModel1 = {
+  accessTest: AccessTest1;
+  availability: AvailabilityEnum1;
+  blockers: Array<BlockerEnum1>;
+  clientApis: Array<GetResourceDeploymentDetailClientApi1>;
+  errorCode?: string | null | undefined;
+  publicModelId: string;
+  testedAt?: Date | null | undefined;
+};
+
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export const SourceEnum1 = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+/**
+ * Provider control plane used to observe model availability without invoking
+ *
+ * @remarks
+ * a model, spending customer quota, or accepting provider terms.
+ */
+export type SourceEnum1 = ClosedEnum<typeof SourceEnum1>;
+
+export type Availability1 = {
+  catalogRevision: string;
+  location?: string | null | undefined;
+  models: Array<GetResourceDeploymentDetailModel1>;
+  /**
+   * Provider control plane used to observe model availability without invoking
+   *
+   * @remarks
+   * a model, spending customer quota, or accepting provider terms.
+   */
+  source: SourceEnum1;
+};
+
+export const GetResourceDeploymentDetailReason66 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type GetResourceDeploymentDetailReason66 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason66
+>;
+
+export const CollectionIssueSeverity66 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity66 = ClosedEnum<
+  typeof CollectionIssueSeverity66
+>;
+
+export type CollectionIssue66 = {
+  message: string;
+  reason: GetResourceDeploymentDetailReason66;
+  severity: CollectionIssueSeverity66;
+  source: string;
+};
+
+export const Health66 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health66 = ClosedEnum<typeof Health66>;
+
+export const Lifecycle66 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle66 = ClosedEnum<typeof Lifecycle66>;
+
+export type DataStatus66 = {
+  collectionIssues: Array<CollectionIssue66>;
+  health: Health66;
+  lifecycle: Lifecycle66;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAwsBedrock = {
+  availability: Availability1;
+  region: string;
+  status: DataStatus66;
+  backend: "awsBedrock";
+};
+
+export type DataUnion16 =
+  | DataAwsBedrock
+  | DataGcpVertex
+  | DataAzureFoundry
+  | DataExternal;
+
+export type DataAi = {
+  data: DataAwsBedrock | DataGcpVertex | DataAzureFoundry | DataExternal;
+  resourceType: "ai";
+};
+
+export const GetResourceDeploymentDetailReason65 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type GetResourceDeploymentDetailReason65 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason65
+>;
 
 export const CollectionIssueSeverity65 = {
   Info: "info",
@@ -109,7 +864,7 @@ export type CollectionIssueSeverity65 = ClosedEnum<
 
 export type CollectionIssue65 = {
   message: string;
-  reason: Reason65;
+  reason: GetResourceDeploymentDetailReason65;
   severity: CollectionIssueSeverity65;
   source: string;
 };
@@ -173,14 +928,16 @@ export type DataAzureServiceBusNamespace = {
   resourceType: "azure_service_bus_namespace";
 };
 
-export const Reason64 = {
+export const GetResourceDeploymentDetailReason64 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason64 = ClosedEnum<typeof Reason64>;
+export type GetResourceDeploymentDetailReason64 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason64
+>;
 
 export const CollectionIssueSeverity64 = {
   Info: "info",
@@ -193,7 +950,7 @@ export type CollectionIssueSeverity64 = ClosedEnum<
 
 export type CollectionIssue64 = {
   message: string;
-  reason: Reason64;
+  reason: GetResourceDeploymentDetailReason64;
   severity: CollectionIssueSeverity64;
   source: string;
 };
@@ -277,14 +1034,16 @@ export type SecondaryEndpoints = {
   web?: string | null | undefined;
 };
 
-export const Reason63 = {
+export const GetResourceDeploymentDetailReason63 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason63 = ClosedEnum<typeof Reason63>;
+export type GetResourceDeploymentDetailReason63 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason63
+>;
 
 export const CollectionIssueSeverity63 = {
   Info: "info",
@@ -297,7 +1056,7 @@ export type CollectionIssueSeverity63 = ClosedEnum<
 
 export type CollectionIssue63 = {
   message: string;
-  reason: Reason63;
+  reason: GetResourceDeploymentDetailReason63;
   severity: CollectionIssueSeverity63;
   source: string;
 };
@@ -364,14 +1123,16 @@ export type DataAzureStorageAccount = {
   resourceType: "azure_storage_account";
 };
 
-export const Reason62 = {
+export const GetResourceDeploymentDetailReason62 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason62 = ClosedEnum<typeof Reason62>;
+export type GetResourceDeploymentDetailReason62 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason62
+>;
 
 export const CollectionIssueSeverity62 = {
   Info: "info",
@@ -384,7 +1145,7 @@ export type CollectionIssueSeverity62 = ClosedEnum<
 
 export type CollectionIssue62 = {
   message: string;
-  reason: Reason62;
+  reason: GetResourceDeploymentDetailReason62;
   severity: CollectionIssueSeverity62;
   source: string;
 };
@@ -434,14 +1195,16 @@ export type DataAzureResourceGroup = {
   resourceType: "azure_resource_group";
 };
 
-export const Reason61 = {
+export const GetResourceDeploymentDetailReason61 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason61 = ClosedEnum<typeof Reason61>;
+export type GetResourceDeploymentDetailReason61 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason61
+>;
 
 export const CollectionIssueSeverity61 = {
   Info: "info",
@@ -454,7 +1217,7 @@ export type CollectionIssueSeverity61 = ClosedEnum<
 
 export type CollectionIssue61 = {
   message: string;
-  reason: Reason61;
+  reason: GetResourceDeploymentDetailReason61;
   severity: CollectionIssueSeverity61;
   source: string;
 };
@@ -501,14 +1264,16 @@ export type DataAzureResourceProvider = {
   backend: "azureResourceProvider";
 };
 
-export const Reason60 = {
+export const GetResourceDeploymentDetailReason60 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason60 = ClosedEnum<typeof Reason60>;
+export type GetResourceDeploymentDetailReason60 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason60
+>;
 
 export const CollectionIssueSeverity60 = {
   Info: "info",
@@ -521,7 +1286,7 @@ export type CollectionIssueSeverity60 = ClosedEnum<
 
 export type CollectionIssue60 = {
   message: string;
-  reason: Reason60;
+  reason: GetResourceDeploymentDetailReason60;
   severity: CollectionIssueSeverity60;
   source: string;
 };
@@ -588,12 +1353,12 @@ export type InvolvedObject10 = {
 
 export type InvolvedObjectUnion10 = InvolvedObject10 | any;
 
-export type GetResourceDeploymentDetailSource10 = {
+export type SourceEvent10 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion10 = GetResourceDeploymentDetailSource10 | any;
+export type SourceUnion10 = SourceEvent10 | any;
 
 export type Event13 = {
   count?: number | null | undefined;
@@ -604,18 +1369,20 @@ export type Event13 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource10 | any | null | undefined;
+  source?: SourceEvent10 | any | null | undefined;
   type?: string | null | undefined;
 };
 
-export const Reason59 = {
+export const GetResourceDeploymentDetailReason59 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason59 = ClosedEnum<typeof Reason59>;
+export type GetResourceDeploymentDetailReason59 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason59
+>;
 
 export const CollectionIssueSeverity59 = {
   Info: "info",
@@ -628,7 +1395,7 @@ export type CollectionIssueSeverity59 = ClosedEnum<
 
 export type CollectionIssue59 = {
   message: string;
-  reason: Reason59;
+  reason: GetResourceDeploymentDetailReason59;
   severity: CollectionIssueSeverity59;
   source: string;
 };
@@ -679,14 +1446,16 @@ export type DataKubernetesJob = {
   backend: "kubernetesJob";
 };
 
-export const Reason58 = {
+export const GetResourceDeploymentDetailReason58 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason58 = ClosedEnum<typeof Reason58>;
+export type GetResourceDeploymentDetailReason58 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason58
+>;
 
 export const CollectionIssueSeverity58 = {
   Info: "info",
@@ -699,7 +1468,7 @@ export type CollectionIssueSeverity58 = ClosedEnum<
 
 export type CollectionIssue58 = {
   message: string;
-  reason: Reason58;
+  reason: GetResourceDeploymentDetailReason58;
   severity: CollectionIssueSeverity58;
   source: string;
 };
@@ -745,14 +1514,16 @@ export type DataAzureContainerApps2 = {
   backend: "azureContainerApps";
 };
 
-export const Reason57 = {
+export const GetResourceDeploymentDetailReason57 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason57 = ClosedEnum<typeof Reason57>;
+export type GetResourceDeploymentDetailReason57 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason57
+>;
 
 export const CollectionIssueSeverity57 = {
   Info: "info",
@@ -765,7 +1536,7 @@ export type CollectionIssueSeverity57 = ClosedEnum<
 
 export type CollectionIssue57 = {
   message: string;
-  reason: Reason57;
+  reason: GetResourceDeploymentDetailReason57;
   severity: CollectionIssueSeverity57;
   source: string;
 };
@@ -811,14 +1582,16 @@ export type DataGcpCloudBuild = {
   backend: "gcpCloudBuild";
 };
 
-export const Reason56 = {
+export const GetResourceDeploymentDetailReason56 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason56 = ClosedEnum<typeof Reason56>;
+export type GetResourceDeploymentDetailReason56 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason56
+>;
 
 export const CollectionIssueSeverity56 = {
   Info: "info",
@@ -831,7 +1604,7 @@ export type CollectionIssueSeverity56 = ClosedEnum<
 
 export type CollectionIssue56 = {
   message: string;
-  reason: Reason56;
+  reason: GetResourceDeploymentDetailReason56;
   severity: CollectionIssueSeverity56;
   source: string;
 };
@@ -907,14 +1680,16 @@ export type DataBuild = {
   resourceType: "build";
 };
 
-export const Reason55 = {
+export const GetResourceDeploymentDetailReason55 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason55 = ClosedEnum<typeof Reason55>;
+export type GetResourceDeploymentDetailReason55 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason55
+>;
 
 export const CollectionIssueSeverity55 = {
   Info: "info",
@@ -927,7 +1702,7 @@ export type CollectionIssueSeverity55 = ClosedEnum<
 
 export type CollectionIssue55 = {
   message: string;
-  reason: Reason55;
+  reason: GetResourceDeploymentDetailReason55;
   severity: CollectionIssueSeverity55;
   source: string;
 };
@@ -970,14 +1745,16 @@ export type DataLocal11 = {
   backend: "local";
 };
 
-export const Reason54 = {
+export const GetResourceDeploymentDetailReason54 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason54 = ClosedEnum<typeof Reason54>;
+export type GetResourceDeploymentDetailReason54 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason54
+>;
 
 export const CollectionIssueSeverity54 = {
   Info: "info",
@@ -990,7 +1767,7 @@ export type CollectionIssueSeverity54 = ClosedEnum<
 
 export type CollectionIssue54 = {
   message: string;
-  reason: Reason54;
+  reason: GetResourceDeploymentDetailReason54;
   severity: CollectionIssueSeverity54;
   source: string;
 };
@@ -1057,14 +1834,16 @@ export type DataAzureContainerRegistry = {
   backend: "azureContainerRegistry";
 };
 
-export const Reason53 = {
+export const GetResourceDeploymentDetailReason53 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason53 = ClosedEnum<typeof Reason53>;
+export type GetResourceDeploymentDetailReason53 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason53
+>;
 
 export const CollectionIssueSeverity53 = {
   Info: "info",
@@ -1077,7 +1856,7 @@ export type CollectionIssueSeverity53 = ClosedEnum<
 
 export type CollectionIssue53 = {
   message: string;
-  reason: Reason53;
+  reason: GetResourceDeploymentDetailReason53;
   severity: CollectionIssueSeverity53;
   source: string;
 };
@@ -1138,7 +1917,7 @@ export type DataGcpArtifactRegistry = {
   backend: "gcpArtifactRegistry";
 };
 
-export type Repository = {
+export type GetResourceDeploymentDetailRepository = {
   createdAt: number;
   encryptionType?: string | null | undefined;
   imageTagMutability?: string | null | undefined;
@@ -1150,14 +1929,16 @@ export type Repository = {
   scanOnPush?: boolean | null | undefined;
 };
 
-export const Reason52 = {
+export const GetResourceDeploymentDetailReason52 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason52 = ClosedEnum<typeof Reason52>;
+export type GetResourceDeploymentDetailReason52 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason52
+>;
 
 export const CollectionIssueSeverity52 = {
   Info: "info",
@@ -1170,7 +1951,7 @@ export type CollectionIssueSeverity52 = ClosedEnum<
 
 export type CollectionIssue52 = {
   message: string;
-  reason: Reason52;
+  reason: GetResourceDeploymentDetailReason52;
   severity: CollectionIssueSeverity52;
   source: string;
 };
@@ -1212,7 +1993,7 @@ export type DataAwsEcr = {
   region: string;
   registryId: string;
   registryUri: string;
-  repositories: Array<Repository>;
+  repositories: Array<GetResourceDeploymentDetailRepository>;
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
@@ -1235,14 +2016,16 @@ export type DataArtifactRegistry = {
   resourceType: "artifact-registry";
 };
 
-export const Reason51 = {
+export const GetResourceDeploymentDetailReason51 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason51 = ClosedEnum<typeof Reason51>;
+export type GetResourceDeploymentDetailReason51 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason51
+>;
 
 export const CollectionIssueSeverity51 = {
   Info: "info",
@@ -1255,7 +2038,7 @@ export type CollectionIssueSeverity51 = ClosedEnum<
 
 export type CollectionIssue51 = {
   message: string;
-  reason: Reason51;
+  reason: GetResourceDeploymentDetailReason51;
   severity: CollectionIssueSeverity51;
   source: string;
 };
@@ -1303,14 +2086,16 @@ export type DataAzureManagedIdentity2 = {
   backend: "azureManagedIdentity";
 };
 
-export const Reason50 = {
+export const GetResourceDeploymentDetailReason50 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason50 = ClosedEnum<typeof Reason50>;
+export type GetResourceDeploymentDetailReason50 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason50
+>;
 
 export const CollectionIssueSeverity50 = {
   Info: "info",
@@ -1323,7 +2108,7 @@ export type CollectionIssueSeverity50 = ClosedEnum<
 
 export type CollectionIssue50 = {
   message: string;
-  reason: Reason50;
+  reason: GetResourceDeploymentDetailReason50;
   severity: CollectionIssueSeverity50;
   source: string;
 };
@@ -1368,14 +2153,16 @@ export type DataGcpServiceAccount2 = {
   backend: "gcpServiceAccount";
 };
 
-export const Reason49 = {
+export const GetResourceDeploymentDetailReason49 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason49 = ClosedEnum<typeof Reason49>;
+export type GetResourceDeploymentDetailReason49 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason49
+>;
 
 export const CollectionIssueSeverity49 = {
   Info: "info",
@@ -1388,7 +2175,7 @@ export type CollectionIssueSeverity49 = ClosedEnum<
 
 export type CollectionIssue49 = {
   message: string;
-  reason: Reason49;
+  reason: GetResourceDeploymentDetailReason49;
   severity: CollectionIssueSeverity49;
   source: string;
 };
@@ -1442,14 +2229,16 @@ export type DataRemoteStackManagement = {
   resourceType: "remote-stack-management";
 };
 
-export const Reason48 = {
+export const GetResourceDeploymentDetailReason48 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason48 = ClosedEnum<typeof Reason48>;
+export type GetResourceDeploymentDetailReason48 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason48
+>;
 
 export const CollectionIssueSeverity48 = {
   Info: "info",
@@ -1462,7 +2251,7 @@ export type CollectionIssueSeverity48 = ClosedEnum<
 
 export type CollectionIssue48 = {
   message: string;
-  reason: Reason48;
+  reason: GetResourceDeploymentDetailReason48;
   severity: CollectionIssueSeverity48;
   source: string;
 };
@@ -1517,14 +2306,16 @@ export type DataAzureVnet = {
   backend: "azureVnet";
 };
 
-export const Reason47 = {
+export const GetResourceDeploymentDetailReason47 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason47 = ClosedEnum<typeof Reason47>;
+export type GetResourceDeploymentDetailReason47 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason47
+>;
 
 export const CollectionIssueSeverity47 = {
   Info: "info",
@@ -1537,7 +2328,7 @@ export type CollectionIssueSeverity47 = ClosedEnum<
 
 export type CollectionIssue47 = {
   message: string;
-  reason: Reason47;
+  reason: GetResourceDeploymentDetailReason47;
   severity: CollectionIssueSeverity47;
   source: string;
 };
@@ -1588,14 +2379,16 @@ export type DataGcpVpc = {
   backend: "gcpVpc";
 };
 
-export const Reason46 = {
+export const GetResourceDeploymentDetailReason46 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason46 = ClosedEnum<typeof Reason46>;
+export type GetResourceDeploymentDetailReason46 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason46
+>;
 
 export const CollectionIssueSeverity46 = {
   Info: "info",
@@ -1608,7 +2401,7 @@ export type CollectionIssueSeverity46 = ClosedEnum<
 
 export type CollectionIssue46 = {
   message: string;
-  reason: Reason46;
+  reason: GetResourceDeploymentDetailReason46;
   severity: CollectionIssueSeverity46;
   source: string;
 };
@@ -1667,14 +2460,16 @@ export type DataNetwork = {
   resourceType: "network";
 };
 
-export const Reason45 = {
+export const GetResourceDeploymentDetailReason45 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason45 = ClosedEnum<typeof Reason45>;
+export type GetResourceDeploymentDetailReason45 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason45
+>;
 
 export const CollectionIssueSeverity45 = {
   Info: "info",
@@ -1687,7 +2482,7 @@ export type CollectionIssueSeverity45 = ClosedEnum<
 
 export type CollectionIssue45 = {
   message: string;
-  reason: Reason45;
+  reason: GetResourceDeploymentDetailReason45;
   severity: CollectionIssueSeverity45;
   source: string;
 };
@@ -1730,14 +2525,16 @@ export type DataLocal10 = {
   backend: "local";
 };
 
-export const Reason44 = {
+export const GetResourceDeploymentDetailReason44 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason44 = ClosedEnum<typeof Reason44>;
+export type GetResourceDeploymentDetailReason44 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason44
+>;
 
 export const CollectionIssueSeverity44 = {
   Info: "info",
@@ -1750,7 +2547,7 @@ export type CollectionIssueSeverity44 = ClosedEnum<
 
 export type CollectionIssue44 = {
   message: string;
-  reason: Reason44;
+  reason: GetResourceDeploymentDetailReason44;
   severity: CollectionIssueSeverity44;
   source: string;
 };
@@ -1806,14 +2603,16 @@ export type DataAzureManagedIdentity1 = {
   backend: "azureManagedIdentity";
 };
 
-export const Reason43 = {
+export const GetResourceDeploymentDetailReason43 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason43 = ClosedEnum<typeof Reason43>;
+export type GetResourceDeploymentDetailReason43 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason43
+>;
 
 export const CollectionIssueSeverity43 = {
   Info: "info",
@@ -1826,7 +2625,7 @@ export type CollectionIssueSeverity43 = ClosedEnum<
 
 export type CollectionIssue43 = {
   message: string;
-  reason: Reason43;
+  reason: GetResourceDeploymentDetailReason43;
   severity: CollectionIssueSeverity43;
   source: string;
 };
@@ -1880,14 +2679,16 @@ export type DataGcpServiceAccount1 = {
   backend: "gcpServiceAccount";
 };
 
-export const Reason42 = {
+export const GetResourceDeploymentDetailReason42 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason42 = ClosedEnum<typeof Reason42>;
+export type GetResourceDeploymentDetailReason42 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason42
+>;
 
 export const CollectionIssueSeverity42 = {
   Info: "info",
@@ -1900,7 +2701,7 @@ export type CollectionIssueSeverity42 = ClosedEnum<
 
 export type CollectionIssue42 = {
   message: string;
-  reason: Reason42;
+  reason: GetResourceDeploymentDetailReason42;
   severity: CollectionIssueSeverity42;
   source: string;
 };
@@ -1975,14 +2776,16 @@ export type DataServiceAccount = {
   resourceType: "service-account";
 };
 
-export const Reason41 = {
+export const GetResourceDeploymentDetailReason41 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason41 = ClosedEnum<typeof Reason41>;
+export type GetResourceDeploymentDetailReason41 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason41
+>;
 
 export const CollectionIssueSeverity41 = {
   Info: "info",
@@ -1995,7 +2798,7 @@ export type CollectionIssueSeverity41 = ClosedEnum<
 
 export type CollectionIssue41 = {
   message: string;
-  reason: Reason41;
+  reason: GetResourceDeploymentDetailReason41;
   severity: CollectionIssueSeverity41;
   source: string;
 };
@@ -2042,14 +2845,16 @@ export type DataLocal9 = {
   backend: "local";
 };
 
-export const Reason40 = {
+export const GetResourceDeploymentDetailReason40 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason40 = ClosedEnum<typeof Reason40>;
+export type GetResourceDeploymentDetailReason40 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason40
+>;
 
 export const CollectionIssueSeverity40 = {
   Info: "info",
@@ -2062,7 +2867,7 @@ export type CollectionIssueSeverity40 = ClosedEnum<
 
 export type CollectionIssue40 = {
   message: string;
-  reason: Reason40;
+  reason: GetResourceDeploymentDetailReason40;
   severity: CollectionIssueSeverity40;
   source: string;
 };
@@ -2106,14 +2911,16 @@ export type DataKubernetesSecret = {
   backend: "kubernetesSecret";
 };
 
-export const Reason39 = {
+export const GetResourceDeploymentDetailReason39 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason39 = ClosedEnum<typeof Reason39>;
+export type GetResourceDeploymentDetailReason39 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason39
+>;
 
 export const CollectionIssueSeverity39 = {
   Info: "info",
@@ -2126,7 +2933,7 @@ export type CollectionIssueSeverity39 = ClosedEnum<
 
 export type CollectionIssue39 = {
   message: string;
-  reason: Reason39;
+  reason: GetResourceDeploymentDetailReason39;
   severity: CollectionIssueSeverity39;
   source: string;
 };
@@ -2162,7 +2969,7 @@ export type DataStatus39 = {
   stale: boolean;
 };
 
-export type DataAzureKeyVault = {
+export type DataAzureKeyVault1 = {
   accessPolicyCount: number;
   location?: string | null | undefined;
   name: string;
@@ -2183,14 +2990,16 @@ export type DataAzureKeyVault = {
   backend: "azureKeyVault";
 };
 
-export const Reason38 = {
+export const GetResourceDeploymentDetailReason38 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason38 = ClosedEnum<typeof Reason38>;
+export type GetResourceDeploymentDetailReason38 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason38
+>;
 
 export const CollectionIssueSeverity38 = {
   Info: "info",
@@ -2203,7 +3012,7 @@ export type CollectionIssueSeverity38 = ClosedEnum<
 
 export type CollectionIssue38 = {
   message: string;
-  reason: Reason38;
+  reason: GetResourceDeploymentDetailReason38;
   severity: CollectionIssueSeverity38;
   source: string;
 };
@@ -2248,14 +3057,16 @@ export type DataGcpSecretManager = {
   backend: "gcpSecretManager";
 };
 
-export const Reason37 = {
+export const GetResourceDeploymentDetailReason37 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason37 = ClosedEnum<typeof Reason37>;
+export type GetResourceDeploymentDetailReason37 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason37
+>;
 
 export const CollectionIssueSeverity37 = {
   Info: "info",
@@ -2268,7 +3079,7 @@ export type CollectionIssueSeverity37 = ClosedEnum<
 
 export type CollectionIssue37 = {
   message: string;
-  reason: Reason37;
+  reason: GetResourceDeploymentDetailReason37;
   severity: CollectionIssueSeverity37;
   source: string;
 };
@@ -2324,7 +3135,7 @@ export type DataAwsParameterStore = {
 export type DataUnion9 =
   | DataAwsParameterStore
   | DataGcpSecretManager
-  | DataAzureKeyVault
+  | DataAzureKeyVault1
   | DataKubernetesSecret
   | DataLocal9;
 
@@ -2332,20 +3143,22 @@ export type DataVault = {
   data:
     | DataAwsParameterStore
     | DataGcpSecretManager
-    | DataAzureKeyVault
+    | DataAzureKeyVault1
     | DataKubernetesSecret
     | DataLocal9;
   resourceType: "vault";
 };
 
-export const Reason36 = {
+export const GetResourceDeploymentDetailReason36 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason36 = ClosedEnum<typeof Reason36>;
+export type GetResourceDeploymentDetailReason36 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason36
+>;
 
 export const CollectionIssueSeverity36 = {
   Info: "info",
@@ -2358,7 +3171,7 @@ export type CollectionIssueSeverity36 = ClosedEnum<
 
 export type CollectionIssue36 = {
   message: string;
-  reason: Reason36;
+  reason: GetResourceDeploymentDetailReason36;
   severity: CollectionIssueSeverity36;
   source: string;
 };
@@ -2403,14 +3216,16 @@ export type DataLocal8 = {
   backend: "local";
 };
 
-export const Reason35 = {
+export const GetResourceDeploymentDetailReason35 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason35 = ClosedEnum<typeof Reason35>;
+export type GetResourceDeploymentDetailReason35 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason35
+>;
 
 export const CollectionIssueSeverity35 = {
   Info: "info",
@@ -2423,7 +3238,7 @@ export type CollectionIssueSeverity35 = ClosedEnum<
 
 export type CollectionIssue35 = {
   message: string;
-  reason: Reason35;
+  reason: GetResourceDeploymentDetailReason35;
   severity: CollectionIssueSeverity35;
   source: string;
 };
@@ -2467,14 +3282,16 @@ export type DataFlexibleServer = {
   backend: "flexibleServer";
 };
 
-export const Reason34 = {
+export const GetResourceDeploymentDetailReason34 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason34 = ClosedEnum<typeof Reason34>;
+export type GetResourceDeploymentDetailReason34 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason34
+>;
 
 export const CollectionIssueSeverity34 = {
   Info: "info",
@@ -2487,7 +3304,7 @@ export type CollectionIssueSeverity34 = ClosedEnum<
 
 export type CollectionIssue34 = {
   message: string;
-  reason: Reason34;
+  reason: GetResourceDeploymentDetailReason34;
   severity: CollectionIssueSeverity34;
   source: string;
 };
@@ -2531,14 +3348,16 @@ export type DataCloudSQL = {
   backend: "cloudSql";
 };
 
-export const Reason33 = {
+export const GetResourceDeploymentDetailReason33 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason33 = ClosedEnum<typeof Reason33>;
+export type GetResourceDeploymentDetailReason33 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason33
+>;
 
 export const CollectionIssueSeverity33 = {
   Info: "info",
@@ -2551,7 +3370,7 @@ export type CollectionIssueSeverity33 = ClosedEnum<
 
 export type CollectionIssue33 = {
   message: string;
-  reason: Reason33;
+  reason: GetResourceDeploymentDetailReason33;
   severity: CollectionIssueSeverity33;
   source: string;
 };
@@ -2617,14 +3436,16 @@ export type DataPostgres = {
   resourceType: "postgres";
 };
 
-export const Reason32 = {
+export const GetResourceDeploymentDetailReason32 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason32 = ClosedEnum<typeof Reason32>;
+export type GetResourceDeploymentDetailReason32 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason32
+>;
 
 export const CollectionIssueSeverity32 = {
   Info: "info",
@@ -2637,7 +3458,7 @@ export type CollectionIssueSeverity32 = ClosedEnum<
 
 export type CollectionIssue32 = {
   message: string;
-  reason: Reason32;
+  reason: GetResourceDeploymentDetailReason32;
   severity: CollectionIssueSeverity32;
   source: string;
 };
@@ -2683,14 +3504,16 @@ export type DataLocal7 = {
   backend: "local";
 };
 
-export const Reason31 = {
+export const GetResourceDeploymentDetailReason31 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason31 = ClosedEnum<typeof Reason31>;
+export type GetResourceDeploymentDetailReason31 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason31
+>;
 
 export const CollectionIssueSeverity31 = {
   Info: "info",
@@ -2703,7 +3526,7 @@ export type CollectionIssueSeverity31 = ClosedEnum<
 
 export type CollectionIssue31 = {
   message: string;
-  reason: Reason31;
+  reason: GetResourceDeploymentDetailReason31;
   severity: CollectionIssueSeverity31;
   source: string;
 };
@@ -2755,14 +3578,16 @@ export type DataAzureTable = {
   backend: "azureTable";
 };
 
-export const Reason30 = {
+export const GetResourceDeploymentDetailReason30 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason30 = ClosedEnum<typeof Reason30>;
+export type GetResourceDeploymentDetailReason30 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason30
+>;
 
 export const CollectionIssueSeverity30 = {
   Info: "info",
@@ -2775,7 +3600,7 @@ export type CollectionIssueSeverity30 = ClosedEnum<
 
 export type CollectionIssue30 = {
   message: string;
-  reason: Reason30;
+  reason: GetResourceDeploymentDetailReason30;
   severity: CollectionIssueSeverity30;
   source: string;
 };
@@ -2838,14 +3663,16 @@ export type KeySchema = {
   keyType: string;
 };
 
-export const Reason29 = {
+export const GetResourceDeploymentDetailReason29 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason29 = ClosedEnum<typeof Reason29>;
+export type GetResourceDeploymentDetailReason29 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason29
+>;
 
 export const CollectionIssueSeverity29 = {
   Info: "info",
@@ -2858,7 +3685,7 @@ export type CollectionIssueSeverity29 = ClosedEnum<
 
 export type CollectionIssue29 = {
   message: string;
-  reason: Reason29;
+  reason: GetResourceDeploymentDetailReason29;
   severity: CollectionIssueSeverity29;
   source: string;
 };
@@ -2930,14 +3757,16 @@ export type DataKv = {
   resourceType: "kv";
 };
 
-export const Reason28 = {
+export const GetResourceDeploymentDetailReason28 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason28 = ClosedEnum<typeof Reason28>;
+export type GetResourceDeploymentDetailReason28 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason28
+>;
 
 export const CollectionIssueSeverity28 = {
   Info: "info",
@@ -2950,7 +3779,7 @@ export type CollectionIssueSeverity28 = ClosedEnum<
 
 export type CollectionIssue28 = {
   message: string;
-  reason: Reason28;
+  reason: GetResourceDeploymentDetailReason28;
   severity: CollectionIssueSeverity28;
   source: string;
 };
@@ -2994,14 +3823,16 @@ export type DataLocal6 = {
   backend: "local";
 };
 
-export const Reason27 = {
+export const GetResourceDeploymentDetailReason27 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason27 = ClosedEnum<typeof Reason27>;
+export type GetResourceDeploymentDetailReason27 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason27
+>;
 
 export const CollectionIssueSeverity27 = {
   Info: "info",
@@ -3014,7 +3845,7 @@ export type CollectionIssueSeverity27 = ClosedEnum<
 
 export type CollectionIssue27 = {
   message: string;
-  reason: Reason27;
+  reason: GetResourceDeploymentDetailReason27;
   severity: CollectionIssueSeverity27;
   source: string;
 };
@@ -3086,14 +3917,16 @@ export type DataAzureServiceBus = {
   backend: "azureServiceBus";
 };
 
-export const Reason26 = {
+export const GetResourceDeploymentDetailReason26 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason26 = ClosedEnum<typeof Reason26>;
+export type GetResourceDeploymentDetailReason26 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason26
+>;
 
 export const CollectionIssueSeverity26 = {
   Info: "info",
@@ -3106,7 +3939,7 @@ export type CollectionIssueSeverity26 = ClosedEnum<
 
 export type CollectionIssue26 = {
   message: string;
-  reason: Reason26;
+  reason: GetResourceDeploymentDetailReason26;
   severity: CollectionIssueSeverity26;
   source: string;
 };
@@ -3180,14 +4013,16 @@ export type DataGcpPubSub = {
   backend: "gcpPubSub";
 };
 
-export const Reason25 = {
+export const GetResourceDeploymentDetailReason25 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason25 = ClosedEnum<typeof Reason25>;
+export type GetResourceDeploymentDetailReason25 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason25
+>;
 
 export const CollectionIssueSeverity25 = {
   Info: "info",
@@ -3200,7 +4035,7 @@ export type CollectionIssueSeverity25 = ClosedEnum<
 
 export type CollectionIssue25 = {
   message: string;
-  reason: Reason25;
+  reason: GetResourceDeploymentDetailReason25;
   severity: CollectionIssueSeverity25;
   source: string;
 };
@@ -3304,12 +4139,12 @@ export type InvolvedObject9 = {
 
 export type InvolvedObjectUnion9 = InvolvedObject9 | any;
 
-export type GetResourceDeploymentDetailSource9 = {
+export type SourceEvent9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion9 = GetResourceDeploymentDetailSource9 | any;
+export type SourceUnion9 = SourceEvent9 | any;
 
 export type Event12 = {
   count?: number | null | undefined;
@@ -3320,7 +4155,7 @@ export type Event12 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource9 | any | null | undefined;
+  source?: SourceEvent9 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -3495,14 +4330,16 @@ export type PodCounts = {
   ready?: number | null | undefined;
 };
 
-export const Reason24 = {
+export const GetResourceDeploymentDetailReason24 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason24 = ClosedEnum<typeof Reason24>;
+export type GetResourceDeploymentDetailReason24 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason24
+>;
 
 export const CollectionIssueSeverity24 = {
   Info: "info",
@@ -3515,7 +4352,7 @@ export type CollectionIssueSeverity24 = ClosedEnum<
 
 export type CollectionIssue24 = {
   message: string;
-  reason: Reason24;
+  reason: GetResourceDeploymentDetailReason24;
   severity: CollectionIssueSeverity24;
   source: string;
 };
@@ -3576,14 +4413,16 @@ export type Nodes5 = {
   ready?: number | null | undefined;
 };
 
-export const Reason23 = {
+export const GetResourceDeploymentDetailReason23 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason23 = ClosedEnum<typeof Reason23>;
+export type GetResourceDeploymentDetailReason23 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason23
+>;
 
 export const CollectionIssueSeverity23 = {
   Info: "info",
@@ -3596,7 +4435,7 @@ export type CollectionIssueSeverity23 = ClosedEnum<
 
 export type CollectionIssue23 = {
   message: string;
-  reason: Reason23;
+  reason: GetResourceDeploymentDetailReason23;
   severity: CollectionIssueSeverity23;
   source: string;
 };
@@ -3667,7 +4506,7 @@ export type CapacityBlocker4 = {
 
 export type CapacityBlockerUnion4 = CapacityBlocker4 | any;
 
-export type Blocker4 = {
+export type DrainProgressBlocker4 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -3683,7 +4522,7 @@ export const DrainProgressStatus4 = {
 export type DrainProgressStatus4 = ClosedEnum<typeof DrainProgressStatus4>;
 
 export type DrainProgress4 = {
-  blockers?: Array<Blocker4> | undefined;
+  blockers?: Array<DrainProgressBlocker4> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -3801,14 +4640,16 @@ export type Nodes4 = {
   ready?: number | null | undefined;
 };
 
-export const Reason22 = {
+export const GetResourceDeploymentDetailReason22 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason22 = ClosedEnum<typeof Reason22>;
+export type GetResourceDeploymentDetailReason22 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason22
+>;
 
 export const CollectionIssueSeverity22 = {
   Info: "info",
@@ -3821,7 +4662,7 @@ export type CollectionIssueSeverity22 = ClosedEnum<
 
 export type CollectionIssue22 = {
   message: string;
-  reason: Reason22;
+  reason: GetResourceDeploymentDetailReason22;
   severity: CollectionIssueSeverity22;
   source: string;
 };
@@ -3887,7 +4728,7 @@ export type CapacityBlocker3 = {
 
 export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
 
-export type Blocker3 = {
+export type DrainProgressBlocker3 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -3903,7 +4744,7 @@ export const DrainProgressStatus3 = {
 export type DrainProgressStatus3 = ClosedEnum<typeof DrainProgressStatus3>;
 
 export type DrainProgress3 = {
-  blockers?: Array<Blocker3> | undefined;
+  blockers?: Array<DrainProgressBlocker3> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -4002,14 +4843,16 @@ export type ProviderFleet3 = {
   providerId: string;
 };
 
-export const Reason21 = {
+export const GetResourceDeploymentDetailReason21 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason21 = ClosedEnum<typeof Reason21>;
+export type GetResourceDeploymentDetailReason21 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason21
+>;
 
 export const CollectionIssueSeverity21 = {
   Info: "info",
@@ -4022,7 +4865,7 @@ export type CollectionIssueSeverity21 = ClosedEnum<
 
 export type CollectionIssue21 = {
   message: string;
-  reason: Reason21;
+  reason: GetResourceDeploymentDetailReason21;
   severity: CollectionIssueSeverity21;
   source: string;
 };
@@ -4089,7 +4932,7 @@ export type CapacityBlocker2 = {
 
 export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
 
-export type Blocker2 = {
+export type DrainProgressBlocker2 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -4105,7 +4948,7 @@ export const DrainProgressStatus2 = {
 export type DrainProgressStatus2 = ClosedEnum<typeof DrainProgressStatus2>;
 
 export type DrainProgress2 = {
-  blockers?: Array<Blocker2> | undefined;
+  blockers?: Array<DrainProgressBlocker2> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -4204,14 +5047,16 @@ export type ProviderFleet2 = {
   providerId: string;
 };
 
-export const Reason20 = {
+export const GetResourceDeploymentDetailReason20 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason20 = ClosedEnum<typeof Reason20>;
+export type GetResourceDeploymentDetailReason20 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason20
+>;
 
 export const CollectionIssueSeverity20 = {
   Info: "info",
@@ -4224,7 +5069,7 @@ export type CollectionIssueSeverity20 = ClosedEnum<
 
 export type CollectionIssue20 = {
   message: string;
-  reason: Reason20;
+  reason: GetResourceDeploymentDetailReason20;
   severity: CollectionIssueSeverity20;
   source: string;
 };
@@ -4291,7 +5136,7 @@ export type CapacityBlocker1 = {
 
 export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
 
-export type Blocker1 = {
+export type DrainProgressBlocker1 = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -4307,7 +5152,7 @@ export const DrainProgressStatus1 = {
 export type DrainProgressStatus1 = ClosedEnum<typeof DrainProgressStatus1>;
 
 export type DrainProgress1 = {
-  blockers?: Array<Blocker1> | undefined;
+  blockers?: Array<DrainProgressBlocker1> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainRequestedAt?: string | null | undefined;
   drainedAt?: string | null | undefined;
@@ -4406,14 +5251,16 @@ export type ProviderFleet1 = {
   providerId: string;
 };
 
-export const Reason19 = {
+export const GetResourceDeploymentDetailReason19 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason19 = ClosedEnum<typeof Reason19>;
+export type GetResourceDeploymentDetailReason19 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason19
+>;
 
 export const CollectionIssueSeverity19 = {
   Info: "info",
@@ -4426,7 +5273,7 @@ export type CollectionIssueSeverity19 = ClosedEnum<
 
 export type CollectionIssue19 = {
   message: string;
-  reason: Reason19;
+  reason: GetResourceDeploymentDetailReason19;
   severity: CollectionIssueSeverity19;
   source: string;
 };
@@ -4568,14 +5415,16 @@ export type Event11 = {
   timestamp: Date;
 };
 
-export const Reason18 = {
+export const GetResourceDeploymentDetailReason18 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason18 = ClosedEnum<typeof Reason18>;
+export type GetResourceDeploymentDetailReason18 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason18
+>;
 
 export const CollectionIssueSeverity18 = {
   Info: "info",
@@ -4588,7 +5437,7 @@ export type CollectionIssueSeverity18 = ClosedEnum<
 
 export type CollectionIssue18 = {
   message: string;
-  reason: Reason18;
+  reason: GetResourceDeploymentDetailReason18;
   severity: CollectionIssueSeverity18;
   source: string;
 };
@@ -4667,12 +5516,12 @@ export type InvolvedObject8 = {
 
 export type InvolvedObjectUnion8 = InvolvedObject8 | any;
 
-export type GetResourceDeploymentDetailSource8 = {
+export type SourceEvent8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = GetResourceDeploymentDetailSource8 | any;
+export type SourceUnion8 = SourceEvent8 | any;
 
 export type Event10 = {
   count?: number | null | undefined;
@@ -4683,7 +5532,7 @@ export type Event10 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource8 | any | null | undefined;
+  source?: SourceEvent8 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4769,14 +5618,16 @@ export type Replicas4 = {
   updated?: number | null | undefined;
 };
 
-export const Reason17 = {
+export const GetResourceDeploymentDetailReason17 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason17 = ClosedEnum<typeof Reason17>;
+export type GetResourceDeploymentDetailReason17 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason17
+>;
 
 export const CollectionIssueSeverity17 = {
   Info: "info",
@@ -4789,7 +5640,7 @@ export type CollectionIssueSeverity17 = ClosedEnum<
 
 export type CollectionIssue17 = {
   message: string;
-  reason: Reason17;
+  reason: GetResourceDeploymentDetailReason17;
   severity: CollectionIssueSeverity17;
   source: string;
 };
@@ -4929,12 +5780,12 @@ export type InvolvedObject7 = {
 
 export type InvolvedObjectUnion7 = InvolvedObject7 | any;
 
-export type GetResourceDeploymentDetailSource7 = {
+export type SourceEvent7 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = GetResourceDeploymentDetailSource7 | any;
+export type SourceUnion7 = SourceEvent7 | any;
 
 export type Event9 = {
   count?: number | null | undefined;
@@ -4947,18 +5798,20 @@ export type Event9 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource7 | any | null | undefined;
+  source?: SourceEvent7 | any | null | undefined;
   type?: string | null | undefined;
 };
 
-export const Reason16 = {
+export const GetResourceDeploymentDetailReason16 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason16 = ClosedEnum<typeof Reason16>;
+export type GetResourceDeploymentDetailReason16 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason16
+>;
 
 export const CollectionIssueSeverity16 = {
   Info: "info",
@@ -4971,7 +5824,7 @@ export type CollectionIssueSeverity16 = ClosedEnum<
 
 export type CollectionIssue16 = {
   message: string;
-  reason: Reason16;
+  reason: GetResourceDeploymentDetailReason16;
   severity: CollectionIssueSeverity16;
   source: string;
 };
@@ -5021,6 +5874,7 @@ export type DataMachines1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: DataStatus16;
   unavailableInstances: number;
   backend: "machines";
@@ -5094,12 +5948,12 @@ export type InvolvedObject6 = {
 
 export type InvolvedObjectUnion6 = InvolvedObject6 | any;
 
-export type GetResourceDeploymentDetailSource6 = {
+export type SourceEvent6 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion6 = GetResourceDeploymentDetailSource6 | any;
+export type SourceUnion6 = SourceEvent6 | any;
 
 export type Event8 = {
   count?: number | null | undefined;
@@ -5112,18 +5966,20 @@ export type Event8 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource6 | any | null | undefined;
+  source?: SourceEvent6 | any | null | undefined;
   type?: string | null | undefined;
 };
 
-export const Reason15 = {
+export const GetResourceDeploymentDetailReason15 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason15 = ClosedEnum<typeof Reason15>;
+export type GetResourceDeploymentDetailReason15 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason15
+>;
 
 export const CollectionIssueSeverity15 = {
   Info: "info",
@@ -5136,7 +5992,7 @@ export type CollectionIssueSeverity15 = ClosedEnum<
 
 export type CollectionIssue15 = {
   message: string;
-  reason: Reason15;
+  reason: GetResourceDeploymentDetailReason15;
   severity: CollectionIssueSeverity15;
   source: string;
 };
@@ -5186,6 +6042,7 @@ export type DataAzure1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: DataStatus15;
   unavailableInstances: number;
   backend: "azure";
@@ -5259,12 +6116,12 @@ export type InvolvedObject5 = {
 
 export type InvolvedObjectUnion5 = InvolvedObject5 | any;
 
-export type GetResourceDeploymentDetailSource5 = {
+export type SourceEvent5 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion5 = GetResourceDeploymentDetailSource5 | any;
+export type SourceUnion5 = SourceEvent5 | any;
 
 export type Event7 = {
   count?: number | null | undefined;
@@ -5277,18 +6134,20 @@ export type Event7 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource5 | any | null | undefined;
+  source?: SourceEvent5 | any | null | undefined;
   type?: string | null | undefined;
 };
 
-export const Reason14 = {
+export const GetResourceDeploymentDetailReason14 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason14 = ClosedEnum<typeof Reason14>;
+export type GetResourceDeploymentDetailReason14 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason14
+>;
 
 export const CollectionIssueSeverity14 = {
   Info: "info",
@@ -5301,7 +6160,7 @@ export type CollectionIssueSeverity14 = ClosedEnum<
 
 export type CollectionIssue14 = {
   message: string;
-  reason: Reason14;
+  reason: GetResourceDeploymentDetailReason14;
   severity: CollectionIssueSeverity14;
   source: string;
 };
@@ -5351,6 +6210,7 @@ export type DataGcp1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: DataStatus14;
   unavailableInstances: number;
   backend: "gcp";
@@ -5424,12 +6284,12 @@ export type InvolvedObject4 = {
 
 export type InvolvedObjectUnion4 = InvolvedObject4 | any;
 
-export type GetResourceDeploymentDetailSource4 = {
+export type SourceEvent4 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion4 = GetResourceDeploymentDetailSource4 | any;
+export type SourceUnion4 = SourceEvent4 | any;
 
 export type Event6 = {
   count?: number | null | undefined;
@@ -5442,18 +6302,20 @@ export type Event6 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource4 | any | null | undefined;
+  source?: SourceEvent4 | any | null | undefined;
   type?: string | null | undefined;
 };
 
-export const Reason13 = {
+export const GetResourceDeploymentDetailReason13 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason13 = ClosedEnum<typeof Reason13>;
+export type GetResourceDeploymentDetailReason13 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason13
+>;
 
 export const CollectionIssueSeverity13 = {
   Info: "info",
@@ -5466,7 +6328,7 @@ export type CollectionIssueSeverity13 = ClosedEnum<
 
 export type CollectionIssue13 = {
   message: string;
-  reason: Reason13;
+  reason: GetResourceDeploymentDetailReason13;
   severity: CollectionIssueSeverity13;
   source: string;
 };
@@ -5516,6 +6378,7 @@ export type DataAws1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: DataStatus13;
   unavailableInstances: number;
   backend: "aws";
@@ -5655,14 +6518,16 @@ export type Memory5 = {
 
 export type MemoryUnion5 = Memory5 | any;
 
-export const Reason12 = {
+export const GetResourceDeploymentDetailReason12 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason12 = ClosedEnum<typeof Reason12>;
+export type GetResourceDeploymentDetailReason12 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason12
+>;
 
 export const CollectionIssueSeverity12 = {
   Info: "info",
@@ -5675,7 +6540,7 @@ export type CollectionIssueSeverity12 = ClosedEnum<
 
 export type CollectionIssue12 = {
   message: string;
-  reason: Reason12;
+  reason: GetResourceDeploymentDetailReason12;
   severity: CollectionIssueSeverity12;
   source: string;
 };
@@ -5758,12 +6623,12 @@ export type InvolvedObject3 = {
 
 export type InvolvedObjectUnion3 = InvolvedObject3 | any;
 
-export type GetResourceDeploymentDetailSource3 = {
+export type SourceEvent3 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion3 = GetResourceDeploymentDetailSource3 | any;
+export type SourceUnion3 = SourceEvent3 | any;
 
 export type Event4 = {
   count?: number | null | undefined;
@@ -5774,7 +6639,7 @@ export type Event4 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource3 | any | null | undefined;
+  source?: SourceEvent3 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -5860,14 +6725,16 @@ export type Replicas3 = {
   updated?: number | null | undefined;
 };
 
-export const Reason11 = {
+export const GetResourceDeploymentDetailReason11 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason11 = ClosedEnum<typeof Reason11>;
+export type GetResourceDeploymentDetailReason11 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason11
+>;
 
 export const CollectionIssueSeverity11 = {
   Info: "info",
@@ -5880,7 +6747,7 @@ export type CollectionIssueSeverity11 = ClosedEnum<
 
 export type CollectionIssue11 = {
   message: string;
-  reason: Reason11;
+  reason: GetResourceDeploymentDetailReason11;
   severity: CollectionIssueSeverity11;
   source: string;
 };
@@ -5989,12 +6856,12 @@ export type InvolvedObject2 = {
 
 export type InvolvedObjectUnion2 = InvolvedObject2 | any;
 
-export type GetResourceDeploymentDetailSource2 = {
+export type SourceEvent2 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion2 = GetResourceDeploymentDetailSource2 | any;
+export type SourceUnion2 = SourceEvent2 | any;
 
 export type Event3 = {
   count?: number | null | undefined;
@@ -6007,7 +6874,7 @@ export type Event3 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource2 | any | null | undefined;
+  source?: SourceEvent2 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -6099,14 +6966,16 @@ export const SchedulingMode = {
 } as const;
 export type SchedulingMode = ClosedEnum<typeof SchedulingMode>;
 
-export const Reason10 = {
+export const GetResourceDeploymentDetailReason10 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason10 = ClosedEnum<typeof Reason10>;
+export type GetResourceDeploymentDetailReason10 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason10
+>;
 
 export const CollectionIssueSeverity10 = {
   Info: "info",
@@ -6119,7 +6988,7 @@ export type CollectionIssueSeverity10 = ClosedEnum<
 
 export type CollectionIssue10 = {
   message: string;
-  reason: Reason10;
+  reason: GetResourceDeploymentDetailReason10;
   severity: CollectionIssueSeverity10;
   source: string;
 };
@@ -6161,7 +7030,9 @@ export type DataHorizonPlatform = {
   cpu?: Cpu3 | any | null | undefined;
   events: Array<Event3>;
   image?: string | null | undefined;
+  latestUpdateTimestamp?: string | null | undefined;
   memory?: Memory3 | any | null | undefined;
+  observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
@@ -6289,14 +7160,16 @@ export type Process = {
 
 export type ProcessUnion = Process | any;
 
-export const Reason9 = {
+export const GetResourceDeploymentDetailReason9 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason9 = ClosedEnum<typeof Reason9>;
+export type GetResourceDeploymentDetailReason9 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason9
+>;
 
 export const CollectionIssueSeverity9 = {
   Info: "info",
@@ -6309,7 +7182,7 @@ export type CollectionIssueSeverity9 = ClosedEnum<
 
 export type CollectionIssue9 = {
   message: string;
-  reason: Reason9;
+  reason: GetResourceDeploymentDetailReason9;
   severity: CollectionIssueSeverity9;
   source: string;
 };
@@ -6388,12 +7261,12 @@ export type InvolvedObject1 = {
 
 export type InvolvedObjectUnion1 = InvolvedObject1 | any;
 
-export type GetResourceDeploymentDetailSource1 = {
+export type SourceEvent1 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion1 = GetResourceDeploymentDetailSource1 | any;
+export type SourceUnion1 = SourceEvent1 | any;
 
 export type Event1 = {
   count?: number | null | undefined;
@@ -6404,7 +7277,7 @@ export type Event1 = {
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource1 | any | null | undefined;
+  source?: SourceEvent1 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -6490,14 +7363,16 @@ export type Replicas1 = {
   updated?: number | null | undefined;
 };
 
-export const Reason8 = {
+export const GetResourceDeploymentDetailReason8 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason8 = ClosedEnum<typeof Reason8>;
+export type GetResourceDeploymentDetailReason8 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason8
+>;
 
 export const CollectionIssueSeverity8 = {
   Info: "info",
@@ -6510,7 +7385,7 @@ export type CollectionIssueSeverity8 = ClosedEnum<
 
 export type CollectionIssue8 = {
   message: string;
-  reason: Reason8;
+  reason: GetResourceDeploymentDetailReason8;
   severity: CollectionIssueSeverity8;
   source: string;
 };
@@ -6592,14 +7467,16 @@ export type DataKubernetes1 = {
   backend: "kubernetes";
 };
 
-export const Reason7 = {
+export const GetResourceDeploymentDetailReason7 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason7 = ClosedEnum<typeof Reason7>;
+export type GetResourceDeploymentDetailReason7 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason7
+>;
 
 export const CollectionIssueSeverity7 = {
   Info: "info",
@@ -6612,7 +7489,7 @@ export type CollectionIssueSeverity7 = ClosedEnum<
 
 export type CollectionIssue7 = {
   message: string;
-  reason: Reason7;
+  reason: GetResourceDeploymentDetailReason7;
   severity: CollectionIssueSeverity7;
   source: string;
 };
@@ -6663,14 +7540,16 @@ export type DataAzureContainerApps1 = {
   backend: "azureContainerApps";
 };
 
-export const Reason6 = {
+export const GetResourceDeploymentDetailReason6 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason6 = ClosedEnum<typeof Reason6>;
+export type GetResourceDeploymentDetailReason6 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason6
+>;
 
 export const CollectionIssueSeverity6 = {
   Info: "info",
@@ -6683,7 +7562,7 @@ export type CollectionIssueSeverity6 = ClosedEnum<
 
 export type CollectionIssue6 = {
   message: string;
-  reason: Reason6;
+  reason: GetResourceDeploymentDetailReason6;
   severity: CollectionIssueSeverity6;
   source: string;
 };
@@ -6738,14 +7617,16 @@ export type DataGcpCloudRun = {
   backend: "gcpCloudRun";
 };
 
-export const Reason5 = {
+export const GetResourceDeploymentDetailReason5 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason5 = ClosedEnum<typeof Reason5>;
+export type GetResourceDeploymentDetailReason5 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason5
+>;
 
 export const CollectionIssueSeverity5 = {
   Info: "info",
@@ -6758,7 +7639,7 @@ export type CollectionIssueSeverity5 = ClosedEnum<
 
 export type CollectionIssue5 = {
   message: string;
-  reason: Reason5;
+  reason: GetResourceDeploymentDetailReason5;
   severity: CollectionIssueSeverity5;
   source: string;
 };
@@ -6835,14 +7716,16 @@ export type DataWorker = {
   resourceType: "worker";
 };
 
-export const Reason4 = {
+export const GetResourceDeploymentDetailReason4 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason4 = ClosedEnum<typeof Reason4>;
+export type GetResourceDeploymentDetailReason4 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason4
+>;
 
 export const CollectionIssueSeverity4 = {
   Info: "info",
@@ -6855,7 +7738,7 @@ export type CollectionIssueSeverity4 = ClosedEnum<
 
 export type CollectionIssue4 = {
   message: string;
-  reason: Reason4;
+  reason: GetResourceDeploymentDetailReason4;
   severity: CollectionIssueSeverity4;
   source: string;
 };
@@ -6901,14 +7784,16 @@ export type DataLocal1 = {
   backend: "local";
 };
 
-export const Reason3 = {
+export const GetResourceDeploymentDetailReason3 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason3 = ClosedEnum<typeof Reason3>;
+export type GetResourceDeploymentDetailReason3 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason3
+>;
 
 export const CollectionIssueSeverity3 = {
   Info: "info",
@@ -6921,7 +7806,7 @@ export type CollectionIssueSeverity3 = ClosedEnum<
 
 export type CollectionIssue3 = {
   message: string;
-  reason: Reason3;
+  reason: GetResourceDeploymentDetailReason3;
   severity: CollectionIssueSeverity3;
   source: string;
 };
@@ -6990,14 +7875,16 @@ export type DataAzureBlob = {
   backend: "azureBlob";
 };
 
-export const Reason2 = {
+export const GetResourceDeploymentDetailReason2 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason2 = ClosedEnum<typeof Reason2>;
+export type GetResourceDeploymentDetailReason2 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason2
+>;
 
 export const CollectionIssueSeverity2 = {
   Info: "info",
@@ -7010,7 +7897,7 @@ export type CollectionIssueSeverity2 = ClosedEnum<
 
 export type CollectionIssue2 = {
   message: string;
-  reason: Reason2;
+  reason: GetResourceDeploymentDetailReason2;
   severity: CollectionIssueSeverity2;
   source: string;
 };
@@ -7069,14 +7956,16 @@ export type DataGcpCloudStorage = {
   backend: "gcpCloudStorage";
 };
 
-export const Reason1 = {
+export const GetResourceDeploymentDetailReason1 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason1 = ClosedEnum<typeof Reason1>;
+export type GetResourceDeploymentDetailReason1 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason1
+>;
 
 export const CollectionIssueSeverity1 = {
   Info: "info",
@@ -7089,7 +7978,7 @@ export type CollectionIssueSeverity1 = ClosedEnum<
 
 export type CollectionIssue1 = {
   message: string;
-  reason: Reason1;
+  reason: GetResourceDeploymentDetailReason1;
   severity: CollectionIssueSeverity1;
   source: string;
 };
@@ -7157,7 +8046,7 @@ export type DataStorage = {
   resourceType: "storage";
 };
 
-export type DataUnion16 =
+export type DataUnion18 =
   | DataStorage
   | DataWorker
   | DataContainer
@@ -7177,7 +8066,9 @@ export type DataUnion16 =
   | DataAzureResourceGroup
   | DataAzureStorageAccount
   | DataAzureContainerAppsEnvironment
-  | DataAzureServiceBusNamespace;
+  | DataAzureServiceBusNamespace
+  | DataAi
+  | DataKey;
 
 export const Format = {
   Json: "json",
@@ -7220,7 +8111,9 @@ export type Heartbeat = {
     | DataAzureResourceGroup
     | DataAzureStorageAccount
     | DataAzureContainerAppsEnvironment
-    | DataAzureServiceBusNamespace;
+    | DataAzureServiceBusNamespace
+    | DataAi
+    | DataKey;
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<Raw>;
@@ -7254,7 +8147,7 @@ export type HeartbeatAvailable = {
 export type HeartbeatUnion = HeartbeatAvailable | HeartbeatMissing;
 
 /**
- * Latest heartbeat detail for one compute resource deployment.
+ * Latest heartbeat detail for one resource deployment.
  */
 export type GetResourceDeploymentDetailResponse = {
   deployment: GetResourceDeploymentDetailDeployment;
@@ -7366,9 +8259,918 @@ export const ControllerPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(ControllerPlatform);
 
 /** @internal */
-export const Reason65$inboundSchema: z.ZodEnum<typeof Reason65> = z.enum(
-  Reason65,
+export const Health72$inboundSchema: z.ZodEnum<typeof Health72> = z.enum(
+  Health72,
 );
+
+/** @internal */
+export const Lifecycle72$inboundSchema: z.ZodEnum<typeof Lifecycle72> = z.enum(
+  Lifecycle72,
+);
+
+/** @internal */
+export const DataStatus72$inboundSchema: z.ZodType<DataStatus72, unknown> = z
+  .object({
+    health: Health72$inboundSchema,
+    lifecycle: Lifecycle72$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+  });
+
+export function dataStatus72FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus72, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus72$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus72' from JSON`,
+  );
+}
+
+/** @internal */
+export const Data8$inboundSchema: z.ZodType<Data8, unknown> = z.object({
+  enabled: z.nullable(z.boolean()).optional(),
+  keyId: z.string(),
+  keyOperations: z.array(z.string()),
+  keyType: z.string(),
+  recoveryLevel: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus72$inboundSchema),
+});
+
+export function data8FromJSON(
+  jsonString: string,
+): SafeParseResult<Data8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Data8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Data8' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureKeyVault2$inboundSchema: z.ZodType<
+  DataAzureKeyVault2,
+  unknown
+> = z.object({
+  data: z.lazy(() => Data8$inboundSchema),
+  provider: z.literal("azure-key-vault"),
+});
+
+export function dataAzureKeyVault2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureKeyVault2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureKeyVault2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureKeyVault2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health71$inboundSchema: z.ZodEnum<typeof Health71> = z.enum(
+  Health71,
+);
+
+/** @internal */
+export const Lifecycle71$inboundSchema: z.ZodEnum<typeof Lifecycle71> = z.enum(
+  Lifecycle71,
+);
+
+/** @internal */
+export const DataStatus71$inboundSchema: z.ZodType<DataStatus71, unknown> = z
+  .object({
+    health: Health71$inboundSchema,
+    lifecycle: Lifecycle71$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+  });
+
+export function dataStatus71FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus71, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus71$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus71' from JSON`,
+  );
+}
+
+/** @internal */
+export const Data7$inboundSchema: z.ZodType<Data7, unknown> = z.object({
+  algorithm: z.nullable(z.string()).optional(),
+  cryptoKeyName: z.string(),
+  primaryState: z.nullable(z.string()).optional(),
+  primaryVersion: z.nullable(z.string()).optional(),
+  purpose: z.string(),
+  status: z.lazy(() => DataStatus71$inboundSchema),
+});
+
+export function data7FromJSON(
+  jsonString: string,
+): SafeParseResult<Data7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Data7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Data7' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpCloudKms$inboundSchema: z.ZodType<
+  DataGcpCloudKms,
+  unknown
+> = z.object({
+  data: z.lazy(() => Data7$inboundSchema),
+  provider: z.literal("gcp-cloud-kms"),
+});
+
+export function dataGcpCloudKmsFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpCloudKms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpCloudKms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpCloudKms' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health70$inboundSchema: z.ZodEnum<typeof Health70> = z.enum(
+  Health70,
+);
+
+/** @internal */
+export const Lifecycle70$inboundSchema: z.ZodEnum<typeof Lifecycle70> = z.enum(
+  Lifecycle70,
+);
+
+/** @internal */
+export const DataStatus70$inboundSchema: z.ZodType<DataStatus70, unknown> = z
+  .object({
+    health: Health70$inboundSchema,
+    lifecycle: Lifecycle70$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+  });
+
+export function dataStatus70FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus70, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus70$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus70' from JSON`,
+  );
+}
+
+/** @internal */
+export const Data6$inboundSchema: z.ZodType<Data6, unknown> = z.object({
+  enabled: z.boolean(),
+  keyArn: z.string(),
+  keySpec: z.string(),
+  keyState: z.string(),
+  keyUsage: z.string(),
+  status: z.lazy(() => DataStatus70$inboundSchema),
+});
+
+export function data6FromJSON(
+  jsonString: string,
+): SafeParseResult<Data6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Data6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Data6' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsKms$inboundSchema: z.ZodType<DataAwsKms, unknown> = z
+  .object({
+    data: z.lazy(() => Data6$inboundSchema),
+    provider: z.literal("aws-kms"),
+  });
+
+export function dataAwsKmsFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsKms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsKms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsKms' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion17$inboundSchema: z.ZodType<DataUnion17, unknown> = z
+  .union([
+    z.lazy(() => DataAwsKms$inboundSchema),
+    z.lazy(() => DataGcpCloudKms$inboundSchema),
+    z.lazy(() => DataAzureKeyVault2$inboundSchema),
+  ]);
+
+export function dataUnion17FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion17, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion17$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion17' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataKey$inboundSchema: z.ZodType<DataKey, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsKms$inboundSchema),
+    z.lazy(() => DataGcpCloudKms$inboundSchema),
+    z.lazy(() => DataAzureKeyVault2$inboundSchema),
+  ]),
+  resourceType: z.literal("key"),
+});
+
+export function dataKeyFromJSON(
+  jsonString: string,
+): SafeParseResult<DataKey, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataKey$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKey' from JSON`,
+  );
+}
+
+/** @internal */
+export const AccessTest4$inboundSchema: z.ZodEnum<typeof AccessTest4> = z.enum(
+  AccessTest4,
+);
+
+/** @internal */
+export const AvailabilityEnum4$inboundSchema: z.ZodEnum<
+  typeof AvailabilityEnum4
+> = z.enum(AvailabilityEnum4);
+
+/** @internal */
+export const BlockerEnum4$inboundSchema: z.ZodEnum<typeof BlockerEnum4> = z
+  .enum(BlockerEnum4);
+
+/** @internal */
+export const GetResourceDeploymentDetailClientApi4$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi4
+> = z.enum(GetResourceDeploymentDetailClientApi4);
+
+/** @internal */
+export const GetResourceDeploymentDetailModel4$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailModel4,
+  unknown
+> = z.object({
+  accessTest: AccessTest4$inboundSchema,
+  availability: AvailabilityEnum4$inboundSchema,
+  blockers: z.array(BlockerEnum4$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi4$inboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function getResourceDeploymentDetailModel4FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailModel4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetResourceDeploymentDetailModel4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailModel4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceEnum4$inboundSchema: z.ZodEnum<typeof SourceEnum4> = z.enum(
+  SourceEnum4,
+);
+
+/** @internal */
+export const Availability4$inboundSchema: z.ZodType<Availability4, unknown> = z
+  .object({
+    catalogRevision: z.string(),
+    location: z.nullable(z.string()).optional(),
+    models: z.array(
+      z.lazy(() => GetResourceDeploymentDetailModel4$inboundSchema),
+    ),
+    source: SourceEnum4$inboundSchema,
+  });
+
+export function availability4FromJSON(
+  jsonString: string,
+): SafeParseResult<Availability4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Availability4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Availability4' from JSON`,
+  );
+}
+
+/** @internal */
+export const AvailabilityUnion$inboundSchema: z.ZodType<
+  AvailabilityUnion,
+  unknown
+> = z.union([z.lazy(() => Availability4$inboundSchema), z.any()]);
+
+export function availabilityUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<AvailabilityUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => AvailabilityUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'AvailabilityUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailReason69$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason69
+> = z.enum(GetResourceDeploymentDetailReason69);
+
+/** @internal */
+export const CollectionIssueSeverity69$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity69
+> = z.enum(CollectionIssueSeverity69);
+
+/** @internal */
+export const CollectionIssue69$inboundSchema: z.ZodType<
+  CollectionIssue69,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: GetResourceDeploymentDetailReason69$inboundSchema,
+  severity: CollectionIssueSeverity69$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue69FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue69, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue69$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue69' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health69$inboundSchema: z.ZodEnum<typeof Health69> = z.enum(
+  Health69,
+);
+
+/** @internal */
+export const Lifecycle69$inboundSchema: z.ZodEnum<typeof Lifecycle69> = z.enum(
+  Lifecycle69,
+);
+
+/** @internal */
+export const DataStatus69$inboundSchema: z.ZodType<DataStatus69, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue69$inboundSchema)),
+    health: Health69$inboundSchema,
+    lifecycle: Lifecycle69$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus69FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus69, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus69$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus69' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataExternal$inboundSchema: z.ZodType<DataExternal, unknown> = z
+  .object({
+    availability: z.nullable(
+      z.union([z.lazy(() => Availability4$inboundSchema), z.any()]),
+    ).optional(),
+    provider: z.string(),
+    status: z.lazy(() => DataStatus69$inboundSchema),
+    backend: z.literal("external"),
+  });
+
+export function dataExternalFromJSON(
+  jsonString: string,
+): SafeParseResult<DataExternal, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataExternal$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataExternal' from JSON`,
+  );
+}
+
+/** @internal */
+export const AccessTest3$inboundSchema: z.ZodEnum<typeof AccessTest3> = z.enum(
+  AccessTest3,
+);
+
+/** @internal */
+export const AvailabilityEnum3$inboundSchema: z.ZodEnum<
+  typeof AvailabilityEnum3
+> = z.enum(AvailabilityEnum3);
+
+/** @internal */
+export const BlockerEnum3$inboundSchema: z.ZodEnum<typeof BlockerEnum3> = z
+  .enum(BlockerEnum3);
+
+/** @internal */
+export const GetResourceDeploymentDetailClientApi3$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi3
+> = z.enum(GetResourceDeploymentDetailClientApi3);
+
+/** @internal */
+export const GetResourceDeploymentDetailModel3$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailModel3,
+  unknown
+> = z.object({
+  accessTest: AccessTest3$inboundSchema,
+  availability: AvailabilityEnum3$inboundSchema,
+  blockers: z.array(BlockerEnum3$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi3$inboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function getResourceDeploymentDetailModel3FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailModel3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetResourceDeploymentDetailModel3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailModel3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceEnum3$inboundSchema: z.ZodEnum<typeof SourceEnum3> = z.enum(
+  SourceEnum3,
+);
+
+/** @internal */
+export const Availability3$inboundSchema: z.ZodType<Availability3, unknown> = z
+  .object({
+    catalogRevision: z.string(),
+    location: z.nullable(z.string()).optional(),
+    models: z.array(
+      z.lazy(() => GetResourceDeploymentDetailModel3$inboundSchema),
+    ),
+    source: SourceEnum3$inboundSchema,
+  });
+
+export function availability3FromJSON(
+  jsonString: string,
+): SafeParseResult<Availability3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Availability3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Availability3' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailReason68$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason68
+> = z.enum(GetResourceDeploymentDetailReason68);
+
+/** @internal */
+export const CollectionIssueSeverity68$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity68
+> = z.enum(CollectionIssueSeverity68);
+
+/** @internal */
+export const CollectionIssue68$inboundSchema: z.ZodType<
+  CollectionIssue68,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: GetResourceDeploymentDetailReason68$inboundSchema,
+  severity: CollectionIssueSeverity68$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue68FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue68, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue68$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue68' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health68$inboundSchema: z.ZodEnum<typeof Health68> = z.enum(
+  Health68,
+);
+
+/** @internal */
+export const Lifecycle68$inboundSchema: z.ZodEnum<typeof Lifecycle68> = z.enum(
+  Lifecycle68,
+);
+
+/** @internal */
+export const DataStatus68$inboundSchema: z.ZodType<DataStatus68, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue68$inboundSchema)),
+    health: Health68$inboundSchema,
+    lifecycle: Lifecycle68$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus68FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus68, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus68$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus68' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureFoundry$inboundSchema: z.ZodType<
+  DataAzureFoundry,
+  unknown
+> = z.object({
+  accountName: z.string(),
+  availability: z.lazy(() => Availability3$inboundSchema),
+  endpoint: z.nullable(z.string()).optional(),
+  location: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus68$inboundSchema),
+  backend: z.literal("azureFoundry"),
+});
+
+export function dataAzureFoundryFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureFoundry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureFoundry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureFoundry' from JSON`,
+  );
+}
+
+/** @internal */
+export const AccessTest2$inboundSchema: z.ZodEnum<typeof AccessTest2> = z.enum(
+  AccessTest2,
+);
+
+/** @internal */
+export const AvailabilityEnum2$inboundSchema: z.ZodEnum<
+  typeof AvailabilityEnum2
+> = z.enum(AvailabilityEnum2);
+
+/** @internal */
+export const BlockerEnum2$inboundSchema: z.ZodEnum<typeof BlockerEnum2> = z
+  .enum(BlockerEnum2);
+
+/** @internal */
+export const GetResourceDeploymentDetailClientApi2$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi2
+> = z.enum(GetResourceDeploymentDetailClientApi2);
+
+/** @internal */
+export const GetResourceDeploymentDetailModel2$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailModel2,
+  unknown
+> = z.object({
+  accessTest: AccessTest2$inboundSchema,
+  availability: AvailabilityEnum2$inboundSchema,
+  blockers: z.array(BlockerEnum2$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi2$inboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function getResourceDeploymentDetailModel2FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailModel2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetResourceDeploymentDetailModel2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailModel2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceEnum2$inboundSchema: z.ZodEnum<typeof SourceEnum2> = z.enum(
+  SourceEnum2,
+);
+
+/** @internal */
+export const Availability2$inboundSchema: z.ZodType<Availability2, unknown> = z
+  .object({
+    catalogRevision: z.string(),
+    location: z.nullable(z.string()).optional(),
+    models: z.array(
+      z.lazy(() => GetResourceDeploymentDetailModel2$inboundSchema),
+    ),
+    source: SourceEnum2$inboundSchema,
+  });
+
+export function availability2FromJSON(
+  jsonString: string,
+): SafeParseResult<Availability2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Availability2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Availability2' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailReason67$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason67
+> = z.enum(GetResourceDeploymentDetailReason67);
+
+/** @internal */
+export const CollectionIssueSeverity67$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity67
+> = z.enum(CollectionIssueSeverity67);
+
+/** @internal */
+export const CollectionIssue67$inboundSchema: z.ZodType<
+  CollectionIssue67,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: GetResourceDeploymentDetailReason67$inboundSchema,
+  severity: CollectionIssueSeverity67$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue67FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue67, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue67$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue67' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health67$inboundSchema: z.ZodEnum<typeof Health67> = z.enum(
+  Health67,
+);
+
+/** @internal */
+export const Lifecycle67$inboundSchema: z.ZodEnum<typeof Lifecycle67> = z.enum(
+  Lifecycle67,
+);
+
+/** @internal */
+export const DataStatus67$inboundSchema: z.ZodType<DataStatus67, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue67$inboundSchema)),
+    health: Health67$inboundSchema,
+    lifecycle: Lifecycle67$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus67FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus67, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus67$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus67' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpVertex$inboundSchema: z.ZodType<DataGcpVertex, unknown> = z
+  .object({
+    availability: z.lazy(() => Availability2$inboundSchema),
+    location: z.string(),
+    project: z.string(),
+    status: z.lazy(() => DataStatus67$inboundSchema),
+    backend: z.literal("gcpVertex"),
+  });
+
+export function dataGcpVertexFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpVertex, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpVertex$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpVertex' from JSON`,
+  );
+}
+
+/** @internal */
+export const AccessTest1$inboundSchema: z.ZodEnum<typeof AccessTest1> = z.enum(
+  AccessTest1,
+);
+
+/** @internal */
+export const AvailabilityEnum1$inboundSchema: z.ZodEnum<
+  typeof AvailabilityEnum1
+> = z.enum(AvailabilityEnum1);
+
+/** @internal */
+export const BlockerEnum1$inboundSchema: z.ZodEnum<typeof BlockerEnum1> = z
+  .enum(BlockerEnum1);
+
+/** @internal */
+export const GetResourceDeploymentDetailClientApi1$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailClientApi1
+> = z.enum(GetResourceDeploymentDetailClientApi1);
+
+/** @internal */
+export const GetResourceDeploymentDetailModel1$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailModel1,
+  unknown
+> = z.object({
+  accessTest: AccessTest1$inboundSchema,
+  availability: AvailabilityEnum1$inboundSchema,
+  blockers: z.array(BlockerEnum1$inboundSchema),
+  clientApis: z.array(GetResourceDeploymentDetailClientApi1$inboundSchema),
+  errorCode: z.nullable(z.string()).optional(),
+  publicModelId: z.string(),
+  testedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+});
+
+export function getResourceDeploymentDetailModel1FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailModel1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetResourceDeploymentDetailModel1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailModel1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceEnum1$inboundSchema: z.ZodEnum<typeof SourceEnum1> = z.enum(
+  SourceEnum1,
+);
+
+/** @internal */
+export const Availability1$inboundSchema: z.ZodType<Availability1, unknown> = z
+  .object({
+    catalogRevision: z.string(),
+    location: z.nullable(z.string()).optional(),
+    models: z.array(
+      z.lazy(() => GetResourceDeploymentDetailModel1$inboundSchema),
+    ),
+    source: SourceEnum1$inboundSchema,
+  });
+
+export function availability1FromJSON(
+  jsonString: string,
+): SafeParseResult<Availability1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Availability1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Availability1' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailReason66$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason66
+> = z.enum(GetResourceDeploymentDetailReason66);
+
+/** @internal */
+export const CollectionIssueSeverity66$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity66
+> = z.enum(CollectionIssueSeverity66);
+
+/** @internal */
+export const CollectionIssue66$inboundSchema: z.ZodType<
+  CollectionIssue66,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: GetResourceDeploymentDetailReason66$inboundSchema,
+  severity: CollectionIssueSeverity66$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue66FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue66, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue66$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue66' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health66$inboundSchema: z.ZodEnum<typeof Health66> = z.enum(
+  Health66,
+);
+
+/** @internal */
+export const Lifecycle66$inboundSchema: z.ZodEnum<typeof Lifecycle66> = z.enum(
+  Lifecycle66,
+);
+
+/** @internal */
+export const DataStatus66$inboundSchema: z.ZodType<DataStatus66, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue66$inboundSchema)),
+    health: Health66$inboundSchema,
+    lifecycle: Lifecycle66$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus66FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus66, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus66$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus66' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsBedrock$inboundSchema: z.ZodType<DataAwsBedrock, unknown> =
+  z.object({
+    availability: z.lazy(() => Availability1$inboundSchema),
+    region: z.string(),
+    status: z.lazy(() => DataStatus66$inboundSchema),
+    backend: z.literal("awsBedrock"),
+  });
+
+export function dataAwsBedrockFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsBedrock, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsBedrock$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsBedrock' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion16$inboundSchema: z.ZodType<DataUnion16, unknown> = z
+  .union([
+    z.lazy(() => DataAwsBedrock$inboundSchema),
+    z.lazy(() => DataGcpVertex$inboundSchema),
+    z.lazy(() => DataAzureFoundry$inboundSchema),
+    z.lazy(() => DataExternal$inboundSchema),
+  ]);
+
+export function dataUnion16FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion16, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion16$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion16' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAi$inboundSchema: z.ZodType<DataAi, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsBedrock$inboundSchema),
+    z.lazy(() => DataGcpVertex$inboundSchema),
+    z.lazy(() => DataAzureFoundry$inboundSchema),
+    z.lazy(() => DataExternal$inboundSchema),
+  ]),
+  resourceType: z.literal("ai"),
+});
+
+export function dataAiFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAi, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAi$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAi' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailReason65$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason65
+> = z.enum(GetResourceDeploymentDetailReason65);
 
 /** @internal */
 export const CollectionIssueSeverity65$inboundSchema: z.ZodEnum<
@@ -7381,7 +9183,7 @@ export const CollectionIssue65$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason65$inboundSchema,
+  reason: GetResourceDeploymentDetailReason65$inboundSchema,
   severity: CollectionIssueSeverity65$inboundSchema,
   source: z.string(),
 });
@@ -7481,9 +9283,9 @@ export function dataAzureServiceBusNamespaceFromJSON(
 }
 
 /** @internal */
-export const Reason64$inboundSchema: z.ZodEnum<typeof Reason64> = z.enum(
-  Reason64,
-);
+export const GetResourceDeploymentDetailReason64$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason64
+> = z.enum(GetResourceDeploymentDetailReason64);
 
 /** @internal */
 export const CollectionIssueSeverity64$inboundSchema: z.ZodEnum<
@@ -7496,7 +9298,7 @@ export const CollectionIssue64$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason64$inboundSchema,
+  reason: GetResourceDeploymentDetailReason64$inboundSchema,
   severity: CollectionIssueSeverity64$inboundSchema,
   source: z.string(),
 });
@@ -7658,9 +9460,9 @@ export function secondaryEndpointsFromJSON(
 }
 
 /** @internal */
-export const Reason63$inboundSchema: z.ZodEnum<typeof Reason63> = z.enum(
-  Reason63,
-);
+export const GetResourceDeploymentDetailReason63$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason63
+> = z.enum(GetResourceDeploymentDetailReason63);
 
 /** @internal */
 export const CollectionIssueSeverity63$inboundSchema: z.ZodEnum<
@@ -7673,7 +9475,7 @@ export const CollectionIssue63$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason63$inboundSchema,
+  reason: GetResourceDeploymentDetailReason63$inboundSchema,
   severity: CollectionIssueSeverity63$inboundSchema,
   source: z.string(),
 });
@@ -7776,9 +9578,9 @@ export function dataAzureStorageAccountFromJSON(
 }
 
 /** @internal */
-export const Reason62$inboundSchema: z.ZodEnum<typeof Reason62> = z.enum(
-  Reason62,
-);
+export const GetResourceDeploymentDetailReason62$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason62
+> = z.enum(GetResourceDeploymentDetailReason62);
 
 /** @internal */
 export const CollectionIssueSeverity62$inboundSchema: z.ZodEnum<
@@ -7791,7 +9593,7 @@ export const CollectionIssue62$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason62$inboundSchema,
+  reason: GetResourceDeploymentDetailReason62$inboundSchema,
   severity: CollectionIssueSeverity62$inboundSchema,
   source: z.string(),
 });
@@ -7877,9 +9679,9 @@ export function dataAzureResourceGroupFromJSON(
 }
 
 /** @internal */
-export const Reason61$inboundSchema: z.ZodEnum<typeof Reason61> = z.enum(
-  Reason61,
-);
+export const GetResourceDeploymentDetailReason61$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason61
+> = z.enum(GetResourceDeploymentDetailReason61);
 
 /** @internal */
 export const CollectionIssueSeverity61$inboundSchema: z.ZodEnum<
@@ -7892,7 +9694,7 @@ export const CollectionIssue61$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason61$inboundSchema,
+  reason: GetResourceDeploymentDetailReason61$inboundSchema,
   severity: CollectionIssueSeverity61$inboundSchema,
   source: z.string(),
 });
@@ -7964,9 +9766,9 @@ export function dataAzureResourceProviderFromJSON(
 }
 
 /** @internal */
-export const Reason60$inboundSchema: z.ZodEnum<typeof Reason60> = z.enum(
-  Reason60,
-);
+export const GetResourceDeploymentDetailReason60$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason60
+> = z.enum(GetResourceDeploymentDetailReason60);
 
 /** @internal */
 export const CollectionIssueSeverity60$inboundSchema: z.ZodEnum<
@@ -7979,7 +9781,7 @@ export const CollectionIssue60$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason60$inboundSchema,
+  reason: GetResourceDeploymentDetailReason60$inboundSchema,
   severity: CollectionIssueSeverity60$inboundSchema,
   source: z.string(),
 });
@@ -8131,31 +9933,25 @@ export function involvedObjectUnion10FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource10$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource10,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent10$inboundSchema: z.ZodType<SourceEvent10, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource10FromJSON(
+export function sourceEvent10FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource10, SDKValidationError> {
+): SafeParseResult<SourceEvent10, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource10' from JSON`,
+    (x) => SourceEvent10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent10' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion10$inboundSchema: z.ZodType<SourceUnion10, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource10$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent10$inboundSchema), z.any()]);
 
 export function sourceUnion10FromJSON(
   jsonString: string,
@@ -8186,10 +9982,7 @@ export const Event13$inboundSchema: z.ZodType<Event13, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource10$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent10$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -8205,9 +9998,9 @@ export function event13FromJSON(
 }
 
 /** @internal */
-export const Reason59$inboundSchema: z.ZodEnum<typeof Reason59> = z.enum(
-  Reason59,
-);
+export const GetResourceDeploymentDetailReason59$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason59
+> = z.enum(GetResourceDeploymentDetailReason59);
 
 /** @internal */
 export const CollectionIssueSeverity59$inboundSchema: z.ZodEnum<
@@ -8220,7 +10013,7 @@ export const CollectionIssue59$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason59$inboundSchema,
+  reason: GetResourceDeploymentDetailReason59$inboundSchema,
   severity: CollectionIssueSeverity59$inboundSchema,
   source: z.string(),
 });
@@ -8300,9 +10093,9 @@ export function dataKubernetesJobFromJSON(
 }
 
 /** @internal */
-export const Reason58$inboundSchema: z.ZodEnum<typeof Reason58> = z.enum(
-  Reason58,
-);
+export const GetResourceDeploymentDetailReason58$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason58
+> = z.enum(GetResourceDeploymentDetailReason58);
 
 /** @internal */
 export const CollectionIssueSeverity58$inboundSchema: z.ZodEnum<
@@ -8315,7 +10108,7 @@ export const CollectionIssue58$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason58$inboundSchema,
+  reason: GetResourceDeploymentDetailReason58$inboundSchema,
   severity: CollectionIssueSeverity58$inboundSchema,
   source: z.string(),
 });
@@ -8386,9 +10179,9 @@ export function dataAzureContainerApps2FromJSON(
 }
 
 /** @internal */
-export const Reason57$inboundSchema: z.ZodEnum<typeof Reason57> = z.enum(
-  Reason57,
-);
+export const GetResourceDeploymentDetailReason57$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason57
+> = z.enum(GetResourceDeploymentDetailReason57);
 
 /** @internal */
 export const CollectionIssueSeverity57$inboundSchema: z.ZodEnum<
@@ -8401,7 +10194,7 @@ export const CollectionIssue57$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason57$inboundSchema,
+  reason: GetResourceDeploymentDetailReason57$inboundSchema,
   severity: CollectionIssueSeverity57$inboundSchema,
   source: z.string(),
 });
@@ -8472,9 +10265,9 @@ export function dataGcpCloudBuildFromJSON(
 }
 
 /** @internal */
-export const Reason56$inboundSchema: z.ZodEnum<typeof Reason56> = z.enum(
-  Reason56,
-);
+export const GetResourceDeploymentDetailReason56$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason56
+> = z.enum(GetResourceDeploymentDetailReason56);
 
 /** @internal */
 export const CollectionIssueSeverity56$inboundSchema: z.ZodEnum<
@@ -8487,7 +10280,7 @@ export const CollectionIssue56$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason56$inboundSchema,
+  reason: GetResourceDeploymentDetailReason56$inboundSchema,
   severity: CollectionIssueSeverity56$inboundSchema,
   source: z.string(),
 });
@@ -8613,9 +10406,9 @@ export function dataBuildFromJSON(
 }
 
 /** @internal */
-export const Reason55$inboundSchema: z.ZodEnum<typeof Reason55> = z.enum(
-  Reason55,
-);
+export const GetResourceDeploymentDetailReason55$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason55
+> = z.enum(GetResourceDeploymentDetailReason55);
 
 /** @internal */
 export const CollectionIssueSeverity55$inboundSchema: z.ZodEnum<
@@ -8628,7 +10421,7 @@ export const CollectionIssue55$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason55$inboundSchema,
+  reason: GetResourceDeploymentDetailReason55$inboundSchema,
   severity: CollectionIssueSeverity55$inboundSchema,
   source: z.string(),
 });
@@ -8694,9 +10487,9 @@ export function dataLocal11FromJSON(
 }
 
 /** @internal */
-export const Reason54$inboundSchema: z.ZodEnum<typeof Reason54> = z.enum(
-  Reason54,
-);
+export const GetResourceDeploymentDetailReason54$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason54
+> = z.enum(GetResourceDeploymentDetailReason54);
 
 /** @internal */
 export const CollectionIssueSeverity54$inboundSchema: z.ZodEnum<
@@ -8709,7 +10502,7 @@ export const CollectionIssue54$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason54$inboundSchema,
+  reason: GetResourceDeploymentDetailReason54$inboundSchema,
   severity: CollectionIssueSeverity54$inboundSchema,
   source: z.string(),
 });
@@ -8801,9 +10594,9 @@ export function dataAzureContainerRegistryFromJSON(
 }
 
 /** @internal */
-export const Reason53$inboundSchema: z.ZodEnum<typeof Reason53> = z.enum(
-  Reason53,
-);
+export const GetResourceDeploymentDetailReason53$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason53
+> = z.enum(GetResourceDeploymentDetailReason53);
 
 /** @internal */
 export const CollectionIssueSeverity53$inboundSchema: z.ZodEnum<
@@ -8816,7 +10609,7 @@ export const CollectionIssue53$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason53$inboundSchema,
+  reason: GetResourceDeploymentDetailReason53$inboundSchema,
   severity: CollectionIssueSeverity53$inboundSchema,
   source: z.string(),
 });
@@ -8902,33 +10695,36 @@ export function dataGcpArtifactRegistryFromJSON(
 }
 
 /** @internal */
-export const Repository$inboundSchema: z.ZodType<Repository, unknown> = z
-  .object({
-    createdAt: z.number(),
-    encryptionType: z.nullable(z.string()).optional(),
-    imageTagMutability: z.nullable(z.string()).optional(),
-    kmsKeyPresent: z.boolean(),
-    registryId: z.string(),
-    repositoryArn: z.string(),
-    repositoryName: z.string(),
-    repositoryUri: z.string(),
-    scanOnPush: z.nullable(z.boolean()).optional(),
-  });
+export const GetResourceDeploymentDetailRepository$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailRepository,
+  unknown
+> = z.object({
+  createdAt: z.number(),
+  encryptionType: z.nullable(z.string()).optional(),
+  imageTagMutability: z.nullable(z.string()).optional(),
+  kmsKeyPresent: z.boolean(),
+  registryId: z.string(),
+  repositoryArn: z.string(),
+  repositoryName: z.string(),
+  repositoryUri: z.string(),
+  scanOnPush: z.nullable(z.boolean()).optional(),
+});
 
-export function repositoryFromJSON(
+export function getResourceDeploymentDetailRepositoryFromJSON(
   jsonString: string,
-): SafeParseResult<Repository, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailRepository, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Repository$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Repository' from JSON`,
+    (x) =>
+      GetResourceDeploymentDetailRepository$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailRepository' from JSON`,
   );
 }
 
 /** @internal */
-export const Reason52$inboundSchema: z.ZodEnum<typeof Reason52> = z.enum(
-  Reason52,
-);
+export const GetResourceDeploymentDetailReason52$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason52
+> = z.enum(GetResourceDeploymentDetailReason52);
 
 /** @internal */
 export const CollectionIssueSeverity52$inboundSchema: z.ZodEnum<
@@ -8941,7 +10737,7 @@ export const CollectionIssue52$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason52$inboundSchema,
+  reason: GetResourceDeploymentDetailReason52$inboundSchema,
   severity: CollectionIssueSeverity52$inboundSchema,
   source: z.string(),
 });
@@ -8995,7 +10791,9 @@ export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
     region: z.string(),
     registryId: z.string(),
     registryUri: z.string(),
-    repositories: z.array(z.lazy(() => Repository$inboundSchema)),
+    repositories: z.array(
+      z.lazy(() => GetResourceDeploymentDetailRepository$inboundSchema),
+    ),
     repositoriesTruncated: z.boolean(),
     repositoryCount: z.int(),
     repositoryPrefix: z.string(),
@@ -9057,9 +10855,9 @@ export function dataArtifactRegistryFromJSON(
 }
 
 /** @internal */
-export const Reason51$inboundSchema: z.ZodEnum<typeof Reason51> = z.enum(
-  Reason51,
-);
+export const GetResourceDeploymentDetailReason51$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason51
+> = z.enum(GetResourceDeploymentDetailReason51);
 
 /** @internal */
 export const CollectionIssueSeverity51$inboundSchema: z.ZodEnum<
@@ -9072,7 +10870,7 @@ export const CollectionIssue51$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason51$inboundSchema,
+  reason: GetResourceDeploymentDetailReason51$inboundSchema,
   severity: CollectionIssueSeverity51$inboundSchema,
   source: z.string(),
 });
@@ -9145,9 +10943,9 @@ export function dataAzureManagedIdentity2FromJSON(
 }
 
 /** @internal */
-export const Reason50$inboundSchema: z.ZodEnum<typeof Reason50> = z.enum(
-  Reason50,
-);
+export const GetResourceDeploymentDetailReason50$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason50
+> = z.enum(GetResourceDeploymentDetailReason50);
 
 /** @internal */
 export const CollectionIssueSeverity50$inboundSchema: z.ZodEnum<
@@ -9160,7 +10958,7 @@ export const CollectionIssue50$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason50$inboundSchema,
+  reason: GetResourceDeploymentDetailReason50$inboundSchema,
   severity: CollectionIssueSeverity50$inboundSchema,
   source: z.string(),
 });
@@ -9230,9 +11028,9 @@ export function dataGcpServiceAccount2FromJSON(
 }
 
 /** @internal */
-export const Reason49$inboundSchema: z.ZodEnum<typeof Reason49> = z.enum(
-  Reason49,
-);
+export const GetResourceDeploymentDetailReason49$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason49
+> = z.enum(GetResourceDeploymentDetailReason49);
 
 /** @internal */
 export const CollectionIssueSeverity49$inboundSchema: z.ZodEnum<
@@ -9245,7 +11043,7 @@ export const CollectionIssue49$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason49$inboundSchema,
+  reason: GetResourceDeploymentDetailReason49$inboundSchema,
   severity: CollectionIssueSeverity49$inboundSchema,
   source: z.string(),
 });
@@ -9355,9 +11153,9 @@ export function dataRemoteStackManagementFromJSON(
 }
 
 /** @internal */
-export const Reason48$inboundSchema: z.ZodEnum<typeof Reason48> = z.enum(
-  Reason48,
-);
+export const GetResourceDeploymentDetailReason48$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason48
+> = z.enum(GetResourceDeploymentDetailReason48);
 
 /** @internal */
 export const CollectionIssueSeverity48$inboundSchema: z.ZodEnum<
@@ -9370,7 +11168,7 @@ export const CollectionIssue48$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason48$inboundSchema,
+  reason: GetResourceDeploymentDetailReason48$inboundSchema,
   severity: CollectionIssueSeverity48$inboundSchema,
   source: z.string(),
 });
@@ -9448,9 +11246,9 @@ export function dataAzureVnetFromJSON(
 }
 
 /** @internal */
-export const Reason47$inboundSchema: z.ZodEnum<typeof Reason47> = z.enum(
-  Reason47,
-);
+export const GetResourceDeploymentDetailReason47$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason47
+> = z.enum(GetResourceDeploymentDetailReason47);
 
 /** @internal */
 export const CollectionIssueSeverity47$inboundSchema: z.ZodEnum<
@@ -9463,7 +11261,7 @@ export const CollectionIssue47$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason47$inboundSchema,
+  reason: GetResourceDeploymentDetailReason47$inboundSchema,
   severity: CollectionIssueSeverity47$inboundSchema,
   source: z.string(),
 });
@@ -9537,9 +11335,9 @@ export function dataGcpVpcFromJSON(
 }
 
 /** @internal */
-export const Reason46$inboundSchema: z.ZodEnum<typeof Reason46> = z.enum(
-  Reason46,
-);
+export const GetResourceDeploymentDetailReason46$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason46
+> = z.enum(GetResourceDeploymentDetailReason46);
 
 /** @internal */
 export const CollectionIssueSeverity46$inboundSchema: z.ZodEnum<
@@ -9552,7 +11350,7 @@ export const CollectionIssue46$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason46$inboundSchema,
+  reason: GetResourceDeploymentDetailReason46$inboundSchema,
   severity: CollectionIssueSeverity46$inboundSchema,
   source: z.string(),
 });
@@ -9666,9 +11464,9 @@ export function dataNetworkFromJSON(
 }
 
 /** @internal */
-export const Reason45$inboundSchema: z.ZodEnum<typeof Reason45> = z.enum(
-  Reason45,
-);
+export const GetResourceDeploymentDetailReason45$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason45
+> = z.enum(GetResourceDeploymentDetailReason45);
 
 /** @internal */
 export const CollectionIssueSeverity45$inboundSchema: z.ZodEnum<
@@ -9681,7 +11479,7 @@ export const CollectionIssue45$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason45$inboundSchema,
+  reason: GetResourceDeploymentDetailReason45$inboundSchema,
   severity: CollectionIssueSeverity45$inboundSchema,
   source: z.string(),
 });
@@ -9747,9 +11545,9 @@ export function dataLocal10FromJSON(
 }
 
 /** @internal */
-export const Reason44$inboundSchema: z.ZodEnum<typeof Reason44> = z.enum(
-  Reason44,
-);
+export const GetResourceDeploymentDetailReason44$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason44
+> = z.enum(GetResourceDeploymentDetailReason44);
 
 /** @internal */
 export const CollectionIssueSeverity44$inboundSchema: z.ZodEnum<
@@ -9762,7 +11560,7 @@ export const CollectionIssue44$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason44$inboundSchema,
+  reason: GetResourceDeploymentDetailReason44$inboundSchema,
   severity: CollectionIssueSeverity44$inboundSchema,
   source: z.string(),
 });
@@ -9843,9 +11641,9 @@ export function dataAzureManagedIdentity1FromJSON(
 }
 
 /** @internal */
-export const Reason43$inboundSchema: z.ZodEnum<typeof Reason43> = z.enum(
-  Reason43,
-);
+export const GetResourceDeploymentDetailReason43$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason43
+> = z.enum(GetResourceDeploymentDetailReason43);
 
 /** @internal */
 export const CollectionIssueSeverity43$inboundSchema: z.ZodEnum<
@@ -9858,7 +11656,7 @@ export const CollectionIssue43$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason43$inboundSchema,
+  reason: GetResourceDeploymentDetailReason43$inboundSchema,
   severity: CollectionIssueSeverity43$inboundSchema,
   source: z.string(),
 });
@@ -9937,9 +11735,9 @@ export function dataGcpServiceAccount1FromJSON(
 }
 
 /** @internal */
-export const Reason42$inboundSchema: z.ZodEnum<typeof Reason42> = z.enum(
-  Reason42,
-);
+export const GetResourceDeploymentDetailReason42$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason42
+> = z.enum(GetResourceDeploymentDetailReason42);
 
 /** @internal */
 export const CollectionIssueSeverity42$inboundSchema: z.ZodEnum<
@@ -9952,7 +11750,7 @@ export const CollectionIssue42$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason42$inboundSchema,
+  reason: GetResourceDeploymentDetailReason42$inboundSchema,
   severity: CollectionIssueSeverity42$inboundSchema,
   source: z.string(),
 });
@@ -10080,9 +11878,9 @@ export function dataServiceAccountFromJSON(
 }
 
 /** @internal */
-export const Reason41$inboundSchema: z.ZodEnum<typeof Reason41> = z.enum(
-  Reason41,
-);
+export const GetResourceDeploymentDetailReason41$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason41
+> = z.enum(GetResourceDeploymentDetailReason41);
 
 /** @internal */
 export const CollectionIssueSeverity41$inboundSchema: z.ZodEnum<
@@ -10095,7 +11893,7 @@ export const CollectionIssue41$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason41$inboundSchema,
+  reason: GetResourceDeploymentDetailReason41$inboundSchema,
   severity: CollectionIssueSeverity41$inboundSchema,
   source: z.string(),
 });
@@ -10167,9 +11965,9 @@ export function dataLocal9FromJSON(
 }
 
 /** @internal */
-export const Reason40$inboundSchema: z.ZodEnum<typeof Reason40> = z.enum(
-  Reason40,
-);
+export const GetResourceDeploymentDetailReason40$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason40
+> = z.enum(GetResourceDeploymentDetailReason40);
 
 /** @internal */
 export const CollectionIssueSeverity40$inboundSchema: z.ZodEnum<
@@ -10182,7 +11980,7 @@ export const CollectionIssue40$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason40$inboundSchema,
+  reason: GetResourceDeploymentDetailReason40$inboundSchema,
   severity: CollectionIssueSeverity40$inboundSchema,
   source: z.string(),
 });
@@ -10251,9 +12049,9 @@ export function dataKubernetesSecretFromJSON(
 }
 
 /** @internal */
-export const Reason39$inboundSchema: z.ZodEnum<typeof Reason39> = z.enum(
-  Reason39,
-);
+export const GetResourceDeploymentDetailReason39$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason39
+> = z.enum(GetResourceDeploymentDetailReason39);
 
 /** @internal */
 export const CollectionIssueSeverity39$inboundSchema: z.ZodEnum<
@@ -10266,7 +12064,7 @@ export const CollectionIssue39$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason39$inboundSchema,
+  reason: GetResourceDeploymentDetailReason39$inboundSchema,
   severity: CollectionIssueSeverity39$inboundSchema,
   source: z.string(),
 });
@@ -10313,8 +12111,8 @@ export function dataStatus39FromJSON(
 }
 
 /** @internal */
-export const DataAzureKeyVault$inboundSchema: z.ZodType<
-  DataAzureKeyVault,
+export const DataAzureKeyVault1$inboundSchema: z.ZodType<
+  DataAzureKeyVault1,
   unknown
 > = z.object({
   accessPolicyCount: z.int(),
@@ -10337,20 +12135,20 @@ export const DataAzureKeyVault$inboundSchema: z.ZodType<
   backend: z.literal("azureKeyVault"),
 });
 
-export function dataAzureKeyVaultFromJSON(
+export function dataAzureKeyVault1FromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureKeyVault, SDKValidationError> {
+): SafeParseResult<DataAzureKeyVault1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureKeyVault$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureKeyVault' from JSON`,
+    (x) => DataAzureKeyVault1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureKeyVault1' from JSON`,
   );
 }
 
 /** @internal */
-export const Reason38$inboundSchema: z.ZodEnum<typeof Reason38> = z.enum(
-  Reason38,
-);
+export const GetResourceDeploymentDetailReason38$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason38
+> = z.enum(GetResourceDeploymentDetailReason38);
 
 /** @internal */
 export const CollectionIssueSeverity38$inboundSchema: z.ZodEnum<
@@ -10363,7 +12161,7 @@ export const CollectionIssue38$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason38$inboundSchema,
+  reason: GetResourceDeploymentDetailReason38$inboundSchema,
   severity: CollectionIssueSeverity38$inboundSchema,
   source: z.string(),
 });
@@ -10433,9 +12231,9 @@ export function dataGcpSecretManagerFromJSON(
 }
 
 /** @internal */
-export const Reason37$inboundSchema: z.ZodEnum<typeof Reason37> = z.enum(
-  Reason37,
-);
+export const GetResourceDeploymentDetailReason37$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason37
+> = z.enum(GetResourceDeploymentDetailReason37);
 
 /** @internal */
 export const CollectionIssueSeverity37$inboundSchema: z.ZodEnum<
@@ -10448,7 +12246,7 @@ export const CollectionIssue37$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason37$inboundSchema,
+  reason: GetResourceDeploymentDetailReason37$inboundSchema,
   severity: CollectionIssueSeverity37$inboundSchema,
   source: z.string(),
 });
@@ -10532,7 +12330,7 @@ export const DataUnion9$inboundSchema: z.ZodType<DataUnion9, unknown> = z.union(
   [
     z.lazy(() => DataAwsParameterStore$inboundSchema),
     z.lazy(() => DataGcpSecretManager$inboundSchema),
-    z.lazy(() => DataAzureKeyVault$inboundSchema),
+    z.lazy(() => DataAzureKeyVault1$inboundSchema),
     z.lazy(() => DataKubernetesSecret$inboundSchema),
     z.lazy(() => DataLocal9$inboundSchema),
   ],
@@ -10553,7 +12351,7 @@ export const DataVault$inboundSchema: z.ZodType<DataVault, unknown> = z.object({
   data: z.union([
     z.lazy(() => DataAwsParameterStore$inboundSchema),
     z.lazy(() => DataGcpSecretManager$inboundSchema),
-    z.lazy(() => DataAzureKeyVault$inboundSchema),
+    z.lazy(() => DataAzureKeyVault1$inboundSchema),
     z.lazy(() => DataKubernetesSecret$inboundSchema),
     z.lazy(() => DataLocal9$inboundSchema),
   ]),
@@ -10571,9 +12369,9 @@ export function dataVaultFromJSON(
 }
 
 /** @internal */
-export const Reason36$inboundSchema: z.ZodEnum<typeof Reason36> = z.enum(
-  Reason36,
-);
+export const GetResourceDeploymentDetailReason36$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason36
+> = z.enum(GetResourceDeploymentDetailReason36);
 
 /** @internal */
 export const CollectionIssueSeverity36$inboundSchema: z.ZodEnum<
@@ -10586,7 +12384,7 @@ export const CollectionIssue36$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason36$inboundSchema,
+  reason: GetResourceDeploymentDetailReason36$inboundSchema,
   severity: CollectionIssueSeverity36$inboundSchema,
   source: z.string(),
 });
@@ -10654,9 +12452,9 @@ export function dataLocal8FromJSON(
 }
 
 /** @internal */
-export const Reason35$inboundSchema: z.ZodEnum<typeof Reason35> = z.enum(
-  Reason35,
-);
+export const GetResourceDeploymentDetailReason35$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason35
+> = z.enum(GetResourceDeploymentDetailReason35);
 
 /** @internal */
 export const CollectionIssueSeverity35$inboundSchema: z.ZodEnum<
@@ -10669,7 +12467,7 @@ export const CollectionIssue35$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason35$inboundSchema,
+  reason: GetResourceDeploymentDetailReason35$inboundSchema,
   severity: CollectionIssueSeverity35$inboundSchema,
   source: z.string(),
 });
@@ -10738,9 +12536,9 @@ export function dataFlexibleServerFromJSON(
 }
 
 /** @internal */
-export const Reason34$inboundSchema: z.ZodEnum<typeof Reason34> = z.enum(
-  Reason34,
-);
+export const GetResourceDeploymentDetailReason34$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason34
+> = z.enum(GetResourceDeploymentDetailReason34);
 
 /** @internal */
 export const CollectionIssueSeverity34$inboundSchema: z.ZodEnum<
@@ -10753,7 +12551,7 @@ export const CollectionIssue34$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason34$inboundSchema,
+  reason: GetResourceDeploymentDetailReason34$inboundSchema,
   severity: CollectionIssueSeverity34$inboundSchema,
   source: z.string(),
 });
@@ -10820,9 +12618,9 @@ export function dataCloudSQLFromJSON(
 }
 
 /** @internal */
-export const Reason33$inboundSchema: z.ZodEnum<typeof Reason33> = z.enum(
-  Reason33,
-);
+export const GetResourceDeploymentDetailReason33$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason33
+> = z.enum(GetResourceDeploymentDetailReason33);
 
 /** @internal */
 export const CollectionIssueSeverity33$inboundSchema: z.ZodEnum<
@@ -10835,7 +12633,7 @@ export const CollectionIssue33$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason33$inboundSchema,
+  reason: GetResourceDeploymentDetailReason33$inboundSchema,
   severity: CollectionIssueSeverity33$inboundSchema,
   source: z.string(),
 });
@@ -10946,9 +12744,9 @@ export function dataPostgresFromJSON(
 }
 
 /** @internal */
-export const Reason32$inboundSchema: z.ZodEnum<typeof Reason32> = z.enum(
-  Reason32,
-);
+export const GetResourceDeploymentDetailReason32$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason32
+> = z.enum(GetResourceDeploymentDetailReason32);
 
 /** @internal */
 export const CollectionIssueSeverity32$inboundSchema: z.ZodEnum<
@@ -10961,7 +12759,7 @@ export const CollectionIssue32$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason32$inboundSchema,
+  reason: GetResourceDeploymentDetailReason32$inboundSchema,
   severity: CollectionIssueSeverity32$inboundSchema,
   source: z.string(),
 });
@@ -11030,9 +12828,9 @@ export function dataLocal7FromJSON(
 }
 
 /** @internal */
-export const Reason31$inboundSchema: z.ZodEnum<typeof Reason31> = z.enum(
-  Reason31,
-);
+export const GetResourceDeploymentDetailReason31$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason31
+> = z.enum(GetResourceDeploymentDetailReason31);
 
 /** @internal */
 export const CollectionIssueSeverity31$inboundSchema: z.ZodEnum<
@@ -11045,7 +12843,7 @@ export const CollectionIssue31$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason31$inboundSchema,
+  reason: GetResourceDeploymentDetailReason31$inboundSchema,
   severity: CollectionIssueSeverity31$inboundSchema,
   source: z.string(),
 });
@@ -11120,9 +12918,9 @@ export function dataAzureTableFromJSON(
 }
 
 /** @internal */
-export const Reason30$inboundSchema: z.ZodEnum<typeof Reason30> = z.enum(
-  Reason30,
-);
+export const GetResourceDeploymentDetailReason30$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason30
+> = z.enum(GetResourceDeploymentDetailReason30);
 
 /** @internal */
 export const CollectionIssueSeverity30$inboundSchema: z.ZodEnum<
@@ -11135,7 +12933,7 @@ export const CollectionIssue30$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason30$inboundSchema,
+  reason: GetResourceDeploymentDetailReason30$inboundSchema,
   severity: CollectionIssueSeverity30$inboundSchema,
   source: z.string(),
 });
@@ -11234,9 +13032,9 @@ export function keySchemaFromJSON(
 }
 
 /** @internal */
-export const Reason29$inboundSchema: z.ZodEnum<typeof Reason29> = z.enum(
-  Reason29,
-);
+export const GetResourceDeploymentDetailReason29$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason29
+> = z.enum(GetResourceDeploymentDetailReason29);
 
 /** @internal */
 export const CollectionIssueSeverity29$inboundSchema: z.ZodEnum<
@@ -11249,7 +13047,7 @@ export const CollectionIssue29$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason29$inboundSchema,
+  reason: GetResourceDeploymentDetailReason29$inboundSchema,
   severity: CollectionIssueSeverity29$inboundSchema,
   source: z.string(),
 });
@@ -11376,9 +13174,9 @@ export function dataKvFromJSON(
 }
 
 /** @internal */
-export const Reason28$inboundSchema: z.ZodEnum<typeof Reason28> = z.enum(
-  Reason28,
-);
+export const GetResourceDeploymentDetailReason28$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason28
+> = z.enum(GetResourceDeploymentDetailReason28);
 
 /** @internal */
 export const CollectionIssueSeverity28$inboundSchema: z.ZodEnum<
@@ -11391,7 +13189,7 @@ export const CollectionIssue28$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason28$inboundSchema,
+  reason: GetResourceDeploymentDetailReason28$inboundSchema,
   severity: CollectionIssueSeverity28$inboundSchema,
   source: z.string(),
 });
@@ -11458,9 +13256,9 @@ export function dataLocal6FromJSON(
 }
 
 /** @internal */
-export const Reason27$inboundSchema: z.ZodEnum<typeof Reason27> = z.enum(
-  Reason27,
-);
+export const GetResourceDeploymentDetailReason27$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason27
+> = z.enum(GetResourceDeploymentDetailReason27);
 
 /** @internal */
 export const CollectionIssueSeverity27$inboundSchema: z.ZodEnum<
@@ -11473,7 +13271,7 @@ export const CollectionIssue27$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason27$inboundSchema,
+  reason: GetResourceDeploymentDetailReason27$inboundSchema,
   severity: CollectionIssueSeverity27$inboundSchema,
   source: z.string(),
 });
@@ -11570,9 +13368,9 @@ export function dataAzureServiceBusFromJSON(
 }
 
 /** @internal */
-export const Reason26$inboundSchema: z.ZodEnum<typeof Reason26> = z.enum(
-  Reason26,
-);
+export const GetResourceDeploymentDetailReason26$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason26
+> = z.enum(GetResourceDeploymentDetailReason26);
 
 /** @internal */
 export const CollectionIssueSeverity26$inboundSchema: z.ZodEnum<
@@ -11585,7 +13383,7 @@ export const CollectionIssue26$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason26$inboundSchema,
+  reason: GetResourceDeploymentDetailReason26$inboundSchema,
   severity: CollectionIssueSeverity26$inboundSchema,
   source: z.string(),
 });
@@ -11683,9 +13481,9 @@ export function dataGcpPubSubFromJSON(
 }
 
 /** @internal */
-export const Reason25$inboundSchema: z.ZodEnum<typeof Reason25> = z.enum(
-  Reason25,
-);
+export const GetResourceDeploymentDetailReason25$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason25
+> = z.enum(GetResourceDeploymentDetailReason25);
 
 /** @internal */
 export const CollectionIssueSeverity25$inboundSchema: z.ZodEnum<
@@ -11698,7 +13496,7 @@ export const CollectionIssue25$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason25$inboundSchema,
+  reason: GetResourceDeploymentDetailReason25$inboundSchema,
   severity: CollectionIssueSeverity25$inboundSchema,
   source: z.string(),
 });
@@ -11902,31 +13700,25 @@ export function involvedObjectUnion9FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource9$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource9,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent9$inboundSchema: z.ZodType<SourceEvent9, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource9FromJSON(
+export function sourceEvent9FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource9, SDKValidationError> {
+): SafeParseResult<SourceEvent9, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource9' from JSON`,
+    (x) => SourceEvent9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent9' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion9$inboundSchema: z.ZodType<SourceUnion9, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource9$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent9$inboundSchema), z.any()]);
 
 export function sourceUnion9FromJSON(
   jsonString: string,
@@ -11957,10 +13749,7 @@ export const Event12$inboundSchema: z.ZodType<Event12, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource9$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent9$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -12394,9 +14183,9 @@ export function podCountsFromJSON(
 }
 
 /** @internal */
-export const Reason24$inboundSchema: z.ZodEnum<typeof Reason24> = z.enum(
-  Reason24,
-);
+export const GetResourceDeploymentDetailReason24$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason24
+> = z.enum(GetResourceDeploymentDetailReason24);
 
 /** @internal */
 export const CollectionIssueSeverity24$inboundSchema: z.ZodEnum<
@@ -12409,7 +14198,7 @@ export const CollectionIssue24$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason24$inboundSchema,
+  reason: GetResourceDeploymentDetailReason24$inboundSchema,
   severity: CollectionIssueSeverity24$inboundSchema,
   source: z.string(),
 });
@@ -12519,9 +14308,9 @@ export function nodes5FromJSON(
 }
 
 /** @internal */
-export const Reason23$inboundSchema: z.ZodEnum<typeof Reason23> = z.enum(
-  Reason23,
-);
+export const GetResourceDeploymentDetailReason23$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason23
+> = z.enum(GetResourceDeploymentDetailReason23);
 
 /** @internal */
 export const CollectionIssueSeverity23$inboundSchema: z.ZodEnum<
@@ -12534,7 +14323,7 @@ export const CollectionIssue23$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason23$inboundSchema,
+  reason: GetResourceDeploymentDetailReason23$inboundSchema,
   severity: CollectionIssueSeverity23$inboundSchema,
   source: z.string(),
 });
@@ -12653,7 +14442,10 @@ export function capacityBlockerUnion4FromJSON(
 }
 
 /** @internal */
-export const Blocker4$inboundSchema: z.ZodType<Blocker4, unknown> = z.object({
+export const DrainProgressBlocker4$inboundSchema: z.ZodType<
+  DrainProgressBlocker4,
+  unknown
+> = z.object({
   reason: z.string(),
   replicaId: z.string(),
   schedulingMode: z.string(),
@@ -12661,13 +14453,13 @@ export const Blocker4$inboundSchema: z.ZodType<Blocker4, unknown> = z.object({
   workloadName: z.string(),
 });
 
-export function blocker4FromJSON(
+export function drainProgressBlocker4FromJSON(
   jsonString: string,
-): SafeParseResult<Blocker4, SDKValidationError> {
+): SafeParseResult<DrainProgressBlocker4, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Blocker4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Blocker4' from JSON`,
+    (x) => DrainProgressBlocker4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainProgressBlocker4' from JSON`,
   );
 }
 
@@ -12679,7 +14471,8 @@ export const DrainProgressStatus4$inboundSchema: z.ZodEnum<
 /** @internal */
 export const DrainProgress4$inboundSchema: z.ZodType<DrainProgress4, unknown> =
   z.object({
-    blockers: z.array(z.lazy(() => Blocker4$inboundSchema)).optional(),
+    blockers: z.array(z.lazy(() => DrainProgressBlocker4$inboundSchema))
+      .optional(),
     drainDeadlineAt: z.nullable(z.string()).optional(),
     drainRequestedAt: z.nullable(z.string()).optional(),
     drainedAt: z.nullable(z.string()).optional(),
@@ -12961,9 +14754,9 @@ export function nodes4FromJSON(
 }
 
 /** @internal */
-export const Reason22$inboundSchema: z.ZodEnum<typeof Reason22> = z.enum(
-  Reason22,
-);
+export const GetResourceDeploymentDetailReason22$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason22
+> = z.enum(GetResourceDeploymentDetailReason22);
 
 /** @internal */
 export const CollectionIssueSeverity22$inboundSchema: z.ZodEnum<
@@ -12976,7 +14769,7 @@ export const CollectionIssue22$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason22$inboundSchema,
+  reason: GetResourceDeploymentDetailReason22$inboundSchema,
   severity: CollectionIssueSeverity22$inboundSchema,
   source: z.string(),
 });
@@ -13092,7 +14885,10 @@ export function capacityBlockerUnion3FromJSON(
 }
 
 /** @internal */
-export const Blocker3$inboundSchema: z.ZodType<Blocker3, unknown> = z.object({
+export const DrainProgressBlocker3$inboundSchema: z.ZodType<
+  DrainProgressBlocker3,
+  unknown
+> = z.object({
   reason: z.string(),
   replicaId: z.string(),
   schedulingMode: z.string(),
@@ -13100,13 +14896,13 @@ export const Blocker3$inboundSchema: z.ZodType<Blocker3, unknown> = z.object({
   workloadName: z.string(),
 });
 
-export function blocker3FromJSON(
+export function drainProgressBlocker3FromJSON(
   jsonString: string,
-): SafeParseResult<Blocker3, SDKValidationError> {
+): SafeParseResult<DrainProgressBlocker3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Blocker3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Blocker3' from JSON`,
+    (x) => DrainProgressBlocker3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainProgressBlocker3' from JSON`,
   );
 }
 
@@ -13118,7 +14914,8 @@ export const DrainProgressStatus3$inboundSchema: z.ZodEnum<
 /** @internal */
 export const DrainProgress3$inboundSchema: z.ZodType<DrainProgress3, unknown> =
   z.object({
-    blockers: z.array(z.lazy(() => Blocker3$inboundSchema)).optional(),
+    blockers: z.array(z.lazy(() => DrainProgressBlocker3$inboundSchema))
+      .optional(),
     drainDeadlineAt: z.nullable(z.string()).optional(),
     drainRequestedAt: z.nullable(z.string()).optional(),
     drainedAt: z.nullable(z.string()).optional(),
@@ -13372,9 +15169,9 @@ export function providerFleet3FromJSON(
 }
 
 /** @internal */
-export const Reason21$inboundSchema: z.ZodEnum<typeof Reason21> = z.enum(
-  Reason21,
-);
+export const GetResourceDeploymentDetailReason21$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason21
+> = z.enum(GetResourceDeploymentDetailReason21);
 
 /** @internal */
 export const CollectionIssueSeverity21$inboundSchema: z.ZodEnum<
@@ -13387,7 +15184,7 @@ export const CollectionIssue21$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason21$inboundSchema,
+  reason: GetResourceDeploymentDetailReason21$inboundSchema,
   severity: CollectionIssueSeverity21$inboundSchema,
   source: z.string(),
 });
@@ -13504,7 +15301,10 @@ export function capacityBlockerUnion2FromJSON(
 }
 
 /** @internal */
-export const Blocker2$inboundSchema: z.ZodType<Blocker2, unknown> = z.object({
+export const DrainProgressBlocker2$inboundSchema: z.ZodType<
+  DrainProgressBlocker2,
+  unknown
+> = z.object({
   reason: z.string(),
   replicaId: z.string(),
   schedulingMode: z.string(),
@@ -13512,13 +15312,13 @@ export const Blocker2$inboundSchema: z.ZodType<Blocker2, unknown> = z.object({
   workloadName: z.string(),
 });
 
-export function blocker2FromJSON(
+export function drainProgressBlocker2FromJSON(
   jsonString: string,
-): SafeParseResult<Blocker2, SDKValidationError> {
+): SafeParseResult<DrainProgressBlocker2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Blocker2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Blocker2' from JSON`,
+    (x) => DrainProgressBlocker2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainProgressBlocker2' from JSON`,
   );
 }
 
@@ -13530,7 +15330,8 @@ export const DrainProgressStatus2$inboundSchema: z.ZodEnum<
 /** @internal */
 export const DrainProgress2$inboundSchema: z.ZodType<DrainProgress2, unknown> =
   z.object({
-    blockers: z.array(z.lazy(() => Blocker2$inboundSchema)).optional(),
+    blockers: z.array(z.lazy(() => DrainProgressBlocker2$inboundSchema))
+      .optional(),
     drainDeadlineAt: z.nullable(z.string()).optional(),
     drainRequestedAt: z.nullable(z.string()).optional(),
     drainedAt: z.nullable(z.string()).optional(),
@@ -13784,9 +15585,9 @@ export function providerFleet2FromJSON(
 }
 
 /** @internal */
-export const Reason20$inboundSchema: z.ZodEnum<typeof Reason20> = z.enum(
-  Reason20,
-);
+export const GetResourceDeploymentDetailReason20$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason20
+> = z.enum(GetResourceDeploymentDetailReason20);
 
 /** @internal */
 export const CollectionIssueSeverity20$inboundSchema: z.ZodEnum<
@@ -13799,7 +15600,7 @@ export const CollectionIssue20$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason20$inboundSchema,
+  reason: GetResourceDeploymentDetailReason20$inboundSchema,
   severity: CollectionIssueSeverity20$inboundSchema,
   source: z.string(),
 });
@@ -13915,7 +15716,10 @@ export function capacityBlockerUnion1FromJSON(
 }
 
 /** @internal */
-export const Blocker1$inboundSchema: z.ZodType<Blocker1, unknown> = z.object({
+export const DrainProgressBlocker1$inboundSchema: z.ZodType<
+  DrainProgressBlocker1,
+  unknown
+> = z.object({
   reason: z.string(),
   replicaId: z.string(),
   schedulingMode: z.string(),
@@ -13923,13 +15727,13 @@ export const Blocker1$inboundSchema: z.ZodType<Blocker1, unknown> = z.object({
   workloadName: z.string(),
 });
 
-export function blocker1FromJSON(
+export function drainProgressBlocker1FromJSON(
   jsonString: string,
-): SafeParseResult<Blocker1, SDKValidationError> {
+): SafeParseResult<DrainProgressBlocker1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Blocker1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Blocker1' from JSON`,
+    (x) => DrainProgressBlocker1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainProgressBlocker1' from JSON`,
   );
 }
 
@@ -13941,7 +15745,8 @@ export const DrainProgressStatus1$inboundSchema: z.ZodEnum<
 /** @internal */
 export const DrainProgress1$inboundSchema: z.ZodType<DrainProgress1, unknown> =
   z.object({
-    blockers: z.array(z.lazy(() => Blocker1$inboundSchema)).optional(),
+    blockers: z.array(z.lazy(() => DrainProgressBlocker1$inboundSchema))
+      .optional(),
     drainDeadlineAt: z.nullable(z.string()).optional(),
     drainRequestedAt: z.nullable(z.string()).optional(),
     drainedAt: z.nullable(z.string()).optional(),
@@ -14195,9 +16000,9 @@ export function providerFleet1FromJSON(
 }
 
 /** @internal */
-export const Reason19$inboundSchema: z.ZodEnum<typeof Reason19> = z.enum(
-  Reason19,
-);
+export const GetResourceDeploymentDetailReason19$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason19
+> = z.enum(GetResourceDeploymentDetailReason19);
 
 /** @internal */
 export const CollectionIssueSeverity19$inboundSchema: z.ZodEnum<
@@ -14210,7 +16015,7 @@ export const CollectionIssue19$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason19$inboundSchema,
+  reason: GetResourceDeploymentDetailReason19$inboundSchema,
   severity: CollectionIssueSeverity19$inboundSchema,
   source: z.string(),
 });
@@ -14516,9 +16321,9 @@ export function event11FromJSON(
 }
 
 /** @internal */
-export const Reason18$inboundSchema: z.ZodEnum<typeof Reason18> = z.enum(
-  Reason18,
-);
+export const GetResourceDeploymentDetailReason18$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason18
+> = z.enum(GetResourceDeploymentDetailReason18);
 
 /** @internal */
 export const CollectionIssueSeverity18$inboundSchema: z.ZodEnum<
@@ -14531,7 +16336,7 @@ export const CollectionIssue18$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason18$inboundSchema,
+  reason: GetResourceDeploymentDetailReason18$inboundSchema,
   severity: CollectionIssueSeverity18$inboundSchema,
   source: z.string(),
 });
@@ -14683,31 +16488,25 @@ export function involvedObjectUnion8FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource8$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource8,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent8$inboundSchema: z.ZodType<SourceEvent8, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource8FromJSON(
+export function sourceEvent8FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource8, SDKValidationError> {
+): SafeParseResult<SourceEvent8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource8' from JSON`,
+    (x) => SourceEvent8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent8' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent8$inboundSchema), z.any()]);
 
 export function sourceUnion8FromJSON(
   jsonString: string,
@@ -14738,10 +16537,7 @@ export const Event10$inboundSchema: z.ZodType<Event10, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent8$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -14933,9 +16729,9 @@ export function replicas4FromJSON(
 }
 
 /** @internal */
-export const Reason17$inboundSchema: z.ZodEnum<typeof Reason17> = z.enum(
-  Reason17,
-);
+export const GetResourceDeploymentDetailReason17$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason17
+> = z.enum(GetResourceDeploymentDetailReason17);
 
 /** @internal */
 export const CollectionIssueSeverity17$inboundSchema: z.ZodEnum<
@@ -14948,7 +16744,7 @@ export const CollectionIssue17$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason17$inboundSchema,
+  reason: GetResourceDeploymentDetailReason17$inboundSchema,
   severity: CollectionIssueSeverity17$inboundSchema,
   source: z.string(),
 });
@@ -15246,31 +17042,25 @@ export function involvedObjectUnion7FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource7$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource7,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent7$inboundSchema: z.ZodType<SourceEvent7, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource7FromJSON(
+export function sourceEvent7FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource7, SDKValidationError> {
+): SafeParseResult<SourceEvent7, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource7' from JSON`,
+    (x) => SourceEvent7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent7' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent7$inboundSchema), z.any()]);
 
 export function sourceUnion7FromJSON(
   jsonString: string,
@@ -15303,10 +17093,7 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent7$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -15322,9 +17109,9 @@ export function event9FromJSON(
 }
 
 /** @internal */
-export const Reason16$inboundSchema: z.ZodEnum<typeof Reason16> = z.enum(
-  Reason16,
-);
+export const GetResourceDeploymentDetailReason16$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason16
+> = z.enum(GetResourceDeploymentDetailReason16);
 
 /** @internal */
 export const CollectionIssueSeverity16$inboundSchema: z.ZodEnum<
@@ -15337,7 +17124,7 @@ export const CollectionIssue16$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason16$inboundSchema,
+  reason: GetResourceDeploymentDetailReason16$inboundSchema,
   severity: CollectionIssueSeverity16$inboundSchema,
   source: z.string(),
 });
@@ -15399,6 +17186,7 @@ export const DataMachines1$inboundSchema: z.ZodType<DataMachines1, unknown> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
+    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => DataStatus16$inboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("machines"),
@@ -15573,31 +17361,25 @@ export function involvedObjectUnion6FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource6$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource6,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent6$inboundSchema: z.ZodType<SourceEvent6, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource6FromJSON(
+export function sourceEvent6FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource6, SDKValidationError> {
+): SafeParseResult<SourceEvent6, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource6' from JSON`,
+    (x) => SourceEvent6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent6' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion6$inboundSchema: z.ZodType<SourceUnion6, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource6$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent6$inboundSchema), z.any()]);
 
 export function sourceUnion6FromJSON(
   jsonString: string,
@@ -15630,10 +17412,7 @@ export const Event8$inboundSchema: z.ZodType<Event8, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource6$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent6$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -15649,9 +17428,9 @@ export function event8FromJSON(
 }
 
 /** @internal */
-export const Reason15$inboundSchema: z.ZodEnum<typeof Reason15> = z.enum(
-  Reason15,
-);
+export const GetResourceDeploymentDetailReason15$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason15
+> = z.enum(GetResourceDeploymentDetailReason15);
 
 /** @internal */
 export const CollectionIssueSeverity15$inboundSchema: z.ZodEnum<
@@ -15664,7 +17443,7 @@ export const CollectionIssue15$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason15$inboundSchema,
+  reason: GetResourceDeploymentDetailReason15$inboundSchema,
   severity: CollectionIssueSeverity15$inboundSchema,
   source: z.string(),
 });
@@ -15726,6 +17505,7 @@ export const DataAzure1$inboundSchema: z.ZodType<DataAzure1, unknown> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
+    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => DataStatus15$inboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("azure"),
@@ -15900,31 +17680,25 @@ export function involvedObjectUnion5FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource5$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource5,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent5$inboundSchema: z.ZodType<SourceEvent5, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource5FromJSON(
+export function sourceEvent5FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource5, SDKValidationError> {
+): SafeParseResult<SourceEvent5, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource5' from JSON`,
+    (x) => SourceEvent5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent5' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion5$inboundSchema: z.ZodType<SourceUnion5, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource5$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent5$inboundSchema), z.any()]);
 
 export function sourceUnion5FromJSON(
   jsonString: string,
@@ -15957,10 +17731,7 @@ export const Event7$inboundSchema: z.ZodType<Event7, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource5$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent5$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -15976,9 +17747,9 @@ export function event7FromJSON(
 }
 
 /** @internal */
-export const Reason14$inboundSchema: z.ZodEnum<typeof Reason14> = z.enum(
-  Reason14,
-);
+export const GetResourceDeploymentDetailReason14$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason14
+> = z.enum(GetResourceDeploymentDetailReason14);
 
 /** @internal */
 export const CollectionIssueSeverity14$inboundSchema: z.ZodEnum<
@@ -15991,7 +17762,7 @@ export const CollectionIssue14$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason14$inboundSchema,
+  reason: GetResourceDeploymentDetailReason14$inboundSchema,
   severity: CollectionIssueSeverity14$inboundSchema,
   source: z.string(),
 });
@@ -16052,6 +17823,7 @@ export const DataGcp1$inboundSchema: z.ZodType<DataGcp1, unknown> = z.object({
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus14$inboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("gcp"),
@@ -16226,31 +17998,25 @@ export function involvedObjectUnion4FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource4$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource4,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent4$inboundSchema: z.ZodType<SourceEvent4, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource4FromJSON(
+export function sourceEvent4FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource4, SDKValidationError> {
+): SafeParseResult<SourceEvent4, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource4' from JSON`,
+    (x) => SourceEvent4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent4' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion4$inboundSchema: z.ZodType<SourceUnion4, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource4$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent4$inboundSchema), z.any()]);
 
 export function sourceUnion4FromJSON(
   jsonString: string,
@@ -16283,10 +18049,7 @@ export const Event6$inboundSchema: z.ZodType<Event6, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource4$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent4$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -16302,9 +18065,9 @@ export function event6FromJSON(
 }
 
 /** @internal */
-export const Reason13$inboundSchema: z.ZodEnum<typeof Reason13> = z.enum(
-  Reason13,
-);
+export const GetResourceDeploymentDetailReason13$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason13
+> = z.enum(GetResourceDeploymentDetailReason13);
 
 /** @internal */
 export const CollectionIssueSeverity13$inboundSchema: z.ZodEnum<
@@ -16317,7 +18080,7 @@ export const CollectionIssue13$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason13$inboundSchema,
+  reason: GetResourceDeploymentDetailReason13$inboundSchema,
   severity: CollectionIssueSeverity13$inboundSchema,
   source: z.string(),
 });
@@ -16378,6 +18141,7 @@ export const DataAws1$inboundSchema: z.ZodType<DataAws1, unknown> = z.object({
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus13$inboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("aws"),
@@ -16697,9 +18461,9 @@ export function memoryUnion5FromJSON(
 }
 
 /** @internal */
-export const Reason12$inboundSchema: z.ZodEnum<typeof Reason12> = z.enum(
-  Reason12,
-);
+export const GetResourceDeploymentDetailReason12$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason12
+> = z.enum(GetResourceDeploymentDetailReason12);
 
 /** @internal */
 export const CollectionIssueSeverity12$inboundSchema: z.ZodEnum<
@@ -16712,7 +18476,7 @@ export const CollectionIssue12$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason12$inboundSchema,
+  reason: GetResourceDeploymentDetailReason12$inboundSchema,
   severity: CollectionIssueSeverity12$inboundSchema,
   source: z.string(),
 });
@@ -16870,31 +18634,25 @@ export function involvedObjectUnion3FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource3$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource3,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent3$inboundSchema: z.ZodType<SourceEvent3, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource3FromJSON(
+export function sourceEvent3FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource3, SDKValidationError> {
+): SafeParseResult<SourceEvent3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource3' from JSON`,
+    (x) => SourceEvent3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent3' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion3$inboundSchema: z.ZodType<SourceUnion3, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource3$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent3$inboundSchema), z.any()]);
 
 export function sourceUnion3FromJSON(
   jsonString: string,
@@ -16925,10 +18683,7 @@ export const Event4$inboundSchema: z.ZodType<Event4, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource3$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent3$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -17120,9 +18875,9 @@ export function replicas3FromJSON(
 }
 
 /** @internal */
-export const Reason11$inboundSchema: z.ZodEnum<typeof Reason11> = z.enum(
-  Reason11,
-);
+export const GetResourceDeploymentDetailReason11$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason11
+> = z.enum(GetResourceDeploymentDetailReason11);
 
 /** @internal */
 export const CollectionIssueSeverity11$inboundSchema: z.ZodEnum<
@@ -17135,7 +18890,7 @@ export const CollectionIssue11$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason11$inboundSchema,
+  reason: GetResourceDeploymentDetailReason11$inboundSchema,
   severity: CollectionIssueSeverity11$inboundSchema,
   source: z.string(),
 });
@@ -17355,31 +19110,25 @@ export function involvedObjectUnion2FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource2$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource2,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent2$inboundSchema: z.ZodType<SourceEvent2, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource2FromJSON(
+export function sourceEvent2FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource2, SDKValidationError> {
+): SafeParseResult<SourceEvent2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource2' from JSON`,
+    (x) => SourceEvent2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent2' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion2$inboundSchema: z.ZodType<SourceUnion2, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource2$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent2$inboundSchema), z.any()]);
 
 export function sourceUnion2FromJSON(
   jsonString: string,
@@ -17412,10 +19161,7 @@ export const Event3$inboundSchema: z.ZodType<Event3, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource2$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent2$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -17605,9 +19351,9 @@ export const SchedulingMode$inboundSchema: z.ZodEnum<typeof SchedulingMode> = z
   .enum(SchedulingMode);
 
 /** @internal */
-export const Reason10$inboundSchema: z.ZodEnum<typeof Reason10> = z.enum(
-  Reason10,
-);
+export const GetResourceDeploymentDetailReason10$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason10
+> = z.enum(GetResourceDeploymentDetailReason10);
 
 /** @internal */
 export const CollectionIssueSeverity10$inboundSchema: z.ZodEnum<
@@ -17620,7 +19366,7 @@ export const CollectionIssue10$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason10$inboundSchema,
+  reason: GetResourceDeploymentDetailReason10$inboundSchema,
   severity: CollectionIssueSeverity10$inboundSchema,
   source: z.string(),
 });
@@ -17677,8 +19423,10 @@ export const DataHorizonPlatform$inboundSchema: z.ZodType<
     .optional(),
   events: z.array(z.lazy(() => Event3$inboundSchema)),
   image: z.nullable(z.string()).optional(),
+  latestUpdateTimestamp: z.nullable(z.string()).optional(),
   memory: z.nullable(z.union([z.lazy(() => Memory3$inboundSchema), z.any()]))
     .optional(),
+  observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$inboundSchema)),
   replicas: z.lazy(() => Replicas2$inboundSchema),
   schedulingMode: SchedulingMode$inboundSchema,
@@ -17985,7 +19733,9 @@ export function processUnionFromJSON(
 }
 
 /** @internal */
-export const Reason9$inboundSchema: z.ZodEnum<typeof Reason9> = z.enum(Reason9);
+export const GetResourceDeploymentDetailReason9$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason9
+> = z.enum(GetResourceDeploymentDetailReason9);
 
 /** @internal */
 export const CollectionIssueSeverity9$inboundSchema: z.ZodEnum<
@@ -17998,7 +19748,7 @@ export const CollectionIssue9$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason9$inboundSchema,
+  reason: GetResourceDeploymentDetailReason9$inboundSchema,
   severity: CollectionIssueSeverity9$inboundSchema,
   source: z.string(),
 });
@@ -18149,31 +19899,25 @@ export function involvedObjectUnion1FromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource1$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource1,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
+export const SourceEvent1$inboundSchema: z.ZodType<SourceEvent1, unknown> = z
+  .object({
+    component: z.nullable(z.string()).optional(),
+    host: z.nullable(z.string()).optional(),
+  });
 
-export function getResourceDeploymentDetailSource1FromJSON(
+export function sourceEvent1FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource1, SDKValidationError> {
+): SafeParseResult<SourceEvent1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource1' from JSON`,
+    (x) => SourceEvent1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceEvent1' from JSON`,
   );
 }
 
 /** @internal */
 export const SourceUnion1$inboundSchema: z.ZodType<SourceUnion1, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource1$inboundSchema),
-    z.any(),
-  ]);
+  .union([z.lazy(() => SourceEvent1$inboundSchema), z.any()]);
 
 export function sourceUnion1FromJSON(
   jsonString: string,
@@ -18204,10 +19948,7 @@ export const Event1$inboundSchema: z.ZodType<Event1, unknown> = z.object({
   raw: z.nullable(z.any()).optional(),
   reason: z.string(),
   source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource1$inboundSchema),
-      z.any(),
-    ]),
+    z.union([z.lazy(() => SourceEvent1$inboundSchema), z.any()]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
@@ -18399,7 +20140,9 @@ export function replicas1FromJSON(
 }
 
 /** @internal */
-export const Reason8$inboundSchema: z.ZodEnum<typeof Reason8> = z.enum(Reason8);
+export const GetResourceDeploymentDetailReason8$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason8
+> = z.enum(GetResourceDeploymentDetailReason8);
 
 /** @internal */
 export const CollectionIssueSeverity8$inboundSchema: z.ZodEnum<
@@ -18412,7 +20155,7 @@ export const CollectionIssue8$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason8$inboundSchema,
+  reason: GetResourceDeploymentDetailReason8$inboundSchema,
   severity: CollectionIssueSeverity8$inboundSchema,
   source: z.string(),
 });
@@ -18555,7 +20298,9 @@ export function dataKubernetes1FromJSON(
 }
 
 /** @internal */
-export const Reason7$inboundSchema: z.ZodEnum<typeof Reason7> = z.enum(Reason7);
+export const GetResourceDeploymentDetailReason7$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason7
+> = z.enum(GetResourceDeploymentDetailReason7);
 
 /** @internal */
 export const CollectionIssueSeverity7$inboundSchema: z.ZodEnum<
@@ -18568,7 +20313,7 @@ export const CollectionIssue7$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason7$inboundSchema,
+  reason: GetResourceDeploymentDetailReason7$inboundSchema,
   severity: CollectionIssueSeverity7$inboundSchema,
   source: z.string(),
 });
@@ -18642,7 +20387,9 @@ export function dataAzureContainerApps1FromJSON(
 }
 
 /** @internal */
-export const Reason6$inboundSchema: z.ZodEnum<typeof Reason6> = z.enum(Reason6);
+export const GetResourceDeploymentDetailReason6$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason6
+> = z.enum(GetResourceDeploymentDetailReason6);
 
 /** @internal */
 export const CollectionIssueSeverity6$inboundSchema: z.ZodEnum<
@@ -18655,7 +20402,7 @@ export const CollectionIssue6$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason6$inboundSchema,
+  reason: GetResourceDeploymentDetailReason6$inboundSchema,
   severity: CollectionIssueSeverity6$inboundSchema,
   source: z.string(),
 });
@@ -18733,7 +20480,9 @@ export function dataGcpCloudRunFromJSON(
 }
 
 /** @internal */
-export const Reason5$inboundSchema: z.ZodEnum<typeof Reason5> = z.enum(Reason5);
+export const GetResourceDeploymentDetailReason5$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason5
+> = z.enum(GetResourceDeploymentDetailReason5);
 
 /** @internal */
 export const CollectionIssueSeverity5$inboundSchema: z.ZodEnum<
@@ -18746,7 +20495,7 @@ export const CollectionIssue5$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason5$inboundSchema,
+  reason: GetResourceDeploymentDetailReason5$inboundSchema,
   severity: CollectionIssueSeverity5$inboundSchema,
   source: z.string(),
 });
@@ -18871,7 +20620,9 @@ export function dataWorkerFromJSON(
 }
 
 /** @internal */
-export const Reason4$inboundSchema: z.ZodEnum<typeof Reason4> = z.enum(Reason4);
+export const GetResourceDeploymentDetailReason4$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason4
+> = z.enum(GetResourceDeploymentDetailReason4);
 
 /** @internal */
 export const CollectionIssueSeverity4$inboundSchema: z.ZodEnum<
@@ -18884,7 +20635,7 @@ export const CollectionIssue4$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason4$inboundSchema,
+  reason: GetResourceDeploymentDetailReason4$inboundSchema,
   severity: CollectionIssueSeverity4$inboundSchema,
   source: z.string(),
 });
@@ -18953,7 +20704,9 @@ export function dataLocal1FromJSON(
 }
 
 /** @internal */
-export const Reason3$inboundSchema: z.ZodEnum<typeof Reason3> = z.enum(Reason3);
+export const GetResourceDeploymentDetailReason3$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason3
+> = z.enum(GetResourceDeploymentDetailReason3);
 
 /** @internal */
 export const CollectionIssueSeverity3$inboundSchema: z.ZodEnum<
@@ -18966,7 +20719,7 @@ export const CollectionIssue3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason3$inboundSchema,
+  reason: GetResourceDeploymentDetailReason3$inboundSchema,
   severity: CollectionIssueSeverity3$inboundSchema,
   source: z.string(),
 });
@@ -19056,7 +20809,9 @@ export function dataAzureBlobFromJSON(
 }
 
 /** @internal */
-export const Reason2$inboundSchema: z.ZodEnum<typeof Reason2> = z.enum(Reason2);
+export const GetResourceDeploymentDetailReason2$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason2
+> = z.enum(GetResourceDeploymentDetailReason2);
 
 /** @internal */
 export const CollectionIssueSeverity2$inboundSchema: z.ZodEnum<
@@ -19069,7 +20824,7 @@ export const CollectionIssue2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason2$inboundSchema,
+  reason: GetResourceDeploymentDetailReason2$inboundSchema,
   severity: CollectionIssueSeverity2$inboundSchema,
   source: z.string(),
 });
@@ -19151,7 +20906,9 @@ export function dataGcpCloudStorageFromJSON(
 }
 
 /** @internal */
-export const Reason1$inboundSchema: z.ZodEnum<typeof Reason1> = z.enum(Reason1);
+export const GetResourceDeploymentDetailReason1$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason1
+> = z.enum(GetResourceDeploymentDetailReason1);
 
 /** @internal */
 export const CollectionIssueSeverity1$inboundSchema: z.ZodEnum<
@@ -19164,7 +20921,7 @@ export const CollectionIssue1$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason1$inboundSchema,
+  reason: GetResourceDeploymentDetailReason1$inboundSchema,
   severity: CollectionIssueSeverity1$inboundSchema,
   source: z.string(),
 });
@@ -19283,7 +21040,7 @@ export function dataStorageFromJSON(
 }
 
 /** @internal */
-export const DataUnion16$inboundSchema: z.ZodType<DataUnion16, unknown> = z
+export const DataUnion18$inboundSchema: z.ZodType<DataUnion18, unknown> = z
   .union([
     z.lazy(() => DataStorage$inboundSchema),
     z.lazy(() => DataWorker$inboundSchema),
@@ -19305,15 +21062,17 @@ export const DataUnion16$inboundSchema: z.ZodType<DataUnion16, unknown> = z
     z.lazy(() => DataAzureStorageAccount$inboundSchema),
     z.lazy(() => DataAzureContainerAppsEnvironment$inboundSchema),
     z.lazy(() => DataAzureServiceBusNamespace$inboundSchema),
+    z.lazy(() => DataAi$inboundSchema),
+    z.lazy(() => DataKey$inboundSchema),
   ]);
 
-export function dataUnion16FromJSON(
+export function dataUnion18FromJSON(
   jsonString: string,
-): SafeParseResult<DataUnion16, SDKValidationError> {
+): SafeParseResult<DataUnion18, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataUnion16$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion16' from JSON`,
+    (x) => DataUnion18$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion18' from JSON`,
   );
 }
 
@@ -19364,6 +21123,8 @@ export const Heartbeat$inboundSchema: z.ZodType<Heartbeat, unknown> = z.object({
     z.lazy(() => DataAzureStorageAccount$inboundSchema),
     z.lazy(() => DataAzureContainerAppsEnvironment$inboundSchema),
     z.lazy(() => DataAzureServiceBusNamespace$inboundSchema),
+    z.lazy(() => DataAi$inboundSchema),
+    z.lazy(() => DataKey$inboundSchema),
   ]),
   deploymentId: z.nullable(z.string()).optional(),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),

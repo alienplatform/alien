@@ -11,5 +11,5 @@ let value: ListResourceDeploymentsArea = "container";
 ## Values
 
 ```typescript
-"container" | "worker" | "daemon"
+"container" | "worker" | "daemon" | "ai"
 ```

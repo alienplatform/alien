@@ -5,11 +5,11 @@
 ```typescript
 import { ManagerRetryResponseItemEnum } from "@alienplatform/platform-api/models";
 
-let value: ManagerRetryResponseItemEnum = "alien-stack";
+let value: ManagerRetryResponseItemEnum = "deployment";
 ```
 
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"deployment" | "models" | "keys" | "bucket" | "registry"
 ```

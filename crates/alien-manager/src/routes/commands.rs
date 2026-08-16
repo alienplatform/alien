@@ -4,11 +4,11 @@
 //! following the same pattern as `sync.rs` and `deployments.rs`.
 
 use axum::{
+    Router,
     extract::{Json, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
-    Router,
 };
 use serde::Deserialize;
 
@@ -18,7 +18,7 @@ use alien_commands::types::*;
 
 use crate::error::ErrorData;
 
-use super::{auth, AppState};
+use super::{AppState, auth};
 
 // --- Helpers ---
 
@@ -319,7 +319,7 @@ async fn get_command_status(
                     command_id: command_id.clone(),
                 },
             )
-            .into_response()
+            .into_response();
         }
         Err(e) => return e.into_response(),
     };
@@ -360,7 +360,7 @@ async fn upload_complete(
                     command_id: command_id.clone(),
                 },
             )
-            .into_response()
+            .into_response();
         }
         Err(e) => return e.into_response(),
     };
@@ -428,7 +428,7 @@ async fn submit_response(
                         command_id: command_id.clone(),
                     },
                 )
-                .into_response()
+                .into_response();
             }
             Err(e) => return e.into_response(),
         };
@@ -628,7 +628,7 @@ async fn release_lease(
             return alien_error::AlienError::new(alien_commands::error::ErrorData::LeaseNotFound {
                 lease_id: lease_id.clone(),
             })
-            .into_response()
+            .into_response();
         }
         Err(e) => return e.into_response(),
     };
@@ -643,7 +643,7 @@ async fn release_lease(
                 return alien_error::AlienError::new(
                     alien_commands::error::ErrorData::CommandNotFound { command_id },
                 )
-                .into_response()
+                .into_response();
             }
             Err(e) => return e.into_response(),
         };
@@ -664,7 +664,7 @@ async fn release_lease(
 mod tests {
     use super::*;
     use alien_commands::test_utils::{
-        test_storage_create_command, test_upload_complete_request, TestCommandServer,
+        TestCommandServer, test_storage_create_command, test_upload_complete_request,
     };
     use chrono::Utc;
 

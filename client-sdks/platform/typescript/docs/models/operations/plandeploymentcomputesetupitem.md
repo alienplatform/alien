@@ -5,11 +5,11 @@
 ```typescript
 import { PlanDeploymentComputeSetupItem } from "@alienplatform/platform-api/models/operations";
 
-let value: PlanDeploymentComputeSetupItem = "alien-stack";
+let value: PlanDeploymentComputeSetupItem = "deployment";
 ```
 
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"deployment" | "models" | "keys" | "bucket" | "registry"
 ```

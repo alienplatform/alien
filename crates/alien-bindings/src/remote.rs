@@ -27,8 +27,8 @@ use access::{ManagerResolverKind, RemoteBindingSource};
 
 #[cfg(test)]
 use access::{
-    authenticated_http_client, validate_manager_url, validate_platform_base_url, DiscoveredManager,
-    GeneratedManagerBindingResolver, ManagerBindingResolver,
+    DiscoveredManager, GeneratedManagerBindingResolver, ManagerBindingResolver,
+    authenticated_http_client, validate_manager_url, validate_platform_base_url,
 };
 
 const INITIAL_REFRESH_RETRY_DELAY_SECONDS: i64 = 5;
@@ -76,6 +76,32 @@ impl RemoteBindingsProvider {
         api_base_url: Option<&str>,
     ) -> Result<Self> {
         Self::discover(deployment_id, token, api_base_url, Arc::new(SystemClock)).await
+    }
+
+    /// Selects a external environment's Storage deployment by Project and external ID and
+    /// creates a lazy remote provider.
+    pub(crate) async fn for_remote_environment(
+        project: &str,
+        external_id: &str,
+        token: &str,
+        api_base_url: Option<&str>,
+    ) -> Result<Self> {
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        Ok(Self {
+            source: Arc::new(
+                RemoteBindingSource::discover_external_environment(
+                    project,
+                    external_id,
+                    token,
+                    api_base_url,
+                    ManagerResolverKind::Generated,
+                    clock.clone(),
+                )
+                .await?,
+            ),
+            resolvers: RwLock::new(HashMap::new()),
+            clock,
+        })
     }
 
     fn from_manager_access(
@@ -257,6 +283,27 @@ pub trait RemoteStorage: Send + Sync + fmt::Debug {
 }
 
 impl RemoteBindings {
+    /// Selects an external environment's Storage deployment by stable application external
+    /// ID and discovers its assigned Manager through the Platform API.
+    pub async fn for_environment(
+        project: &str,
+        external_id: &str,
+        token: &str,
+        api_base_url: Option<&str>,
+    ) -> Result<Self> {
+        Ok(Self {
+            provider: Arc::new(
+                RemoteBindingsProvider::for_remote_environment(
+                    project,
+                    external_id,
+                    token,
+                    api_base_url,
+                )
+                .await?,
+            ),
+        })
+    }
+
     /// Discovers the deployment's assigned manager through the Platform API.
     pub async fn for_deployment(
         deployment_id: &str,
@@ -839,7 +886,6 @@ impl RemoteStorageResolver {
                 state.record_failure(error.clone(), now);
                 if let Some(provider) = state.unexpired(now) {
                     debug!(
-                        deployment_id = %self.source.deployment_id,
                         resource_id = %self.resource_id,
                         "Remote binding refresh failed before lease expiry; using cached credentials"
                     );

@@ -44,6 +44,18 @@ export interface RemoteDeploymentBindingsOptions {
   apiBaseUrl?: string
 }
 
+/** Options for accessing a customer's Storage by stable application ID. */
+export interface RemoteCustomerBindingsOptions {
+  /** Project name or ID containing the customer connection. */
+  project: string
+  /** Stable, non-secret customer ID used when creating the Deployment Link. */
+  externalId: string
+  /** Project-scoped Remote Bindings API token. */
+  token: string
+  /** Override the Alien API base URL. */
+  apiBaseUrl?: string
+}
+
 /** Remote bindings for an existing deployment. */
 export class Bindings {
   readonly #storage: (name: string) => RemoteStorage
@@ -60,6 +72,22 @@ export class Bindings {
     this.#ai = ai
   }
 
+  /** Select a customer's Storage by Project and stable external ID. */
+  static async forRemoteCustomer(options: RemoteCustomerBindingsOptions): Promise<Bindings> {
+    try {
+      const addon = loadAddon()
+      const bindings = await addon.RemoteBindingsHandle.forCustomer(
+        options.project,
+        options.externalId,
+        options.token,
+        options.apiBaseUrl,
+      )
+      return Bindings.fromRemoteHandle(bindings)
+    } catch (error) {
+      throw unwrapNapiError(error)
+    }
+  }
+
   /** Discover the deployment's manager and prepare remote Storage bindings. */
   static async forRemoteDeployment(options: RemoteDeploymentBindingsOptions): Promise<Bindings> {
     try {
@@ -69,25 +97,31 @@ export class Bindings {
         options.token,
         options.apiBaseUrl,
       )
-      return new Bindings(
-        createRemoteStorageFactory(bindings),
-        createRemoteKeyFactory(bindings),
-        async () => {
-          const lease = await bindings.ai()
-          return {
-            resourceId: lease.resourceId,
-            binding: aiBindingSchema.parse(JSON.parse(lease.bindingJson)),
-            clientConfig: remoteClientConfigSchema.parse(JSON.parse(lease.clientConfigJson)),
-            expiresAt: z.iso
-              .datetime({ offset: true })
-              .transform(value => new Date(value))
-              .parse(lease.expiresAt),
-          }
-        },
-      )
+      return Bindings.fromRemoteHandle(bindings)
     } catch (error) {
       throw unwrapNapiError(error)
     }
+  }
+
+  private static fromRemoteHandle(
+    bindings: import("./loader.js").RawRemoteBindingsHandle,
+  ): Bindings {
+    return new Bindings(
+      createRemoteStorageFactory(bindings),
+      createRemoteKeyFactory(bindings),
+      async () => {
+        const lease = await bindings.ai()
+        return {
+          resourceId: lease.resourceId,
+          binding: aiBindingSchema.parse(JSON.parse(lease.bindingJson)),
+          clientConfig: remoteClientConfigSchema.parse(JSON.parse(lease.clientConfigJson)),
+          expiresAt: z.iso
+            .datetime({ offset: true })
+            .transform(value => new Date(value))
+            .parse(lease.expiresAt),
+        }
+      },
+    )
   }
 
   /** Resolve a remote Storage binding by resource name. */

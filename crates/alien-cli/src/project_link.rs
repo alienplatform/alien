@@ -6,8 +6,8 @@ use crate::git_utils;
 use crate::interaction::InteractionMode;
 use crate::output::{can_prompt, prompt_confirm, prompt_select, prompt_text};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_platform_api::types;
 use alien_platform_api::SdkResultExt;
+use alien_platform_api::types;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -270,6 +270,7 @@ pub async fn create_new_project(
             git_repository,
             root_directory: None,
             packages_config: None,
+            enabled_capabilities: Vec::new(),
         })
         .send()
         .await
@@ -349,7 +350,7 @@ pub async fn create_new_project(
                 .transpose()?,
             deployment_portal_appearance: None,
             packages_config: None,
-            customer_connections: None,
+            project_capabilities: None,
             default_managers: None,
             deployment_count: Some(0.0),
             latest_release: None.into(),

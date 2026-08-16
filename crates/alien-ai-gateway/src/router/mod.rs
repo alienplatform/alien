@@ -83,6 +83,7 @@ where
 pub enum GatewayTarget {
     Cloud(Platform),
     DirectAnthropic,
+    DirectDatabricks,
     DirectOpenAi,
 }
 
@@ -139,17 +140,85 @@ pub fn route_from_direct_openai(
     })
 }
 
+/// Build a Databricks Unity AI Gateway route for one validated workspace.
+///
+/// Databricks uses an OpenAI-compatible request and bearer credential, but its
+/// upstream host belongs to the customer's workspace. Only canonical Databricks
+/// workspace hosts are accepted so this cannot become a generic bearer-token proxy.
+pub fn route_from_direct_databricks(
+    name: impl Into<String>,
+    workspace_url: &str,
+    access_token: impl Into<String>,
+) -> Result<GatewayRoute> {
+    let name = name.into();
+    let mut upstream = reqwest::Url::parse(workspace_url)
+        .into_alien_error()
+        .context(ErrorData::BindingConfigInvalid {
+            binding: name.clone(),
+            message: "the Databricks workspace URL is invalid".to_string(),
+        })?;
+    let route_name = upstream.host_str().map(str::to_string).ok_or_else(|| {
+        AlienError::new(ErrorData::BindingConfigInvalid {
+            binding: name.clone(),
+            message: "the Databricks workspace URL has no host".to_string(),
+        })
+    })?;
+    let valid_host = [
+        ".cloud.databricks.com",
+        ".azuredatabricks.net",
+        ".gcp.databricks.com",
+    ]
+    .iter()
+    .any(|suffix| route_name.ends_with(suffix));
+    if upstream.scheme() != "https"
+        || !valid_host
+        || upstream.port().is_some()
+        || !upstream.username().is_empty()
+        || upstream.password().is_some()
+        || upstream.query().is_some()
+        || upstream.fragment().is_some()
+    {
+        return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+            binding: name,
+            message: "the Databricks workspace URL must be an HTTPS Databricks workspace host"
+                .to_string(),
+        }));
+    }
+    upstream.set_path("");
+
+    Ok(GatewayRoute {
+        name,
+        target: GatewayTarget::DirectDatabricks,
+        region: None,
+        project: None,
+        azure_endpoint: None,
+        cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(access_token)?),
+        upstream_base_override: Some(upstream.to_string().trim_end_matches('/').to_string()),
+    })
+}
+
 struct AppState {
     routes: HashMap<String, GatewayRoute>,
     client: reqwest::Client,
     /// Account-specific, read-only control-plane observations supplied by the
     /// hosted route resolver. `None` keeps embedded gateways catalog-only.
-    available_models: Option<AvailableModels>,
+    observed_models: Option<ObservedModels>,
     usage_observer: Option<Arc<dyn AiUsageObserver>>,
 }
 
 /// Available public model IDs keyed by binding name.
 pub type AvailableModels = HashMap<String, HashSet<String>>;
+
+/// Request-time access state for one model in a resolved customer connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObservedModelAvailability {
+    Available,
+    Blocked { reason: String },
+    Unknown,
+}
+
+/// Observed public model access keyed by binding name and public model ID.
+pub type ObservedModels = HashMap<String, HashMap<String, ObservedModelAvailability>>;
 
 /// Build the axum router serving every binding under `/<name>/...`:
 /// `POST /<name>/v1/chat/completions` (OpenAI), `POST /<name>/v1/messages`
@@ -172,7 +241,19 @@ pub fn build_router_with_availability(
     routes: Vec<GatewayRoute>,
     available_models: AvailableModels,
 ) -> Router {
-    build_router_inner(routes, Some(available_models), None)
+    build_router_inner(
+        routes,
+        Some(observed_from_available(available_models)),
+        None,
+    )
+}
+
+/// Build a router that preserves provider-reported model blocker state.
+pub fn build_router_with_observed_models(
+    routes: Vec<GatewayRoute>,
+    observed_models: ObservedModels,
+) -> Router {
+    build_router_inner(routes, Some(observed_models), None)
 }
 
 /// Build a hosted router with both bounded model availability and usage observation.
@@ -181,12 +262,25 @@ pub fn build_router_with_availability_and_observer(
     available_models: AvailableModels,
     usage_observer: Arc<dyn AiUsageObserver>,
 ) -> Router {
-    build_router_inner(routes, Some(available_models), Some(usage_observer))
+    build_router_inner(
+        routes,
+        Some(observed_from_available(available_models)),
+        Some(usage_observer),
+    )
+}
+
+/// Build a hosted router that preserves provider-reported model blocker state.
+pub fn build_router_with_observed_models_and_observer(
+    routes: Vec<GatewayRoute>,
+    observed_models: ObservedModels,
+    usage_observer: Arc<dyn AiUsageObserver>,
+) -> Router {
+    build_router_inner(routes, Some(observed_models), Some(usage_observer))
 }
 
 fn build_router_inner(
     routes: Vec<GatewayRoute>,
-    available_models: Option<AvailableModels>,
+    observed_models: Option<ObservedModels>,
     usage_observer: Option<Arc<dyn AiUsageObserver>>,
 ) -> Router {
     let routes: HashMap<String, GatewayRoute> =
@@ -194,7 +288,7 @@ fn build_router_inner(
     let state = Arc::new(AppState {
         routes,
         client: reqwest::Client::new(),
-        available_models,
+        observed_models,
         usage_observer,
     });
     Router::new()
@@ -209,11 +303,32 @@ fn build_router_inner(
         .with_state(state)
 }
 
+fn observed_from_available(available_models: AvailableModels) -> ObservedModels {
+    available_models
+        .into_iter()
+        .map(|(binding, models)| {
+            (
+                binding,
+                models
+                    .into_iter()
+                    .map(|model| (model, ObservedModelAvailability::Available))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
 /// Parse a proxied request body as JSON and pull out its required `model` field.
 /// Both the chat/completions|messages handler and the Responses handler route on
 /// the request's `model`, so they share this preamble.
+///
+/// AI SDK conventions namespace model ids as `vendor/model` (for example
+/// `openai/gpt-5.6-luna`). The gateway's namespace is `byo/` — every model runs
+/// on the caller's own provider account — so `byo/<id>` is accepted as an alias
+/// for the bare catalog id, and the payload is normalized so downstream routing,
+/// availability checks, and usage reporting all see one spelling.
 fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
-    let payload: Value =
+    let mut payload: Value =
         serde_json::from_slice(body)
             .into_alien_error()
             .context(ErrorData::InvalidRequest {
@@ -228,6 +343,14 @@ fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
             })
         })?
         .to_string();
+    let model = match model.strip_prefix("byo/") {
+        Some(bare) => {
+            let bare = bare.to_string();
+            payload["model"] = Value::String(bare.clone());
+            bare
+        }
+        None => model,
+    };
     Ok((payload, model))
 }
 
@@ -307,15 +430,6 @@ fn usage_client_api(client_api: ClientApi) -> AiUsageClientApi {
     }
 }
 
-fn cloud_usage_provider(cloud: Platform) -> AiUsageProvider {
-    match cloud {
-        Platform::Aws => AiUsageProvider::AwsBedrock,
-        Platform::Gcp => AiUsageProvider::GcpVertex,
-        Platform::Azure => AiUsageProvider::AzureFoundry,
-        _ => unreachable!("AI cloud routes are available only on AWS, GCP, and Azure"),
-    }
-}
-
 fn observe_result(
     result: Result<Response>,
     observer: Option<&Arc<dyn AiUsageObserver>>,
@@ -327,6 +441,15 @@ fn observe_result(
             observe_gateway_error(observer, context, error.http_status_code.unwrap_or(500));
             Err(error)
         }
+    }
+}
+
+fn cloud_usage_provider(cloud: Platform) -> AiUsageProvider {
+    match cloud {
+        Platform::Aws => AiUsageProvider::AwsBedrock,
+        Platform::Gcp => AiUsageProvider::GcpVertex,
+        Platform::Azure => AiUsageProvider::AzureFoundry,
+        _ => unreachable!("AI cloud routes are available only on AWS, GCP, and Azure"),
     }
 }
 
@@ -451,15 +574,7 @@ async fn proxy(
                 None,
             );
             let validation = ensure_model_available(&state, &binding, &model).and_then(|()| {
-                if client_api == ClientApi::OpenAiChatCompletions {
-                    Ok(())
-                } else {
-                    Err(AlienError::new(ErrorData::InvalidRequest {
-                        message: format!(
-                            "direct OpenAI chat completions use /{binding}/v1/chat/completions"
-                        ),
-                    }))
-                }
+                ensure_direct_openai_client_api(&model, &binding, client_api).map(|_| ())
             });
             if let Err(error) = validation {
                 return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
@@ -474,11 +589,67 @@ async fn proxy(
             .await;
             return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
+        GatewayTarget::DirectDatabricks => {
+            let direct = match ensure_direct_databricks_client_api(&model, &binding, client_api) {
+                Ok(direct) => direct,
+                Err(error) => {
+                    let descriptor = AiUsageContext::new(
+                        &binding,
+                        AiUsageProvider::Databricks,
+                        &model,
+                        &model,
+                        usage_client_api(client_api),
+                        None,
+                    );
+                    return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+                }
+            };
+            let provider_model = direct.upstream_id;
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::Databricks,
+                &model,
+                provider_model,
+                usage_client_api(client_api),
+                None,
+            );
+            if let Err(error) = ensure_model_available(&state, &binding, &model) {
+                return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+            }
+            let response = match client_api {
+                ClientApi::OpenAiChatCompletions => {
+                    let path = format!("/serving-endpoints/{provider_model}/invocations");
+                    proxy_direct_openai(
+                        &state.client,
+                        route,
+                        payload,
+                        provider_model,
+                        &path,
+                    )
+                    .await
+                }
+                ClientApi::AnthropicMessages => {
+                    proxy_direct_anthropic_at(
+                        &state.client,
+                        route,
+                        payload,
+                        provider_model,
+                        &headers,
+                        "/ai-gateway/anthropic/v1/messages",
+                    )
+                    .await
+                }
+                ClientApi::OpenAiResponses => unreachable!("handled by proxy_responses"),
+            };
+            return observe_result(response, state.usage_observer.as_ref(), descriptor);
+        }
         GatewayTarget::Cloud(_) => {}
     }
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic | GatewayTarget::DirectOpenAi => {
+        GatewayTarget::DirectAnthropic
+        | GatewayTarget::DirectDatabricks
+        | GatewayTarget::DirectOpenAi => {
             unreachable!("handled above")
         }
     };
@@ -488,7 +659,6 @@ async fn proxy(
             binding: binding.clone(),
         })
     })?;
-
     let descriptor = AiUsageContext::new(
         &binding,
         cloud_usage_provider(cloud),
@@ -511,7 +681,7 @@ async fn proxy(
         };
         let error = AlienError::new(ErrorData::InvalidRequest {
             message: format!(
-                "model `{model}` is not supported by this client API; send it to /{binding}/{expected_path}"
+                "model `{model}` is not supported by this client API; send it to /{expected_path}"
             ),
         });
         return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
@@ -549,7 +719,6 @@ async fn proxy(
                 .context(ErrorData::Other {
                     message: "could not re-serialize the rewritten request body".to_string(),
                 })?;
-
         let (url, aws_service) = upstream_target(route, cm.provider_api)?;
         let upstream = sign_and_execute(
             &state.client,
@@ -590,10 +759,12 @@ async fn proxy_responses(
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
         GatewayTarget::DirectAnthropic => {
-            return Err(AlienError::new(ErrorData::ModelNotAvailable {
-                model,
-                binding,
-            }))
+            ensure_model_available(&state, &binding, &model)?;
+            return Err(AlienError::new(ErrorData::InvalidRequest {
+                message: format!(
+                    "model `{model}` is not supported by this client API; send it to /v1/messages"
+                ),
+            }));
         }
         GatewayTarget::DirectOpenAi => {
             let descriptor = AiUsageContext::new(
@@ -604,22 +775,93 @@ async fn proxy_responses(
                 AiUsageClientApi::OpenAiResponses,
                 None,
             );
-            if let Err(error) = ensure_model_available(&state, &binding, &model) {
+            let validation = ensure_model_available(&state, &binding, &model).and_then(|()| {
+                ensure_direct_openai_client_api(&model, &binding, ClientApi::OpenAiResponses)
+                    .map(|_| ())
+            });
+            if let Err(error) = validation {
                 return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
             }
             let response =
                 proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await;
             return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
+        GatewayTarget::DirectDatabricks => {
+            let provider_model = match ensure_direct_databricks_client_api(
+                &model,
+                &binding,
+                ClientApi::OpenAiResponses,
+            ) {
+                Ok(direct) => direct.upstream_id.to_string(),
+                Err(error) => {
+                    let descriptor = AiUsageContext::new(
+                        &binding,
+                        AiUsageProvider::Databricks,
+                        &model,
+                        &model,
+                        AiUsageClientApi::OpenAiResponses,
+                        None,
+                    );
+                    return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+                }
+            };
+            payload["model"] = Value::String(provider_model.clone());
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::Databricks,
+                &model,
+                &provider_model,
+                AiUsageClientApi::OpenAiResponses,
+                None,
+            );
+            if let Err(error) = ensure_model_available(&state, &binding, &model) {
+                return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+            }
+            let response = proxy_direct_openai(
+                &state.client,
+                route,
+                payload,
+                &provider_model,
+                "/ai-gateway/openai/v1/responses",
+            )
+            .await;
+            return observe_result(response, state.usage_observer.as_ref(), descriptor);
+        }
     };
-    let catalog_model = ai_catalog::resolve_for(&model, cloud)
-        .filter(|model| model.client_apis.contains(&ClientApi::OpenAiResponses))
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ModelNotAvailable {
-                model: model.clone(),
-                binding: binding.clone(),
-            })
-        })?;
+    let catalog_model = ai_catalog::resolve_for(&model, cloud).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.clone(),
+            binding: binding.clone(),
+        })
+    })?;
+    let descriptor = AiUsageContext::new(
+        &binding,
+        cloud_usage_provider(cloud),
+        &model,
+        catalog_model.upstream_id,
+        AiUsageClientApi::OpenAiResponses,
+        route.region.clone(),
+    );
+    if let Err(error) = ensure_model_available(&state, &binding, &model) {
+        return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+    }
+    if !catalog_model
+        .client_apis
+        .contains(&ClientApi::OpenAiResponses)
+    {
+        let expected_path = match catalog_model.client_apis.first() {
+            Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
+            Some(ClientApi::AnthropicMessages) => "v1/messages",
+            Some(ClientApi::OpenAiResponses) => "v1/responses",
+            None => "v1/models",
+        };
+        let error = AlienError::new(ErrorData::InvalidRequest {
+            message: format!(
+                "model `{model}` is not supported by this client API; send it to /{expected_path}"
+            ),
+        });
+        return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+    }
     let target = ai_catalog::responses_target(catalog_model.public_id).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
             model: model.clone(),
@@ -635,10 +877,6 @@ async fn proxy_responses(
         route.region.clone(),
     );
 
-    if let Err(error) = ensure_model_available(&state, &binding, &model) {
-        return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
-    }
-
     let response = async {
         payload["model"] = Value::String(target.upstream_id.to_string());
         let upstream_body =
@@ -647,7 +885,6 @@ async fn proxy_responses(
                 .context(ErrorData::Other {
                     message: "could not re-serialize the rewritten request body".to_string(),
                 })?;
-
         let region = route
             .region
             .as_deref()
@@ -657,7 +894,6 @@ async fn proxy_responses(
             .clone()
             .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
         let url = format!("{}{}", base.trim_end_matches('/'), target.path);
-
         let upstream = sign_and_execute(
             &state.client,
             &route.cred,
@@ -674,7 +910,9 @@ async fn proxy_responses(
 }
 
 /// `GET /<name>/v1/models`: the qualified catalog, intersected with the bounded
-/// account observation when the hosted control plane supplied one.
+/// account observation when the hosted control plane supplied one. Ids are
+/// listed in the `byo/` namespace — the spelling the chat endpoints accept —
+/// and the bare id remains accepted as an alias.
 async fn list_models(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
@@ -684,8 +922,8 @@ async fn list_models(
             binding: binding.clone(),
         })
     })?;
-    let allowed = state
-        .available_models
+    let observed = state
+        .observed_models
         .as_ref()
         .map(|by_binding| by_binding.get(&binding));
 
@@ -693,13 +931,15 @@ async fn list_models(
         GatewayTarget::Cloud(cloud) => ai_catalog::models_for(cloud)
             .into_iter()
             .filter(|model| {
-                allowed.is_none_or(|models| {
-                    models.is_some_and(|models| models.contains(model.public_id))
+                observed.is_none_or(|models| {
+                    models.is_some_and(|models| {
+                        models.get(model.public_id) == Some(&ObservedModelAvailability::Available)
+                    })
                 })
             })
             .map(|model| {
                 json!({
-                    "id": model.public_id,
+                    "id": format!("byo/{}", model.public_id),
                     "object": "model",
                     "provider": model.provider(),
                     "displayName": model.display_name(),
@@ -709,13 +949,15 @@ async fn list_models(
         GatewayTarget::DirectAnthropic => ai_catalog::direct_anthropic_models()
             .into_iter()
             .filter(|model| {
-                allowed.is_none_or(|models| {
-                    models.is_some_and(|models| models.contains(model.public_id))
+                observed.is_none_or(|models| {
+                    models.is_some_and(|models| {
+                        models.get(model.public_id) == Some(&ObservedModelAvailability::Available)
+                    })
                 })
             })
             .map(|model| {
                 json!({
-                    "id": model.public_id,
+                    "id": format!("byo/{}", model.public_id),
                     "object": "model",
                     "provider": "anthropic",
                     "displayName": model.display_name(),
@@ -723,19 +965,44 @@ async fn list_models(
             })
             .collect(),
         GatewayTarget::DirectOpenAi => {
-            let mut models = allowed
+            let mut models = observed
                 .into_iter()
                 .flatten()
                 .flat_map(|models| models.iter())
+                .filter_map(|(model, availability)| {
+                    (availability == &ObservedModelAvailability::Available).then_some(model)
+                })
                 .collect::<Vec<_>>();
             models.sort();
             models
                 .into_iter()
                 .map(|model| {
                     json!({
-                        "id": model,
+                        "id": format!("byo/{model}"),
                         "object": "model",
                         "provider": "openai",
+                        "displayName": model,
+                    })
+                })
+                .collect()
+        }
+        GatewayTarget::DirectDatabricks => {
+            let mut models = observed
+                .into_iter()
+                .flatten()
+                .flat_map(|models| models.iter())
+                .filter_map(|(model, availability)| {
+                    (availability == &ObservedModelAvailability::Available).then_some(model)
+                })
+                .collect::<Vec<_>>();
+            models.sort();
+            models
+                .into_iter()
+                .map(|model| {
+                    json!({
+                        "id": format!("byo/{model}"),
+                        "object": "model",
+                        "provider": "databricks",
                         "displayName": model,
                     })
                 })
@@ -746,23 +1013,89 @@ async fn list_models(
 }
 
 fn ensure_model_available(state: &AppState, binding: &str, model: &str) -> Result<()> {
-    if state.available_models.as_ref().is_some_and(|by_binding| {
-        !by_binding
-            .get(binding)
-            .is_some_and(|models| models.contains(model))
-    }) {
-        return Err(AlienError::new(ErrorData::ModelNotAvailable {
+    let Some(by_binding) = state.observed_models.as_ref() else {
+        return Ok(());
+    };
+    match by_binding.get(binding).and_then(|models| models.get(model)) {
+        Some(ObservedModelAvailability::Available) => Ok(()),
+        Some(ObservedModelAvailability::Blocked { reason }) => {
+            Err(AlienError::new(ErrorData::ModelAccessRequired {
+                model: model.to_string(),
+                binding: binding.to_string(),
+                reason: reason.clone(),
+            }))
+        }
+        Some(ObservedModelAvailability::Unknown) => {
+            Err(AlienError::new(ErrorData::ModelAvailabilityUnknown {
+                model: model.to_string(),
+                binding: binding.to_string(),
+            }))
+        }
+        None => Err(AlienError::new(ErrorData::ModelNotAvailable {
             model: model.to_string(),
             binding: binding.to_string(),
-        }));
+        })),
     }
-    Ok(())
+}
+
+fn ensure_direct_openai_client_api(
+    model: &str,
+    binding: &str,
+    client_api: ClientApi,
+) -> Result<()> {
+    let direct = ai_catalog::resolve_direct_openai(model).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.to_string(),
+            binding: binding.to_string(),
+        })
+    })?;
+    if direct.client_apis.contains(&client_api) {
+        return Ok(());
+    }
+    let expected_path = match direct.client_apis.first() {
+        Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
+        Some(ClientApi::OpenAiResponses) => "v1/responses",
+        Some(ClientApi::AnthropicMessages) => "v1/messages",
+        None => "v1/models",
+    };
+    Err(AlienError::new(ErrorData::InvalidRequest {
+        message: format!(
+            "model `{model}` is not supported by this client API; send it to /{expected_path}"
+        ),
+    }))
+}
+
+fn ensure_direct_databricks_client_api(
+    model: &str,
+    binding: &str,
+    client_api: ClientApi,
+) -> Result<&'static ai_catalog::DirectDatabricksModel> {
+    let direct = ai_catalog::resolve_direct_databricks(model).ok_or_else(|| {
+        AlienError::new(ErrorData::ModelNotAvailable {
+            model: model.to_string(),
+            binding: binding.to_string(),
+        })
+    })?;
+    if direct.client_apis.contains(&client_api) {
+        return Ok(direct);
+    }
+    let expected_path = match direct.client_apis.first() {
+        Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
+        Some(ClientApi::OpenAiResponses) => "v1/responses",
+        Some(ClientApi::AnthropicMessages) => "v1/messages",
+        None => "v1/models",
+    };
+    Err(AlienError::new(ErrorData::InvalidRequest {
+        message: format!(
+            "model `{model}` is not supported by this client API; send it to /{expected_path}"
+        ),
+    }))
 }
 
 async fn proxy_direct_anthropic(
     client: &reqwest::Client,
     route: &GatewayRoute,
-    mut payload: Value,
+    payload: Value,
     model: &str,
     headers: &HeaderMap,
 ) -> Result<Response> {
@@ -772,7 +1105,26 @@ async fn proxy_direct_anthropic(
             binding: route.name.clone(),
         })
     })?;
-    payload["model"] = Value::String(direct.upstream_id.to_string());
+    proxy_direct_anthropic_at(
+        client,
+        route,
+        payload,
+        direct.upstream_id,
+        headers,
+        "/v1/messages",
+    )
+    .await
+}
+
+async fn proxy_direct_anthropic_at(
+    client: &reqwest::Client,
+    route: &GatewayRoute,
+    mut payload: Value,
+    provider_model: &str,
+    headers: &HeaderMap,
+    path: &str,
+) -> Result<Response> {
+    payload["model"] = Value::String(provider_model.to_string());
     let body = serde_json::to_vec(&payload)
         .into_alien_error()
         .context(ErrorData::Other {
@@ -782,7 +1134,7 @@ async fn proxy_direct_anthropic(
         .upstream_base_override
         .as_deref()
         .unwrap_or("https://api.anthropic.com");
-    let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
     let version = headers
         .get("anthropic-version")
         .and_then(|value| value.to_str().ok())
@@ -833,7 +1185,9 @@ pub(crate) fn upstream_target(
 ) -> Result<(String, &'static str)> {
     let cloud = match route.target {
         GatewayTarget::Cloud(cloud) => cloud,
-        GatewayTarget::DirectAnthropic | GatewayTarget::DirectOpenAi => {
+        GatewayTarget::DirectAnthropic
+        | GatewayTarget::DirectDatabricks
+        | GatewayTarget::DirectOpenAi => {
             return Err(AlienError::new(ErrorData::Other {
                 message: "direct providers do not use a cloud upstream target".to_string(),
             }))
@@ -910,6 +1264,7 @@ fn parse_stream_flag(value: Option<Value>) -> Result<bool> {
 mod tests {
     use std::net::Ipv4Addr;
     use std::sync::mpsc;
+    use std::time::Duration;
 
     use aws_credential_types::provider::SharedCredentialsProvider;
     use aws_credential_types::Credentials;
@@ -920,12 +1275,13 @@ mod tests {
 
     use super::*;
     use crate::creds::{AwsSigV4Cred, BearerTokenCred};
+    use crate::usage::{AiTokenUsage, AiUsageEvent, AiUsageOutcome};
 
-    struct TestObserver(mpsc::Sender<crate::usage::AiUsageEvent>);
+    struct TestUsageObserver(mpsc::Sender<AiUsageEvent>);
 
-    impl AiUsageObserver for TestObserver {
-        fn observe(&self, event: crate::usage::AiUsageEvent) {
-            self.0.send(event).expect("usage receiver remains open");
+    impl AiUsageObserver for TestUsageObserver {
+        fn observe(&self, event: AiUsageEvent) {
+            let _ = self.0.send(event);
         }
     }
 
@@ -978,6 +1334,23 @@ mod tests {
         }
     }
 
+    fn direct_openai_route(upstream: &str) -> GatewayRoute {
+        let mut route = route_from_direct_openai("llm", "sk-test").expect("direct OpenAI route");
+        route.upstream_base_override = Some(upstream.to_string());
+        route
+    }
+
+    fn direct_databricks_route(upstream: &str) -> GatewayRoute {
+        let mut route = route_from_direct_databricks(
+            "llm",
+            "https://dbc-123.cloud.databricks.com",
+            "temporary-oauth-token",
+        )
+        .expect("direct Databricks route");
+        route.upstream_base_override = Some(upstream.to_string());
+        route
+    }
+
     #[tokio::test]
     async fn direct_openai_responses_are_observed() {
         let server = MockServer::start_async().await;
@@ -992,11 +1365,13 @@ mod tests {
                     .body(r#"{"id":"resp_1","usage":{"input_tokens":12,"output_tokens":7}}"#);
             })
             .await;
-        let mut route = route_from_direct_openai("llm", "sk-test").unwrap();
-        route.upstream_base_override = Some(server.base_url());
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
-        let url = serve(build_router_with_observer(vec![route], observer)).await;
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![direct_openai_route(&server.base_url())],
+            observer,
+        ))
+        .await;
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/responses"))
@@ -1010,7 +1385,7 @@ mod tests {
         let event = receiver.try_recv().expect("completed usage observation");
         assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
         assert_eq!(event.provider, AiUsageProvider::OpenAi);
-        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::Success);
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
         assert_eq!(event.status, 200);
         assert_eq!(event.tokens.input_tokens, Some(12));
         assert_eq!(event.tokens.output_tokens, Some(7));
@@ -1022,7 +1397,7 @@ mod tests {
         let mut route = route_from_direct_openai("llm", "sk-test").unwrap();
         route.upstream_base_override = Some("http://[invalid".to_string());
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_observer(vec![route], observer)).await;
 
         let response = reqwest::Client::new()
@@ -1031,24 +1406,20 @@ mod tests {
             .send()
             .await
             .expect("gateway response");
-        assert_eq!(
-            response.status(),
-            500,
-            "gateway error must still reach caller"
-        );
+        assert_eq!(response.status(), 500);
 
         let event = receiver.try_recv().expect("gateway error observation");
         assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
-        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
+        assert_eq!(event.outcome, AiUsageOutcome::GatewayError);
         assert_eq!(event.status, 500);
-        assert_eq!(event.tokens, crate::usage::AiTokenUsage::default());
+        assert_eq!(event.tokens, AiTokenUsage::default());
     }
 
     #[tokio::test]
     async fn attributable_validation_failures_are_observed() {
         let route = route_from_direct_openai("llm", "sk-test").unwrap();
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_availability_and_observer(
             vec![route],
             HashMap::from([("llm".to_string(), HashSet::new())]),
@@ -1070,16 +1441,16 @@ mod tests {
         assert_eq!(event.public_model, "gpt-5-mini");
         assert_eq!(event.provider_model, "gpt-5-mini");
         assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
-        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
+        assert_eq!(event.outcome, AiUsageOutcome::GatewayError);
         assert_eq!(event.status, 404);
-        assert_eq!(event.tokens, crate::usage::AiTokenUsage::default());
+        assert_eq!(event.tokens, AiTokenUsage::default());
     }
 
     #[tokio::test]
     async fn incompatible_client_api_failures_are_observed() {
         let route = route_from_direct_openai("llm", "sk-test").unwrap();
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_observer(vec![route], observer)).await;
 
         let response = reqwest::Client::new()
@@ -1094,8 +1465,200 @@ mod tests {
         assert_eq!(event.provider, AiUsageProvider::OpenAi);
         assert_eq!(event.public_model, "gpt-5-mini");
         assert_eq!(event.client_api, AiUsageClientApi::AnthropicMessages);
-        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
+        assert_eq!(event.outcome, AiUsageOutcome::GatewayError);
         assert_eq!(event.status, 400);
+    }
+
+    #[tokio::test]
+    async fn databricks_responses_rewrites_the_public_model_id() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/ai-gateway/openai/v1/responses")
+                    .header("authorization", "Bearer temporary-oauth-token")
+                    .body_contains("databricks-gpt-5-6-sol");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({"id": "response", "output": []}));
+            })
+            .await;
+        let url = serve(build_router_with_availability(
+            vec![direct_databricks_route(&server.base_url())],
+            HashMap::from([(
+                "llm".to_string(),
+                HashSet::from(["gpt-5.6-sol".to_string()]),
+            )]),
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model": "gpt-5.6-sol", "input": "ping"}))
+            .send()
+            .await
+            .expect("proxy response");
+
+        assert_eq!(response.status(), 200);
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn databricks_chat_rewrites_the_public_model_id() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/serving-endpoints/databricks-gemma-3-12b/invocations")
+                    .header("authorization", "Bearer temporary-oauth-token")
+                    .body_contains("databricks-gemma-3-12b");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({"id": "completion", "choices": []}));
+            })
+            .await;
+        let url = serve(build_router_with_availability(
+            vec![direct_databricks_route(&server.base_url())],
+            HashMap::from([(
+                "llm".to_string(),
+                HashSet::from(["gemma-3-12b".to_string()]),
+            )]),
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model": "gemma-3-12b", "messages": []}))
+            .send()
+            .await
+            .expect("proxy response");
+
+        assert_eq!(response.status(), 200);
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn databricks_messages_rewrites_claude_and_forwards_version() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/ai-gateway/anthropic/v1/messages")
+                    .header("authorization", "Bearer temporary-oauth-token")
+                    .header("anthropic-version", "2023-06-01")
+                    .body_contains("databricks-claude-sonnet-5");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({"id": "message", "content": []}));
+            })
+            .await;
+        let url = serve(build_router_with_availability(
+            vec![direct_databricks_route(&server.base_url())],
+            HashMap::from([(
+                "llm".to_string(),
+                HashSet::from(["claude-sonnet-5".to_string()]),
+            )]),
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/messages"))
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({"model": "claude-sonnet-5", "max_tokens": 16, "messages": []}))
+            .send()
+            .await
+            .expect("proxy response");
+
+        assert_eq!(response.status(), 200);
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn observes_usage_from_a_completed_response_body() {
+        let server = MockServer::start_async().await;
+        let upstream = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "id": "response",
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "prompt_tokens_details": { "cached_tokens": 3 }
+                        }
+                    }));
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![direct_openai_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-4.1-mini", "messages": [] }))
+            .send()
+            .await
+            .expect("proxy response");
+        let body = response.bytes().await.expect("response body");
+        assert!(body
+            .windows(b"prompt_tokens".len())
+            .any(|part| part == b"prompt_tokens"));
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("completed usage observation");
+        assert_eq!(event.provider, AiUsageProvider::OpenAi);
+        assert_eq!(event.public_model, "gpt-4.1-mini");
+        assert_eq!(event.client_api, AiUsageClientApi::OpenAiChatCompletions);
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
+        assert_eq!(event.status, 200);
+        assert_eq!(event.tokens.input_tokens, Some(13));
+        assert_eq!(event.tokens.output_tokens, Some(5));
+        assert_eq!(event.tokens.cache_read_tokens, Some(3));
+        upstream.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn observes_sanitized_provider_failures_without_parsing_the_error_body() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(429)
+                    .header("retry-after", "2")
+                    .json_body(json!({ "secret_provider_detail": "must not escape" }));
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![direct_openai_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-4.1-mini", "messages": [] }))
+            .send()
+            .await
+            .expect("proxy response");
+        assert_eq!(response.status(), 429);
+        let body = response.text().await.expect("safe error body");
+        assert!(!body.contains("secret_provider_detail"));
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("provider error observation");
+        assert_eq!(event.outcome, AiUsageOutcome::ProviderError);
+        assert_eq!(event.status, 429);
+        assert_eq!(event.tokens, AiTokenUsage::default());
     }
 
     #[test]
@@ -1408,6 +1971,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn byo_namespace_routes_like_the_bare_model_id() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/openai/v1/chat/completions")
+                    // The namespace never reaches the provider: the body carries the
+                    // rewritten upstream id, exactly as for the bare public id.
+                    .body_contains("openai.gpt-oss-20b-1:0")
+                    .header_exists("authorization");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"cmpl-1","choices":[{"message":{"content":"pong"}}]}"#);
+            })
+            .await;
+
+        let url = serve(build_router(vec![aws_route(&server.base_url())])).await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"byo/gpt-oss-20b","messages":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(resp.status(), 200);
+        mock.assert_async().await;
+
+        // The namespace is `byo/` only — any other vendor prefix stays an unknown model,
+        // so ids never resolve to a provider the customer didn't connect.
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({"model":"openai/gpt-oss-20b","messages":[]}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
     async fn responses_only_models_are_refused_on_chat_completions() {
         // A chat-completions client will ask for one of these as soon as they list,
         // so it has to be told where to send it rather than handed the catch-all's
@@ -1465,7 +2067,7 @@ mod tests {
             .text()
             .await
             .expect("chat error body")
-            .contains("/llm/v1/messages"));
+            .contains("/v1/messages"));
 
         let openai_model_on_messages = client
             .post(format!("{url}/llm/v1/messages"))
@@ -1478,7 +2080,21 @@ mod tests {
             .text()
             .await
             .expect("messages error body")
-            .contains("/llm/v1/chat/completions"));
+            .contains("/v1/chat/completions"));
+
+        let gcp_url = serve(build_router(vec![gcp_route("global")])).await;
+        let gemini_on_responses = client
+            .post(format!("{gcp_url}/llm/v1/responses"))
+            .json(&json!({"model":"gemini-2.5-flash","input":"hi"}))
+            .send()
+            .await
+            .expect("responses request");
+        assert_eq!(gemini_on_responses.status(), 400);
+        assert!(gemini_on_responses
+            .text()
+            .await
+            .expect("responses error body")
+            .contains("/v1/chat/completions"));
 
         upstream.assert_hits_async(0).await;
     }
@@ -2276,7 +2892,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_over_responses_is_404() {
+    async fn claude_over_responses_names_the_messages_api() {
         // Claude on mantle is Messages-only; a Claude id over /v1/responses must be
         // rejected by the gateway, not forwarded.
         let server = MockServer::start_async().await;
@@ -2287,14 +2903,11 @@ mod tests {
             .send()
             .await
             .expect("proxy request");
-        assert_eq!(resp.status(), 404);
-        // The mock upstream answers unmatched requests with its own 404, so the
-        // status alone cannot prove the gateway rejected the model rather than
-        // forwarding the request — the body must carry the gateway's error code.
+        assert_eq!(resp.status(), 400);
         let body = resp.text().await.expect("response body");
         assert!(
-            body.contains("GATEWAY_MODEL_NOT_AVAILABLE"),
-            "the 404 must be the gateway's own rejection, not a forwarded upstream 404: {body}"
+            body.contains("GATEWAY_INVALID_REQUEST") && body.contains("/v1/messages"),
+            "the response must name the supported Messages endpoint: {body}"
         );
     }
 
@@ -2342,8 +2955,8 @@ mod tests {
             .collect();
 
         assert!(
-            ids.contains(&"gpt-5.6-sol"),
-            "gpt-5.6-sol must be listed: {ids:?}"
+            ids.contains(&"byo/gpt-5.6-sol"),
+            "byo/gpt-5.6-sol must be listed: {ids:?}"
         );
         assert_eq!(
             responses.hits_async().await,
@@ -2354,8 +2967,8 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|m| m["id"] == "gpt-5.6-sol")
-            .expect("gpt-5.6-sol entry");
+            .find(|m| m["id"] == "byo/gpt-5.6-sol")
+            .expect("byo/gpt-5.6-sol entry");
         assert_eq!(sol["displayName"], "GPT-5.6 Sol");
     }
 
@@ -2387,11 +3000,11 @@ mod tests {
         let data = body["data"].as_array().unwrap();
         let ids: Vec<&str> = data.iter().map(|m| m["id"].as_str().unwrap()).collect();
 
-        assert_eq!(ids, vec!["gpt-oss-20b"]);
+        assert_eq!(ids, vec!["byo/gpt-oss-20b"]);
         let gpt = data
             .iter()
-            .find(|m| m["id"] == "gpt-oss-20b")
-            .expect("gpt-oss-20b entry");
+            .find(|m| m["id"] == "byo/gpt-oss-20b")
+            .expect("byo/gpt-oss-20b entry");
         assert_eq!(gpt["provider"], "openai");
         assert_eq!(gpt["displayName"], "GPT-OSS 20B");
         assert_eq!(
@@ -2412,6 +3025,55 @@ mod tests {
             0,
             "blocked inference must stay local"
         );
+    }
+
+    #[tokio::test]
+    async fn observed_model_blockers_are_actionable_and_unknown_is_retryable() {
+        let server = MockServer::start_async().await;
+        let observed = HashMap::from([(
+            "llm".to_string(),
+            HashMap::from([
+                (
+                    "gpt-oss-20b".to_string(),
+                    ObservedModelAvailability::Blocked {
+                        reason: "provider agreement required".to_string(),
+                    },
+                ),
+                (
+                    "gpt-oss-120b".to_string(),
+                    ObservedModelAvailability::Unknown,
+                ),
+            ]),
+        )]);
+        let url = serve(build_router_with_observed_models(
+            vec![aws_route(&server.base_url())],
+            observed,
+        ))
+        .await;
+        let client = reqwest::Client::new();
+
+        let blocked = client
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-oss-20b", "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+        let blocked_body = blocked.text().await.unwrap();
+        assert!(blocked_body.contains("GATEWAY_MODEL_ACCESS_REQUIRED"));
+        assert!(blocked_body.contains("provider agreement required"));
+        assert!(blocked_body.contains("\"retryable\":false"));
+
+        let unknown = client
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-oss-120b", "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unknown.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let unknown_body = unknown.text().await.unwrap();
+        assert!(unknown_body.contains("GATEWAY_MODEL_AVAILABILITY_UNKNOWN"));
+        assert!(unknown_body.contains("\"retryable\":true"));
     }
 
     #[tokio::test]

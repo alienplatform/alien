@@ -98,6 +98,37 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// Storage credentials are missing permission for an operation.
+    #[error(
+        code = "STORAGE_ACCESS_DENIED",
+        message = "Storage access denied for binding '{binding_name}' while attempting to {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403,
+        hint = "Check that the customer's Storage connection is active and its Access identity still has the required permissions."
+    )]
+    StorageAccessDenied {
+        /// Name of the storage binding.
+        binding_name: String,
+        /// Provider-independent operation name.
+        operation: String,
+    },
+
+    /// The requested object does not exist.
+    #[error(
+        code = "STORAGE_OBJECT_NOT_FOUND",
+        message = "Storage object not found for binding '{binding_name}' while attempting to {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    StorageObjectNotFound {
+        /// Name of the storage binding.
+        binding_name: String,
+        /// Provider-independent operation name.
+        operation: String,
+    },
+
     /// Build operation failed due to provider issues.
     #[error(
         code = "BUILD_OPERATION_FAILED",

@@ -11,7 +11,9 @@ let value: APIKeyDeploymentSetupConfig = {
   },
   policy: {
     allowedPlatforms: [],
-    allowedSetupMethods: [],
+    allowedSetupMethods: [
+      "google-oauth",
+    ],
   },
   environmentVariables: [
     {
@@ -22,10 +24,10 @@ let value: APIKeyDeploymentSetupConfig = {
   ],
   items: [
     {
-      item: "models",
+      item: "keys",
       source: {
         type: "built-in",
-        definitionId: "customer-key",
+        definitionId: "customer-registry",
         version: "<value>",
         sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       },

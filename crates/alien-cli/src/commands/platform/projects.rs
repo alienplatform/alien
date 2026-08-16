@@ -90,6 +90,7 @@ async fn create_project_task(
             git_repository: None,
             root_directory: None,
             packages_config: None,
+            enabled_capabilities: Vec::new(),
         })
         .send()
         .await

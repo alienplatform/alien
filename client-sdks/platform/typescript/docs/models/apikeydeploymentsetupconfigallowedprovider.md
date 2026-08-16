@@ -11,5 +11,5 @@ let value: APIKeyDeploymentSetupConfigAllowedProvider = "gcp-vertex";
 ## Values
 
 ```typescript
-"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic"
+"aws-bedrock" | "gcp-vertex" | "azure-foundry" | "anthropic" | "databricks" | "openai"
 ```

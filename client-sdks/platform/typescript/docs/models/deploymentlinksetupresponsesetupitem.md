@@ -5,11 +5,11 @@
 ```typescript
 import { DeploymentLinkSetupResponseSetupItem } from "@alienplatform/platform-api/models";
 
-let value: DeploymentLinkSetupResponseSetupItem = "alien-stack";
+let value: DeploymentLinkSetupResponseSetupItem = "deployment";
 ```
 
 ## Values
 
 ```typescript
-"alien-stack" | "models" | "keys"
+"deployment" | "models" | "keys" | "bucket" | "registry"
 ```

@@ -142,6 +142,27 @@ pub struct RemoteBindingsHandle {
 #[cfg(feature = "platform-sdk")]
 #[napi]
 impl RemoteBindingsHandle {
+    /// Select a customer's Storage deployment by Project and external ID.
+    #[napi(factory)]
+    pub async fn for_environment(
+        project: String,
+        external_id: String,
+        token: String,
+        api_base_url: Option<String>,
+    ) -> napi::Result<Self> {
+        let bindings = RemoteBindings::for_environment(
+            &project,
+            &external_id,
+            &token,
+            api_base_url.as_deref(),
+        )
+        .await
+        .map_err(map_alien_error)?;
+        Ok(Self {
+            inner: Arc::new(bindings),
+        })
+    }
+
     /// Discover a deployment's assigned manager and create remote bindings.
     #[napi(factory)]
     pub async fn for_deployment(

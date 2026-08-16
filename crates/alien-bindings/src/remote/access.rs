@@ -25,13 +25,24 @@ const MANAGER_TOKEN_REFRESH_SKEW_SECONDS: i64 = 30;
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct RemoteBindingSource {
-    pub(super) deployment_id: String,
+    access_selector: PlatformAccessSelector,
     platform: Option<alien_platform_api::Client>,
     manager: RwLock<DiscoveredManager>,
     manager_refresh_lock: Mutex<()>,
     allow_insecure_manager_url: bool,
     manager_resolver: Arc<dyn ManagerBindingResolver>,
     clock: Arc<dyn Clock>,
+}
+
+#[derive(Debug)]
+enum PlatformAccessSelector {
+    Deployment {
+        deployment_id: String,
+    },
+    ExternalEnvironment {
+        project: String,
+        external_id: String,
+    },
 }
 
 pub(super) enum ManagerResolverKind {
@@ -55,6 +66,7 @@ pub(super) struct GeneratedManagerBindingResolver;
 
 #[derive(Clone)]
 pub(super) struct DiscoveredManager {
+    pub(super) deployment_id: String,
     pub(super) url: reqwest::Url,
     pub(super) http: reqwest::Client,
     pub(super) refresh_at: DateTime<Utc>,
@@ -75,7 +87,7 @@ impl fmt::Debug for DiscoveredManager {
 impl fmt::Debug for RemoteBindingSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RemoteBindingSource")
-            .field("deployment_id", &self.deployment_id)
+            .field("access_selector", &self.access_selector)
             .field("manager", &"<redacted>")
             .finish()
     }
@@ -111,7 +123,53 @@ impl RemoteBindingSource {
         .await?;
 
         Ok(Self {
-            deployment_id: deployment_id.to_string(),
+            access_selector: PlatformAccessSelector::Deployment {
+                deployment_id: deployment_id.to_string(),
+            },
+            platform: Some(platform),
+            manager: RwLock::new(manager),
+            manager_refresh_lock: Mutex::new(()),
+            allow_insecure_manager_url,
+            manager_resolver,
+            clock,
+        })
+    }
+
+    pub(super) async fn discover_external_environment(
+        project: &str,
+        external_id: &str,
+        platform_token: &str,
+        api_base_url: Option<&str>,
+        resolver_kind: ManagerResolverKind,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self> {
+        let base_url = api_base_url.unwrap_or(DEFAULT_PLATFORM_API_URL);
+        let allow_insecure_manager_url = match api_base_url {
+            Some(base_url) => validate_platform_base_url(base_url)?,
+            None => false,
+        };
+        let platform_http = authenticated_http_client(platform_token, "Platform API")?;
+        let platform = alien_platform_api::Client::new_with_client(base_url, platform_http);
+        let manager_resolver: Arc<dyn ManagerBindingResolver> = match resolver_kind {
+            ManagerResolverKind::Generated => Arc::new(GeneratedManagerBindingResolver),
+            #[cfg(test)]
+            ManagerResolverKind::LocalFixture => Arc::new(LocalFixtureManagerBindingResolver),
+        };
+        let manager = discover_external_environment_manager_access(
+            &platform,
+            project,
+            external_id,
+            allow_insecure_manager_url,
+            clock.as_ref(),
+            0,
+        )
+        .await?;
+
+        Ok(Self {
+            access_selector: PlatformAccessSelector::ExternalEnvironment {
+                project: project.to_string(),
+                external_id: external_id.to_string(),
+            },
             platform: Some(platform),
             manager: RwLock::new(manager),
             manager_refresh_lock: Mutex::new(()),
@@ -140,9 +198,12 @@ impl RemoteBindingSource {
         let url = validate_manager_url(manager_url, allow_insecure)?;
         let http = authenticated_http_client(manager_token, "assigned Manager")?;
         Ok(Self {
-            deployment_id: deployment_id.to_string(),
+            access_selector: PlatformAccessSelector::Deployment {
+                deployment_id: deployment_id.to_string(),
+            },
             platform: None,
             manager: RwLock::new(DiscoveredManager {
+                deployment_id: deployment_id.to_string(),
                 url,
                 http,
                 refresh_at: expires_at,
@@ -183,14 +244,32 @@ impl RemoteBindingSource {
             })
         })?;
         let next_generation = self.manager.read().await.generation.wrapping_add(1);
-        let manager = discover_manager_access(
-            platform,
-            &self.deployment_id,
-            self.allow_insecure_manager_url,
-            self.clock.as_ref(),
-            next_generation,
-        )
-        .await?;
+        let manager = match &self.access_selector {
+            PlatformAccessSelector::Deployment { deployment_id } => {
+                discover_manager_access(
+                    platform,
+                    deployment_id,
+                    self.allow_insecure_manager_url,
+                    self.clock.as_ref(),
+                    next_generation,
+                )
+                .await?
+            }
+            PlatformAccessSelector::ExternalEnvironment {
+                project,
+                external_id,
+            } => {
+                discover_external_environment_manager_access(
+                    platform,
+                    project,
+                    external_id,
+                    self.allow_insecure_manager_url,
+                    self.clock.as_ref(),
+                    next_generation,
+                )
+                .await?
+            }
+        };
         *self.manager.write().await = manager.clone();
         Ok(manager)
     }
@@ -222,14 +301,14 @@ impl RemoteBindingSource {
         let manager = self.manager_access().await?;
         match self
             .manager_resolver
-            .resolve(&manager, &self.deployment_id, selector)
+            .resolve(&manager, &manager.deployment_id, selector)
             .await
         {
             Ok(binding) => Ok(binding),
             Err(error) if self.platform.is_some() && is_auth_or_assignment_rejection(&error) => {
                 let manager = self.refresh_after_rejection(manager.generation).await?;
                 self.manager_resolver
-                    .resolve(&manager, &self.deployment_id, selector)
+                    .resolve(&manager, &manager.deployment_id, selector)
                     .await
             }
             Err(error) => Err(error),
@@ -386,6 +465,64 @@ async fn discover_manager_access(
         .min(MANAGER_ACCESS_MAX_AGE_SECONDS * 1_000);
 
     Ok(DiscoveredManager {
+        deployment_id: deployment_id.to_string(),
+        url: manager_url,
+        http,
+        refresh_at: requested_at + ChronoDuration::milliseconds(refresh_delay_millis),
+        generation,
+    })
+}
+
+async fn discover_external_environment_manager_access(
+    platform: &alien_platform_api::Client,
+    project: &str,
+    external_id: &str,
+    allow_insecure: bool,
+    clock: &dyn Clock,
+    generation: u64,
+) -> Result<DiscoveredManager> {
+    let requested_at = clock.now();
+    let response = platform
+        .create_remote_bindings_external_access()
+        .id_or_name(project)
+        .body(
+            alien_platform_api::types::RemoteBindingsExternalAccessRequest::builder()
+                .capability(
+                    alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability::Storage,
+                )
+                .external_id(external_id),
+        )
+        .send()
+        .await
+        .into_sdk_error()
+        .map_err(into_remote_error)?
+        .into_inner();
+
+    let expires_in = response.expires_in.ok_or_else(|| {
+        invalid_manager_access_response("external environment access response omitted its expiry")
+    })?;
+    let lifetime_millis = positive_duration_millis(expires_in).ok_or_else(|| {
+        invalid_manager_access_response(
+            "external environment access response has an invalid expiry",
+        )
+    })?;
+    if response.access_token.trim().is_empty() {
+        return Err(invalid_manager_access_response(
+            "external environment access response returned an empty token",
+        ));
+    }
+    let manager_url = validate_manager_url(&response.manager_url, allow_insecure)?;
+    let http = authenticated_http_client(&response.access_token, "manager binding API")?;
+    let skew_millis = lifetime_millis
+        .saturating_div(5)
+        .min(MANAGER_TOKEN_REFRESH_SKEW_SECONDS * 1_000)
+        .max(1);
+    let refresh_delay_millis = lifetime_millis
+        .saturating_sub(skew_millis)
+        .min(MANAGER_ACCESS_MAX_AGE_SECONDS * 1_000);
+
+    Ok(DiscoveredManager {
+        deployment_id: response.deployment_id.to_string(),
         url: manager_url,
         http,
         refresh_at: requested_at + ChronoDuration::milliseconds(refresh_delay_millis),

@@ -1,6 +1,6 @@
 # GetResourceDeploymentDetailResponse
 
-Latest heartbeat detail for one compute resource deployment.
+Latest heartbeat detail for one resource deployment.
 
 ## Example Usage
 

@@ -8,7 +8,7 @@ import { CreateProjectModels } from "@alienplatform/platform-api/models/operatio
 let value: CreateProjectModels = {
   enabled: true,
   allowedProviders: [
-    "aws-bedrock",
+    "gcp-vertex",
   ],
   requirements: [],
 };

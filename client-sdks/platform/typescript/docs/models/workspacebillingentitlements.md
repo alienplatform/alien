@@ -11,20 +11,21 @@ let value: WorkspaceBillingEntitlements = {
   features: {
     customDomains: true,
     privateManagers: false,
-    ssoSaml: false,
+    operationsCustomPlugins: false,
+    ssoSaml: true,
     auditLogs: true,
     airgapped: true,
   },
   limits: {
-    maxDeployments: 1611.31,
-    maxProjects: 4036.58,
-    maxSeats: 9607.5,
-    maxCustomDomains: 9208.96,
-    creditUsd: 7075.2,
-    seatsIncluded: 7490.77,
+    maxDeployments: 1385.32,
+    maxProjects: 3144.64,
+    maxSeats: 3743.19,
+    maxCustomDomains: 7182.98,
+    creditUsd: 2481.03,
+    seatsIncluded: 863.33,
   },
-  syncedAt: null,
-  stale: true,
+  syncedAt: new Date("2025-01-06T04:12:40.643Z"),
+  stale: false,
 };
 ```
 

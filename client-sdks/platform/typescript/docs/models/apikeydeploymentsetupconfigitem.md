@@ -6,10 +6,10 @@
 import { APIKeyDeploymentSetupConfigItem } from "@alienplatform/platform-api/models";
 
 let value: APIKeyDeploymentSetupConfigItem = {
-  item: "alien-stack",
+  item: "deployment",
   source: {
     type: "built-in",
-    definitionId: "customer-ai",
+    definitionId: "customer-key",
     version: "<value>",
     sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   },

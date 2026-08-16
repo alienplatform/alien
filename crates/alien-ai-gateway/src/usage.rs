@@ -33,6 +33,7 @@ pub enum AiUsageProvider {
     GcpVertex,
     AzureFoundry,
     Anthropic,
+    Databricks,
     #[serde(rename = "openai")]
     OpenAi,
 }

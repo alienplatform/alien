@@ -61,7 +61,7 @@ fn put_options(
             Some(other) => {
                 return Err(napi::Error::from_reason(format!(
                     "unsupported KV put condition '{other}'"
-                )))
+                )));
             }
         };
     if ttl_secs.is_none() && matches!(condition, PutCondition::None) {

@@ -71,6 +71,26 @@ pub struct DirectAnthropicModel {
     pub upstream_id: &'static str,
 }
 
+/// One OpenAI model qualified through the Gateway's direct-provider route.
+///
+/// OpenAI's account model listing also contains embeddings, image, audio,
+/// moderation, realtime, and other APIs. Keep this list explicit so
+/// `GET /v1/models` never claims that an observed provider model is callable
+/// through Chat Completions or Responses when it is not.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectOpenAiModel {
+    pub public_id: &'static str,
+    pub client_apis: &'static [ClientApi],
+}
+
+/// One Databricks-hosted model service qualified through Unity AI Gateway.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectDatabricksModel {
+    pub public_id: &'static str,
+    pub upstream_id: &'static str,
+    pub client_apis: &'static [ClientApi],
+}
+
 impl DirectAnthropicModel {
     pub fn display_name(&self) -> &'static str {
         resolve(self.public_id)
@@ -131,7 +151,6 @@ impl CatalogModel {
             "deepseek-v3.2" => "DeepSeek V3.2",
             "qwen3-32b" => "Qwen3 32B",
             "qwen3-coder-30b" => "Qwen3 Coder 30B",
-            "qwen3-coder-next" => "Qwen3 Coder Next",
             "qwen3-next-80b" => "Qwen3 Next 80B",
             "qwen3-vl-235b" => "Qwen3 VL 235B",
             "mistral-large-3" => "Mistral Large 3",
@@ -161,14 +180,10 @@ impl CatalogModel {
             "claude-opus-4.7" => "Claude Opus 4.7",
             "claude-opus-4.6" => "Claude Opus 4.6",
             "claude-opus-4.5" => "Claude Opus 4.5",
-            "claude-opus-4.1" => "Claude Opus 4.1",
             "claude-sonnet-4.6" => "Claude Sonnet 4.6",
             "claude-sonnet-4.5" => "Claude Sonnet 4.5",
             "claude-haiku-4.5" => "Claude Haiku 4.5",
             "claude-fable-5" => "Claude Fable 5",
-            "claude-mythos-5" => "Claude Mythos 5",
-            "claude-sonnet-4" => "Claude Sonnet 4",
-            "claude-3-haiku" => "Claude 3 Haiku",
             "gemini-2.5-pro" => "Gemini 2.5 Pro",
             "gemini-2.5-flash" => "Gemini 2.5 Flash",
             "gemini-2.5-flash-lite" => "Gemini 2.5 Flash Lite",
@@ -289,13 +304,6 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "qwen3-coder-30b",
         cloud: Platform::Aws,
         upstream_id: "qwen.qwen3-coder-30b-a3b-v1:0",
-        client_apis: &[ClientApi::OpenAiChatCompletions],
-        provider_api: ProviderApi::OpenAi,
-    },
-    CatalogModel {
-        public_id: "qwen3-coder-next",
-        cloud: Platform::Aws,
-        upstream_id: "qwen.qwen3-coder-next",
         client_apis: &[ClientApi::OpenAiChatCompletions],
         provider_api: ProviderApi::OpenAi,
     },
@@ -509,13 +517,6 @@ static CATALOG: &[CatalogModel] = &[
         provider_api: ProviderApi::Anthropic,
     },
     CatalogModel {
-        public_id: "claude-opus-4.1",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-opus-4-1-20250805-v1:0",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
         public_id: "claude-sonnet-4.6",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-sonnet-4-6",
@@ -540,27 +541,6 @@ static CATALOG: &[CatalogModel] = &[
         public_id: "claude-fable-5",
         cloud: Platform::Aws,
         upstream_id: "anthropic.claude-fable-5",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
-        public_id: "claude-mythos-5",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-mythos-5",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
-        public_id: "claude-sonnet-4",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-sonnet-4-20250514-v1:0",
-        client_apis: &[ClientApi::AnthropicMessages],
-        provider_api: ProviderApi::Anthropic,
-    },
-    CatalogModel {
-        public_id: "claude-3-haiku",
-        cloud: Platform::Aws,
-        upstream_id: "anthropic.claude-3-haiku-20240307-v1:0",
         client_apis: &[ClientApi::AnthropicMessages],
         provider_api: ProviderApi::Anthropic,
     },
@@ -605,6 +585,13 @@ static CATALOG: &[CatalogModel] = &[
     // in the `:rawPredict` URL path (`publishers/anthropic/models/<id>`); models past
     // Sonnet 4.5 carry no date suffix, older ones keep an `@<date>` version. Needs
     // Claude model access granted on the deployment's project.
+    CatalogModel {
+        public_id: "claude-opus-5",
+        cloud: Platform::Gcp,
+        upstream_id: "claude-opus-5",
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
+    },
     CatalogModel {
         public_id: "claude-sonnet-5",
         cloud: Platform::Gcp,
@@ -700,6 +687,13 @@ static CATALOG: &[CatalogModel] = &[
     // in the catalog as the deployment-name mapping. The resource heartbeat lists
     // actual deployments, so the gateway omits Claude until that deployment exists.
     CatalogModel {
+        public_id: "claude-opus-5",
+        cloud: Platform::Azure,
+        upstream_id: "claude-opus-5",
+        client_apis: &[ClientApi::AnthropicMessages],
+        provider_api: ProviderApi::Anthropic,
+    },
+    CatalogModel {
         public_id: "claude-sonnet-5",
         cloud: Platform::Azure,
         upstream_id: "claude-sonnet-5",
@@ -767,7 +761,7 @@ static CATALOG: &[CatalogModel] = &[
 /// Changes whenever public model ids or their supported client APIs change.
 /// Heartbeat consumers use this to distinguish an old observation from a
 /// current catalog without duplicating the catalog in durable state.
-pub const AI_CATALOG_REVISION: &str = "2026-08-05.1";
+pub const AI_CATALOG_REVISION: &str = "2026-08-09.1";
 
 /// Azure deployments to create at provision time: (deployment name, model name,
 /// model version). The deployment name is the catalog `upstream_id`. The version
@@ -806,10 +800,6 @@ static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
         upstream_id: "claude-opus-4-5",
     },
     DirectAnthropicModel {
-        public_id: "claude-opus-4.1",
-        upstream_id: "claude-opus-4-1-20250805",
-    },
-    DirectAnthropicModel {
         public_id: "claude-sonnet-4.6",
         upstream_id: "claude-sonnet-4-6",
     },
@@ -825,17 +815,198 @@ static DIRECT_ANTHROPIC_MODELS: &[DirectAnthropicModel] = &[
         public_id: "claude-fable-5",
         upstream_id: "claude-fable-5",
     },
-    DirectAnthropicModel {
-        public_id: "claude-mythos-5",
-        upstream_id: "claude-mythos-5",
+];
+
+/// Direct OpenAI models qualified end to end through the Gateway.
+///
+/// Add a model only after exercising every client API listed for it against a
+/// real provider account. Provider discovery is then used as the account-level
+/// availability filter; discovery alone is not sufficient to expose a model.
+///
+/// Every entry below was exercised live (2026-08-09) against both
+/// `/v1/chat/completions` and `/v1/responses`. Note the GPT-5 family answers
+/// both APIs here, unlike on bedrock-mantle where it is Responses-only.
+static DIRECT_OPENAI_MODELS: &[DirectOpenAiModel] = &[
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-sol",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
     },
-    DirectAnthropicModel {
-        public_id: "claude-sonnet-4",
-        upstream_id: "claude-sonnet-4-20250514",
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-terra",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
     },
-    DirectAnthropicModel {
-        public_id: "claude-3-haiku",
-        upstream_id: "claude-3-haiku-20240307",
+    DirectOpenAiModel {
+        public_id: "gpt-5.6-luna",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.5",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-5.4",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-4.1",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-4.1-mini",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectOpenAiModel {
+        public_id: "gpt-4o-mini",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+];
+
+/// Generally available Databricks-hosted text-generation models that have an
+/// exact Alien public-model ID, reviewed against Databricks' supported-models
+/// catalog on 2026-08-10. Preview, deprecated, embedding, and image-generation
+/// models are intentionally excluded. Credential verification is separate from
+/// model access: Databricks can accept OAuth while a service is disabled by quota.
+/// Source: <https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models>
+static DIRECT_DATABRICKS_MODELS: &[DirectDatabricksModel] = &[
+    DirectDatabricksModel {
+        public_id: "gpt-5.6-sol",
+        upstream_id: "databricks-gpt-5-6-sol",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.6-terra",
+        upstream_id: "databricks-gpt-5-6-terra",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.6-luna",
+        upstream_id: "databricks-gpt-5-6-luna",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.5",
+        upstream_id: "databricks-gpt-5-5",
+        client_apis: &[ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-5.4",
+        upstream_id: "databricks-gpt-5-4",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-haiku-4.5",
+        upstream_id: "databricks-claude-haiku-4-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-5",
+        upstream_id: "system.ai.claude-opus-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-sonnet-5",
+        upstream_id: "databricks-claude-sonnet-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-sonnet-4.6",
+        upstream_id: "databricks-claude-sonnet-4-6",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-sonnet-4.5",
+        upstream_id: "databricks-claude-sonnet-4-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-fable-5",
+        upstream_id: "databricks-claude-fable-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.8",
+        upstream_id: "databricks-claude-opus-4-8",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.7",
+        upstream_id: "databricks-claude-opus-4-7",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.6",
+        upstream_id: "databricks-claude-opus-4-6",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "claude-opus-4.5",
+        upstream_id: "databricks-claude-opus-4-5",
+        client_apis: &[
+            ClientApi::OpenAiChatCompletions,
+            ClientApi::OpenAiResponses,
+            ClientApi::AnthropicMessages,
+        ],
+    },
+    DirectDatabricksModel {
+        public_id: "gemini-3.5-flash",
+        upstream_id: "databricks-gemini-3-5-flash",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gemini-3.1-flash-lite",
+        upstream_id: "databricks-gemini-3-1-flash-lite",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-oss-120b",
+        upstream_id: "databricks-gpt-oss-120b",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gpt-oss-20b",
+        upstream_id: "databricks-gpt-oss-20b",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
+    },
+    DirectDatabricksModel {
+        public_id: "gemma-3-12b",
+        upstream_id: "databricks-gemma-3-12b",
+        client_apis: &[ClientApi::OpenAiChatCompletions, ClientApi::OpenAiResponses],
     },
 ];
 
@@ -924,6 +1095,26 @@ pub fn direct_anthropic_models() -> Vec<&'static DirectAnthropicModel> {
 
 pub fn resolve_direct_anthropic(public_id: &str) -> Option<&'static DirectAnthropicModel> {
     DIRECT_ANTHROPIC_MODELS
+        .iter()
+        .find(|model| model.public_id == public_id)
+}
+
+pub fn direct_openai_models() -> Vec<&'static DirectOpenAiModel> {
+    DIRECT_OPENAI_MODELS.iter().collect()
+}
+
+pub fn resolve_direct_openai(public_id: &str) -> Option<&'static DirectOpenAiModel> {
+    DIRECT_OPENAI_MODELS
+        .iter()
+        .find(|model| model.public_id == public_id)
+}
+
+pub fn direct_databricks_models() -> Vec<&'static DirectDatabricksModel> {
+    DIRECT_DATABRICKS_MODELS.iter().collect()
+}
+
+pub fn resolve_direct_databricks(public_id: &str) -> Option<&'static DirectDatabricksModel> {
+    DIRECT_DATABRICKS_MODELS
         .iter()
         .find(|model| model.public_id == public_id)
 }
@@ -1067,6 +1258,56 @@ mod tests {
             assert_ne!(model.display_name(), model.public_id);
         }
         assert!(resolve_direct_anthropic("claude-not-real").is_none());
+    }
+
+    #[test]
+    fn direct_openai_models_are_unique_and_have_qualified_apis() {
+        let mut public_ids = std::collections::HashSet::new();
+        for model in DIRECT_OPENAI_MODELS {
+            assert!(public_ids.insert(model.public_id));
+            assert!(!model.client_apis.is_empty());
+            assert_eq!(
+                resolve_direct_openai(model.public_id)
+                    .expect("direct model must resolve")
+                    .client_apis,
+                model.client_apis
+            );
+        }
+        assert!(resolve_direct_openai("text-embedding-3-small").is_none());
+        assert!(resolve_direct_openai("gpt-image-1").is_none());
+    }
+
+    #[test]
+    fn direct_databricks_models_are_unique_and_resolve_to_provider_ids() {
+        let mut public_ids = std::collections::HashSet::new();
+        for model in DIRECT_DATABRICKS_MODELS {
+            assert!(public_ids.insert(model.public_id));
+            assert!(
+                model.upstream_id.starts_with("databricks-")
+                    || model.upstream_id.starts_with("system.ai.")
+            );
+            assert!(!model.client_apis.is_empty());
+            assert_eq!(
+                resolve_direct_databricks(model.public_id)
+                    .expect("direct Databricks model must resolve")
+                    .upstream_id,
+                model.upstream_id
+            );
+        }
+        assert!(resolve_direct_databricks("bge-large-en").is_none());
+        assert!(resolve_direct_databricks("databricks-genie").is_none());
+        assert_eq!(
+            resolve_direct_databricks("claude-opus-5")
+                .expect("Claude Opus 5 must resolve")
+                .upstream_id,
+            "system.ai.claude-opus-5"
+        );
+        assert_eq!(
+            resolve_direct_databricks("gpt-5.5")
+                .expect("GPT-5.5 must resolve")
+                .client_apis,
+            &[ClientApi::OpenAiResponses]
+        );
     }
 
     use super::*;
