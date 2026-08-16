@@ -148,10 +148,15 @@ fn generate_auto_management_profile(
             }
             ResourceLifecycle::Frozen if policy.requires_management_permissions() => {
                 let permission = format!("{}/management", permission_resource_type);
-                if resource_type == "key" {
+                if resource_type == "key" || resource_type == Sandbox::RESOURCE_TYPE.as_ref() {
                     // Key metadata access must name the exact customer key.
                     // The Key emitter binds this permission after setup knows
                     // the provider resource identifier.
+                    //
+                    // A sandbox names its own group for the same shape of reason: an Azure RBAC
+                    // scope has to name a concrete resource, so the stack-level scope would be the
+                    // whole resource group, and there this grant would let a holder terminate
+                    // sessions in a sibling sandbox group.
                     resource_permission_set_ids
                         .entry(resource_id.clone())
                         .or_default()
