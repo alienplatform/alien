@@ -714,7 +714,7 @@ jobs:
   publish-client-sdks:
     needs: [prepare]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -737,7 +737,7 @@ jobs:
         if: ${{ inputs.stable_action == 'qualification' }}
         working-directory: client-sdks/platform/typescript
         env:
-          NODE_OPTIONS: "--max-old-space-size=8192"
+          NODE_OPTIONS: "--max-old-space-size=14336"
         run: |
           npm install
           npm run build
