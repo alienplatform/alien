@@ -414,12 +414,6 @@ async fn proxy(
     // resolve would always land on another cloud's entry and fail the cloud filter.
     match route.target {
         GatewayTarget::DirectAnthropic => {
-            ensure_model_available(&state, &binding, &model)?;
-            if client_api != ClientApi::AnthropicMessages {
-                return Err(AlienError::new(ErrorData::InvalidRequest {
-                    message: format!("direct Anthropic supports only /{binding}/v1/messages"),
-                }));
-            }
             let provider_model = ai_catalog::resolve_direct_anthropic(&model)
                 .map(|resolved| resolved.upstream_id)
                 .unwrap_or(model.as_str());
@@ -431,19 +425,23 @@ async fn proxy(
                 usage_client_api(client_api),
                 None,
             );
+            let validation = ensure_model_available(&state, &binding, &model).and_then(|()| {
+                if client_api == ClientApi::AnthropicMessages {
+                    Ok(())
+                } else {
+                    Err(AlienError::new(ErrorData::InvalidRequest {
+                        message: format!("direct Anthropic supports only /{binding}/v1/messages"),
+                    }))
+                }
+            });
+            if let Err(error) = validation {
+                return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+            }
             let response =
                 proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await;
             return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
         GatewayTarget::DirectOpenAi => {
-            ensure_model_available(&state, &binding, &model)?;
-            if client_api != ClientApi::OpenAiChatCompletions {
-                return Err(AlienError::new(ErrorData::InvalidRequest {
-                    message: format!(
-                        "direct OpenAI chat completions use /{binding}/v1/chat/completions"
-                    ),
-                }));
-            }
             let descriptor = AiUsageContext::new(
                 &binding,
                 AiUsageProvider::OpenAi,
@@ -452,6 +450,20 @@ async fn proxy(
                 usage_client_api(client_api),
                 None,
             );
+            let validation = ensure_model_available(&state, &binding, &model).and_then(|()| {
+                if client_api == ClientApi::OpenAiChatCompletions {
+                    Ok(())
+                } else {
+                    Err(AlienError::new(ErrorData::InvalidRequest {
+                        message: format!(
+                            "direct OpenAI chat completions use /{binding}/v1/chat/completions"
+                        ),
+                    }))
+                }
+            });
+            if let Err(error) = validation {
+                return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+            }
             let response = proxy_direct_openai(
                 &state.client,
                 route,
@@ -476,7 +488,6 @@ async fn proxy(
             binding: binding.clone(),
         })
     })?;
-    ensure_model_available(&state, &binding, &model)?;
 
     let descriptor = AiUsageContext::new(
         &binding,
@@ -487,6 +498,10 @@ async fn proxy(
         route.region.clone(),
     );
 
+    if let Err(error) = ensure_model_available(&state, &binding, &model) {
+        return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+    }
+
     if !cm.client_apis.contains(&client_api) {
         let expected_path = match cm.client_apis.first() {
             Some(ClientApi::OpenAiChatCompletions) => "v1/chat/completions",
@@ -494,11 +509,12 @@ async fn proxy(
             Some(ClientApi::OpenAiResponses) => "v1/responses",
             None => "v1/models",
         };
-        return Err(AlienError::new(ErrorData::InvalidRequest {
+        let error = AlienError::new(ErrorData::InvalidRequest {
             message: format!(
                 "model `{model}` is not supported by this client API; send it to /{binding}/{expected_path}"
             ),
-        }));
+        });
+        return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
     }
 
     // AWS serves Claude through classic Bedrock InvokeModel, not the passthrough
@@ -580,7 +596,6 @@ async fn proxy_responses(
             }))
         }
         GatewayTarget::DirectOpenAi => {
-            ensure_model_available(&state, &binding, &model)?;
             let descriptor = AiUsageContext::new(
                 &binding,
                 AiUsageProvider::OpenAi,
@@ -589,6 +604,9 @@ async fn proxy_responses(
                 AiUsageClientApi::OpenAiResponses,
                 None,
             );
+            if let Err(error) = ensure_model_available(&state, &binding, &model) {
+                return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+            }
             let response =
                 proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await;
             return observe_result(response, state.usage_observer.as_ref(), descriptor);
@@ -602,7 +620,6 @@ async fn proxy_responses(
                 binding: binding.clone(),
             })
         })?;
-    ensure_model_available(&state, &binding, &model)?;
     let target = ai_catalog::responses_target(catalog_model.public_id).ok_or_else(|| {
         AlienError::new(ErrorData::ModelNotAvailable {
             model: model.clone(),
@@ -617,6 +634,10 @@ async fn proxy_responses(
         AiUsageClientApi::OpenAiResponses,
         route.region.clone(),
     );
+
+    if let Err(error) = ensure_model_available(&state, &binding, &model) {
+        return observe_result(Err(error), state.usage_observer.as_ref(), descriptor);
+    }
 
     let response = async {
         payload["model"] = Value::String(target.upstream_id.to_string());
@@ -1021,6 +1042,60 @@ mod tests {
         assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
         assert_eq!(event.status, 500);
         assert_eq!(event.tokens, crate::usage::AiTokenUsage::default());
+    }
+
+    #[tokio::test]
+    async fn attributable_validation_failures_are_observed() {
+        let route = route_from_direct_openai("llm", "sk-test").unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let url = serve(build_router_with_availability_and_observer(
+            vec![route],
+            HashMap::from([("llm".to_string(), HashSet::new())]),
+            observer,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model": "gpt-5-mini", "input": "hi"}))
+            .send()
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), 404);
+
+        let event = receiver.try_recv().expect("validation error observation");
+        assert_eq!(event.binding, "llm");
+        assert_eq!(event.provider, AiUsageProvider::OpenAi);
+        assert_eq!(event.public_model, "gpt-5-mini");
+        assert_eq!(event.provider_model, "gpt-5-mini");
+        assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
+        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
+        assert_eq!(event.status, 404);
+        assert_eq!(event.tokens, crate::usage::AiTokenUsage::default());
+    }
+
+    #[tokio::test]
+    async fn incompatible_client_api_failures_are_observed() {
+        let route = route_from_direct_openai("llm", "sk-test").unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let url = serve(build_router_with_observer(vec![route], observer)).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/messages"))
+            .json(&json!({"model": "gpt-5-mini", "messages": []}))
+            .send()
+            .await
+            .expect("gateway response");
+        assert_eq!(response.status(), 400);
+
+        let event = receiver.try_recv().expect("validation error observation");
+        assert_eq!(event.provider, AiUsageProvider::OpenAi);
+        assert_eq!(event.public_model, "gpt-5-mini");
+        assert_eq!(event.client_api, AiUsageClientApi::AnthropicMessages);
+        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
+        assert_eq!(event.status, 400);
     }
 
     #[test]
