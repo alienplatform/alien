@@ -618,12 +618,13 @@ async fn proxy(
             }
             let response = match client_api {
                 ClientApi::OpenAiChatCompletions => {
+                    let path = format!("/serving-endpoints/{provider_model}/invocations");
                     proxy_direct_openai(
                         &state.client,
                         route,
                         payload,
                         provider_model,
-                        "/ai-gateway/mlflow/v1/chat/completions",
+                        &path,
                     )
                     .await
                 }
@@ -821,7 +822,7 @@ async fn proxy_responses(
                 route,
                 payload,
                 &provider_model,
-                "/ai-gateway/mlflow/v1/responses",
+                "/ai-gateway/openai/v1/responses",
             )
             .await;
             return observe_result(response, state.usage_observer.as_ref(), descriptor);
@@ -1474,7 +1475,7 @@ mod tests {
         let upstream = server
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/ai-gateway/mlflow/v1/responses")
+                    .path("/ai-gateway/openai/v1/responses")
                     .header("authorization", "Bearer temporary-oauth-token")
                     .body_contains("databricks-gpt-5-6-sol");
                 then.status(200)
@@ -1508,7 +1509,7 @@ mod tests {
         let upstream = server
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/ai-gateway/mlflow/v1/chat/completions")
+                    .path("/serving-endpoints/databricks-gemma-3-12b/invocations")
                     .header("authorization", "Bearer temporary-oauth-token")
                     .body_contains("databricks-gemma-3-12b");
                 then.status(200)
