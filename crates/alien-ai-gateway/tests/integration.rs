@@ -10,8 +10,8 @@
 use std::net::Ipv4Addr;
 
 use alien_ai_gateway::{
-    build_router, route_from_direct_anthropic, AmbientCred, AwsSigV4Cred, BearerTokenCred,
-    GatewayRoute, GatewayTarget,
+    build_router, route_from_direct_anthropic, route_from_direct_openai, AmbientCred, AwsSigV4Cred,
+    BearerTokenCred, GatewayRoute, GatewayTarget,
 };
 use alien_core::Platform;
 use aws_credential_types::provider::SharedCredentialsProvider;
@@ -302,4 +302,64 @@ async fn direct_anthropic_is_fixed_to_messages_and_injects_only_its_api_key() {
     assert_eq!(messages.hits_async().await, 1);
 
     assert!(route_from_direct_anthropic("direct", "sk-ant-admin-test").is_err());
+}
+
+#[tokio::test]
+async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
+    let upstream = MockServer::start_async().await;
+    let chat = upstream
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/chat/completions")
+                .header("authorization", "Bearer sk-proj-test-secret")
+                .body_contains("gpt-5");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"chat_direct","choices":[]}"#);
+        })
+        .await;
+    let responses = upstream
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/responses")
+                .header("authorization", "Bearer sk-proj-test-secret")
+                .body_contains("gpt-5");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"resp_direct","output":[]}"#);
+        })
+        .await;
+
+    let mut route =
+        route_from_direct_openai("direct", "sk-proj-test-secret").expect("valid API key");
+    route.upstream_base_override = Some(upstream.base_url());
+    let base = serve(build_router(vec![route])).await;
+    let client = reqwest::Client::new();
+
+    let chat_response = client
+        .post(format!("{base}/direct/v1/chat/completions"))
+        .json(&json!({"model": "gpt-5", "messages": []}))
+        .send()
+        .await
+        .expect("chat request");
+    assert_eq!(chat_response.status(), 200);
+
+    let responses_response = client
+        .post(format!("{base}/direct/v1/responses"))
+        .json(&json!({"model": "gpt-5", "input": "hello"}))
+        .send()
+        .await
+        .expect("responses request");
+    assert_eq!(responses_response.status(), 200);
+
+    let wrong_protocol = client
+        .post(format!("{base}/direct/v1/messages"))
+        .json(&json!({"model": "gpt-5", "messages": []}))
+        .send()
+        .await
+        .expect("wrong protocol response");
+    assert_eq!(wrong_protocol.status(), 400);
+    chat.assert_async().await;
+    responses.assert_async().await;
+    assert!(route_from_direct_openai("direct", "contains whitespace").is_err());
 }

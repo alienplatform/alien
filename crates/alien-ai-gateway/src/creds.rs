@@ -127,6 +127,9 @@ pub enum AmbientCred {
     /// A direct Anthropic workspace key. Kept separate from bearer credentials so
     /// it can only be emitted as `x-api-key`, never as an Authorization header.
     AnthropicApiKey(AnthropicApiKeyCred),
+    /// A direct OpenAI project key. Kept separate from cloud bearer tokens so
+    /// static provider credentials cannot be resolved through metadata paths.
+    OpenAiApiKey(OpenAiApiKeyCred),
 }
 
 impl AmbientCred {
@@ -142,7 +145,39 @@ impl AmbientCred {
             AmbientCred::Aws(c) => c.sign(req, aws_sigv4_service).await,
             AmbientCred::Bearer(c) => c.attach(req).await,
             AmbientCred::AnthropicApiKey(c) => c.attach(req),
+            AmbientCred::OpenAiApiKey(c) => c.attach(req),
         }
+    }
+}
+
+/// A standard OpenAI API key. This type deliberately has no `Debug`
+/// implementation so accidental structured logging cannot print the key.
+pub struct OpenAiApiKeyCred {
+    key: String,
+}
+
+impl OpenAiApiKeyCred {
+    pub fn new(key: impl Into<String>) -> Result<Self> {
+        let key = key.into();
+        if key.is_empty() || key.bytes().any(|byte| byte.is_ascii_whitespace()) {
+            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                binding: "openai".to_string(),
+                message: "a valid OpenAI API key is required".to_string(),
+            }));
+        }
+        Ok(Self { key })
+    }
+
+    fn attach(&self, req: &mut reqwest::Request) -> Result<()> {
+        let value = HeaderValue::from_str(&format!("Bearer {}", self.key))
+            .into_alien_error()
+            .context(ErrorData::BindingConfigInvalid {
+                binding: "openai".to_string(),
+                message: "the OpenAI API key is not a valid HTTP header".to_string(),
+            })?;
+        req.headers_mut()
+            .insert(HeaderName::from_static("authorization"), value);
+        Ok(())
     }
 }
 

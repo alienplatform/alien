@@ -22,13 +22,33 @@
 use crate::error::{ErrorData, Result};
 use alien_core::BinaryTarget;
 use alien_error::{AlienError, Context, IntoAlienError};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use fs2::FileExt;
+use serde::Deserialize;
+use sha2::{Digest, Sha512};
 use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::info;
+
+#[derive(Deserialize)]
+struct PackageManifest {
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct NpmVersionMetadata {
+    dist: NpmDist,
+}
+
+#[derive(Deserialize)]
+struct NpmDist {
+    tarball: String,
+    integrity: String,
+}
 
 /// The native-asset shape a package embeds into a compiled binary.
 enum AddonKind {
@@ -104,6 +124,211 @@ fn napi_triple(target: BinaryTarget) -> Option<&'static str> {
         // No Windows prebuild is published for the bindings addon.
         BinaryTarget::WindowsX64 => None,
     }
+}
+
+/// Download one target-native asset from its published npm prebuild package.
+///
+/// Package managers intentionally skip optional dependencies whose `os`/`cpu`
+/// selectors do not match the host. Alien cross-builds for Linux from macOS,
+/// so the target prebuild is often absent even though the JavaScript wrapper
+/// is installed correctly. Fetch only the requested target package, verify its
+/// npm integrity, and cache the single asset outside the application.
+async fn fetch_published_asset(
+    addon_dist: &Path,
+    spec: &NativeAddonSpec,
+    triple: &str,
+    asset_name: &str,
+    resource_name: &str,
+) -> Result<Option<PathBuf>> {
+    let package_root = addon_dist.parent().ok_or_else(|| {
+        AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!(
+                "Resolved {} directory '{}' has no package root",
+                spec.package,
+                addon_dist.display()
+            ),
+            build_output: None,
+        })
+    })?;
+    let manifest_path = package_root.join("package.json");
+    // Unit-test fixtures and linked development packages may expose only the
+    // resolved native entry. Without a published wrapper version there is no
+    // safe target package to download; preserve the normal local-source path.
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let manifest: PackageManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).await.into_alien_error().context(
+            ErrorData::FileOperationFailed {
+                operation: "read".to_string(),
+                file_path: manifest_path.display().to_string(),
+                reason: format!("Failed to read the installed {} version", spec.package),
+            },
+        )?)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "parse".to_string(),
+            file_path: manifest_path.display().to_string(),
+            reason: format!("Failed to parse the installed {} manifest", spec.package),
+        })?;
+
+    let target_package = format!("{}-{triple}", spec.package);
+    let cache_root = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("alien")
+        .join("native-assets")
+        .join(spec.scoped_name)
+        .join(&manifest.version)
+        .join(triple);
+    let cached = cache_root.join(asset_name);
+    if cached.is_file() {
+        return Ok(Some(cached));
+    }
+
+    let encoded_package = target_package.replace('@', "%40").replace('/', "%2F");
+    let metadata_url = format!(
+        "https://registry.npmjs.org/{encoded_package}/{}",
+        manifest.version
+    );
+    info!(
+        "Downloading {}@{} for cross-build target {}",
+        target_package, manifest.version, triple
+    );
+    let response = reqwest::get(&metadata_url)
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Failed to query npm metadata for {target_package}"),
+            url: Some(metadata_url.clone()),
+        })?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let metadata: NpmVersionMetadata = response
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("npm rejected metadata request for {target_package}"),
+            url: Some(metadata_url),
+        })?
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Failed to parse npm metadata for {target_package}"),
+            url: None,
+        })?;
+    let archive_bytes = reqwest::get(&metadata.dist.tarball)
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Failed to download {target_package}"),
+            url: Some(metadata.dist.tarball.clone()),
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("npm rejected download for {target_package}"),
+            url: Some(metadata.dist.tarball.clone()),
+        })?
+        .bytes()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpRequestFailed {
+            message: format!("Failed to read {target_package} archive"),
+            url: Some(metadata.dist.tarball),
+        })?;
+
+    let expected_integrity = metadata
+        .dist
+        .integrity
+        .strip_prefix("sha512-")
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ImageBuildFailed {
+                resource_name: resource_name.to_string(),
+                reason: format!(
+                    "npm metadata for {target_package} did not provide SHA-512 integrity"
+                ),
+                build_output: None,
+            })
+        })?;
+    let expected_digest = BASE64_STANDARD
+        .decode(expected_integrity)
+        .map_err(|error| {
+            AlienError::new(ErrorData::ImageBuildFailed {
+                resource_name: resource_name.to_string(),
+                reason: format!("Invalid npm integrity for {target_package}: {error}"),
+                build_output: None,
+            })
+        })?;
+    let actual_digest = Sha512::digest(&archive_bytes);
+    if actual_digest.as_slice() != expected_digest {
+        return Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("Integrity verification failed for {target_package}"),
+            build_output: None,
+        }));
+    }
+
+    let expected_path = PathBuf::from("package").join(asset_name);
+    let archive_for_extract = archive_bytes.to_vec();
+    let extracted = tokio::task::spawn_blocking(move || -> std::io::Result<Option<Vec<u8>>> {
+        let decoder = flate2::read::GzDecoder::new(archive_for_extract.as_slice());
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            if entry.path()?.as_ref() == expected_path {
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes)?;
+                return Ok(Some(bytes));
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .into_alien_error()
+    .context(ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: format!("Failed to inspect {target_package} archive"),
+        build_output: None,
+    })?
+    .into_alien_error()
+    .context(ErrorData::ImageBuildFailed {
+        resource_name: resource_name.to_string(),
+        reason: format!("Failed to extract {target_package} archive"),
+        build_output: None,
+    })?;
+    let Some(asset_bytes) = extracted else {
+        return Ok(None);
+    };
+
+    fs::create_dir_all(&cache_root)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create directory".to_string(),
+            file_path: cache_root.display().to_string(),
+            reason: "Failed to create the native asset cache".to_string(),
+        })?;
+    let temporary = cache_root.join(format!("{asset_name}.staging-{}", std::process::id()));
+    fs::write(&temporary, asset_bytes)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: temporary.display().to_string(),
+            reason: format!("Failed to cache {target_package}"),
+        })?;
+    fs::rename(&temporary, &cached)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "rename".to_string(),
+            file_path: cached.display().to_string(),
+            reason: format!("Failed to publish cached {target_package}"),
+        })?;
+    Ok(Some(cached))
 }
 
 /// Locate the native addon binary for `triple`, trying (in order):
@@ -193,7 +418,8 @@ async fn find_napi_source(
     // 3. In-repo, host-triple build: source-build the dev addon with napi.
     let host_triple = napi_triple(BinaryTarget::current_os());
     let Some(crate_dir) = workspace_addon_crate else {
-        return Ok(None);
+        return fetch_published_asset(addon_dist, spec, triple, addon_file_name, resource_name)
+            .await;
     };
     if host_triple != Some(triple) {
         checked.push(format!(
@@ -369,7 +595,14 @@ async fn find_binary_source(
         checked.push(format!(
             "(no crates/{cargo_package} above the app or resolved package)"
         ));
-        return Ok(None);
+        return match fetch_published_asset(addon_dist, spec, triple, bin_name, resource_name).await
+        {
+            Ok(asset) => Ok(asset),
+            Err(error) => {
+                checked.push(format!("(published prebuild download failed: {error})"));
+                Ok(None)
+            }
+        };
     };
 
     // The dev/target binary is host-native, so only usable when building for the

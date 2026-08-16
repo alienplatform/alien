@@ -847,7 +847,7 @@ async fn declare_platform_release(
     ctx: &ExecutionMode,
     project_id: &str,
     workspace: Option<&str>,
-    _version: &str,
+    version: &str,
     git_metadata: Option<GitMetadata>,
     channel: &str,
 ) -> Result<String> {
@@ -860,8 +860,16 @@ async fn declare_platform_release(
 
     // No `.stack(...)` — a stackless release is a version identity only.
     let channel = parse_release_channel_name(channel)?;
+    let version = alien_platform_api::types::CreateReleaseRequestVersion::try_from(version)
+        .map_err(|error| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "version".to_string(),
+                message: format!("Invalid release version: {error}"),
+            })
+        })?;
     let body = alien_platform_api::types::CreateReleaseRequest::builder()
         .project(project_id.to_string())
+        .version(version)
         .channel(channel)
         .git_metadata(git_metadata);
 
