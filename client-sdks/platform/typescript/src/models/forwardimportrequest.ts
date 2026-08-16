@@ -22,6 +22,21 @@ export type ForwardImportRequestMode = ClosedEnum<
   typeof ForwardImportRequestMode
 >;
 
+/**
+ * Exact item selected from a tailored customer setup link.
+ */
+export const ForwardImportRequestSetupItem = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+/**
+ * Exact item selected from a tailored customer setup link.
+ */
+export type ForwardImportRequestSetupItem = ClosedEnum<
+  typeof ForwardImportRequestSetupItem
+>;
+
 export type ForwardImportRequest = {
   mode?: ForwardImportRequestMode | undefined;
   /**
@@ -37,6 +52,10 @@ export type ForwardImportRequest = {
    * Resolved setup import payload
    */
   source: ImportSource;
+  /**
+   * Exact item selected from a tailored customer setup link.
+   */
+  setupItem?: ForwardImportRequestSetupItem | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
 
@@ -46,12 +65,18 @@ export const ForwardImportRequestMode$outboundSchema: z.ZodEnum<
 > = z.enum(ForwardImportRequestMode);
 
 /** @internal */
+export const ForwardImportRequestSetupItem$outboundSchema: z.ZodEnum<
+  typeof ForwardImportRequestSetupItem
+> = z.enum(ForwardImportRequestSetupItem);
+
+/** @internal */
 export type ForwardImportRequest$Outbound = {
   mode: string;
   project?: string | undefined;
   deploymentGroupId?: string | undefined;
   managerId?: string | undefined;
   source: ImportSource$Outbound;
+  setupItem?: string | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
@@ -65,6 +90,7 @@ export const ForwardImportRequest$outboundSchema: z.ZodType<
   deploymentGroupId: z.string().optional(),
   managerId: z.string().optional(),
   source: ImportSource$outboundSchema,
+  setupItem: ForwardImportRequestSetupItem$outboundSchema.optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
 });

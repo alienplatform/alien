@@ -20,6 +20,18 @@ let value: APIKeyDeploymentSetupConfig = {
       targetResources: [],
     },
   ],
+  items: [
+    {
+      item: "models",
+      source: {
+        type: "built-in",
+        definitionId: "customer-key",
+        version: "<value>",
+        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+      required: false,
+    },
+  ],
 };
 ```
 
@@ -30,3 +42,4 @@ let value: APIKeyDeploymentSetupConfig = {
 | `metadata`                                                                                                 | Record<string, *any*>                                                                                      | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `policy`                                                                                                   | [models.DeploymentSetupPolicy](../models/deploymentsetuppolicy.md)                                         | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
 | `environmentVariables`                                                                                     | [models.APIKeyDeploymentSetupEnvironmentVariable](../models/apikeydeploymentsetupenvironmentvariable.md)[] | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `items`                                                                                                    | [models.APIKeyDeploymentSetupConfigItem](../models/apikeydeploymentsetupconfigitem.md)[]                   | :heavy_minus_sign:                                                                                         | N/A                                                                                                        |

@@ -35,6 +35,90 @@ export type DeploymentInfoSetupConfigEnvironmentVariable = {
   targetResources: Array<string> | null;
 };
 
+export const DeploymentInfoSetupConfigItemEnum = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+export type DeploymentInfoSetupConfigItemEnum = ClosedEnum<
+  typeof DeploymentInfoSetupConfigItemEnum
+>;
+
+export const DeploymentInfoSetupConfigDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+} as const;
+export type DeploymentInfoSetupConfigDefinitionId = ClosedEnum<
+  typeof DeploymentInfoSetupConfigDefinitionId
+>;
+
+export type DeploymentInfoSetupConfigSourceBuiltIn = {
+  type: "built-in";
+  definitionId: DeploymentInfoSetupConfigDefinitionId;
+  version: string;
+  /**
+   * Unique identifier for the release.
+   */
+  sourceReleaseId: string;
+};
+
+export type DeploymentInfoSetupConfigSourceApplicationRelease = {
+  type: "application-release";
+  releaseChannel: string;
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type DeploymentInfoSetupConfigSourceUnion =
+  | DeploymentInfoSetupConfigSourceApplicationRelease
+  | DeploymentInfoSetupConfigSourceBuiltIn;
+
+export const DeploymentInfoSetupConfigAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+} as const;
+export type DeploymentInfoSetupConfigAllowedProvider = ClosedEnum<
+  typeof DeploymentInfoSetupConfigAllowedProvider
+>;
+
+export const DeploymentInfoSetupConfigClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type DeploymentInfoSetupConfigClientApi = ClosedEnum<
+  typeof DeploymentInfoSetupConfigClientApi
+>;
+
+export type DeploymentInfoSetupConfigModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<DeploymentInfoSetupConfigClientApi>;
+  required: boolean;
+};
+
+export type DeploymentInfoSetupConfigConfiguration = {
+  allowedProviders?:
+    | Array<DeploymentInfoSetupConfigAllowedProvider>
+    | undefined;
+  modelRequirements?:
+    | Array<DeploymentInfoSetupConfigModelRequirement>
+    | undefined;
+};
+
+export type DeploymentInfoSetupConfigItem = {
+  item: DeploymentInfoSetupConfigItemEnum;
+  source:
+    | DeploymentInfoSetupConfigSourceApplicationRelease
+    | DeploymentInfoSetupConfigSourceBuiltIn;
+  required: boolean;
+  configuration?: DeploymentInfoSetupConfigConfiguration | undefined;
+};
+
 export const DeploymentInfoSetupConfigTypeStringList = {
   StringList: "stringList",
 } as const;
@@ -288,6 +372,7 @@ export type DeploymentInfoSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   environmentVariables: Array<DeploymentInfoSetupConfigEnvironmentVariable>;
+  items?: Array<DeploymentInfoSetupConfigItem> | undefined;
   inputs?: Array<DeploymentInfoSetupConfigInput> | undefined;
   inputValues?: Array<ResolvedStackInputSummary> | undefined;
 };
@@ -313,6 +398,172 @@ export function deploymentInfoSetupConfigEnvironmentVariableFromJSON(
         JSON.parse(x),
       ),
     `Failed to parse 'DeploymentInfoSetupConfigEnvironmentVariable' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigItemEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoSetupConfigItemEnum
+> = z.enum(DeploymentInfoSetupConfigItemEnum);
+
+/** @internal */
+export const DeploymentInfoSetupConfigDefinitionId$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoSetupConfigDefinitionId
+> = z.enum(DeploymentInfoSetupConfigDefinitionId);
+
+/** @internal */
+export const DeploymentInfoSetupConfigSourceBuiltIn$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigSourceBuiltIn,
+  unknown
+> = z.object({
+  type: z.literal("built-in"),
+  definitionId: DeploymentInfoSetupConfigDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
+});
+
+export function deploymentInfoSetupConfigSourceBuiltInFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigSourceBuiltIn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigSourceBuiltIn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigSourceBuiltIn' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema:
+  z.ZodType<DeploymentInfoSetupConfigSourceApplicationRelease, unknown> = z
+    .object({
+      type: z.literal("application-release"),
+      releaseChannel: z.string(),
+      releaseId: z.string(),
+      resourceId: z.string().optional(),
+    });
+
+export function deploymentInfoSetupConfigSourceApplicationReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentInfoSetupConfigSourceApplicationRelease,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentInfoSetupConfigSourceApplicationRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigSourceUnion$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigSourceUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema),
+  z.lazy(() => DeploymentInfoSetupConfigSourceBuiltIn$inboundSchema),
+]);
+
+export function deploymentInfoSetupConfigSourceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigSourceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigSourceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoSetupConfigAllowedProvider
+> = z.enum(DeploymentInfoSetupConfigAllowedProvider);
+
+/** @internal */
+export const DeploymentInfoSetupConfigClientApi$inboundSchema: z.ZodEnum<
+  typeof DeploymentInfoSetupConfigClientApi
+> = z.enum(DeploymentInfoSetupConfigClientApi);
+
+/** @internal */
+export const DeploymentInfoSetupConfigModelRequirement$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigModelRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(DeploymentInfoSetupConfigClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function deploymentInfoSetupConfigModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentInfoSetupConfigModelRequirement,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigModelRequirement$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentInfoSetupConfigModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigConfiguration$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(
+    DeploymentInfoSetupConfigAllowedProvider$inboundSchema,
+  ).optional(),
+  modelRequirements: z.array(
+    z.lazy(() => DeploymentInfoSetupConfigModelRequirement$inboundSchema),
+  ).optional(),
+});
+
+export function deploymentInfoSetupConfigConfigurationFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigConfiguration, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentInfoSetupConfigConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigConfiguration' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInfoSetupConfigItem$inboundSchema: z.ZodType<
+  DeploymentInfoSetupConfigItem,
+  unknown
+> = z.object({
+  item: DeploymentInfoSetupConfigItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() =>
+      DeploymentInfoSetupConfigSourceApplicationRelease$inboundSchema
+    ),
+    z.lazy(() => DeploymentInfoSetupConfigSourceBuiltIn$inboundSchema),
+  ]),
+  required: z.boolean(),
+  configuration: z.lazy(() =>
+    DeploymentInfoSetupConfigConfiguration$inboundSchema
+  ).optional(),
+});
+
+export function deploymentInfoSetupConfigItemFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoSetupConfigItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoSetupConfigItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoSetupConfigItem' from JSON`,
   );
 }
 
@@ -612,6 +863,8 @@ export const DeploymentInfoSetupConfig$inboundSchema: z.ZodType<
   environmentVariables: z.array(
     z.lazy(() => DeploymentInfoSetupConfigEnvironmentVariable$inboundSchema),
   ),
+  items: z.array(z.lazy(() => DeploymentInfoSetupConfigItem$inboundSchema))
+    .optional(),
   inputs: z.array(z.lazy(() => DeploymentInfoSetupConfigInput$inboundSchema))
     .optional(),
   inputValues: z.array(ResolvedStackInputSummary$inboundSchema).optional(),

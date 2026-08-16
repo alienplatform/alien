@@ -24,6 +24,15 @@ export type GetDeploymentInfoPlatform = ClosedEnum<
   typeof GetDeploymentInfoPlatform
 >;
 
+export const GetDeploymentInfoSetupItem = {
+  AlienStack: "alien-stack",
+  Models: "models",
+  Keys: "keys",
+} as const;
+export type GetDeploymentInfoSetupItem = ClosedEnum<
+  typeof GetDeploymentInfoSetupItem
+>;
+
 export type GetDeploymentInfoRequest = {
   /**
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
@@ -33,6 +42,7 @@ export type GetDeploymentInfoRequest = {
    * Represents the target cloud platform.
    */
   platform?: GetDeploymentInfoPlatform | undefined;
+  setupItem?: GetDeploymentInfoSetupItem | undefined;
 };
 
 /** @internal */
@@ -41,9 +51,15 @@ export const GetDeploymentInfoPlatform$outboundSchema: z.ZodEnum<
 > = z.enum(GetDeploymentInfoPlatform);
 
 /** @internal */
+export const GetDeploymentInfoSetupItem$outboundSchema: z.ZodEnum<
+  typeof GetDeploymentInfoSetupItem
+> = z.enum(GetDeploymentInfoSetupItem);
+
+/** @internal */
 export type GetDeploymentInfoRequest$Outbound = {
   workspace?: string | undefined;
   platform?: string | undefined;
+  setupItem?: string | undefined;
 };
 
 /** @internal */
@@ -53,6 +69,7 @@ export const GetDeploymentInfoRequest$outboundSchema: z.ZodType<
 > = z.object({
   workspace: z.string().optional(),
   platform: GetDeploymentInfoPlatform$outboundSchema.optional(),
+  setupItem: GetDeploymentInfoSetupItem$outboundSchema.optional(),
 });
 
 export function getDeploymentInfoRequestToJSON(

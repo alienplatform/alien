@@ -299,6 +299,7 @@ async fn deployment_handler(
     Json(json!({
         "id": DEPLOYMENT_ID,
         "name": "remote-storage-test",
+        "purpose": "application",
         "status": "running",
         "projectId": PROJECT_ID,
         "platform": "local",
