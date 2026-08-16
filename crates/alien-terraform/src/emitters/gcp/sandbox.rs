@@ -28,12 +28,18 @@ impl TfEmitter for GcpSandboxEmitter {
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
-        let _ = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
-        Ok(expr::object([(
-            "launcherPath",
-            Expression::String(LAUNCHER_PATH.to_string()),
-        )]))
+        let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        Ok(expr::object([
+            (
+                "launcherPath",
+                Expression::String(LAUNCHER_PATH.to_string()),
+            ),
+            (
+                "allowEgress",
+                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+            ),
+        ]))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {

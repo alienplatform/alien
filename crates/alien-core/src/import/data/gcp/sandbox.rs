@@ -13,4 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct GcpSandboxImportData {
     /// Path to the sandbox CLI Cloud Run injects when the container sets `sandboxLauncher`.
     pub launcher_path: String,
+    /// Whether sessions may reach the network. Taken from the declaration rather than left to the
+    /// application: the launcher decides egress per sandbox at create time.
+    pub allow_egress: bool,
 }
