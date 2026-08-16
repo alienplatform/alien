@@ -1358,7 +1358,7 @@ mod tests {
             .mock_async(|when, then| {
                 when.method(POST)
                     .path("/v1/responses")
-                    .body_contains("gpt-5-mini")
+                    .body_contains("gpt-4.1-mini")
                     .header("authorization", "Bearer sk-test");
                 then.status(200)
                     .header("content-type", "application/json")
@@ -1375,7 +1375,7 @@ mod tests {
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/responses"))
-            .json(&json!({"model": "gpt-5-mini", "input": "hi"}))
+            .json(&json!({"model": "gpt-4.1-mini", "input": "hi"}))
             .send()
             .await
             .expect("proxy request");
@@ -1402,7 +1402,7 @@ mod tests {
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/responses"))
-            .json(&json!({"model": "gpt-5-mini", "input": "hi"}))
+            .json(&json!({"model": "gpt-4.1-mini", "input": "hi"}))
             .send()
             .await
             .expect("gateway response");
@@ -1429,7 +1429,7 @@ mod tests {
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/responses"))
-            .json(&json!({"model": "gpt-5-mini", "input": "hi"}))
+            .json(&json!({"model": "gpt-4.1-mini", "input": "hi"}))
             .send()
             .await
             .expect("gateway response");
@@ -1438,8 +1438,8 @@ mod tests {
         let event = receiver.try_recv().expect("validation error observation");
         assert_eq!(event.binding, "llm");
         assert_eq!(event.provider, AiUsageProvider::OpenAi);
-        assert_eq!(event.public_model, "gpt-5-mini");
-        assert_eq!(event.provider_model, "gpt-5-mini");
+        assert_eq!(event.public_model, "gpt-4.1-mini");
+        assert_eq!(event.provider_model, "gpt-4.1-mini");
         assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
         assert_eq!(event.outcome, AiUsageOutcome::GatewayError);
         assert_eq!(event.status, 404);
@@ -1455,7 +1455,7 @@ mod tests {
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/messages"))
-            .json(&json!({"model": "gpt-5-mini", "messages": []}))
+            .json(&json!({"model": "gpt-4.1-mini", "messages": []}))
             .send()
             .await
             .expect("gateway response");
@@ -1463,7 +1463,7 @@ mod tests {
 
         let event = receiver.try_recv().expect("validation error observation");
         assert_eq!(event.provider, AiUsageProvider::OpenAi);
-        assert_eq!(event.public_model, "gpt-5-mini");
+        assert_eq!(event.public_model, "gpt-4.1-mini");
         assert_eq!(event.client_api, AiUsageClientApi::AnthropicMessages);
         assert_eq!(event.outcome, AiUsageOutcome::GatewayError);
         assert_eq!(event.status, 400);
