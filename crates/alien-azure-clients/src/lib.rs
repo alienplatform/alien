@@ -9,11 +9,9 @@ pub use azure::{
 
 // Re-export all client APIs
 pub use azure::application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient};
-pub use azure::cognitive_services::{
-    AzureCognitiveServicesClient, CognitiveServicesAccountsApi,
-};
 pub use azure::authorization::{AuthorizationApi, AzureAuthorizationClient};
 pub use azure::blob_containers::{AzureBlobContainerClient, BlobContainerApi};
+pub use azure::cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi};
 pub use azure::compute::{AzureVmssClient, VirtualMachineScaleSetsApi};
 pub use azure::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
 pub use azure::containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi};

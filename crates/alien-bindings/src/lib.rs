@@ -6,7 +6,7 @@ pub use bindings::{Bindings, BoundQueue};
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 #[cfg(feature = "platform-sdk")]
-pub use remote::{RemoteBindings, RemoteStorage};
+pub use remote::{RemoteAiLease, RemoteBindings, RemoteStorage};
 pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,

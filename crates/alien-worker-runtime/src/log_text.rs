@@ -39,9 +39,7 @@ fn normalize_log_body(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        decode_log_line, normalize_log_body, strip_system_log_prefix, CapturedLogLine,
-    };
+    use super::{decode_log_line, normalize_log_body, strip_system_log_prefix, CapturedLogLine};
 
     #[test]
     fn decodes_and_removes_system_marker() {

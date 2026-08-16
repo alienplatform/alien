@@ -1,0 +1,1 @@
+{"type":"string","description":"A public API accepted from an application client.","enum":["open-ai-chat-completions","open-ai-responses","anthropic-messages"],"x-readme-ref-name":"ClientApi"}

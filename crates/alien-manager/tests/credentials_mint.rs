@@ -109,6 +109,7 @@ fn managed_azure_config() -> ClientConfig {
         "https://storage.azure.com/.default",
         "https://vault.azure.net/.default",
         "https://servicebus.azure.net/.default",
+        "https://cognitiveservices.azure.com/.default",
     ]
     .into_iter()
     .map(|scope| (scope.to_string(), format!("{FAKE_SESSION_TOKEN}:{scope}")))
@@ -1011,12 +1012,13 @@ async fn azure_mint_response_contains_exact_scoped_short_lived_tokens() {
     let credentials = &json["clientConfig"]["credentials"];
     assert_eq!(credentials["type"], "scopedAccessTokens");
     let tokens = credentials["tokens"].as_object().expect("scope token map");
-    assert_eq!(tokens.len(), 4);
+    assert_eq!(tokens.len(), 5);
     for scope in [
         "https://management.azure.com/.default",
         "https://storage.azure.com/.default",
         "https://vault.azure.net/.default",
         "https://servicebus.azure.net/.default",
+        "https://cognitiveservices.azure.com/.default",
     ] {
         assert!(tokens.contains_key(scope), "missing exact scope {scope}");
     }

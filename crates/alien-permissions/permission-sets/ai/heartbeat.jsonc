@@ -7,14 +7,16 @@
         "label": "check-bedrock-availability",
         "description": "Read Bedrock foundation model availability needed for application health checks.",
         "grant": {
-          "actions": ["bedrock:ListFoundationModels"]
+          "actions": ["bedrock:ListFoundationModels", "bedrock:GetFoundationModelAvailability"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+            // AWS does not support resource-level permissions for either action.
+            // This grant exposes only provider catalog and availability metadata.
+            "resources": ["*"]
           },
           "resource": {
-            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+            "resources": ["*"]
           }
         }
       }
@@ -24,7 +26,15 @@
         "label": "check-vertex-ai-health",
         "description": "Read Vertex AI model and endpoint metadata needed for application health checks.",
         "grant": {
-          "permissions": ["aiplatform.models.list", "aiplatform.endpoints.list"]
+          "permissions": [
+            // Frozen resources give the generated Management identity this
+            // heartbeat set. Deployment uses it to resolve the numeric project
+            // number before compiling project-scoped IAM conditions.
+            "resourcemanager.projects.get",
+            "aiplatform.models.list",
+            "aiplatform.endpoints.list",
+            "aiplatform.endpoints.get"
+          ]
         },
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
@@ -37,7 +47,10 @@
         "label": "check-cognitive-services-health",
         "description": "Read Azure Cognitive Services account metadata needed for application health checks.",
         "grant": {
-          "actions": ["Microsoft.CognitiveServices/accounts/read"]
+          "actions": [
+            "Microsoft.CognitiveServices/accounts/read",
+            "Microsoft.CognitiveServices/accounts/deployments/read"
+          ]
         },
         "binding": {
           "stack": {

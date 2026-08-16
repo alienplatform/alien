@@ -108,10 +108,18 @@ pub struct CognitiveServicesDeploymentProperties {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CognitiveServicesDeployment {
+    /// Deployment resource name, used by inference requests as the model selector.
+    pub name: Option<String>,
     /// The SKU
     pub sku: Option<CognitiveServicesDeploymentSku>,
     /// The deployment properties, including the model and provisioning state
     pub properties: Option<CognitiveServicesDeploymentProperties>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CognitiveServicesDeploymentList {
+    value: Vec<CognitiveServicesDeployment>,
 }
 
 /// Properties included in the deployment create request body.
@@ -159,11 +167,7 @@ pub trait CognitiveServicesAccountsApi: Send + Sync + std::fmt::Debug {
     ) -> Result<CognitiveServicesAccount>;
 
     /// Delete a CognitiveServices account.
-    async fn delete_account(
-        &self,
-        resource_group_name: &str,
-        account_name: &str,
-    ) -> Result<()>;
+    async fn delete_account(&self, resource_group_name: &str, account_name: &str) -> Result<()>;
 
     /// Create (or update) a model deployment under an account (PUT). May return a
     /// long-running operation.
@@ -182,6 +186,14 @@ pub trait CognitiveServicesAccountsApi: Send + Sync + std::fmt::Debug {
         account_name: &str,
         deployment_name: &str,
     ) -> Result<CognitiveServicesDeployment>;
+
+    /// List the account's configured model deployments. This is a read-only
+    /// availability observation; it does not create a deployment or invoke a model.
+    async fn list_deployments(
+        &self,
+        resource_group_name: &str,
+        account_name: &str,
+    ) -> Result<Vec<CognitiveServicesDeployment>>;
 }
 
 // -------------------------------------------------------------------------
@@ -254,9 +266,9 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
             .into_alien_error()
             .context(ErrorData::SerializationError {
                 message: format!(
-                    "Failed to serialize CognitiveServices account create parameters for resource: {}",
-                    account_name
-                ),
+                "Failed to serialize CognitiveServices account create parameters for resource: {}",
+                account_name
+            ),
             })?;
 
         let builder = AzureRequestBuilder::new(Method::PUT, url)
@@ -268,7 +280,11 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
         let signed = self.base.sign_request(req, &bearer_token).await?;
 
         self.base
-            .execute_request_with_long_running_support(signed, "CreateCognitiveServicesAccount", account_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateCognitiveServicesAccount",
+                account_name,
+            )
             .await
     }
 
@@ -329,11 +345,7 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
     }
 
     /// Delete a CognitiveServices account
-    async fn delete_account(
-        &self,
-        resource_group_name: &str,
-        account_name: &str,
-    ) -> Result<()> {
+    async fn delete_account(&self, resource_group_name: &str, account_name: &str) -> Result<()> {
         let bearer_token = self
             .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
@@ -455,6 +467,58 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
             })?;
 
         Ok(deployment)
+    }
+
+    async fn list_deployments(
+        &self,
+        resource_group_name: &str,
+        account_name: &str,
+    ) -> Result<Vec<CognitiveServicesDeployment>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let path = format!(
+            "{}/deployments",
+            self.resource_url(resource_group_name, account_name)
+        );
+        let url = self.base.build_url(
+            &path,
+            Some(vec![("api-version", COGNITIVE_SERVICES_API_VERSION.into())]),
+        );
+        let request = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "ListCognitiveServicesDeployments", account_name)
+            .await?;
+        let body = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure ListCognitiveServicesDeployments: failed to read response for {account_name}"
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: None,
+            })?;
+        let list: CognitiveServicesDeploymentList = serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure ListCognitiveServicesDeployments: JSON parse error for {account_name}"
+                ),
+                url,
+                http_status: 200,
+                http_request_text: None,
+                http_response_text: Some(body),
+            })?;
+        Ok(list.value)
     }
 }
 
@@ -583,22 +647,19 @@ mod mock_tests {
     async fn mock_create_get_delete_round_trip() {
         let mut mock = MockCognitiveServicesAccountsApi::new();
 
-        mock.expect_create_account()
-            .returning(|_, _, _| {
-                Ok(OperationResult::Completed(CognitiveServicesAccount {
-                    kind: Some("AIServices".to_string()),
-                    location: Some("eastus".to_string()),
-                    sku: Some(CognitiveServicesSku {
-                        name: "S0".to_string(),
-                    }),
-                    properties: Some(CognitiveServicesAccountProperties {
-                        endpoint: Some(
-                            "https://my-account.cognitiveservices.azure.com/".to_string(),
-                        ),
-                        provisioning_state: Some("Succeeded".to_string()),
-                    }),
-                }))
-            });
+        mock.expect_create_account().returning(|_, _, _| {
+            Ok(OperationResult::Completed(CognitiveServicesAccount {
+                kind: Some("AIServices".to_string()),
+                location: Some("eastus".to_string()),
+                sku: Some(CognitiveServicesSku {
+                    name: "S0".to_string(),
+                }),
+                properties: Some(CognitiveServicesAccountProperties {
+                    endpoint: Some("https://my-account.cognitiveservices.azure.com/".to_string()),
+                    provisioning_state: Some("Succeeded".to_string()),
+                }),
+            }))
+        });
 
         mock.expect_get_account().returning(|_, _| {
             Ok(CognitiveServicesAccount {
@@ -608,9 +669,7 @@ mod mock_tests {
                     name: "S0".to_string(),
                 }),
                 properties: Some(CognitiveServicesAccountProperties {
-                    endpoint: Some(
-                        "https://my-account.cognitiveservices.azure.com/".to_string(),
-                    ),
+                    endpoint: Some("https://my-account.cognitiveservices.azure.com/".to_string()),
                     provisioning_state: Some("Succeeded".to_string()),
                 }),
             })

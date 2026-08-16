@@ -11,12 +11,12 @@
 //! Host and audience are settled: production bindings carry the AIServices
 //! account's `properties.endpoint` (the `cognitiveservices.azure.com` shape), and
 //! Foundry accepts that host with an `ai.azure.com`-audience token on the first
-//! probe, with no host derivation or audience swap needed.
+//! request, with no host derivation or audience swap needed.
 
 use std::net::Ipv4Addr;
 
+use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute, GatewayTarget};
 use alien_core::Platform;
-use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
 use serde_json::{json, Value};
 
 async fn serve(router: axum::Router) -> String {
@@ -37,7 +37,7 @@ fn foundry_route() -> GatewayRoute {
         std::env::var("AZURE_ACCESS_TOKEN").expect("AZURE_ACCESS_TOKEN must hold an Entra token");
     GatewayRoute {
         name: "llm".to_string(),
-        cloud: Platform::Azure,
+        target: GatewayTarget::Cloud(Platform::Azure),
         region: None,
         project: None,
         azure_endpoint: Some(endpoint),
@@ -98,10 +98,19 @@ async fn live_foundry_claude_streaming() {
         .expect("request to the gateway");
 
     let status = resp.status();
-    assert!(status.is_success(), "Foundry streaming must return 2xx; got {status}");
+    assert!(
+        status.is_success(),
+        "Foundry streaming must return 2xx; got {status}"
+    );
     let body = resp.text().await.expect("stream body");
     let head: String = body.chars().take(400).collect();
     eprintln!("live foundry claude stream head: {head}");
-    assert!(body.contains("message_start"), "SSE must open with message_start: {body}");
-    assert!(body.contains("message_stop"), "SSE must close with message_stop: {body}");
+    assert!(
+        body.contains("message_start"),
+        "SSE must open with message_start: {body}"
+    );
+    assert!(
+        body.contains("message_stop"),
+        "SSE must close with message_stop: {body}"
+    );
 }

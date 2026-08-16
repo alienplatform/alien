@@ -19,7 +19,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, Ai, PermissionProfile, PermissionSetReference, Result, ServiceAccount,
+    import::EmitContext, Ai, PermissionProfile, PermissionSetReference, RemoteBindings, Result,
+    ServiceAccount,
 };
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
@@ -83,7 +84,24 @@ fn ai_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSet
             owners.push((label.to_string(), refs));
         }
     }
+    if let (Some(definition), Some(label)) = (
+        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        remote_bindings_label(ctx),
+    ) {
+        owners.push((
+            label.to_string(),
+            vec![PermissionSetReference::from_name(definition.permission_set)],
+        ));
+    }
     owners
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
 }
 
 fn ai_permission_refs(

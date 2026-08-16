@@ -9,8 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_bindings::provider::LazyEnvBindingsProvider;
-use alien_bindings::BindingsProvider;
+use alien_bindings::{provider::LazyEnvBindingsProvider, BindingsProvider, RemoteAiLease};
 use alien_core::bindings::AiBinding;
 use alien_core::{
     AzureCredentials, ClientConfig, GcpCredentials, Platform, ENV_ALIEN_DEPLOYMENT_TOKEN,
@@ -20,7 +19,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 
 use crate::creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
 use crate::error::{ErrorData, Result};
-use crate::{GatewayBinding, GatewayRoute};
+use crate::{GatewayBinding, GatewayRoute, GatewayTarget};
 
 /// The shared workload credential resolver used for the mint-gated (runtime-less) path.
 pub type Managed = Arc<LazyEnvBindingsProvider>;
@@ -32,7 +31,8 @@ pub type Managed = Arc<LazyEnvBindingsProvider>;
 /// self-refreshing native credential path.
 pub fn managed_provider() -> Result<Option<Managed>> {
     let env: HashMap<String, String> = std::env::vars().collect();
-    let mint_gate = env.contains_key(ENV_ALIEN_MANAGER_URL) && env.contains_key(ENV_ALIEN_DEPLOYMENT_TOKEN);
+    let mint_gate =
+        env.contains_key(ENV_ALIEN_MANAGER_URL) && env.contains_key(ENV_ALIEN_DEPLOYMENT_TOKEN);
     if !mint_gate {
         return Ok(None);
     }
@@ -45,8 +45,8 @@ pub fn managed_provider() -> Result<Option<Managed>> {
     Ok(Some(Arc::new(provider)))
 }
 
-/// AAD audience for an Azure AI Services / Foundry account token.
-const AZURE_AI_AUDIENCE: &str = "https://cognitiveservices.azure.com";
+/// AAD audience for the Foundry OpenAI-compatible and Anthropic endpoints.
+const AZURE_AI_AUDIENCE: &str = "https://ai.azure.com";
 
 /// The workload's resolved cloud credentials, from the runtime-less credential resolver: the
 /// native/projected identity when present, else Alien-minted short-lived credentials (the
@@ -65,9 +65,12 @@ async fn workload_client_config() -> Result<Option<ClientConfig>> {
     let lazy = BindingsProvider::from_env_lazy(env).context(ErrorData::Other {
         message: "the workload credential resolver could not be built".to_string(),
     })?;
-    let provider = lazy.provider().await.context(ErrorData::AmbientCredentialUnavailable {
-        message: "the workload credential resolver failed".to_string(),
-    })?;
+    let provider = lazy
+        .provider()
+        .await
+        .context(ErrorData::AmbientCredentialUnavailable {
+            message: "the workload credential resolver failed".to_string(),
+        })?;
     Ok(Some(provider.client_config().clone()))
 }
 
@@ -127,7 +130,10 @@ fn bindings_from_pairs(
 ) -> Result<Vec<GatewayBinding>> {
     let mut bindings = Vec::new();
     for (key, value) in pairs {
-        let Some(name) = key.strip_prefix("ALIEN_").and_then(|k| k.strip_suffix("_BINDING")) else {
+        let Some(name) = key
+            .strip_prefix("ALIEN_")
+            .and_then(|k| k.strip_suffix("_BINDING"))
+        else {
             continue;
         };
         // Not an AI binding: another resource type in the shared namespace.
@@ -184,8 +190,81 @@ fn gateway_binding(name: &str, binding: AiBinding) -> Option<GatewayBinding> {
     }
 }
 
+/// Turn a short-lived Remote Bindings AI lease into one proxy route.
+///
+/// Hosted gateways use this instead of ambient workload credentials: the
+/// customer Deployment's assigned Manager has already minted the exact
+/// short-lived cloud credential carried by `lease`.
+pub async fn route_from_remote_ai_lease(
+    name: impl Into<String>,
+    lease: &RemoteAiLease,
+) -> Result<GatewayRoute> {
+    let name = name.into();
+    let binding = gateway_binding(&name, lease.binding.clone()).ok_or_else(|| {
+        AlienError::new(ErrorData::BindingConfigInvalid {
+            binding: name.clone(),
+            message: "the remote AI binding is not a managed cloud binding".to_string(),
+        })
+    })?;
+    let cred = match (&lease.binding, &lease.client_config) {
+        (AiBinding::Bedrock(_), ClientConfig::Aws(_)) => AmbientCred::Aws(
+            AwsSigV4Cred::from_client_config(
+                binding.region.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding: name.clone(),
+                        message: "an AWS remote AI binding needs a region".to_string(),
+                    })
+                })?,
+                &lease.client_config,
+            )
+            .await?,
+        ),
+        (AiBinding::Vertex(_), ClientConfig::Gcp(config)) => match &config.credentials {
+            GcpCredentials::AccessToken { token } => {
+                AmbientCred::Bearer(BearerTokenCred::static_token(token.clone()))
+            }
+            _ => {
+                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    binding: name,
+                    message: "a remote Vertex binding needs a ready access token".to_string(),
+                }))
+            }
+        },
+        (AiBinding::Foundry(_), ClientConfig::Azure(config)) => match &config.credentials {
+            AzureCredentials::AccessToken { token } => {
+                AmbientCred::Bearer(BearerTokenCred::static_token(token.clone()))
+            }
+            _ => {
+                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    binding: name,
+                    message: "a remote Foundry binding needs a ready access token".to_string(),
+                }))
+            }
+        },
+        _ => {
+            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                binding: name,
+                message: "the remote AI binding and cloud credential do not match".to_string(),
+            }))
+        }
+    };
+
+    Ok(GatewayRoute {
+        name: binding.name,
+        target: GatewayTarget::Cloud(binding.cloud),
+        region: binding.region,
+        project: binding.project,
+        azure_endpoint: binding.azure_endpoint,
+        cred,
+        upstream_base_override: None,
+    })
+}
+
 /// Attach the binding's cloud ambient credential, producing a route the proxy serves.
-pub async fn resolve_route(binding: GatewayBinding, managed: Option<&Managed>) -> Result<GatewayRoute> {
+pub async fn resolve_route(
+    binding: GatewayBinding,
+    managed: Option<&Managed>,
+) -> Result<GatewayRoute> {
     // The gateway authorizes upstream calls with the workload's own identity. Both paths
     // handle either shape the resolver can select: minted short-lived credentials, which each
     // request re-resolves so they refresh before expiry, or the workload's projected identity,
@@ -217,7 +296,9 @@ pub async fn resolve_route(binding: GatewayBinding, managed: Option<&Managed>) -
             },
         },
         Platform::Azure => match managed {
-            Some(p) => AmbientCred::Bearer(BearerTokenCred::managed_azure(p.clone(), AZURE_AI_AUDIENCE)),
+            Some(p) => {
+                AmbientCred::Bearer(BearerTokenCred::managed_azure(p.clone(), AZURE_AI_AUDIENCE))
+            }
             None => match azure_access_token().await? {
                 Some(token) => AmbientCred::Bearer(BearerTokenCred::static_token(token)),
                 None => AmbientCred::Bearer(BearerTokenCred::azure(AZURE_AI_AUDIENCE)),
@@ -233,7 +314,7 @@ pub async fn resolve_route(binding: GatewayBinding, managed: Option<&Managed>) -
 
     Ok(GatewayRoute {
         name: binding.name,
-        cloud: binding.cloud,
+        target: GatewayTarget::Cloud(binding.cloud),
         region: binding.region,
         project: binding.project,
         azure_endpoint: binding.azure_endpoint,
@@ -257,10 +338,16 @@ mod tests {
         assert_eq!(gcp.region.as_deref(), Some("us-central1"));
         assert_eq!(gcp.project.as_deref(), Some("proj"));
 
-        let azure =
-            gateway_binding("llm", AiBinding::foundry("https://x.openai.azure.com/", "acct")).unwrap();
+        let azure = gateway_binding(
+            "llm",
+            AiBinding::foundry("https://x.openai.azure.com/", "acct"),
+        )
+        .unwrap();
         assert_eq!(azure.cloud, Platform::Azure);
-        assert_eq!(azure.azure_endpoint.as_deref(), Some("https://x.openai.azure.com/"));
+        assert_eq!(
+            azure.azure_endpoint.as_deref(),
+            Some("https://x.openai.azure.com/")
+        );
     }
 
     #[test]
@@ -296,7 +383,10 @@ mod tests {
                     .find(|b| b.name == "llm")
                     .expect("the llm binding should be parsed from the env");
                 assert_eq!(binding.cloud, Platform::Azure);
-                assert_eq!(binding.azure_endpoint.as_deref(), Some("https://x.openai.azure.com/"));
+                assert_eq!(
+                    binding.azure_endpoint.as_deref(),
+                    Some("https://x.openai.azure.com/")
+                );
             },
         );
     }
@@ -310,7 +400,10 @@ mod tests {
             Some(r#"{"service":"bedrock","region":"us-east-2"}"#),
             || {
                 let bindings = bindings_from_env().expect("the env holds a valid AI binding");
-                assert_eq!(bindings.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["my-llm"]);
+                assert_eq!(
+                    bindings.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+                    ["my-llm"]
+                );
             },
         );
     }
@@ -338,7 +431,10 @@ mod tests {
             Some(r#"{"service":"aurora","clusterEndpoint":"x","port":5432}"#),
             || {
                 let bindings = bindings_from_env().expect("a non-AI service tag is not an error");
-                assert!(bindings.is_empty(), "a postgres binding must not be picked up");
+                assert!(
+                    bindings.is_empty(),
+                    "a postgres binding must not be picked up"
+                );
             },
         );
     }
@@ -347,10 +443,15 @@ mod tests {
     /// gateway that serves nothing, so it must fail loudly instead.
     #[test]
     fn a_malformed_ai_binding_is_an_error() {
-        temp_env::with_var("ALIEN_LLM_BINDING", Some(r#"{"service":"bedrock"}"#), || {
-            let err = bindings_from_env().expect_err("a bedrock binding with no region must fail");
-            assert_eq!(err.code, "GATEWAY_BINDING_CONFIG_INVALID");
-        });
+        temp_env::with_var(
+            "ALIEN_LLM_BINDING",
+            Some(r#"{"service":"bedrock"}"#),
+            || {
+                let err =
+                    bindings_from_env().expect_err("a bedrock binding with no region must fail");
+                assert_eq!(err.code, "GATEWAY_BINDING_CONFIG_INVALID");
+            },
+        );
     }
 
     /// `AI_SERVICE_TAGS` is hand-maintained, so a new `AiBinding` variant added without

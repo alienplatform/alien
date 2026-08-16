@@ -26,21 +26,22 @@ pub(crate) async fn proxy_foundry_anthropic(
     mut payload: Value,
     headers: &HeaderMap,
 ) -> Result<Response> {
-    let endpoint =
-        route.azure_endpoint.as_deref().ok_or_else(|| missing_field(route, "endpoint"))?;
+    let endpoint = route
+        .azure_endpoint
+        .as_deref()
+        .ok_or_else(|| missing_field(route, "endpoint"))?;
 
     payload["model"] = Value::String(upstream_id.to_string());
-    let upstream_body = serde_json::to_vec(&payload)
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "could not re-serialize the rewritten request body".to_string(),
-        })?;
+    let upstream_body =
+        serde_json::to_vec(&payload)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "could not re-serialize the rewritten request body".to_string(),
+            })?;
 
     // The binding carries the AIServices account endpoint; the Anthropic path
-    // serves on that account. Whether the account host also needs the Entra
-    // audience swapped to https://ai.azure.com is settled by the live Foundry
-    // probe — the credential keeps the account audience until that probe says
-    // otherwise.
+    // serves on that account. Authentication uses the Foundry audience when the
+    // route credential is constructed, independent of this account host.
     let base = route
         .upstream_base_override
         .clone()
@@ -57,5 +58,5 @@ pub(crate) async fn proxy_foundry_anthropic(
     }
     let upstream =
         sign_and_execute(client, &route.cred, &url, "", upstream_body, &extra_headers).await?;
-    forward_response(upstream)
+    forward_response(upstream).await
 }

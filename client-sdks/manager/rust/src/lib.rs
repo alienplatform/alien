@@ -550,7 +550,8 @@ mod tests {
             .resolve_binding()
             .body(types::ResolveBindingRequest {
                 deployment_id: "dep_test".to_string(),
-                resource_id: "storage".to_string(),
+                kind: None,
+                resource_id: Some("storage".to_string()),
             })
             .send()
             .await

@@ -583,6 +583,7 @@ pub fn azure_predefined_role_id(role_name: &str) -> Option<&'static str> {
         "Azure Service Bus Data Receiver" => Some("4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0"),
         "Azure Service Bus Data Sender" => Some("69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"),
         "Cognitive Services OpenAI User" => Some("5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"),
+        "Cognitive Services User" => Some("a97b65f3-24c7-4388-baec-2e87135dc908"),
         "Key Vault Contributor" => Some("f25e0fa2-a7c8-4377-a976-54943a77a395"),
         "Key Vault Reader" => Some("21090545-7ca7-4776-b22c-e363652d74d2"),
         "Key Vault Secrets User" => Some("4633458b-17de-408a-b874-0445c86b69e6"),

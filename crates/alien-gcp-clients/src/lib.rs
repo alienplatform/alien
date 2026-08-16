@@ -13,10 +13,10 @@ pub mod platform {
 
 // Re-export all client APIs
 pub use gcp::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
+pub use gcp::cloud_kms::{CloudKmsApi, CloudKmsClient};
 pub use gcp::cloud_sql::{CloudSqlApi, CloudSqlClient};
 pub use gcp::cloudasset::{CloudAssetApi, CloudAssetClient};
 pub use gcp::cloudbuild::{CloudBuildApi, CloudBuildClient};
-pub use gcp::cloud_kms::{CloudKmsApi, CloudKmsClient};
 pub use gcp::cloudrun::{CloudRunApi, CloudRunClient};
 pub use gcp::cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient};
 pub use gcp::compute::{ComputeApi, ComputeClient};
@@ -24,6 +24,7 @@ pub use gcp::container::{ContainerApi, ContainerClient};
 pub use gcp::firestore::{FirestoreApi, FirestoreClient};
 pub use gcp::gcs::{GcsApi, GcsClient};
 pub use gcp::iam::{IamApi, IamClient};
+pub use gcp::model_garden::{ModelGardenApi, ModelGardenClient};
 pub use gcp::monitoring::{MonitoringApi, MonitoringClient};
 pub use gcp::pubsub::{PubSubApi, PubSubClient};
 pub use gcp::resource_manager::{ResourceManagerApi, ResourceManagerClient};

@@ -5,14 +5,17 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::azure::cognitive_services::{
     CognitiveServicesAccountCreateParameters, CognitiveServicesAccountCreateProperties,
-    CognitiveServicesDeploymentCreateParameters, CognitiveServicesDeploymentCreateProperties,
-    CognitiveServicesDeploymentModel, CognitiveServicesDeploymentSku, CognitiveServicesSku,
+    CognitiveServicesDeployment, CognitiveServicesDeploymentCreateParameters,
+    CognitiveServicesDeploymentCreateProperties, CognitiveServicesDeploymentModel,
+    CognitiveServicesDeploymentSku, CognitiveServicesSku,
 };
 use alien_azure_clients::long_running_operation::OperationResult;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    bindings::AiBinding, Ai, AiHeartbeatData, AiHeartbeatStatus, AiOutputs,
-    AzureFoundryAiHeartbeatData, HeartbeatBackend, Platform, ResourceHeartbeat,
+    ai_catalog, bindings::AiBinding, Ai, AiAccessTest, AiAvailabilityBlocker,
+    AiAvailabilityObservation, AiAvailabilitySource, AiHeartbeatData, AiHeartbeatStatus,
+    AiModelAvailability, AiModelAvailabilityObservation, AiOutputs, AzureFoundryAiHeartbeatData,
+    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -23,6 +26,50 @@ use chrono::Utc;
 /// deployment. A conservative default; per-region quota tuning is a deploy-time
 /// concern verified against the target subscription.
 const DEFAULT_DEPLOYMENT_CAPACITY: i32 = 1;
+const AVAILABILITY_REFRESH_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
+
+fn azure_availability(
+    location: Option<String>,
+    deployments: &[CognitiveServicesDeployment],
+) -> AiAvailabilityObservation {
+    let models = ai_catalog::models_for(Platform::Azure)
+        .into_iter()
+        .map(|model| {
+            let deployment = deployments
+                .iter()
+                .find(|deployment| deployment.name.as_deref() == Some(model.upstream_id));
+            let running = deployment
+                .and_then(|deployment| deployment.properties.as_ref())
+                .and_then(|properties| properties.provisioning_state.as_deref())
+                == Some("Succeeded");
+            AiModelAvailabilityObservation {
+                public_model_id: model.public_id.to_string(),
+                client_apis: model.client_apis.to_vec(),
+                availability: if running {
+                    AiModelAvailability::Available
+                } else {
+                    AiModelAvailability::Blocked
+                },
+                blockers: if running {
+                    vec![]
+                } else {
+                    vec![AiAvailabilityBlocker::DeploymentRequired]
+                },
+                // A Succeeded deployment is generally available, but this
+                // read-only heartbeat does not spend quota to invoke it.
+                access_test: AiAccessTest::NotChecked,
+                tested_at: Some(Utc::now()),
+                error_code: None,
+            }
+        })
+        .collect();
+    AiAvailabilityObservation {
+        source: AiAvailabilitySource::AzureFoundry,
+        catalog_revision: ai_catalog::AI_CATALOG_REVISION.to_string(),
+        location,
+        models,
+    }
+}
 
 /// Derives a globally-unique AIServices account name from the stack prefix and
 /// resource id. Azure account names must be 2-64 chars, alphanumeric + hyphens,
@@ -58,6 +105,10 @@ pub struct AzureAiController {
     pub(crate) resource_group: Option<String>,
     /// The Azure region where the account is created.
     pub(crate) location: Option<String>,
+    #[serde(default)]
+    pub(crate) availability: Option<AiAvailabilityObservation>,
+    #[serde(default)]
+    pub(crate) availability_observed_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[controller]
@@ -156,7 +207,7 @@ impl AzureAiController {
         let azure_config = ctx.get_azure_config()?;
         let config = ctx.desired_resource_config::<Ai>()?;
 
-        let account_name = self.account_name.as_ref().ok_or_else(|| {
+        let account_name = self.account_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Account name not set in state".to_string(),
                 resource_id: Some(config.id.clone()),
@@ -176,7 +227,7 @@ impl AzureAiController {
             .get_azure_cognitive_services_client(azure_config)?;
 
         match cognitive_client
-            .get_account(resource_group_name, account_name)
+            .get_account(resource_group_name, &account_name)
             .await
         {
             Ok(account) => {
@@ -245,7 +296,7 @@ impl AzureAiController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
 
-        info!(id = %config.id, "Applying Cognitive Services OpenAI User role on AIServices account");
+        info!(id = %config.id, "Applying Cognitive Services User role on AIServices account");
 
         let account_name = self.account_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -280,7 +331,7 @@ impl AzureAiController {
         )
         .await?;
 
-        info!(id = %config.id, "Successfully applied Cognitive Services OpenAI User role");
+        info!(id = %config.id, "Successfully applied Cognitive Services User role");
 
         Ok(HandlerAction::Continue {
             state: DeployingModels,
@@ -481,7 +532,7 @@ impl AzureAiController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
 
-        let account_name = self.account_name.as_ref().ok_or_else(|| {
+        let account_name = self.account_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 resource_id: Some(config.id.clone()),
                 message: "Account name not set in state".to_string(),
@@ -495,6 +546,65 @@ impl AzureAiController {
         })?;
 
         info!(id = %config.id, "Azure AI heartbeat tick");
+        let resource_group = self.resource_group.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Resource group not set in state".to_string(),
+            })
+        })?;
+        let refresh = self.availability_observed_at.is_none_or(|observed_at| {
+            Utc::now().signed_duration_since(observed_at) >= AVAILABILITY_REFRESH_INTERVAL
+        });
+        if refresh {
+            let client = ctx
+                .service_provider
+                .get_azure_cognitive_services_client(ctx.get_azure_config()?)?;
+            self.availability = Some(
+                match client
+                    .list_deployments(&resource_group, &account_name)
+                    .await
+                {
+                    Ok(deployments) => azure_availability(self.location.clone(), &deployments),
+                    Err(error) => {
+                        tracing::warn!(id = %config.id, %error, "Azure AI availability observation failed");
+                        let mut availability = AiAvailabilityObservation::unobserved(
+                            AiAvailabilitySource::AzureFoundry,
+                            Platform::Azure,
+                            self.location.clone(),
+                        );
+                        for model in &mut availability.models {
+                            model.tested_at = Some(Utc::now());
+                            model.error_code = Some("azure-observation-failed".to_string());
+                        }
+                        availability
+                    }
+                },
+            );
+            self.availability_observed_at = Some(Utc::now());
+        }
+        let availability = self.availability.clone().unwrap_or_else(|| {
+            AiAvailabilityObservation::unobserved(
+                AiAvailabilitySource::AzureFoundry,
+                Platform::Azure,
+                self.location.clone(),
+            )
+        });
+        let partial = availability
+            .models
+            .iter()
+            .any(|model| model.availability == AiModelAvailability::Unknown);
+        let status = AiHeartbeatStatus {
+            health: if partial {
+                ObservedHealth::Degraded
+            } else {
+                ObservedHealth::Healthy
+            },
+            lifecycle: ProviderLifecycleState::Running,
+            message: partial.then(|| "Some model availability could not be observed".to_string()),
+            stale: false,
+            partial,
+            collection_issues: vec![],
+        };
 
         ctx.emit_heartbeat(ResourceHeartbeat {
             deployment_id: None,
@@ -505,11 +615,12 @@ impl AzureAiController {
             observed_at: Utc::now(),
             data: ResourceHeartbeatData::Ai(AiHeartbeatData::AzureFoundry(
                 AzureFoundryAiHeartbeatData {
-                    status: AiHeartbeatStatus::default(),
+                    status,
                     account_name: account_name.clone(),
                     endpoint: self.endpoint.clone(),
                     resource_group: self.resource_group.clone(),
                     location: self.location.clone(),
+                    availability,
                 },
             )),
             raw: vec![],
@@ -733,6 +844,8 @@ impl AzureAiController {
         self.endpoint = None;
         self.resource_group = None;
         self.location = None;
+        self.availability = None;
+        self.availability_observed_at = None;
     }
 
     /// Creates a controller in the ready state for testing purposes.
@@ -744,6 +857,8 @@ impl AzureAiController {
             endpoint: Some(endpoint.to_string()),
             resource_group: Some("mock-rg".to_string()),
             location: Some("eastus".to_string()),
+            availability: None,
+            availability_observed_at: None,
             _internal_stay_count: None,
         }
     }
@@ -758,6 +873,8 @@ impl AzureAiController {
             endpoint: Some(endpoint.to_string()),
             resource_group: Some("mock-rg".to_string()),
             location: Some("eastus".to_string()),
+            availability: None,
+            availability_observed_at: None,
             _internal_stay_count: None,
         }
     }
@@ -785,6 +902,7 @@ mod tests {
     /// A deployment whose model + provisioning state are both reported succeeded.
     fn succeeded_deployment() -> CognitiveServicesDeployment {
         CognitiveServicesDeployment {
+            name: Some("gpt-4.1".to_string()),
             sku: None,
             properties: Some(CognitiveServicesDeploymentProperties {
                 model: CognitiveServicesDeploymentModel {
@@ -795,6 +913,29 @@ mod tests {
                 provisioning_state: Some("Succeeded".to_string()),
             }),
         }
+    }
+
+    #[test]
+    fn availability_uses_exact_succeeded_deployment_names() {
+        let observation = azure_availability(Some("eastus".to_string()), &[succeeded_deployment()]);
+        let deployed = observation
+            .models
+            .iter()
+            .find(|model| model.public_model_id == "gpt-4.1")
+            .unwrap();
+        let missing = observation
+            .models
+            .iter()
+            .find(|model| model.public_model_id != "gpt-4.1")
+            .unwrap();
+
+        assert_eq!(deployed.availability, AiModelAvailability::Available);
+        assert_eq!(deployed.access_test, AiAccessTest::NotChecked);
+        assert_eq!(missing.availability, AiModelAvailability::Blocked);
+        assert_eq!(
+            missing.blockers,
+            vec![AiAvailabilityBlocker::DeploymentRequired]
+        );
     }
 
     fn setup_mock_provider_for_deletion(
@@ -898,6 +1039,7 @@ mod tests {
                     .returning(|_, _, _, _| Ok(OperationResult::Completed(succeeded_deployment())));
                 mock_cognitive.expect_get_deployment().returning(|_, _, _| {
                     Ok(CognitiveServicesDeployment {
+                        name: Some("gpt-4.1".to_string()),
                         sku: None,
                         properties: Some(CognitiveServicesDeploymentProperties {
                             model: CognitiveServicesDeploymentModel {
