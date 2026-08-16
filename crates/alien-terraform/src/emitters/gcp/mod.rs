@@ -20,6 +20,7 @@ pub mod service_activation;
 pub mod storage;
 pub mod vault;
 pub mod worker;
+pub mod sandbox;
 
 pub use ai::GcpAiEmitter;
 pub use artifact_registry::GcpArtifactRegistryEmitter;
@@ -28,6 +29,7 @@ pub use key::GcpKeyEmitter;
 pub use kv::GcpKvEmitter;
 pub use network::GcpNetworkEmitter;
 pub use queue::GcpQueueEmitter;
+pub use sandbox::GcpSandboxEmitter;
 pub use remote_bindings::GcpRemoteBindingsEmitter;
 pub use remote_stack_management::GcpRemoteStackManagementEmitter;
 pub use service_account::GcpServiceAccountEmitter;

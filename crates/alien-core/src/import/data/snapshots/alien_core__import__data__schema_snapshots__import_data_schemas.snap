@@ -1870,6 +1870,21 @@ expression: schemas
     "title": "GcpQueueImportData",
     "type": "object"
   },
+  "gcp_sandbox": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "GCP Sandbox ImportData.\n\nA Cloud Run sandbox has no durable parent: it is a nested gVisor sandbox started by a launcher binary Cloud Run injects into the container, so there is no group, image or endpoint for setup to hand over. What the runtime needs is the launcher's path, and it is carried here rather than hardcoded in the provider so a change to where Cloud Run mounts it is a data change.",
+    "properties": {
+      "launcherPath": {
+        "description": "Path to the sandbox CLI Cloud Run injects when the container sets `sandboxLauncher`.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "launcherPath"
+    ],
+    "title": "GcpSandboxImportData",
+    "type": "object"
+  },
   "gcp_remote_stack_management": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "GCP RemoteStackManagement ImportData — cross-project service account the manager impersonates.",

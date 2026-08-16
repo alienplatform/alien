@@ -14,6 +14,7 @@ pub mod service_activation;
 pub mod storage;
 pub mod vault;
 pub mod worker;
+pub mod sandbox;
 
 pub use ai::*;
 pub use artifact_registry::*;
@@ -23,6 +24,7 @@ pub use key::*;
 pub use kv::*;
 pub use network::*;
 pub use postgres::*;
+pub use sandbox::GcpSandboxImportData;
 pub use queue::*;
 pub use remote_bindings::*;
 pub use remote_stack_management::*;
