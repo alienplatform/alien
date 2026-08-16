@@ -1,7 +1,5 @@
 # DataCloudSQL
 
-GCP Cloud SQL backend.
-
 ## Example Usage
 
 ```typescript

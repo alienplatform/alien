@@ -1,7 +1,5 @@
 # DataAurora
 
-AWS Aurora Serverless v2 backend.
-
 ## Example Usage
 
 ```typescript

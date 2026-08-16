@@ -192,6 +192,15 @@ export type CreateProjectPackagesConfigRequest = {
   terraform?: CreateProjectTerraformRequest | null | undefined;
 };
 
+export const EnabledCapability = {
+  Deployments: "deployments",
+  Models: "models",
+  Keys: "keys",
+  Buckets: "buckets",
+  Registry: "registry",
+} as const;
+export type EnabledCapability = ClosedEnum<typeof EnabledCapability>;
+
 export type CreateProjectRequestBody = {
   /**
    * Project name.
@@ -209,6 +218,7 @@ export type CreateProjectRequestBody = {
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
   packagesConfig?: CreateProjectPackagesConfigRequest | null | undefined;
+  enabledCapabilities?: Array<EnabledCapability> | undefined;
 };
 
 export type CreateProjectRequest = {
@@ -826,6 +836,11 @@ export function createProjectPackagesConfigRequestToJSON(
 }
 
 /** @internal */
+export const EnabledCapability$outboundSchema: z.ZodEnum<
+  typeof EnabledCapability
+> = z.enum(EnabledCapability);
+
+/** @internal */
 export type CreateProjectRequestBody$Outbound = {
   name: string;
   gitRepository?: CreateProjectGitRepositoryRequest$Outbound | null | undefined;
@@ -834,6 +849,7 @@ export type CreateProjectRequestBody$Outbound = {
     | CreateProjectPackagesConfigRequest$Outbound
     | null
     | undefined;
+  enabledCapabilities?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -849,6 +865,7 @@ export const CreateProjectRequestBody$outboundSchema: z.ZodType<
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectPackagesConfigRequest$outboundSchema),
   ).optional(),
+  enabledCapabilities: z.array(EnabledCapability$outboundSchema).optional(),
 });
 
 export function createProjectRequestBodyToJSON(

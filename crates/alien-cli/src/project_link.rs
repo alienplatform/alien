@@ -270,6 +270,7 @@ pub async fn create_new_project(
             git_repository,
             root_directory: None,
             packages_config: None,
+            enabled_capabilities: Vec::new(),
         })
         .send()
         .await

@@ -904,7 +904,7 @@ static DIRECT_DATABRICKS_MODELS: &[DirectDatabricksModel] = &[
     },
     DirectDatabricksModel {
         public_id: "claude-opus-5",
-        upstream_id: "databricks-claude-opus-5",
+        upstream_id: "system.ai.claude-opus-5",
         client_apis: &[
             ClientApi::OpenAiChatCompletions,
             ClientApi::OpenAiResponses,
@@ -1282,7 +1282,10 @@ mod tests {
         let mut public_ids = std::collections::HashSet::new();
         for model in DIRECT_DATABRICKS_MODELS {
             assert!(public_ids.insert(model.public_id));
-            assert!(model.upstream_id.starts_with("databricks-"));
+            assert!(
+                model.upstream_id.starts_with("databricks-")
+                    || model.upstream_id.starts_with("system.ai.")
+            );
             assert!(!model.client_apis.is_empty());
             assert_eq!(
                 resolve_direct_databricks(model.public_id)
@@ -1293,6 +1296,12 @@ mod tests {
         }
         assert!(resolve_direct_databricks("bge-large-en").is_none());
         assert!(resolve_direct_databricks("databricks-genie").is_none());
+        assert_eq!(
+            resolve_direct_databricks("claude-opus-5")
+                .expect("Claude Opus 5 must resolve")
+                .upstream_id,
+            "system.ai.claude-opus-5"
+        );
         assert_eq!(
             resolve_direct_databricks("gpt-5.5")
                 .expect("GPT-5.5 must resolve")
