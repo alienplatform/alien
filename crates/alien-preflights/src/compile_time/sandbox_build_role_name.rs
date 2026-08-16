@@ -14,7 +14,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Sandbox, Stack};
+use alien_core::{Build, Platform, Sandbox, Stack};
 
 /// Suffix `sandbox/provision` scopes its `iam:PassRole` to.
 const BUILD_ROLE_SUFFIX: &str = "-build";
@@ -71,10 +71,14 @@ impl CompileTimeCheck for SandboxBuildRoleNameCheck {
         let mut errors = Vec::new();
 
         for (resource_id, entry) in stack.resources() {
-            let is_sandbox =
-                entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref();
+            let resource_type = entry.config.resource_type();
+            let is_sandbox = resource_type.as_ref() == Sandbox::RESOURCE_TYPE.as_ref();
+            // A `Build` is the one type that may wear the shape safely: its role trusts codebuild,
+            // so the image builder cannot assume it whatever the name says. Refusing it would cost
+            // a caller the most natural id for a build without buying anything.
+            let is_build = resource_type.as_ref() == Build::RESOURCE_TYPE.as_ref();
 
-            if !is_sandbox && resource_id.ends_with(BUILD_ROLE_SUFFIX) {
+            if !is_sandbox && !is_build && resource_id.ends_with(BUILD_ROLE_SUFFIX) {
                 errors.push(format!(
                     "Resource '{resource_id}' ends in '{BUILD_ROLE_SUFFIX}', which is reserved: a \
                      sandbox's build role is named '<prefix>-<sandbox>{BUILD_ROLE_SUFFIX}' and \
@@ -156,6 +160,29 @@ mod tests {
         let result = run(stack).await;
         assert!(!result.success, "a reserved suffix must be refused");
         assert!(result.errors.iter().any(|error| error.contains("reserved")));
+    }
+
+    /// The natural id for a build is `<something>-build`, and a `Build` may keep it: its role
+    /// trusts codebuild, so the image builder cannot assume it however the name reads. Refusing it
+    /// would block a stack that is not at risk.
+    #[tokio::test]
+    async fn a_build_resource_may_keep_the_build_suffix() {
+        let stack = Stack::new("app".to_string())
+            .add(sandbox("runner"), ResourceLifecycle::Frozen)
+            .add(
+                Build::new("image-build".to_string())
+                    .permissions("build-execution".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let result = run(stack).await;
+        assert!(
+            result.success,
+            "a Build may wear the suffix: {:?}",
+            result.errors
+        );
     }
 
     /// The grant follows the permission set, so a profile can carry it with no sandbox in sight.
