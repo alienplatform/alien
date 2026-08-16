@@ -114,18 +114,78 @@ impl AiUsageContext {
             provider_region,
         }
     }
+
+    fn observe(
+        self,
+        observer: &Arc<dyn AiUsageObserver>,
+        outcome: AiUsageOutcome,
+        status: u16,
+        tokens: AiTokenUsage,
+    ) {
+        let event = AiUsageEvent {
+            request_id: self.request_id,
+            started_at: self.started_at,
+            duration: self.started.elapsed(),
+            binding: self.binding,
+            provider: self.provider,
+            public_model: self.public_model,
+            provider_model: self.provider_model,
+            client_api: self.client_api,
+            provider_region: self.provider_region,
+            status,
+            outcome,
+            tokens,
+        };
+        let observer = Arc::clone(observer);
+        // A faulty optional observer must not turn successful inference into a
+        // failed response or abort a response-body task.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observer.observe(event);
+        }));
+    }
 }
 
 struct ObservedBody {
     inner: Pin<Box<dyn futures::Stream<Item = Result<Bytes, axum::Error>> + Send>>,
     observer: Arc<dyn AiUsageObserver>,
-    context: AiUsageContext,
+    context: Option<AiUsageContext>,
     response_tail: VecDeque<u8>,
+    sse_line: Vec<u8>,
+    discard_sse_line: bool,
+    streamed_tokens: AiTokenUsage,
     status: u16,
     complete: bool,
 }
 
 impl ObservedBody {
+    fn inspect_chunk(&mut self, chunk: &[u8]) {
+        self.retain_tail(chunk);
+        for &byte in chunk {
+            if byte == b'\n' {
+                if !self.discard_sse_line {
+                    let usage = usage_from_sse_line(&self.sse_line, self.client_api());
+                    merge_usage(&mut self.streamed_tokens, usage);
+                }
+                self.sse_line.clear();
+                self.discard_sse_line = false;
+            } else if !self.discard_sse_line {
+                if self.sse_line.len() < MAX_USAGE_RESPONSE_BYTES {
+                    self.sse_line.push(byte);
+                } else {
+                    self.sse_line.clear();
+                    self.discard_sse_line = true;
+                }
+            }
+        }
+    }
+
+    fn client_api(&self) -> AiUsageClientApi {
+        self.context
+            .as_ref()
+            .expect("usage context exists until observation finishes")
+            .client_api
+    }
+
     fn retain_tail(&mut self, chunk: &[u8]) {
         if chunk.len() >= MAX_USAGE_RESPONSE_BYTES {
             self.response_tail.clear();
@@ -150,34 +210,25 @@ impl ObservedBody {
             return;
         }
         self.complete = true;
+        let context = self
+            .context
+            .take()
+            .expect("usage context exists until observation finishes");
         let tokens = if outcome == AiUsageOutcome::Success {
-            parse_ai_token_usage(
-                self.response_tail.make_contiguous(),
-                self.context.client_api,
-            )
+            if !self.discard_sse_line && !self.sse_line.is_empty() {
+                merge_usage(
+                    &mut self.streamed_tokens,
+                    usage_from_sse_line(&self.sse_line, context.client_api),
+                );
+            }
+            let mut tokens =
+                parse_ai_token_usage(self.response_tail.make_contiguous(), context.client_api);
+            merge_usage(&mut tokens, std::mem::take(&mut self.streamed_tokens));
+            tokens
         } else {
             AiTokenUsage::default()
         };
-        let event = AiUsageEvent {
-            request_id: self.context.request_id.clone(),
-            started_at: self.context.started_at,
-            duration: self.context.started.elapsed(),
-            binding: self.context.binding.clone(),
-            provider: self.context.provider,
-            public_model: self.context.public_model.clone(),
-            provider_model: self.context.provider_model.clone(),
-            client_api: self.context.client_api,
-            provider_region: self.context.provider_region.clone(),
-            status,
-            outcome,
-            tokens,
-        };
-        let observer = Arc::clone(&self.observer);
-        // A faulty optional observer must not turn successful inference into a
-        // failed response or abort a response-body task.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            observer.observe(event);
-        }));
+        context.observe(&self.observer, outcome, status, tokens);
     }
 }
 
@@ -202,15 +253,18 @@ pub(crate) fn observe_response(
     let state = ObservedBody {
         inner: Box::pin(body.into_data_stream()),
         observer: Arc::clone(observer),
-        context,
+        context: Some(context),
         response_tail: VecDeque::new(),
+        sse_line: Vec::new(),
+        discard_sse_line: false,
+        streamed_tokens: AiTokenUsage::default(),
         status,
         complete: false,
     };
     let stream = futures::stream::unfold(state, |mut state| async move {
         match state.inner.next().await {
             Some(Ok(chunk)) => {
-                state.retain_tail(&chunk);
+                state.inspect_chunk(&chunk);
                 Some((Ok::<_, axum::Error>(chunk), state))
             }
             Some(Err(error)) => {
@@ -232,6 +286,21 @@ pub(crate) fn observe_response(
     Response::from_parts(parts, Body::from_stream(stream))
 }
 
+pub(crate) fn observe_gateway_error(
+    observer: Option<&Arc<dyn AiUsageObserver>>,
+    context: AiUsageContext,
+    status: u16,
+) {
+    if let Some(observer) = observer {
+        context.observe(
+            observer,
+            AiUsageOutcome::GatewayError,
+            status,
+            AiTokenUsage::default(),
+        );
+    }
+}
+
 /// Extract token counts from a complete JSON response or from the JSON payloads
 /// carried by an SSE response. Unknown response fields are ignored. Missing usage
 /// remains `None`; it is never converted to zero.
@@ -242,19 +311,23 @@ pub fn parse_ai_token_usage(body: &[u8], client_api: AiUsageClientApi) -> AiToke
 
     let mut usage = AiTokenUsage::default();
     for line in body.split(|byte| *byte == b'\n') {
-        let line = trim_ascii(line);
-        let Some(data) = line.strip_prefix(b"data:") else {
-            continue;
-        };
-        let data = trim_ascii(data);
-        if data == b"[DONE]" {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_slice::<Value>(data) {
-            merge_usage(&mut usage, usage_from_value(&value, client_api));
-        }
+        merge_usage(&mut usage, usage_from_sse_line(line, client_api));
     }
     usage
+}
+
+fn usage_from_sse_line(line: &[u8], client_api: AiUsageClientApi) -> AiTokenUsage {
+    let line = trim_ascii(line);
+    let Some(data) = line.strip_prefix(b"data:") else {
+        return AiTokenUsage::default();
+    };
+    let data = trim_ascii(data);
+    if data == b"[DONE]" {
+        return AiTokenUsage::default();
+    }
+    serde_json::from_slice::<Value>(data)
+        .map(|value| usage_from_value(&value, client_api))
+        .unwrap_or_default()
 }
 
 fn trim_ascii(mut value: &[u8]) -> &[u8] {
@@ -373,15 +446,18 @@ mod tests {
         let state = ObservedBody {
             inner: Box::pin(futures::stream::pending()),
             observer,
-            context: AiUsageContext::new(
+            context: Some(AiUsageContext::new(
                 "llm",
                 AiUsageProvider::OpenAi,
                 "gpt-5-mini",
                 "gpt-5-mini",
                 AiUsageClientApi::OpenAiChatCompletions,
                 None,
-            ),
+            )),
             response_tail: VecDeque::new(),
+            sse_line: Vec::new(),
+            discard_sse_line: false,
+            streamed_tokens: AiTokenUsage::default(),
             status: 200,
             complete: false,
         };
@@ -455,6 +531,60 @@ data: {"type":"message_delta","usage":{"output_tokens":11}}
         assert_eq!(usage.cache_read_tokens, Some(9));
         assert_eq!(usage.cache_write_tokens, Some(6));
         assert_eq!(usage.reasoning_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn observes_usage_from_both_ends_of_a_large_anthropic_stream() {
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let start = Bytes::from_static(
+            b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":30,\"cache_creation_input_tokens\":6,\"cache_read_input_tokens\":9}}}\n\n",
+        );
+        let middle = Bytes::from(vec![b'x'; MAX_USAGE_RESPONSE_BYTES + 1]);
+        let end = Bytes::from_static(
+            b"\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":11}}\n\n",
+        );
+        let expected_len = start.len() + middle.len() + end.len();
+        let response = Response::new(Body::from_stream(futures::stream::iter([
+            Ok::<_, std::io::Error>(start),
+            Ok(middle),
+            Ok(end),
+        ])));
+        let response = observe_response(
+            response,
+            Some(&observer),
+            AiUsageContext::new(
+                "llm",
+                AiUsageProvider::Anthropic,
+                "claude-opus-4.8",
+                "claude-opus-4-8",
+                AiUsageClientApi::AnthropicMessages,
+                None,
+            ),
+        );
+
+        let forwarded = axum::body::to_bytes(response.into_body(), expected_len)
+            .await
+            .expect("consume observed response");
+        assert_eq!(
+            forwarded.len(),
+            expected_len,
+            "response must pass through whole"
+        );
+
+        let event = receiver.try_recv().expect("completed usage observation");
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
+        assert_eq!(event.status, 200);
+        assert_eq!(
+            event.tokens,
+            AiTokenUsage {
+                input_tokens: Some(30),
+                output_tokens: Some(11),
+                cache_read_tokens: Some(9),
+                cache_write_tokens: Some(6),
+                reasoning_tokens: None,
+            }
+        );
     }
 
     #[test]

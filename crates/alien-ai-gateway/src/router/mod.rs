@@ -23,7 +23,8 @@ use serde_json::{json, Value};
 use crate::creds::{AmbientCred, AnthropicApiKeyCred, OpenAiApiKeyCred};
 use crate::error::{ErrorData, Result};
 use crate::usage::{
-    observe_response, AiUsageClientApi, AiUsageContext, AiUsageObserver, AiUsageProvider,
+    observe_gateway_error, observe_response, AiUsageClientApi, AiUsageContext, AiUsageObserver,
+    AiUsageProvider,
 };
 
 mod bedrock;
@@ -315,6 +316,20 @@ fn cloud_usage_provider(cloud: Platform) -> AiUsageProvider {
     }
 }
 
+fn observe_result(
+    result: Result<Response>,
+    observer: Option<&Arc<dyn AiUsageObserver>>,
+    context: AiUsageContext,
+) -> Result<Response> {
+    match result {
+        Ok(response) => Ok(observe_response(response, observer, context)),
+        Err(error) => {
+            observe_gateway_error(observer, context, error.http_status_code.unwrap_or(500));
+            Err(error)
+        }
+    }
+}
+
 /// Build a JSON POST to `url`, sign it with the ambient credential for `service`,
 /// and execute it. The handlers differ only in URL, signing service, body, and any
 /// protocol-required header, so the build + sign + execute + upstream-error
@@ -417,12 +432,8 @@ async fn proxy(
                 None,
             );
             let response =
-                proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await?;
-            return Ok(observe_response(
-                response,
-                state.usage_observer.as_ref(),
-                descriptor,
-            ));
+                proxy_direct_anthropic(&state.client, route, payload, &model, &headers).await;
+            return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
         GatewayTarget::DirectOpenAi => {
             ensure_model_available(&state, &binding, &model)?;
@@ -449,11 +460,7 @@ async fn proxy(
                 "/v1/chat/completions",
             )
             .await;
-            return Ok(observe_response(
-                response?,
-                state.usage_observer.as_ref(),
-                descriptor,
-            ));
+            return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
         GatewayTarget::Cloud(_) => {}
     }
@@ -499,65 +506,48 @@ async fn proxy(
     // event-stream framing, so it needs its own request/response shape.
     if cloud == Platform::Aws && cm.provider_api == ProviderApi::Anthropic {
         let response =
-            proxy_bedrock_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
-                .await?;
-        return Ok(observe_response(
-            response,
-            state.usage_observer.as_ref(),
-            descriptor,
-        ));
+            proxy_bedrock_anthropic(&state.client, route, cm.upstream_id, payload, &headers).await;
+        return observe_result(response, state.usage_observer.as_ref(), descriptor);
     }
     // GCP serves Claude through Vertex rawPredict: the model id travels in the URL
     // and streaming is chosen by the URL verb, but the reply is native Anthropic
     // JSON/SSE — no decoder needed, unlike Bedrock.
     if cloud == Platform::Gcp && cm.provider_api == ProviderApi::Anthropic {
         let response =
-            proxy_vertex_anthropic(&state.client, route, cm.upstream_id, payload, &headers).await?;
-        return Ok(observe_response(
-            response,
-            state.usage_observer.as_ref(),
-            descriptor,
-        ));
+            proxy_vertex_anthropic(&state.client, route, cm.upstream_id, payload, &headers).await;
+        return observe_result(response, state.usage_observer.as_ref(), descriptor);
     }
     // Azure serves Claude through Foundry's Anthropic endpoint: standard Messages
     // in both directions, on the `/anthropic/v1` path with the version header.
     if cloud == Platform::Azure && cm.provider_api == ProviderApi::Anthropic {
         let response =
-            proxy_foundry_anthropic(&state.client, route, cm.upstream_id, payload, &headers)
-                .await?;
-        return Ok(observe_response(
-            response,
-            state.usage_observer.as_ref(),
-            descriptor,
-        ));
+            proxy_foundry_anthropic(&state.client, route, cm.upstream_id, payload, &headers).await;
+        return observe_result(response, state.usage_observer.as_ref(), descriptor);
     }
 
-    payload["model"] = Value::String(cm.upstream_id.to_string());
-    let upstream_body =
-        serde_json::to_vec(&payload)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "could not re-serialize the rewritten request body".to_string(),
-            })?;
+    let response = async {
+        payload["model"] = Value::String(cm.upstream_id.to_string());
+        let upstream_body =
+            serde_json::to_vec(&payload)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "could not re-serialize the rewritten request body".to_string(),
+                })?;
 
-    let (url, aws_service) = upstream_target(route, cm.provider_api)?;
-
-    let upstream = sign_and_execute(
-        &state.client,
-        &route.cred,
-        &url,
-        aws_service,
-        upstream_body,
-        &[],
-    )
-    .await?;
-
-    let response = forward_response(upstream).await?;
-    Ok(observe_response(
-        response,
-        state.usage_observer.as_ref(),
-        descriptor,
-    ))
+        let (url, aws_service) = upstream_target(route, cm.provider_api)?;
+        let upstream = sign_and_execute(
+            &state.client,
+            &route.cred,
+            &url,
+            aws_service,
+            upstream_body,
+            &[],
+        )
+        .await?;
+        forward_response(upstream).await
+    }
+    .await;
+    observe_result(response, state.usage_observer.as_ref(), descriptor)
 }
 
 /// Proxy an OpenAI Responses request (`POST /<name>/v1/responses`, used by Codex).
@@ -591,8 +581,17 @@ async fn proxy_responses(
         }
         GatewayTarget::DirectOpenAi => {
             ensure_model_available(&state, &binding, &model)?;
-            return proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses")
-                .await;
+            let descriptor = AiUsageContext::new(
+                &binding,
+                AiUsageProvider::OpenAi,
+                &model,
+                &model,
+                AiUsageClientApi::OpenAiResponses,
+                None,
+            );
+            let response =
+                proxy_direct_openai(&state.client, route, payload, &model, "/v1/responses").await;
+            return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
     };
     let catalog_model = ai_catalog::resolve_for(&model, cloud)
@@ -619,40 +618,38 @@ async fn proxy_responses(
         route.region.clone(),
     );
 
-    payload["model"] = Value::String(target.upstream_id.to_string());
-    let upstream_body =
-        serde_json::to_vec(&payload)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "could not re-serialize the rewritten request body".to_string(),
-            })?;
+    let response = async {
+        payload["model"] = Value::String(target.upstream_id.to_string());
+        let upstream_body =
+            serde_json::to_vec(&payload)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "could not re-serialize the rewritten request body".to_string(),
+                })?;
 
-    let region = route
-        .region
-        .as_deref()
-        .ok_or_else(|| missing_field(route, "region"))?;
-    let base = route
-        .upstream_base_override
-        .clone()
-        .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
-    let url = format!("{}{}", base.trim_end_matches('/'), target.path);
+        let region = route
+            .region
+            .as_deref()
+            .ok_or_else(|| missing_field(route, "region"))?;
+        let base = route
+            .upstream_base_override
+            .clone()
+            .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws"));
+        let url = format!("{}{}", base.trim_end_matches('/'), target.path);
 
-    let upstream = sign_and_execute(
-        &state.client,
-        &route.cred,
-        &url,
-        "bedrock-mantle",
-        upstream_body,
-        &[],
-    )
-    .await?;
-
-    let response = forward_response(upstream).await?;
-    Ok(observe_response(
-        response,
-        state.usage_observer.as_ref(),
-        descriptor,
-    ))
+        let upstream = sign_and_execute(
+            &state.client,
+            &route.cred,
+            &url,
+            "bedrock-mantle",
+            upstream_body,
+            &[],
+        )
+        .await?;
+        forward_response(upstream).await
+    }
+    .await;
+    observe_result(response, state.usage_observer.as_ref(), descriptor)
 }
 
 /// `GET /<name>/v1/models`: the qualified catalog, intersected with the bounded
@@ -891,6 +888,7 @@ fn parse_stream_flag(value: Option<Value>) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
+    use std::sync::mpsc;
 
     use aws_credential_types::provider::SharedCredentialsProvider;
     use aws_credential_types::Credentials;
@@ -901,6 +899,14 @@ mod tests {
 
     use super::*;
     use crate::creds::{AwsSigV4Cred, BearerTokenCred};
+
+    struct TestObserver(mpsc::Sender<crate::usage::AiUsageEvent>);
+
+    impl AiUsageObserver for TestObserver {
+        fn observe(&self, event: crate::usage::AiUsageEvent) {
+            self.0.send(event).expect("usage receiver remains open");
+        }
+    }
 
     fn test_aws_cred() -> AmbientCred {
         let creds = Credentials::new(
@@ -949,6 +955,72 @@ mod tests {
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
         }
+    }
+
+    #[tokio::test]
+    async fn direct_openai_responses_are_observed() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/responses")
+                    .body_contains("gpt-5-mini")
+                    .header("authorization", "Bearer sk-test");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"resp_1","usage":{"input_tokens":12,"output_tokens":7}}"#);
+            })
+            .await;
+        let mut route = route_from_direct_openai("llm", "sk-test").unwrap();
+        route.upstream_base_override = Some(server.base_url());
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let url = serve(build_router_with_observer(vec![route], observer)).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model": "gpt-5-mini", "input": "hi"}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(response.status(), 200);
+        response.bytes().await.expect("consume response body");
+
+        let event = receiver.try_recv().expect("completed usage observation");
+        assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
+        assert_eq!(event.provider, AiUsageProvider::OpenAi);
+        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::Success);
+        assert_eq!(event.status, 200);
+        assert_eq!(event.tokens.input_tokens, Some(12));
+        assert_eq!(event.tokens.output_tokens, Some(7));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn gateway_failures_are_observed_without_swallowing_the_error() {
+        let mut route = route_from_direct_openai("llm", "sk-test").unwrap();
+        route.upstream_base_override = Some("http://[invalid".to_string());
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let url = serve(build_router_with_observer(vec![route], observer)).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model": "gpt-5-mini", "input": "hi"}))
+            .send()
+            .await
+            .expect("gateway response");
+        assert_eq!(
+            response.status(),
+            500,
+            "gateway error must still reach caller"
+        );
+
+        let event = receiver.try_recv().expect("gateway error observation");
+        assert_eq!(event.client_api, AiUsageClientApi::OpenAiResponses);
+        assert_eq!(event.outcome, crate::usage::AiUsageOutcome::GatewayError);
+        assert_eq!(event.status, 500);
+        assert_eq!(event.tokens, crate::usage::AiTokenUsage::default());
     }
 
     #[test]
