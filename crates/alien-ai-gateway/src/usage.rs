@@ -15,9 +15,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Receives completed request observations. Implementations must return quickly;
-/// inference must never wait for telemetry delivery. A typical implementation uses
-/// a bounded channel and drops the event when that channel is full.
+/// Receives completed provider-bound inference observations.
+///
+/// Rejected requests that cannot be attributed to a binding, provider, public
+/// model, provider model, and client API are not usage events. Implementations
+/// must return quickly; inference must never wait for telemetry delivery. A
+/// typical implementation uses a bounded channel and drops the event when that
+/// channel is full.
 pub trait AiUsageObserver: Send + Sync + 'static {
     fn observe(&self, event: AiUsageEvent);
 }
@@ -48,6 +52,7 @@ pub enum AiUsageClientApi {
 pub enum AiUsageOutcome {
     Success,
     ProviderError,
+    /// The gateway failed after resolving the request to a provider-bound model.
     GatewayError,
     Cancelled,
 }
