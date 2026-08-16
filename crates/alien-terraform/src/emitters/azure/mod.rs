@@ -30,6 +30,7 @@ pub mod storage;
 pub mod storage_account;
 pub mod vault;
 pub mod worker;
+pub mod sandbox;
 
 pub use ai::AzureAiEmitter;
 pub use artifact_registry::AzureArtifactRegistryEmitter;
@@ -40,6 +41,7 @@ pub use kv::AzureKvEmitter;
 pub use network::AzureNetworkEmitter;
 pub use queue::AzureQueueEmitter;
 pub use remote_bindings::AzureRemoteBindingsEmitter;
+pub use sandbox::AzureSandboxEmitter;
 pub use remote_stack_management::AzureRemoteStackManagementEmitter;
 pub use resource_group::AzureResourceGroupEmitter;
 pub use service_account::AzureServiceAccountEmitter;

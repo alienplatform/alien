@@ -135,6 +135,7 @@ fn register_azure(registry: &mut TfRegistry) {
     );
     registry.register(Build::RESOURCE_TYPE, p, azure::AzureBuildEmitter);
     registry.register(Worker::RESOURCE_TYPE, p, azure::AzureWorkerEmitter);
+    registry.register(Sandbox::RESOURCE_TYPE, p, azure::AzureSandboxEmitter);
     registry.register(
         ServiceActivation::RESOURCE_TYPE,
         p,
