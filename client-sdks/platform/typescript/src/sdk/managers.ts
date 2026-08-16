@@ -27,20 +27,6 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Managers extends ClientSDK {
   /**
-   * Create a new manager.
-   */
-  async create(
-    request?: operations.CreateManagerRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<models.CreateManagerResponse> {
-    return unwrapAsync(managersCreate(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Retrieve all managers.
    */
   async list(
@@ -48,6 +34,20 @@ export class Managers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<Array<models.Manager>> {
     return unwrapAsync(managersList(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create a new manager.
+   */
+  async create(
+    request?: operations.CreateManagerRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.CreateManagerResponse> {
+    return unwrapAsync(managersCreate(
       this,
       request,
       options,
