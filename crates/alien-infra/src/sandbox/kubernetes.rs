@@ -114,7 +114,7 @@ impl KubernetesSandboxController {
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
-        let created = replenish_warm_pool(
+        let pool = replenish_warm_pool(
             ctx,
             &config,
             &namespace,
@@ -124,7 +124,31 @@ impl KubernetesSandboxController {
         )
         .await?;
 
+        let created = pool.created;
         debug!(sandbox_id = %config.id, sessions, created, "Sandbox health check passed");
+
+        // Counts of pods, never anything inside one. `sessions` covers every pod carrying the
+        // sandbox label, the idle pool included, so what an application is actually running is
+        // what is left once the idle pods are taken out.
+        ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
+            deployment_id: None,
+            resource_id: config.id.clone(),
+            resource_type: Sandbox::RESOURCE_TYPE,
+            controller_platform: alien_core::Platform::Kubernetes,
+            backend: alien_core::HeartbeatBackend::Kubernetes,
+            observed_at: chrono::Utc::now(),
+            data: alien_core::ResourceHeartbeatData::Sandbox(
+                alien_core::SandboxHeartbeatData::KubernetesPods(
+                    alien_core::KubernetesSandboxHeartbeatData {
+                        status: alien_core::SandboxHeartbeatStatus::default(),
+                        namespace,
+                        active_sessions: sessions.saturating_sub(pool.idle) as u32,
+                        idle_pods: (pool.idle + pool.created) as u32,
+                    },
+                ),
+            ),
+            raw: vec![],
+        });
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -296,6 +320,14 @@ impl KubernetesSandboxController {
 /// Idle pods kept ready when the operator has not chosen a size.
 const DEFAULT_WARM_POOL_SIZE: usize = 2;
 
+/// What one replenish pass found and did.
+struct WarmPool {
+    /// Idle pods already waiting when the pass ran.
+    idle: usize,
+    /// Pods the pass added.
+    created: usize,
+}
+
 /// Tops the idle pool back up to its target.
 ///
 /// Runs on the health tick rather than on session create: a create that had to wait for a pod
@@ -307,7 +339,7 @@ async fn replenish_warm_pool(
     runtime_class: &str,
     target: usize,
     capability_public_key: Option<&str>,
-) -> Result<usize> {
+) -> Result<WarmPool> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let client = ctx
         .service_provider
@@ -322,7 +354,8 @@ async fn replenish_warm_pool(
             resource_id: Some(sandbox.id.clone()),
         })?;
 
-    let deficit = pool_deficit(target, idle.items.len());
+    let waiting = idle.items.len();
+    let deficit = pool_deficit(target, waiting);
     let mut created = 0;
 
     for _ in 0..deficit {
@@ -346,7 +379,10 @@ async fn replenish_warm_pool(
         }
     }
 
-    Ok(created)
+    Ok(WarmPool {
+        idle: waiting,
+        created,
+    })
 }
 
 /// The deployment's namespace, which is where a sandbox's pods go.

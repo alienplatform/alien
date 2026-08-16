@@ -283,7 +283,10 @@ fn critical_e2e_provider_operations_are_declared() {
             ],
             gcp_permissions: &[],
             gcp_predefined_roles: &[],
-            azure_actions: &["Microsoft.App/sandboxGroups/write", "Microsoft.App/sandboxGroups/delete"],
+            azure_actions: &[
+                "Microsoft.App/sandboxGroups/write",
+                "Microsoft.App/sandboxGroups/delete",
+            ],
             azure_data_actions: &[],
             azure_predefined_roles: &[],
         },

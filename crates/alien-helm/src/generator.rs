@@ -10,11 +10,11 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs, Container,
-    ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster, KubernetesClusterOutputs,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
-    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
-    WorkerCode,
+    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs,
+    Container, ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster,
+    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider, Platform,
+    RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -299,14 +299,23 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
     // stays a namespaced Role. Both grant read-only + the access-request CRD.
     if cluster_wide {
-        docs.push(operator_clusterrole_doc(&operator_name, &labels, &crd_names));
+        docs.push(operator_clusterrole_doc(
+            &operator_name,
+            &labels,
+            &crd_names,
+        ));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
             &operator_name,
             &labels,
         ));
     } else {
-        docs.push(operator_role_doc(namespace, &operator_name, &labels, &crd_names));
+        docs.push(operator_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+            &crd_names,
+        ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
     docs.push(operator_secret_doc(
@@ -1361,6 +1370,7 @@ impl ChartAnalysis {
                 resource: entry,
                 resource_id,
                 platform: Platform::Kubernetes,
+                targets_kubernetes: true,
                 stack_settings: &stack_settings,
                 names: &names,
             };
@@ -4302,10 +4312,16 @@ mod tests {
             .any(|r| {
                 r.get("apiGroups")
                     .and_then(YamlValue::as_sequence)
-                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme.dev")))
+                    .map(|g| {
+                        g.iter()
+                            .any(|x| x.as_str() == Some("accessrequests.acme.dev"))
+                    })
                     .unwrap_or(false)
             });
-        assert!(has_branded_rule, "RBAC must grant the branded access-request group");
+        assert!(
+            has_branded_rule,
+            "RBAC must grant the branded access-request group"
+        );
     }
 
     #[test]

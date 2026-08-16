@@ -53,6 +53,32 @@ where
     }
 }
 
+/// Same reason as the boolean helper: CloudFormation stringifies the leaves of a custom
+/// resource's properties, so a declared port list arrives as `["3000"]` rather than `[3000]`.
+pub(crate) fn deserialize_u16_vec_from_numbers_or_strings<'de, D>(
+    deserializer: D,
+) -> Result<Vec<u16>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    values
+        .into_iter()
+        .map(|value| match value {
+            serde_json::Value::Number(number) => number
+                .as_u64()
+                .and_then(|n| u16::try_from(n).ok())
+                .ok_or_else(|| serde::de::Error::custom(format!("port {number} is out of range"))),
+            serde_json::Value::String(text) => text.parse::<u16>().map_err(|_| {
+                serde::de::Error::custom(format!("expected a port number, got {text:?}"))
+            }),
+            other => Err(serde::de::Error::custom(format!(
+                "expected a port number or numeric string, got {other}"
+            ))),
+        })
+        .collect()
+}
+
 #[cfg(all(test, feature = "jsonschema"))]
 mod schema_snapshots {
     use super::*;
@@ -190,7 +216,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn aws_import_data_accepts_cloudformation_string_booleans() {
+    fn aws_import_data_accepts_cloudformation_stringified_leaves() {
         let network: AwsNetworkImportData = serde_json::from_value(json!({
             "vpcId": "vpc-123",
             "cidrBlock": null,
@@ -224,5 +250,32 @@ mod tests {
         }))
         .expect("service account import data should parse");
         assert!(!service_account.stack_permissions_applied);
+
+        // CloudFormation stringifies every leaf of a custom resource's properties, so this is the
+        // shape the importer actually receives — a sandbox declared with open egress and a preview
+        // port reaches it as strings, and rejecting them fails the customer's stack at setup.
+        let sandbox: AwsSandboxImportData = serde_json::from_value(json!({
+            "imageIdentifier": "runner",
+            "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image/runner",
+            "imageVersion": "1",
+            "egressConnectorArns": [],
+            "allowEgress": "true",
+            "previewPorts": ["3000", "8080"],
+        }))
+        .expect("sandbox import data should parse CloudFormation's stringified leaves");
+        assert!(sandbox.allow_egress);
+        assert_eq!(sandbox.preview_ports, vec![3000, 8080]);
+
+        let native: AwsSandboxImportData = serde_json::from_value(json!({
+            "imageIdentifier": "runner",
+            "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image/runner",
+            "imageVersion": "1",
+            "egressConnectorArns": [],
+            "allowEgress": false,
+            "previewPorts": [3000],
+        }))
+        .expect("sandbox import data should still parse native JSON types");
+        assert!(!native.allow_egress);
+        assert_eq!(native.preview_ports, vec![3000]);
     }
 }

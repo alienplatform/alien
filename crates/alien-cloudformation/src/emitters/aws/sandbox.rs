@@ -42,7 +42,7 @@ impl CfEmitter for AwsSandboxEmitter {
 
         let artifact_uri = artifact_uri(sandbox)?;
         refuse_unsupported_egress(sandbox)?;
-        let (vpc_id, subnet_ids) = egress_network(ctx, sandbox)?;
+        let egress = egress_network(ctx, sandbox)?;
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
@@ -51,6 +51,19 @@ impl CfEmitter for AwsSandboxEmitter {
         let connector_id = format!("{image_id}EgressConnector");
 
         let mut role = CfResource::new(role_id.clone(), "AWS::IAM::Role".to_string());
+        // Named rather than left to CloudFormation: the grant that passes this role is scoped by
+        // name, and a generated `<stack>-<logical id>-<random>` would not match the pattern the
+        // Terraform module produces. One name means one pattern for both.
+        //
+        // Unclamped on purpose. `SandboxBuildRoleNameCheck` refuses at plan time any id that could
+        // reach IAM's 64-character ceiling under the widest permitted prefix, so this cannot
+        // overflow — and clamping is what would hurt: Terraform's generic clamp replaces the tail
+        // with a hash, which drops the `-build` the pass grant matches and denies the image build
+        // at runtime instead of failing here.
+        role.properties.insert(
+            "RoleName".to_string(),
+            CfExpression::sub(format!("${{AWS::StackName}}-{}-build", sandbox.id())),
+        );
         role.properties.insert(
             "AssumeRolePolicyDocument".to_string(),
             service_trust_policy(["lambda.amazonaws.com"]),
@@ -59,87 +72,96 @@ impl CfEmitter for AwsSandboxEmitter {
             .insert("Policies".to_string(), build_policies(&artifact_uri));
         role.properties.insert("Tags".to_string(), tags(ctx));
 
-        // Lambda assumes this to manage the connector's network interfaces. AWS documents the
-        // permissions it must hold; the property being optional is not a promise that AWS
-        // provisions an equivalent role.
-        let mut operator_role =
-            CfResource::new(operator_role_id.clone(), "AWS::IAM::Role".to_string());
-        operator_role.properties.insert(
-            "AssumeRolePolicyDocument".to_string(),
-            service_trust_policy(["lambda.amazonaws.com"]),
-        );
-        operator_role
-            .properties
-            .insert("Policies".to_string(), operator_policies());
-        operator_role
-            .properties
-            .insert("Tags".to_string(), tags(ctx));
+        // An open sandbox routes nothing through a VPC, so none of this exists for it: no
+        // connector to attach, no group to deny with, and no role to manage interfaces.
+        let mut egress_resources = Vec::new();
+        if let Some((vpc_id, subnet_ids)) = egress {
+            // Lambda assumes this to manage the connector's network interfaces. AWS documents the
+            // permissions it must hold; the property being optional is not a promise that AWS
+            // provisions an equivalent role.
+            let mut operator_role =
+                CfResource::new(operator_role_id.clone(), "AWS::IAM::Role".to_string());
+            operator_role.properties.insert(
+                "AssumeRolePolicyDocument".to_string(),
+                service_trust_policy(["lambda.amazonaws.com"]),
+            );
+            operator_role
+                .properties
+                .insert("Policies".to_string(), operator_policies());
+            operator_role
+                .properties
+                .insert("Tags".to_string(), tags(ctx));
 
-        let mut security_group = CfResource::new(
-            security_group_id.clone(),
-            "AWS::EC2::SecurityGroup".to_string(),
-        );
-        security_group.properties.insert(
-            "GroupDescription".to_string(),
-            CfExpression::from(format!("Alien sandbox {} session egress", sandbox.id()).as_str()),
-        );
-        security_group
-            .properties
-            .insert("VpcId".to_string(), vpc_id);
-        // EC2 adds an allow-all egress rule to any group whose template states none, so the deny
-        // has to be written down. Loopback-only is AWS's documented way to say it. Widening this
-        // rule is the one edit that turns `egress: deny` back into internet access.
-        security_group.properties.insert(
-            "SecurityGroupEgress".to_string(),
-            CfExpression::list([CfExpression::object([
-                ("IpProtocol", CfExpression::from("-1")),
-                ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
-                (
-                    "Description",
-                    CfExpression::from("Sandbox sessions reach nothing outbound"),
-                ),
-            ])]),
-        );
-        security_group
-            .properties
-            .insert("Tags".to_string(), tags(ctx));
+            let mut security_group = CfResource::new(
+                security_group_id.clone(),
+                "AWS::EC2::SecurityGroup".to_string(),
+            );
+            security_group.properties.insert(
+                "GroupDescription".to_string(),
+                CfExpression::from(format!("Sandbox {} session egress", sandbox.id()).as_str()),
+            );
+            security_group
+                .properties
+                .insert("VpcId".to_string(), vpc_id);
+            // EC2 adds an allow-all egress rule to any group whose template states none, so the deny
+            // has to be written down. Loopback-only is AWS's documented way to say it. Widening this
+            // rule is the one edit that turns `egress: deny` back into internet access.
+            security_group.properties.insert(
+                "SecurityGroupEgress".to_string(),
+                CfExpression::list([CfExpression::object([
+                    ("IpProtocol", CfExpression::from("-1")),
+                    ("CidrIp", CfExpression::from(LOOPBACK_ONLY_CIDR)),
+                    (
+                        "Description",
+                        CfExpression::from("Sandbox sessions reach nothing outbound"),
+                    ),
+                ])]),
+            );
+            security_group
+                .properties
+                .insert("Tags".to_string(), tags(ctx));
 
-        let mut connector = CfResource::new(
-            connector_id.clone(),
-            "AWS::Lambda::NetworkConnector".to_string(),
-        );
-        connector.properties.insert(
-            "Name".to_string(),
-            CfExpression::sub(format!("${{AWS::StackName}}-{}", sandbox.id())),
-        );
-        connector.properties.insert(
-            "OperatorRole".to_string(),
-            CfExpression::get_att(&operator_role_id, "Arn"),
-        );
-        connector.properties.insert(
-            "Configuration".to_string(),
-            CfExpression::object([(
-                "VpcEgressConfiguration",
-                CfExpression::object([
-                    (
-                        "AssociatedComputeResourceTypes",
-                        CfExpression::list([CfExpression::from("MicroVm")]),
-                    ),
-                    // Documented optional in both the CloudControl schema and the
-                    // CloudFormation reference, and rejected when absent: "NetworkProtocol
-                    // cannot be null or empty for VPC_EGRESS connector". IPv4 rather than
-                    // DualStack because the security group that carries the deny matches IPv4
-                    // CIDRs — a v6 path would be outside it.
-                    ("NetworkProtocol", CfExpression::from("IPv4")),
-                    ("SubnetIds", subnet_ids),
-                    (
-                        "SecurityGroupIds",
-                        CfExpression::list([CfExpression::get_att(&security_group_id, "GroupId")]),
-                    ),
-                ]),
-            )]),
-        );
-        connector.properties.insert("Tags".to_string(), tags(ctx));
+            let mut connector = CfResource::new(
+                connector_id.clone(),
+                "AWS::Lambda::NetworkConnector".to_string(),
+            );
+            connector.properties.insert(
+                "Name".to_string(),
+                CfExpression::sub(format!("${{AWS::StackName}}-{}", sandbox.id())),
+            );
+            connector.properties.insert(
+                "OperatorRole".to_string(),
+                CfExpression::get_att(&operator_role_id, "Arn"),
+            );
+            connector.properties.insert(
+                "Configuration".to_string(),
+                CfExpression::object([(
+                    "VpcEgressConfiguration",
+                    CfExpression::object([
+                        (
+                            "AssociatedComputeResourceTypes",
+                            CfExpression::list([CfExpression::from("MicroVm")]),
+                        ),
+                        // Documented optional in both the CloudControl schema and the
+                        // CloudFormation reference, and rejected when absent: "NetworkProtocol
+                        // cannot be null or empty for VPC_EGRESS connector". IPv4 rather than
+                        // DualStack because the security group that carries the deny matches IPv4
+                        // CIDRs — a v6 path would be outside it.
+                        ("NetworkProtocol", CfExpression::from("IPv4")),
+                        ("SubnetIds", subnet_ids),
+                        (
+                            "SecurityGroupIds",
+                            CfExpression::list([CfExpression::get_att(
+                                &security_group_id,
+                                "GroupId",
+                            )]),
+                        ),
+                    ]),
+                )]),
+            );
+            connector.properties.insert("Tags".to_string(), tags(ctx));
+            egress_resources.extend([operator_role, security_group, connector]);
+        }
 
         let mut image = CfResource::new(
             image_id.to_string(),
@@ -153,11 +175,13 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         properties.insert(
             "Description".to_string(),
-            CfExpression::from(format!("Alien sandbox {}", sandbox.id()).as_str()),
+            CfExpression::from(format!("Sandbox {}", sandbox.id()).as_str()),
         );
         properties.insert(
             "BaseImageArn".to_string(),
-            CfExpression::sub("arn:aws:lambda:${AWS::Region}:aws:microvm-image:al2023-1"),
+            CfExpression::sub(
+                "arn:${AWS::Partition}:lambda:${AWS::Region}:aws:microvm-image:al2023-1",
+            ),
         );
         properties.insert("BaseImageVersion".to_string(), CfExpression::from("1"));
         properties.insert(
@@ -207,7 +231,10 @@ impl CfEmitter for AwsSandboxEmitter {
         properties.insert("EnvironmentVariables".to_string(), environment_variables());
         properties.insert("Tags".to_string(), tags(ctx));
 
-        Ok(vec![role, operator_role, security_group, connector, image])
+        let mut resources = vec![role];
+        resources.append(&mut egress_resources);
+        resources.push(image);
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -217,15 +244,21 @@ impl CfEmitter for AwsSandboxEmitter {
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
-                CfExpression::list([CfExpression::get_att(
-                    format!("{image_id}EgressConnector"),
-                    "Arn",
-                )]),
+                egress_connector_arns(sandbox, image_id),
             ),
-            // `Ref` returns the image ARN, which is what both `GetMicrovmImage` and
-            // `RunMicrovm` require — measured against the live API, where a bare name is refused
-            // by both.
-            ("imageIdentifier", CfExpression::ref_(image_id)),
+            (
+                "allowEgress",
+                CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+            ),
+            // Both `GetMicrovmImage` and `RunMicrovm` require the ARN — measured against the
+            // live API, where a bare name is refused with "Malformed ARN - doesn't start with
+            // 'arn:'". `Ref` was measured to return it too, but the attribute says
+            // so outright and is what the Terraform module uses for this field — one intrinsic
+            // for one field, so the two formats cannot drift apart on it.
+            (
+                "imageIdentifier",
+                CfExpression::get_att(image_id, "ImageArn"),
+            ),
             ("imageArn", CfExpression::get_att(image_id, "ImageArn")),
             // `RunMicrovm` has no tags, so image plus version is the whole of session identity.
             // A stale version enumerates the wrong set and orphans live sessions.
@@ -244,10 +277,11 @@ impl CfEmitter for AwsSandboxEmitter {
             ("previewPorts".to_string(), preview_ports(sandbox)),
             (
                 "egressConnectorArns".to_string(),
-                CfExpression::list([CfExpression::get_att(
-                    format!("{image_id}EgressConnector"),
-                    "Arn",
-                )]),
+                egress_connector_arns(sandbox, image_id),
+            ),
+            (
+                "allowEgress".to_string(),
+                CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
             (
                 "imageArn".to_string(),
@@ -311,13 +345,13 @@ fn build_policies(artifact_uri: &str) -> CfExpression {
                             ),
                             (
                                 "Resource",
-                                CfExpression::from(
-                                    format!(
-                                        "arn:aws:s3:::{}",
-                                        artifact_uri.trim_start_matches("s3://")
-                                    )
-                                    .as_str(),
-                                ),
+                                // Partition-qualified like every other ARN here: a hardcoded
+                                // `aws` never matches in GovCloud or China, and the build fails
+                                // on the bundle it was granted.
+                                CfExpression::sub(format!(
+                                    "arn:${{AWS::Partition}}:s3:::{}",
+                                    artifact_uri.trim_start_matches("s3://")
+                                )),
                             ),
                         ]),
                         CfExpression::object([
@@ -464,13 +498,19 @@ fn operator_policies() -> CfExpression {
 fn egress_network(
     ctx: &EmitContext<'_>,
     sandbox: &Sandbox,
-) -> Result<(CfExpression, CfExpression)> {
+) -> Result<Option<(CfExpression, CfExpression)>> {
     let refuse = |reason: String| {
         Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
             reason,
         }))
     };
+
+    if matches!(sandbox.egress, SandboxEgress::Allow) {
+        // Nothing to attach: a MicroVM started with no connector keeps AWS's managed internet
+        // path, which is what `allow` asks for, and needs no VPC to do it.
+        return Ok(None);
+    }
 
     let Some((network_id, network)) = default_network(ctx) else {
         return refuse(
@@ -486,7 +526,7 @@ fn egress_network(
         // deploy — cfn-lint rejects it, and worse, it is the case where a session would run with
         // no connector at all. Falling through to the use-existing parameter instead means
         // use-default fails when CloudFormation creates the connector rather than silently.
-        NetworkSettings::Create { .. } => Ok((
+        NetworkSettings::Create { .. } => Ok(Some((
             CfExpression::if_(
                 CONDITION_NETWORK_MODE_CREATE,
                 CfExpression::ref_(format!("{network_id}Vpc")),
@@ -497,8 +537,10 @@ fn egress_network(
                 subnet_refs(network_id, "PrivateSubnet"),
                 CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
             ),
-        )),
-        NetworkSettings::ByoVpcAws { .. } => Ok((vpc_id_expr(ctx), private_subnet_ids_expr(ctx))),
+        ))),
+        NetworkSettings::ByoVpcAws { .. } => {
+            Ok(Some((vpc_id_expr(ctx), private_subnet_ids_expr(ctx))))
+        }
         NetworkSettings::UseDefault => refuse(
             "an AWS sandbox routes session traffic through a VPC egress connector, which needs \
              private subnets; the account's default VPC has only public ones. Set the network \
@@ -510,6 +552,20 @@ fn egress_network(
              stack's network settings are for another cloud"
                 .to_string(),
         ),
+    }
+}
+
+/// The connectors a session starts with, which an open sandbox has none of.
+///
+/// Empty is not a missing value here: it is how `allow` is expressed on the wire, and the
+/// binding carries `allowEgress` alongside so the two cannot be confused.
+fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
+    match sandbox.egress {
+        SandboxEgress::Allow => CfExpression::list([]),
+        _ => CfExpression::list([CfExpression::get_att(
+            format!("{image_id}EgressConnector"),
+            "Arn",
+        )]),
     }
 }
 
@@ -533,8 +589,7 @@ fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
     };
 
     match &sandbox.egress {
-        SandboxEgress::Deny => Ok(()),
-        SandboxEgress::Allow => refuse("allow"),
+        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
         SandboxEgress::AllowDomains { .. } => refuse("allowDomains"),
     }
 }

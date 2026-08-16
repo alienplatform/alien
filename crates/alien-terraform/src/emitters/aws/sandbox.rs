@@ -46,7 +46,7 @@ pub const NETWORK_CONNECTOR_RESOURCE: &str = "awscc_lambda_network_connector";
 /// deny connector, so the build reaching out does not widen what a session can reach.
 fn internet_egress_connector_arn() -> Expression {
     expr::raw(
-        "\"arn:aws:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS\"",
+        "\"arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS\"",
     )
 }
 
@@ -72,7 +72,14 @@ impl TfEmitter for AwsSandboxEmitter {
         let label = required_label(ctx)?;
         let artifact_uri = artifact_uri(sandbox)?;
         refuse_unsupported_egress(sandbox)?;
-        let subnet_ids = egress_subnet_ids(ctx, sandbox)?;
+        // An open sandbox routes nothing through a VPC: no subnets, and none of the connector
+        // apparatus below exists for it.
+        let open = matches!(sandbox.egress, SandboxEgress::Allow);
+        let subnet_ids = if open {
+            None
+        } else {
+            Some(egress_subnet_ids(ctx, sandbox)?)
+        };
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
@@ -102,7 +109,10 @@ impl TfEmitter for AwsSandboxEmitter {
                     ),
                     (
                         "Resource",
-                        Expression::String(artifact_object_arn(&artifact_uri)),
+                        // A template for the same reason the operator policy's ARNs are: a plain
+                        // string literal has its `${` escaped, so the partition would reach IAM as
+                        // literal text and the grant would match nothing.
+                        expr::template(artifact_object_arn(&artifact_uri)),
                     ),
                 ]),
                 Expression::from_iter([
@@ -154,23 +164,34 @@ impl TfEmitter for AwsSandboxEmitter {
                 // so a replaced role keeps the same ARN and the barrier would never re-run.
                 attr(
                     "triggers",
-                    Expression::from_iter([
-                        (
+                    if open {
+                        Expression::from_iter([(
                             "build_role",
                             expr::traversal(["aws_iam_role", label, "unique_id"]),
-                        ),
-                        (
-                            "operator_role",
-                            expr::traversal(["aws_iam_role", &egress_label, "unique_id"]),
-                        ),
-                    ]),
+                        )])
+                    } else {
+                        Expression::from_iter([
+                            (
+                                "build_role",
+                                expr::traversal(["aws_iam_role", label, "unique_id"]),
+                            ),
+                            (
+                                "operator_role",
+                                expr::traversal(["aws_iam_role", &egress_label, "unique_id"]),
+                            ),
+                        ])
+                    },
                 ),
                 attr(
                     "depends_on",
-                    Expression::from(vec![
-                        expr::traversal(["aws_iam_role_policy", label]),
-                        expr::traversal(["aws_iam_role_policy", &egress_label]),
-                    ]),
+                    if open {
+                        Expression::from(vec![expr::traversal(["aws_iam_role_policy", label])])
+                    } else {
+                        Expression::from(vec![
+                            expr::traversal(["aws_iam_role_policy", label]),
+                            expr::traversal(["aws_iam_role_policy", &egress_label]),
+                        ])
+                    },
                 ),
             ],
         );
@@ -185,7 +206,7 @@ impl TfEmitter for AwsSandboxEmitter {
                 ),
                 attr(
                     "description",
-                    Expression::String(format!("Alien sandbox {} session egress", sandbox.id())),
+                    Expression::String(format!("Sandbox {} session egress", sandbox.id())),
                 ),
                 attr("vpc_id", vpc_id_expr(ctx)),
                 // Loopback-only is AWS's documented way to say "no egress": EC2 attaches an
@@ -240,7 +261,11 @@ impl TfEmitter for AwsSandboxEmitter {
                             // IPv4 rather than DualStack because the security group that carries
                             // the deny matches IPv4 CIDRs — a v6 path would be outside it.
                             ("network_protocol", Expression::String("IPv4".to_string())),
-                            ("subnet_ids", subnet_ids),
+                            (
+                                "subnet_ids",
+                                subnet_ids
+                                    .unwrap_or_else(|| Expression::from(Vec::<Expression>::new())),
+                            ),
                             (
                                 "security_group_ids",
                                 Expression::from(vec![expr::traversal([
@@ -323,15 +348,20 @@ impl TfEmitter for AwsSandboxEmitter {
             ],
         );
 
-        Ok(TfFragment::empty()
+        let fragment = TfFragment::empty()
             .with_resource(build_role)
             .with_resource(build_policy)
-            .with_resource(operator_role)
-            .with_resource(operator_policy)
             .with_resource(iam_propagation)
-            .with_resource(security_group)
-            .with_resource(connector)
-            .with_resource(image))
+            .with_resource(image);
+        Ok(if open {
+            fragment
+        } else {
+            fragment
+                .with_resource(operator_role)
+                .with_resource(operator_policy)
+                .with_resource(security_group)
+                .with_resource(connector)
+        })
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -339,13 +369,10 @@ impl TfEmitter for AwsSandboxEmitter {
         let label = required_label(ctx)?;
         Ok(expr::object([
             ("previewPorts", preview_ports(sandbox)),
+            ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
-                "egressConnectorArns",
-                Expression::from(vec![expr::traversal([
-                    NETWORK_CONNECTOR_RESOURCE,
-                    label,
-                    "arn",
-                ])]),
+                "allowEgress",
+                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
             // The ARN, not the name. Measured against the live API: `GetMicrovmImage` and
             // `RunMicrovm` both refuse a bare name — the latter with "Malformed ARN - doesn't
@@ -368,13 +395,10 @@ impl TfEmitter for AwsSandboxEmitter {
         let mut fields = vec![
             ("service", Expression::String("sandbox-aws".to_string())),
             ("previewPorts", preview_ports(sandbox)),
+            ("egressConnectorArns", egress_connector_arns(sandbox, label)),
             (
-                "egressConnectorArns",
-                Expression::from(vec![expr::traversal([
-                    NETWORK_CONNECTOR_RESOURCE,
-                    label,
-                    "arn",
-                ])]),
+                "allowEgress",
+                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
             ("imageArn", image_property(label, "ImageArn")),
             (
@@ -383,7 +407,7 @@ impl TfEmitter for AwsSandboxEmitter {
             ),
             (
                 "region",
-                expr::traversal(["data", "aws_region", "current", "name"]),
+                expr::traversal(["data", "aws_region", "current", "region"]),
             ),
         ];
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
@@ -467,17 +491,20 @@ fn tag_objects(ctx: &EmitContext<'_>, snake: bool) -> Expression {
 /// The AWS-managed base image, which is region-scoped.
 fn base_image_arn() -> Expression {
     Expression::from(hcl::TemplateExpr::QuotedString(
-        "arn:aws:lambda:${data.aws_region.current.region}:aws:microvm-image:al2023-1".to_string(),
+        "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:microvm-image:al2023-1".to_string(),
     ))
 }
 
 /// The one object the build reads, as an ARN.
 ///
 /// The bundle URI is known when the module is emitted, so the build role is scoped to it rather
-/// than to every object in the account. `s3://bucket/key` maps to `arn:aws:s3:::bucket/key`; a
+/// than to every object in the account. `s3://bucket/key` maps to `arn:<partition>:s3:::bucket/key`; a
 /// URI without a key would be a bucket ARN, which `artifact_uri` has already refused.
 fn artifact_object_arn(uri: &str) -> String {
-    format!("arn:aws:s3:::{}", uri.trim_start_matches("s3://"))
+    format!(
+        "arn:${{data.aws_partition.current.partition}}:s3:::{}",
+        uri.trim_start_matches("s3://")
+    )
 }
 
 /// What Lambda may do while managing the connector's network interfaces.
@@ -495,15 +522,18 @@ fn operator_statements() -> Vec<Expression> {
                 "Action",
                 Expression::String("ec2:CreateNetworkInterface".to_string()),
             ),
+            // Templates rather than plain strings: a string literal has its `${` escaped, so the
+            // region and account would reach IAM as the literal text and the ARN is refused with
+            // MalformedPolicyDocument — at apply, which is the only place it shows.
             (
                 "Resource",
                 Expression::from(
                     [
-                        "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
-                        "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
-                        "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*",
+                        "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
+                        "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*",
+                        "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*",
                     ]
-                    .map(|arn| Expression::String(arn.to_string()))
+                    .map(expr::template)
                     .to_vec(),
                 ),
             ),
@@ -514,9 +544,8 @@ fn operator_statements() -> Vec<Expression> {
             ("Action", Expression::String("ec2:CreateTags".to_string())),
             (
                 "Resource",
-                Expression::String(
-                    "arn:aws:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*"
-                        .to_string(),
+                expr::template(
+                    "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
                 ),
             ),
             (
@@ -573,6 +602,21 @@ fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Express
     }
 }
 
+/// The connectors a session starts with, which an open sandbox has none of.
+///
+/// Empty is not a missing value here: it is how `allow` is expressed on the wire, and
+/// `allowEgress` travels beside it so a stripped `deny` cannot be mistaken for it.
+fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
+    match sandbox.egress {
+        SandboxEgress::Allow => Expression::from(Vec::<Expression>::new()),
+        _ => Expression::from(vec![expr::traversal([
+            NETWORK_CONNECTOR_RESOURCE,
+            label,
+            "arn",
+        ])]),
+    }
+}
+
 /// Refuses an egress mode the emitted artifact cannot deliver.
 ///
 /// `deny` is built from a connector whose security group carries no egress rule. Outbound
@@ -594,8 +638,7 @@ fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
     };
 
     match &sandbox.egress {
-        SandboxEgress::Deny => Ok(()),
-        SandboxEgress::Allow => refuse("allow"),
+        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
         SandboxEgress::AllowDomains { .. } => refuse("allowDomains"),
     }
 }
@@ -647,21 +690,21 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<String> {
 /// it is what defers the snapshot until the agent is actually serving.
 fn hooks() -> Expression {
     Expression::from_iter([
-        ("port", Expression::Number(AGENT_PORT.into())),
+        ("Port", Expression::Number(AGENT_PORT.into())),
         (
-            "microvm_image_hooks",
+            "MicrovmImageHooks",
             Expression::from_iter([
-                ("ready", Expression::String("ENABLED".to_string())),
-                ("ready_timeout_in_seconds", Expression::Number(120.into())),
+                ("Ready", Expression::String("ENABLED".to_string())),
+                ("ReadyTimeoutInSeconds", Expression::Number(120.into())),
             ]),
         ),
         (
-            "microvm_hooks",
+            "MicrovmHooks",
             Expression::from_iter([
-                ("run", Expression::String("ENABLED".to_string())),
-                ("run_timeout_in_seconds", Expression::Number(30.into())),
-                ("resume", Expression::String("ENABLED".to_string())),
-                ("resume_timeout_in_seconds", Expression::Number(30.into())),
+                ("Run", Expression::String("ENABLED".to_string())),
+                ("RunTimeoutInSeconds", Expression::Number(30.into())),
+                ("Resume", Expression::String("ENABLED".to_string())),
+                ("ResumeTimeoutInSeconds", Expression::Number(30.into())),
             ]),
         ),
     ])
@@ -685,8 +728,8 @@ fn environment_variables() -> Expression {
             .into_iter()
             .map(|(key, value)| {
                 Expression::from_iter([
-                    ("key", Expression::String(key.to_string())),
-                    ("value", Expression::String(value)),
+                    ("Key", Expression::String(key.to_string())),
+                    ("Value", Expression::String(value)),
                 ])
             })
             .collect::<Vec<_>>(),
@@ -703,5 +746,59 @@ mod tests {
     #[test]
     fn the_architecture_is_the_only_one_microvm_images_accept() {
         assert_eq!(ARCHITECTURE, "ARM_64");
+    }
+
+    /// A string literal has its `${` escaped, so an ARN written as one reaches IAM carrying the
+    /// literal text instead of the account and region. IAM refuses the document, and only at
+    /// apply: both the HCL and the JSON are well-formed until AWS reads the ARN.
+    #[test]
+    fn the_connector_policy_arns_interpolate_rather_than_escape() {
+        for statement in operator_statements() {
+            let rendered = statement.to_string();
+            assert!(
+                !rendered.contains("$${"),
+                "an escaped interpolation reaches IAM as literal text: {rendered}"
+            );
+        }
+    }
+
+    /// `desired_state` is checked against the CloudFormation Resource Schema, which names every
+    /// property in PascalCase and rejects anything else — but only once an apply reaches AWS, so
+    /// a casing slip lands in a customer's install rather than in a test.
+    #[test]
+    fn the_image_properties_are_named_the_way_the_resource_schema_names_them() {
+        let hooks = hooks().to_string();
+        for property in [
+            "Port",
+            "MicrovmImageHooks",
+            "Ready",
+            "ReadyTimeoutInSeconds",
+            "MicrovmHooks",
+            "Run",
+            "RunTimeoutInSeconds",
+            "Resume",
+            "ResumeTimeoutInSeconds",
+        ] {
+            assert!(
+                hooks.contains(property),
+                "hooks must carry {property}: {hooks}"
+            );
+        }
+        // No property in this object is snake_case, so an underscore is the drift itself.
+        assert!(
+            !hooks.contains('_'),
+            "a snake_case hook property is refused: {hooks}"
+        );
+
+        let variables = environment_variables().to_string();
+        assert!(
+            variables.contains("Key") && variables.contains("Value"),
+            "{variables}"
+        );
+        // No key or value in the pairs contains these words, so a match is a lower-cased property.
+        assert!(
+            !variables.contains("key") && !variables.contains("value"),
+            "an environment variable pair is Key/Value: {variables}"
+        );
     }
 }

@@ -12,6 +12,12 @@ pub struct EmitContext<'a> {
     pub resource_id: &'a str,
     /// Target platform for this emission pass.
     pub platform: Platform,
+    /// Whether the artifact runs workloads on Kubernetes rather than on the cloud's own compute.
+    ///
+    /// `platform` names the cloud the cluster runs in, so it reads the same for an EKS package as
+    /// for a plain AWS one. Anything whose answer differs between the two — a resource skipped on
+    /// Kubernetes, and every expression that has to agree with that skip — needs this instead.
+    pub targets_kubernetes: bool,
     /// User-selected stack settings for the setup artifact.
     pub stack_settings: &'a StackSettings,
     /// Stable names precomputed by the outer generator.

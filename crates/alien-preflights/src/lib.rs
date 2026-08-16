@@ -339,6 +339,9 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::NetworkSettingsPlatformCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicSubnetsRequiredCheck));
         registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_build_role_name::SandboxBuildRoleNameCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
             compile_time::sandbox_host_required::SandboxHostRequiredCheck,
         ));
         registry.add_compile_time_check(Box::new(

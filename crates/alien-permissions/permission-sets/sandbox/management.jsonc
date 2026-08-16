@@ -24,22 +24,28 @@
         }
       },
       {
-        // Name-scoped: PassRole is evaluated against the role being passed, which carries no
-        // resource tag to bound it with.
-        "label": "pass-sandbox-execution-role",
-        "description": "Allow a MicroVM to run under the sandbox's own execution role.",
+        // The third action a RunMicrovm carrying an egress connector is authorized as; without
+        // it a sandbox that declares egress cannot start a session at all. AWS authorizes it
+        // against no resource type and defines no condition key, so it cannot be narrowed.
+        "label": "pass-sandbox-egress-connector",
+        "description": "Allow a session to start on the sandbox's egress connector.",
         "grant": {
-          "actions": ["iam:PassRole"]
+          "actions": ["lambda:PassNetworkConnector"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["*"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-*"]
+            "resources": ["*"]
           }
         }
       },
+      // No `iam:PassRole` here, deliberately. A session reads whatever role its MicroVM runs under
+      // from instance metadata, which no egress control reaches, so passing a role would hand
+      // untrusted code that role's credentials. The binding refuses to name one and
+      // `no_sandbox_set_can_pass_a_role_into_a_session` pins the absence; restoring the action
+      // would need a session-scoped role, not a stack-wide pattern.
       {
         "grant": {
           // Addressing an already-running MicroVM. Suspending or terminating does not grant

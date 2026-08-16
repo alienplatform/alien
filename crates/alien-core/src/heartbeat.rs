@@ -1626,7 +1626,7 @@ impl Default for SandboxHeartbeatStatus {
     }
 }
 
-/// AWS: MicroVMs started from one image, counted across every version.
+/// AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -1634,12 +1634,12 @@ pub struct AwsMicrovmSandboxHeartbeatData {
     pub status: SandboxHeartbeatStatus,
     /// Image the sessions belong to.
     pub image_identifier: String,
-    /// Sessions running now. Counted across all image versions, because a rolled version stays a
-    /// scope until its own MicroVMs are gone.
-    pub active_sessions: u32,
-    /// Image versions still carrying sessions.
-    pub versions_with_sessions: u32,
     /// The image's own lifecycle state, which is where AWS surfaces base-image deprecation.
+    ///
+    /// No session count sits beside it: counting means `lambda:ListMicrovms`, which authorizes
+    /// against no resource type and so cannot be granted without an account-wide reach the
+    /// permission sets refuse. A field only an over-broad grant could fill is a field whose
+    /// implementer ships AccessDenied into a customer's account.
     pub image_state: Option<String>,
 }
 

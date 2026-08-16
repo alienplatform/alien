@@ -148,7 +148,12 @@ mod tests {
             },
         ));
 
-        for platform in [Platform::Aws, Platform::Azure, Platform::Gcp, Platform::Kubernetes] {
+        for platform in [
+            Platform::Aws,
+            Platform::Azure,
+            Platform::Gcp,
+            Platform::Kubernetes,
+        ] {
             let result = SandboxPlatformSupportCheck
                 .check(&stack, platform)
                 .await

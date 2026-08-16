@@ -5,13 +5,13 @@
     "aws": [
       {
         "grant": {
-          // Parent state: whether the image exists and which versions are live. A rolled
-          // version stays a cleanup scope until its own MicroVMs are gone, so the heartbeat
-          // reads versions rather than assuming the newest.
+          // Parent state: whether the image exists and what state it is in. The version comes
+          // back with the image itself, and enumerating versions without a session count says
+          // nothing more, so that grant stays in `sandbox/provision` where the build needs it.
           //
           // No session count here: counting sessions means `lambda:ListMicrovms`, which AWS
           // authorizes against no resource type, so granting it would mean an account-wide grant.
-          "actions": ["lambda:GetMicrovmImage", "lambda:ListMicrovmImageVersions"]
+          "actions": ["lambda:GetMicrovmImage"]
         },
         "binding": {
           "stack": {

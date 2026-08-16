@@ -329,6 +329,7 @@ fn render_linked_binding(
                 resource,
                 resource_id: link.id(),
                 platform: ctx.platform,
+                targets_kubernetes: ctx.targets_kubernetes,
                 stack_settings: ctx.stack_settings,
                 names: ctx.names,
             };

@@ -111,6 +111,51 @@ fn find_image_tarball(output_dir: &Path, resource_name: &str, target: BinaryTarg
     );
 }
 
+/// Bytes of `app/alien-bindings.node` inside an OCI tarball, if any layer carries it.
+fn addon_bytes_in_image(tarball: &Path) -> Option<Vec<u8>> {
+    let extracted = tempdir().expect("temp dir for image");
+    let status = Command::new("tar")
+        .args(["-xf", &tarball.to_string_lossy(), "-C"])
+        .arg(extracted.path())
+        .status()
+        .expect("extract oci tarball");
+    assert!(status.success(), "extracting {}", tarball.display());
+
+    for entry in walk_files(&extracted.path().join("blobs")) {
+        let listing = Command::new("tar")
+            .args(["-tzf", &entry.to_string_lossy()])
+            .output();
+        let Ok(listing) = listing else { continue };
+        if !String::from_utf8_lossy(&listing.stdout).contains("app/alien-bindings.node") {
+            continue;
+        }
+        let out = Command::new("tar")
+            .args(["-xzOf", &entry.to_string_lossy(), "app/alien-bindings.node"])
+            .output()
+            .expect("extract addon from layer");
+        if out.status.success() && !out.stdout.is_empty() {
+            return Some(out.stdout);
+        }
+    }
+    None
+}
+
+fn walk_files(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk_files(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
 /// One TS stack with a Worker, a Container, and a Daemon, all built from
 /// source for linux-x64; asserts the OCI image metadata per compute type.
 #[tokio::test]
@@ -246,6 +291,29 @@ async fn typescript_source_image_shapes_per_compute_type() {
         ),
         "TypeScript Worker CMD must run its bundle through Bun from the language base"
     );
+
+    // A bundled Worker is plain JS, so nothing embeds the addon the way `--compile` does for a
+    // binary — it has to be packaged. The base image carries its own copy at the same path, so
+    // asserting mere presence passes on a stale one: compare bytes against the addon this build
+    // staged. Without this, a binding added after the base image was published is absent
+    // at runtime in the cloud, with the build reporting success.
+    let staged_addon = worker_dir
+        .join("node_modules/@alienplatform/bindings/dist/alien-bindings.node");
+    if staged_addon.is_file() {
+        let expected = std::fs::read(&staged_addon).expect("read staged addon");
+        let packaged = addon_bytes_in_image(&worker_tarball)
+            .expect("Worker image must package the bindings addon");
+        assert_eq!(
+            packaged.len(),
+            expected.len(),
+            "Worker image ships a different addon than this build staged — the base image's \
+             stale copy is serving instead"
+        );
+        assert!(
+            packaged == expected,
+            "Worker image ships a different addon than this build staged"
+        );
+    }
 
     // Container/Daemon images: the compiled binary IS the entrypoint.
     for (resource, binary) in [

@@ -318,20 +318,37 @@ pub fn availability_zone_names() -> CfExpression {
     ])
 }
 
+/// The created resource when this stack builds the VPC, otherwise the bring-your-own parameter.
+///
+/// The innermost branch exists only for use-default. A stack that cannot offer that mode collapses
+/// to two branches, because leaving the third in place is template logic nothing can reach.
+fn created_or_provided(
+    ctx: &EmitContext<'_>,
+    created: CfExpression,
+    provided: CfExpression,
+) -> CfExpression {
+    let otherwise = if alien_core::restricts_network_mode(ctx.stack, ctx.targets_kubernetes) {
+        provided
+    } else {
+        CfExpression::if_(
+            CONDITION_NETWORK_MODE_USE_EXISTING,
+            provided,
+            CfExpression::no_value(),
+        )
+    };
+    CfExpression::if_(CONDITION_NETWORK_MODE_CREATE, created, otherwise)
+}
+
 /// VPC ID expression: created VPC ref, existing VPC parameter, or nothing.
 pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_("VpcId");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => CfExpression::if_(
-            CONDITION_NETWORK_MODE_CREATE,
+        NetworkSettings::Create { .. } => created_or_provided(
+            ctx,
             CfExpression::ref_(format!("{network_id}Vpc")),
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                CfExpression::ref_("VpcId"),
-                CfExpression::no_value(),
-            ),
+            CfExpression::ref_("VpcId"),
         ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
@@ -347,14 +364,10 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
         return CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => CfExpression::if_(
-            CONDITION_NETWORK_MODE_CREATE,
+        NetworkSettings::Create { .. } => created_or_provided(
+            ctx,
             subnet_refs(network_id, "PrivateSubnet"),
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
-                CfExpression::no_value(),
-            ),
+            CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
         ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
@@ -370,14 +383,10 @@ pub fn public_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
         return CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => CfExpression::if_(
-            CONDITION_NETWORK_MODE_CREATE,
+        NetworkSettings::Create { .. } => created_or_provided(
+            ctx,
             subnet_refs(network_id, "PublicSubnet"),
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
-                CfExpression::no_value(),
-            ),
+            CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
         ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
@@ -393,17 +402,13 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
         return CfExpression::ref_(PARAM_SECURITY_GROUP_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => CfExpression::if_(
-            CONDITION_NETWORK_MODE_CREATE,
+        NetworkSettings::Create { .. } => created_or_provided(
+            ctx,
             CfExpression::list([CfExpression::get_att(
                 format!("{network_id}SecurityGroup"),
                 "GroupId",
             )]),
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
-                CfExpression::no_value(),
-            ),
+            CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
         ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }

@@ -30,6 +30,10 @@ impl Harness {
             LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker must be reachable"),
         );
         manager.reap(SANDBOX).await.expect("clean slate");
+        // The route registry is process-global, so a prior test in this binary leaves an entry
+        // whose token file lived in a TempDir that is now gone. Evict it the way teardown would,
+        // or `ensure` hands back that stale route and the token read below fails.
+        SandboxRoute::remove(SANDBOX).await;
 
         let template = SandboxSessionConfig {
             image: IMAGE.to_string(),

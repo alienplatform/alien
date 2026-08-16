@@ -1,7 +1,10 @@
 //! AWS identity & network — service-account / management /
 //! network (Create + ByoVpcAws + UseDefault).
 
-use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module, try_render};
+use super::helpers::{
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
+    snapshot_module, try_render,
+};
 use alien_core::{
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount,
@@ -281,8 +284,15 @@ fn aws_sandbox_build_policy_is_a_well_formed_scoped_document() {
         "statements must be objects, not encoded strings: {policy}"
     );
     assert!(
-        policy.contains("arn:aws:s3:::acme-artifacts/agents/bundle.zip"),
+        policy.contains(":s3:::acme-artifacts/agents/bundle.zip"),
         "the build role reads one object and must be scoped to it: {policy}"
+    );
+    // `$${` would be an escaped literal, so the partition would reach IAM as text and the grant
+    // would match nothing — visible only as AccessDenied during the image build.
+    assert!(
+        policy.contains("arn:${data.aws_partition.current.partition}:s3:::")
+            && !policy.contains("$${"),
+        "the partition must interpolate rather than render as literal text: {policy}"
     );
     assert!(
         !policy.contains(r#""s3:GetObject"], "Resource" = "*""#)
@@ -320,20 +330,52 @@ fn aws_sandbox_module_configures_the_awscc_provider() {
     );
 }
 
+/// An open sandbox builds no connector, and needs no VPC to build one in.
+///
+/// `allow` is a session started with no egress connector, which leaves AWS's managed internet
+/// path in place. Rendering the deny apparatus anyway would demand a VPC from a stack that never
+/// routes through one.
+#[test]
+fn aws_sandbox_allowing_egress_builds_no_connector() {
+    // Without a `Network` in the stack: rendering the deny apparatus would demand one, so a
+    // fixture that supplies a VPC anyway could not tell the two outcomes apart.
+    let (stack, settings) =
+        sandbox_stack_without_a_network("acme-sandbox-open", SandboxEgress::Allow);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    let rendered: String = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Named for the sandbox rather than by type: the stack's own network renders a security
+    // group of its own, and matching on the type alone would pass or fail for the wrong reason.
+    for absent in ["awscc_lambda_network_connector", "agents_egress"] {
+        assert!(
+            !rendered.contains(absent),
+            "an open sandbox must not render {absent}:\n{rendered}"
+        );
+    }
+    assert!(
+        rendered.contains("AWS::Lambda::MicrovmImage"),
+        "the image is still the sandbox's durable parent:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("allowEgress"),
+        "the empty connector list must be readable as open, not stripped:\n{rendered}"
+    );
+}
+
 /// An egress mode the artifact cannot deliver is refused, not dropped.
 ///
-/// The connector this module builds denies outbound traffic. Nothing renders an allowance —
-/// `allow` depends on the network's NAT topology and AWS has no domain filter at the connector —
-/// so a declared `allow` would be silently ignored, and the customer would believe outbound
-/// access was configured when it is not.
+/// AWS offers no domain filter at the connector, so `allowDomains` has nothing to render into and
+/// would otherwise be silently ignored while the customer believed it applied.
 #[test]
 fn aws_sandbox_refuses_an_egress_mode_it_cannot_deliver() {
-    for mode in [
-        SandboxEgress::Allow,
-        SandboxEgress::AllowDomains {
-            domains: vec!["example.com".to_string()],
-        },
-    ] {
+    for mode in [SandboxEgress::AllowDomains {
+        domains: vec!["example.com".to_string()],
+    }] {
         let (stack, settings) = sandbox_stack("acme-sandbox-egress", mode.clone());
         let error = try_render(&stack, TerraformTarget::Aws, settings)
             .expect_err(&format!("egress {mode:?} must be refused at emit time"));
@@ -358,6 +400,14 @@ fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
 }
 
 /// A sandbox and the network its egress connector attaches to, which the emitter requires.
+/// A stack carrying only the sandbox — no `Network`, which is what "needs no VPC" means.
+fn sandbox_stack_without_a_network(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
+    let stack = Stack::new(name.to_string())
+        .add(sandbox_fixture(egress), ResourceLifecycle::Frozen)
+        .build();
+    (stack, StackSettings::default())
+}
+
 fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
@@ -531,5 +581,43 @@ fn aws_sandbox_refuses_to_render_without_a_network_to_attach_to() {
     assert!(
         error.to_string().contains("declares no network"),
         "the refusal must name why: {error}"
+    );
+}
+
+/// The withheld network mode has to be refused where the installer can still act on it — see
+/// `network_mode_variable_block` for why. Asserted against real `terraform plan` diagnostics
+/// rather than by matching rendered text, because what matters is that Terraform itself rejects it.
+#[test]
+fn a_restricted_sandbox_makes_terraform_refuse_the_default_network_at_plan_time() {
+    let (stack, settings) = sandbox_stack("acme-sandbox-denied", SandboxEgress::Deny);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+
+    assert_terraform_valid(&module, "restricted sandbox module");
+    snapshot_module("aws_sandbox_restricted", &module);
+    assert_terraform_variable_plan_invalid_contains(
+        &module,
+        "restricted sandbox with network_mode=use-default",
+        // `name` and `token` have no defaults, so a plan missing them aborts before any
+        // validation is evaluated — the assertion would pass on the wrong diagnostic.
+        &[
+            ("name", "example"),
+            ("token", "example-token"),
+            ("network_mode", "use-default"),
+        ],
+        "must name subnets",
+    );
+}
+
+/// The counterpart: an open sandbox routes through no connector, so the mode stays available.
+#[test]
+fn an_open_sandbox_leaves_the_default_network_selectable() {
+    let (stack, settings) = sandbox_stack("acme-sandbox-open-modes", SandboxEgress::Allow);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+
+    assert_terraform_valid(&module, "open sandbox module");
+    let variables = module.get("variables.tf").expect("variables.tf renders");
+    assert!(
+        !variables.contains("must name subnets"),
+        "an open sandbox must not restrict the network mode:\n{variables}"
     );
 }

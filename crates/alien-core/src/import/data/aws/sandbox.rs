@@ -17,14 +17,25 @@ pub struct AwsSandboxImportData {
     pub image_arn: String,
     /// Image version the sessions are scoped to. Re-imported on every image roll.
     pub image_version: String,
-    /// Execution role attached to each MicroVM, distinct from the workload's own role.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution_role_arn: Option<String>,
     /// Egress network connectors. Deleting one while MicroVMs still reference it breaks their
     /// networking, so teardown needs them named rather than rediscovered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress_connector_arns: Vec<String>,
     /// Ports a preview capability may be minted for; empty means preview is not offered.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::import::data::deserialize_u16_vec_from_numbers_or_strings"
+    )]
     pub preview_ports: Vec<u16>,
+    /// Whether the declaration asked for open egress.
+    ///
+    /// The controller builds the binding from this, and an empty connector list cannot be read
+    /// without it: a stripped `deny` import would otherwise look exactly like an open sandbox.
+    #[serde(
+        default,
+        skip_serializing_if = "std::ops::Not::not",
+        deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string"
+    )]
+    pub allow_egress: bool,
 }

@@ -222,6 +222,7 @@ pub fn generate_terraform_module(
             resource,
             resource_id,
             platform,
+            targets_kubernetes: target.is_kubernetes(),
             stack_settings: &stack_settings,
             names: &labels,
         };
@@ -407,6 +408,7 @@ pub fn generate_terraform_module(
             setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
+            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
         )?)?,
     );
     files.insert(
@@ -1338,6 +1340,7 @@ fn variables_body(
     setup_only: bool,
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
+    needs_named_subnets: bool,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let advanced_settings_default = advanced_settings_default_json(target, stack_settings)?;
@@ -1427,12 +1430,7 @@ fn variables_body(
     if matches!(target.cloud_platform(), alien_core::Platform::Aws)
         && has_dynamic_aws_network_settings(stack_settings.network.as_ref())
     {
-        blocks.push(nested(variable_block(
-            "network_mode",
-            "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default.",
-            Some(Expression::String("create-new".to_string())),
-            false,
-        )));
+        blocks.push(nested(network_mode_variable_block(needs_named_subnets)));
         blocks.push(nested(variable_block(
             "vpc_cidr",
             "CIDR for a newly-created network. Empty uses 10.42.0.0/16.",
@@ -1996,6 +1994,63 @@ fn string_enum_variable_block(
     }
 }
 
+/// The `network_mode` description, which is also where the withheld value is explained.
+///
+/// A restricted sandbox routes session egress through a VPC connector that must name subnets, and
+/// the account default VPC's cannot be enumerated at setup.
+fn network_mode_description(needs_named_subnets: bool) -> &'static str {
+    if needs_named_subnets {
+        "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
+    } else {
+        "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+    }
+}
+
+/// The `network_mode` variable, refusing the withheld mode at `terraform plan`.
+///
+/// CloudFormation withholds it from `AllowedValues`, where the console refuses it before anything
+/// is created. Without the same gate here the module plans cleanly and then fails at AWS on the
+/// connector, leaving the installer with a half-built stack.
+///
+/// The validation sits on this variable rather than a guard of its own: referencing another
+/// variable inside `validation` needs Terraform 1.9, and these modules declare 1.5.
+fn network_mode_variable_block(needs_named_subnets: bool) -> Block {
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String(network_mode_description(needs_named_subnets).to_string()),
+        ),
+        attr("default", Expression::String("create-new".to_string())),
+    ];
+
+    if needs_named_subnets {
+        body.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("validation"),
+            labels: vec![],
+            body: Body::from(vec![
+                attr(
+                    "condition",
+                    expr::raw("contains([\"create-new\", \"use-existing\"], var.network_mode)"),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(
+                        "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+                            .to_string(),
+                    ),
+                ),
+            ]),
+        }));
+    }
+
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("network_mode".to_string())],
+        body: Body::from(body),
+    }
+}
+
 fn variable_block(
     name: &str,
     description: &str,
@@ -2238,6 +2293,14 @@ fn providers_body(
                 identifier: Identifier::sanitized("data"),
                 labels: vec![
                     BlockLabel::String("aws_region".to_string()),
+                    BlockLabel::String("current".to_string()),
+                ],
+                body: Body::default(),
+            }));
+            structures.push(Structure::Block(Block {
+                identifier: Identifier::sanitized("data"),
+                labels: vec![
+                    BlockLabel::String("aws_partition".to_string()),
                     BlockLabel::String("current".to_string()),
                 ],
                 body: Body::default(),
@@ -3164,7 +3227,13 @@ fn readme_md(
     if has_dynamic_aws_network_settings(stack_settings.network.as_ref())
         || has_dynamic_gcp_network_settings(stack_settings.network.as_ref())
     {
-        input_sections.push(readme_network_inputs(target));
+        input_sections.push(readme_network_inputs(
+            target,
+            // Not on a Kubernetes target: the sandbox is skipped there, so no connector exists
+            // to demand subnets and the restriction would explain itself with a resource the
+            // module does not contain.
+            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+        ));
     }
     if target.is_kubernetes() {
         input_sections.push(readme_kubernetes_inputs(
@@ -3268,8 +3337,13 @@ fn readme_azure_inputs(target: TerraformTarget) -> String {
     )
 }
 
-fn readme_network_inputs(target: TerraformTarget) -> String {
+/// The README's network section, which has to name the same modes `variables.tf` accepts.
+///
+/// An installer reads this and picks a value; documenting one the module refuses at plan makes
+/// the package contradict itself.
+fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> String {
     match target.cloud_platform() {
+        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
         _ => String::new(),

@@ -9,8 +9,8 @@ import * as z from "zod";
  * @description AWS Sandbox ImportData.\n\nCarries the Frozen parent from the setup emitter to the runtime controller. The image\n**version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only\nsession identity there is, and a controller holding a stale version would enumerate the wrong\nset and orphan every session started on the previous one.
  */
 export const AwsSandboxImportDataSchema = z.object({
-    "egressConnectorArns": z.optional(z.array(z.string()).describe("Egress network connectors. Deleting one while MicroVMs still reference it breaks their\nnetworking, so teardown needs them named rather than rediscovered.")),
-"executionRoleArn": z.string().describe("Execution role attached to each MicroVM, distinct from the workload's own role.").nullish(),
+    "allowEgress": z.optional(z.boolean().describe("Whether the declaration asked for open egress.\n\nThe controller builds the binding from this, and an empty connector list cannot be read\nwithout it: a stripped `deny` import would otherwise look exactly like an open sandbox.")),
+"egressConnectorArns": z.optional(z.array(z.string()).describe("Egress network connectors. Deleting one while MicroVMs still reference it breaks their\nnetworking, so teardown needs them named rather than rediscovered.")),
 "imageArn": z.string().describe("MicroVM image ARN."),
 "imageIdentifier": z.string().describe("MicroVM image identifier."),
 "imageVersion": z.string().describe("Image version the sessions are scoped to. Re-imported on every image roll."),
