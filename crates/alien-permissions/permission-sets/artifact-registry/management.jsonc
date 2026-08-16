@@ -19,9 +19,8 @@
       {
         "grant": {
           "actions": [
-            "ecr:DescribeImages",
-            "ecr:ListImages",
-            "ecr:DescribeImageScanFindings",
+            "ecr:CreateRepository",
+            "ecr:DeleteRepository",
             "ecr:GetRepositoryPolicy",
             "ecr:ListTagsForResource"
           ]
@@ -65,13 +64,7 @@
           "permissions": [
             "artifactregistry.repositories.get",
             "artifactregistry.repositories.list",
-            "artifactregistry.repositories.getIamPolicy",
-            "artifactregistry.tags.get",
-            "artifactregistry.tags.list",
-            "artifactregistry.versions.get",
-            "artifactregistry.versions.list",
-            "artifactregistry.packages.get",
-            "artifactregistry.packages.list"
+            "artifactregistry.repositories.getIamPolicy"
           ]
         },
         "binding": {
@@ -89,10 +82,7 @@
         "grant": {
           "actions": [
             "Microsoft.ContainerRegistry/registries/read",
-            "Microsoft.ContainerRegistry/registries/metadata/read",
-            "Microsoft.ContainerRegistry/registries/quarantine/read",
-            "Microsoft.ContainerRegistry/registries/quarantine/write",
-            "Microsoft.ContainerRegistry/registries/sign/write"
+            "Microsoft.ContainerRegistry/registries/metadata/read"
           ]
         },
         "binding": {

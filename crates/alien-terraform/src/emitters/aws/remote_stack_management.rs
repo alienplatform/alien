@@ -256,7 +256,12 @@ fn resource_scoped_aws_permission_context(
         .with_resource_id(resource_id.to_string());
     context.resource_name = None;
 
-    if resource_entry.config.downcast_ref::<Worker>().is_some() {
+    if resource_entry.config.downcast_ref::<Worker>().is_some()
+        || resource_entry
+            .config
+            .downcast_ref::<alien_core::ArtifactRegistry>()
+            .is_some()
+    {
         return context.with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
     }
 
@@ -280,7 +285,9 @@ fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
+    use alien_core::{
+        ArtifactRegistry, Resource, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode,
+    };
 
     fn live_worker_entry(id: &str) -> ResourceEntry {
         ResourceEntry {
@@ -332,5 +339,25 @@ mod tests {
 
         assert_eq!(context.resource_id.as_deref(), Some("uploads"));
         assert_eq!(context.resource_name, None);
+    }
+
+    #[test]
+    fn aws_remote_management_names_artifact_registry_child_prefix() {
+        let entry = ResourceEntry {
+            enabled_when: None,
+            config: Resource::new(ArtifactRegistry::new("images".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: true,
+        };
+        let context = resource_scoped_aws_permission_context(
+            "images",
+            &entry,
+            &aws_terraform_permission_context(),
+        );
+        assert_eq!(
+            context.resource_name.as_deref(),
+            Some("${local.resource_prefix}-images")
+        );
     }
 }
