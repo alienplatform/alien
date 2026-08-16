@@ -275,12 +275,15 @@ async fn download_artifact(artifact: &Artifact, destination: &Path, force: bool)
 }
 
 fn package_api_url(base_url: &str, path: &str, workspace: &str) -> Result<reqwest::Url> {
-    let mut url = reqwest::Url::parse(base_url).into_alien_error().context(
-        ErrorData::ConfigurationError {
-            message: "platform base URL is invalid".to_string(),
-        },
-    )?;
-    url.set_path(path);
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    ))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "platform base URL is invalid".to_string(),
+    })?;
     url.query_pairs_mut().append_pair("workspace", workspace);
     Ok(url)
 }
@@ -461,5 +464,20 @@ mod tests {
         let artifacts = vec![artifact("modules.aws"), artifact("modules.gcp")];
         let error = select_artifact(&artifacts, None).unwrap_err();
         assert!(error.message.contains("--artifact"));
+    }
+
+    #[test]
+    fn package_api_url_preserves_base_path_prefix() {
+        let url = package_api_url(
+            "https://platform.example/proxy/api/",
+            "/v1/packages/pkg_123",
+            "example-workspace",
+        )
+        .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "https://platform.example/proxy/api/v1/packages/pkg_123?workspace=example-workspace"
+        );
     }
 }
