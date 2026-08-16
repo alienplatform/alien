@@ -1141,6 +1141,14 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "local")]
         "LocalAiController" => deser!(crate::ai::LocalAiController),
 
+        // Setup-owned encryption Key controllers
+        #[cfg(feature = "aws")]
+        "AwsKeyController" => deser!(crate::key::AwsKeyController),
+        #[cfg(feature = "gcp")]
+        "GcpKeyController" => deser!(crate::key::GcpKeyController),
+        #[cfg(feature = "azure")]
+        "AzureKeyController" => deser!(crate::key::AzureKeyController),
+
         // Service activation controllers
         #[cfg(feature = "gcp")]
         "GcpServiceActivationController" => {
@@ -1447,6 +1455,24 @@ mod tests {
         assert_controller_state_round_trips(
             crate::remote_bindings::AzureRemoteBindingsController::default(),
         );
+    }
+
+    #[cfg(feature = "aws")]
+    #[test]
+    fn aws_key_controller_state_round_trips() {
+        assert_controller_state_round_trips(crate::key::AwsKeyController::default());
+    }
+
+    #[cfg(feature = "gcp")]
+    #[test]
+    fn gcp_key_controller_state_round_trips() {
+        assert_controller_state_round_trips(crate::key::GcpKeyController::default());
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn azure_key_controller_state_round_trips() {
+        assert_controller_state_round_trips(crate::key::AzureKeyController::default());
     }
 
     #[test]

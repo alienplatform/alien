@@ -6,7 +6,7 @@
 //! blocks.
 
 use crate::{
-    block::{attr, block, nested, resource_block},
+    block::{attr, block, data_block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
@@ -36,6 +36,14 @@ impl TfEmitter for GcpStorageEmitter {
         let mut fragment = TfFragment::default();
 
         fragment.resource_blocks.push(bucket(label, ctx, storage));
+
+        if let Some(key_label) = storage
+            .encryption_key
+            .as_ref()
+            .and_then(|key| ctx.name_for(&key.id))
+        {
+            emit_storage_key_access(&mut fragment, label, key_label);
+        }
 
         if storage.public_read {
             fragment.resource_blocks.push(public_iam_binding(label));
@@ -77,6 +85,35 @@ impl TfEmitter for GcpStorageEmitter {
     }
 }
 
+fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &str) {
+    let service_agent_label = format!("{label}_service_agent");
+    fragment.data_blocks.push(data_block(
+        "google_storage_project_service_account",
+        &service_agent_label,
+        [attr("project", expr::raw("var.gcp_project"))],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "google_kms_crypto_key_iam_member",
+        &format!("{label}_storage_encryption"),
+        [
+            attr(
+                "crypto_key_id",
+                expr::traversal(["google_kms_crypto_key", key_label, "id"]),
+            ),
+            attr(
+                "role",
+                Expression::String("roles/cloudkms.cryptoKeyEncrypterDecrypter".to_string()),
+            ),
+            attr(
+                "member",
+                expr::template(format!(
+                    "serviceAccount:${{data.google_storage_project_service_account.{service_agent_label}.email_address}}"
+                )),
+            ),
+        ],
+    ));
+}
+
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structure::Block {
     let mut body: Vec<hcl::structure::Structure> = vec![
         attr("name", resource_prefix_template(storage.id())),
@@ -104,6 +141,27 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
             "versioning",
             [attr("enabled", Expression::Bool(true))],
         )));
+    }
+
+    if let Some(key_label) = storage
+        .encryption_key
+        .as_ref()
+        .and_then(|key| ctx.name_for(&key.id))
+    {
+        body.push(nested(block(
+            "encryption",
+            [attr(
+                "default_kms_key_name",
+                expr::traversal(["google_kms_crypto_key", key_label, "id"]),
+            )],
+        )));
+        body.push(attr(
+            "depends_on",
+            Expression::Array(vec![expr::traversal([
+                "google_kms_crypto_key_iam_member",
+                &format!("{label}_storage_encryption"),
+            ])]),
+        ));
     }
 
     for rule in &storage.lifecycle_rules {

@@ -20,7 +20,7 @@ const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct RemoteBindingSource {
     pub(super) deployment_id: String,
-    platform: alien_platform_api::Client,
+    platform: Option<alien_platform_api::Client>,
     manager: RwLock<DiscoveredManager>,
     manager_refresh_lock: Mutex<()>,
     allow_insecure_manager_url: bool,
@@ -106,11 +106,45 @@ impl RemoteBindingSource {
 
         Ok(Self {
             deployment_id: deployment_id.to_string(),
-            platform,
+            platform: Some(platform),
             manager: RwLock::new(manager),
             manager_refresh_lock: Mutex::new(()),
             allow_insecure_manager_url,
             manager_resolver,
+            clock,
+        })
+    }
+
+    pub(super) fn from_manager_access(
+        deployment_id: &str,
+        manager_url: &str,
+        manager_token: &str,
+        expires_at: DateTime<Utc>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self> {
+        let parsed = reqwest::Url::parse(manager_url)
+            .into_alien_error()
+            .context(ErrorData::RemoteAccessFailed {
+                operation: "parse assigned Manager URL".to_string(),
+            })?;
+        let allow_insecure = parsed
+            .host_str()
+            .and_then(|host| host.parse::<IpAddr>().ok())
+            .is_some_and(|address| address.is_loopback());
+        let url = validate_manager_url(manager_url, allow_insecure)?;
+        let http = authenticated_http_client(manager_token, "assigned Manager")?;
+        Ok(Self {
+            deployment_id: deployment_id.to_string(),
+            platform: None,
+            manager: RwLock::new(DiscoveredManager {
+                url,
+                http,
+                refresh_at: expires_at,
+                generation: 0,
+            }),
+            manager_refresh_lock: Mutex::new(()),
+            allow_insecure_manager_url: allow_insecure,
+            manager_resolver: Arc::new(GeneratedManagerBindingResolver),
             clock,
         })
     }
@@ -137,9 +171,14 @@ impl RemoteBindingSource {
     }
 
     async fn refresh_manager_access_locked(&self) -> Result<DiscoveredManager> {
+        let platform = self.platform.as_ref().ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::RemoteAccessFailed {
+                operation: "refresh expired assigned Manager access".to_string(),
+            })
+        })?;
         let next_generation = self.manager.read().await.generation.wrapping_add(1);
         let manager = discover_manager_access(
-            &self.platform,
+            platform,
             &self.deployment_id,
             self.allow_insecure_manager_url,
             self.clock.as_ref(),
@@ -169,7 +208,7 @@ impl RemoteBindingSource {
             .await
         {
             Ok(binding) => Ok(binding),
-            Err(error) if is_auth_or_assignment_rejection(&error) => {
+            Err(error) if self.platform.is_some() && is_auth_or_assignment_rejection(&error) => {
                 let manager = self.refresh_after_rejection(manager.generation).await?;
                 self.manager_resolver
                     .resolve(&manager, &self.deployment_id, resource_id)

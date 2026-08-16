@@ -23,6 +23,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawContainerHandle,
+  RawKeyHandle,
   RawKvHandle,
   RawPostgresConnection,
   RawPostgresHandle,
@@ -34,6 +35,8 @@ import type {
 } from "./loader.js"
 import type {
   Container,
+  Key,
+  KeyOptions,
   Kv,
   KvEntry,
   KvScanResult,
@@ -107,6 +110,15 @@ function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
     copy: (from, to) => guard(handle, raw => raw.copy(from, to)),
     signedUrl: (options: SignedUrlOptions): Promise<PresignedRequest> =>
       guard(handle, raw => raw.signedUrl(options.method, options.path, options.expiresIn)),
+  }
+}
+
+function makeKey(handle: () => Promise<RawKeyHandle>): Key {
+  return {
+    encrypt: (plaintext, options?: KeyOptions) =>
+      guard(handle, raw => raw.encrypt(toBuffer(plaintext), options?.context ?? null)),
+    decrypt: (ciphertext, options?: KeyOptions) =>
+      guard(handle, raw => raw.decrypt(toBuffer(ciphertext), options?.context ?? null)),
   }
 }
 
@@ -330,6 +342,7 @@ function makePostgres(handle: () => Promise<RawPostgresHandle>): Postgres {
 /** The public factory surface. */
 export interface Factories {
   storage(name: string): Storage
+  key(name: string): Key
   kv(name: string): Kv
   queue(name: string): Queue
   vault(name: string): Vault
@@ -342,6 +355,7 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
   const getBindings = bindingsFromAddon(getAddon)
   return {
     storage: name => makeStorage(lazyHandle(async () => (await getBindings()).storage(name))),
+    key: name => makeKey(lazyHandle(async () => (await getBindings()).key(name))),
     kv: name => makeKv(lazyHandle(async () => (await getBindings()).kv(name))),
     queue: name => makeQueue(lazyHandle(async () => (await getBindings()).queue(name))),
     vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
@@ -360,5 +374,18 @@ export function createRemoteStorageFactory(bindings: RawRemoteBindingsHandle) {
       storages.set(name, storage)
     }
     return storage
+  }
+}
+
+/** Build the remote Key factory around one native bindings handle. */
+export function createRemoteKeyFactory(bindings: RawRemoteBindingsHandle) {
+  const keys = new Map<string, Key>()
+  return (name: string): Key => {
+    let key = keys.get(name)
+    if (!key) {
+      key = makeKey(lazyHandle(() => bindings.key(name)))
+      keys.set(name, key)
+    }
+    return key
   }
 }

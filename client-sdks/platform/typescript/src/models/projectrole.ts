@@ -11,6 +11,7 @@ import { ClosedEnum } from "../types/enums.js";
 export const ProjectRole = {
   ProjectViewer: "project.viewer",
   ProjectDeveloper: "project.developer",
+  ProjectEncryption: "project.encryption",
 } as const;
 /**
  * Role for project-scoped service accounts

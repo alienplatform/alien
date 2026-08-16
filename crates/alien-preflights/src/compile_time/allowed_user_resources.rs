@@ -32,6 +32,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "queue",
             "kv",
             "vault",
+            "key",
             "container",
             "service-account",
             // Customer-declarable to express pool/capacity-group config
@@ -82,6 +83,7 @@ mod tests {
         let email = alien_core::Email::new("test-email".to_string()).build();
         let search = alien_core::AwsOpenSearch::new("test-search".to_string()).build();
         let storage = Storage::new("test-storage".to_string()).build();
+        let key = alien_core::Key::new("test-key".to_string()).build();
         let worker = Worker::new("test-worker".to_string())
             .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
@@ -90,6 +92,16 @@ mod tests {
             .build();
 
         let mut resources = IndexMap::new();
+        resources.insert(
+            "test-key".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(key),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: true,
+                enabled_when: None,
+            },
+        );
         resources.insert(
             "test-storage".to_string(),
             ResourceEntry {

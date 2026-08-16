@@ -10,26 +10,27 @@ pub mod kubernetes_cluster;
 pub use aws::{
     AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData,
     AwsComputeClusterImportData, AwsEmailDkimTokenImportData, AwsEmailDomainImportData,
-    AwsEmailImportData, AwsKvImportData, AwsNetworkImportData, AwsOpenSearchImportData,
-    AwsPostgresImportData, AwsQueueImportData, AwsRemoteBindingsImportData,
-    AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
-    AwsVaultImportData, AwsWorkerImportData,
+    AwsEmailImportData, AwsKeyImportData, AwsKvImportData, AwsNetworkImportData,
+    AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData,
+    AwsRemoteBindingsImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
+    AwsStorageImportData, AwsVaultImportData, AwsWorkerImportData,
 };
 pub use azure::{
     AzureAiImportData, AzureArtifactRegistryImportData, AzureBuildImportData,
     AzureComputeClusterImportData, AzureContainerAppsEnvironmentImportData,
-    AzureFlexibleServerPostgresImportData, AzureKvImportData, AzureNetworkImportData,
-    AzureQueueImportData, AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
-    AzureResourceGroupImportData, AzureServiceAccountImportData, AzureServiceActivationImportData,
+    AzureFlexibleServerPostgresImportData, AzureKeyImportData, AzureKvImportData,
+    AzureNetworkImportData, AzureQueueImportData, AzureRemoteBindingsImportData,
+    AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+    AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };
 pub use gcp::{
     GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData,
-    GcpComputeClusterImportData, GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData,
-    GcpQueueImportData, GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData,
-    GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
-    GcpVaultImportData, GcpWorkerImportData,
+    GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData, GcpNetworkImportData,
+    GcpPostgresImportData, GcpQueueImportData, GcpRemoteBindingsImportData,
+    GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
+    GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,
@@ -77,6 +78,7 @@ mod schema_snapshots {
             ("aws_email", schema::<AwsEmailImportData>()),
             ("aws_function", schema::<AwsWorkerImportData>()),
             ("aws_kv", schema::<AwsKvImportData>()),
+            ("aws_key", schema::<AwsKeyImportData>()),
             ("aws_network", schema::<AwsNetworkImportData>()),
             ("aws_open_search", schema::<AwsOpenSearchImportData>()),
             ("aws_postgres", schema::<AwsPostgresImportData>()),
@@ -107,6 +109,7 @@ mod schema_snapshots {
             ),
             ("azure_function", schema::<AzureWorkerImportData>()),
             ("azure_kv", schema::<AzureKvImportData>()),
+            ("azure_key", schema::<AzureKeyImportData>()),
             ("azure_network", schema::<AzureNetworkImportData>()),
             (
                 "azure_postgres",
@@ -151,6 +154,7 @@ mod schema_snapshots {
             ),
             ("gcp_function", schema::<GcpWorkerImportData>()),
             ("gcp_kv", schema::<GcpKvImportData>()),
+            ("gcp_key", schema::<GcpKeyImportData>()),
             ("gcp_network", schema::<GcpNetworkImportData>()),
             ("gcp_postgres", schema::<GcpPostgresImportData>()),
             ("gcp_queue", schema::<GcpQueueImportData>()),

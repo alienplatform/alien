@@ -1,0 +1,20 @@
+{
+  "id": "key/native-storage",
+  "description": "Allows an application using native storage encryption to use the selected key",
+  "platforms": {
+    "aws": [
+      {
+        "label": "use-for-storage",
+        "description": "Generate storage data keys and decrypt encrypted storage objects.",
+        "grant": {
+          "actions": ["kms:GenerateDataKey", "kms:Decrypt"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["${resourceName}"]
+          }
+        }
+      }
+    ]
+  }
+}

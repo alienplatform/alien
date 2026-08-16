@@ -321,6 +321,19 @@ importers:
         specifier: ^4.0.0
         version: 4.1.10(@types/node@24.13.3)(msw@2.12.7(@types/node@24.13.3)(typescript@5.9.3))(vite@7.3.0(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.31.1)(tsx@4.21.0))
 
+  tests/e2e/test-apps/byo-encryption-key:
+    dependencies:
+      '@alienplatform/core':
+        specifier: link:../../../../packages/core
+        version: link:../../../../packages/core
+    devDependencies:
+      '@alienplatform/typescript-config':
+        specifier: link:../../../../packages/config-typescript
+        version: link:../../../../packages/config-typescript
+      typescript:
+        specifier: ^5.7.3
+        version: 5.8.3
+
   tests/e2e/test-apps/comprehensive-rust:
     devDependencies:
       '@alienplatform/core':

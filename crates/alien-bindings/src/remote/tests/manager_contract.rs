@@ -1,6 +1,64 @@
 use super::*;
 
 #[tokio::test]
+async fn preissued_manager_access_loads_a_binding_without_platform_discovery() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        json!({
+            "service": "s3",
+            "binding": { "bucketName": "customer-bucket" },
+            "clientConfig": {
+                "accountId": "123456789012",
+                "region": "us-east-1",
+                "credentials": {
+                    "type": "sessionCredentials",
+                    "accessKeyId": "AKIAEXAMPLE",
+                    "secretAccessKey": "secret",
+                    "sessionToken": "session",
+                    "expiresAt": expires_at.to_rfc3339(),
+                },
+            },
+            "expiresAt": expires_at.to_rfc3339(),
+        }),
+    )));
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: requests.clone(),
+    })
+    .await;
+
+    let bindings = RemoteBindings::from_manager_access(
+        DEPLOYMENT_ID,
+        &manager_url,
+        GENERATED_MANAGER_TOKEN,
+        expires_at,
+    )
+    .expect("construct bindings from assigned Manager access");
+    bindings
+        .storage("files")
+        .await
+        .expect("resolve the binding directly through Manager");
+
+    assert_eq!(
+        requests
+            .lock()
+            .expect("generated contract requests lock")
+            .as_slice(),
+        &[RecordedRequest {
+            method: "POST".to_string(),
+            path: "/v1/bindings/resolve".to_string(),
+            authorization: Some(format!("Bearer {GENERATED_MANAGER_TOKEN}")),
+            body: Some(json!({
+                "deploymentId": DEPLOYMENT_ID,
+                "resourceId": "files",
+            })),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
     let response = Arc::new(StdRwLock::new((
         StatusCode::OK,

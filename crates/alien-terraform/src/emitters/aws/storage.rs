@@ -33,7 +33,13 @@ impl TfEmitter for AwsStorageEmitter {
         let mut fragment = TfFragment::default();
 
         fragment.resource_blocks.push(bucket(label, ctx, storage));
-        fragment.resource_blocks.push(encryption(label));
+        fragment.resource_blocks.push(encryption(
+            label,
+            storage
+                .encryption_key
+                .as_ref()
+                .and_then(|key| ctx.name_for(&key.id)),
+        ));
         fragment.resource_blocks.push(ownership_controls(label));
         fragment
             .resource_blocks
@@ -49,6 +55,7 @@ impl TfEmitter for AwsStorageEmitter {
                 .push(lifecycle(label, &storage.lifecycle_rules));
         }
         emit_storage_iam(ctx, &mut fragment, label)?;
+        emit_storage_key_iam(ctx, &mut fragment, storage, label)?;
 
         Ok(fragment)
     }
@@ -79,6 +86,39 @@ impl TfEmitter for AwsStorageEmitter {
     }
 }
 
+fn emit_storage_key_iam(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    storage: &Storage,
+    storage_label: &str,
+) -> Result<()> {
+    let Some(key_label) = storage
+        .encryption_key
+        .as_ref()
+        .and_then(|key| ctx.name_for(&key.id))
+    else {
+        return Ok(());
+    };
+    let Some(permission_set) = alien_permissions::get_permission_set("key/native-storage") else {
+        return Ok(());
+    };
+    let context = aws_terraform_permission_context()
+        .with_resource_name(format!("${{aws_kms_key.{key_label}.arn}}"));
+
+    for (owner_label, _) in storage_permission_owners(ctx) {
+        emit_iam_role_policy_for_target_with_label(
+            fragment,
+            &owner_label,
+            permission_set,
+            &format!("{storage_label}_{owner_label}_native_encryption"),
+            &format!("{}-native-encryption", ctx.resource_id),
+            &context,
+            BindingTarget::Resource,
+        )?;
+    }
+    Ok(())
+}
+
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
     resource_block(
         "aws_s3_bucket",
@@ -94,14 +134,25 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> Block {
     )
 }
 
-fn encryption(label: &str) -> Block {
-    let inner = block(
-        "apply_server_side_encryption_by_default",
-        [attr(
-            "sse_algorithm",
-            Expression::String("AES256".to_string()),
-        )],
-    );
+fn encryption(label: &str, key_label: Option<&str>) -> Block {
+    let mut encryption = vec![attr(
+        "sse_algorithm",
+        Expression::String(
+            if key_label.is_some() {
+                "aws:kms"
+            } else {
+                "AES256"
+            }
+            .to_string(),
+        ),
+    )];
+    if let Some(key_label) = key_label {
+        encryption.push(attr(
+            "kms_master_key_id",
+            expr::traversal(["aws_kms_key", key_label, "arn"]),
+        ));
+    }
+    let inner = block("apply_server_side_encryption_by_default", encryption);
     let rule = block("rule", [nested(inner)]);
     resource_block(
         "aws_s3_bucket_server_side_encryption_configuration",

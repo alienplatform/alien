@@ -4,6 +4,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawContainerHandle,
+  RawKeyHandle,
   RawKvHandle,
   RawPostgresHandle,
   RawQueueHandle,
@@ -46,8 +47,16 @@ function fakeRemoteAddon() {
     copy: async () => {},
     signedUrl: async () => ({ url: "https://example.invalid", method: "GET", headers: {} }),
   }
+  const key: RawKeyHandle = {
+    encrypt: async (plaintext, context) =>
+      Buffer.concat([plaintext, Buffer.from(context?.tenant ?? "")]),
+    decrypt: async ciphertext => ciphertext,
+  }
+  const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
 
   class FakeBindingsHandle implements RawBindingsHandle {
+    key = resolveKey
+
     async storage(): Promise<RawStorageHandle> {
       return localStorage
     }
@@ -81,6 +90,8 @@ function fakeRemoteAddon() {
     ) => Promise<RawRemoteBindingsHandle>
 
     storage = resolveStorage
+
+    key = resolveKey
   }
 
   const forRemoteDeployment = vi.fn<
@@ -98,6 +109,7 @@ function fakeRemoteAddon() {
     resolveStorage,
     head,
     put,
+    resolveKey,
   }
 }
 
@@ -127,7 +139,25 @@ describe("Bindings.forRemoteDeployment", () => {
     expect("kv" in bindings).toBe(false)
     expect("queue" in bindings).toBe(false)
     expect("vault" in bindings).toBe(false)
+    expect("key" in bindings).toBe(true)
     expect(Object.keys(storage).sort()).toEqual(["delete", "get", "head", "list", "put"])
+  })
+
+  it("resolves a typed remote Key and forwards bytes and context", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+
+    const ciphertext = await bindings
+      .key("customer-key")
+      .encrypt(Buffer.from("root"), { context: { tenant: "acme" } })
+
+    expect(ciphertext.toString()).toBe("rootacme")
+    expect(fixture.resolveKey).toHaveBeenCalledOnce()
+    expect(fixture.resolveKey).toHaveBeenCalledWith("customer-key")
   })
 
   it("reuses one native bindings handle and resolves each Storage handle lazily once", async () => {

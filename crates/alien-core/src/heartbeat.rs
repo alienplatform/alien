@@ -158,6 +158,8 @@ pub enum ResourceHeartbeatData {
     AzureServiceBusNamespace(AzureServiceBusNamespaceHeartbeatData),
     #[serde(rename = "ai")]
     Ai(AiHeartbeatData),
+    #[serde(rename = "key")]
+    Key(KeyHeartbeatData),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +186,60 @@ pub enum ProviderLifecycleState {
     Deleting,
     Deleted,
     Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KeyHeartbeatStatus {
+    pub health: ObservedHealth,
+    pub lifecycle: ProviderLifecycleState,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "provider", content = "data", rename_all = "kebab-case")]
+pub enum KeyHeartbeatData {
+    AwsKms(AwsKmsKeyHeartbeatData),
+    GcpCloudKms(GcpCloudKmsKeyHeartbeatData),
+    AzureKeyVault(AzureKeyVaultKeyHeartbeatData),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsKmsKeyHeartbeatData {
+    pub status: KeyHeartbeatStatus,
+    pub key_arn: String,
+    pub key_state: String,
+    pub enabled: bool,
+    pub key_spec: String,
+    pub key_usage: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GcpCloudKmsKeyHeartbeatData {
+    pub status: KeyHeartbeatStatus,
+    pub crypto_key_name: String,
+    pub purpose: String,
+    pub primary_version: Option<String>,
+    pub primary_state: Option<String>,
+    pub algorithm: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AzureKeyVaultKeyHeartbeatData {
+    pub status: KeyHeartbeatStatus,
+    pub key_id: String,
+    pub enabled: Option<bool>,
+    pub key_type: String,
+    pub key_operations: Vec<String>,
+    pub recovery_level: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
