@@ -1365,7 +1365,7 @@ mod tests {
             })
             .await;
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_observer(
             vec![direct_openai_route(&server.base_url())],
             observer,
@@ -1396,7 +1396,7 @@ mod tests {
         let mut route = route_from_direct_openai("llm", "sk-test").unwrap();
         route.upstream_base_override = Some("http://[invalid".to_string());
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_observer(vec![route], observer)).await;
 
         let response = reqwest::Client::new()
@@ -1418,7 +1418,7 @@ mod tests {
     async fn attributable_validation_failures_are_observed() {
         let route = route_from_direct_openai("llm", "sk-test").unwrap();
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_availability_and_observer(
             vec![route],
             HashMap::from([("llm".to_string(), HashSet::new())]),
@@ -1449,7 +1449,7 @@ mod tests {
     async fn incompatible_client_api_failures_are_observed() {
         let route = route_from_direct_openai("llm", "sk-test").unwrap();
         let (sender, receiver) = mpsc::channel();
-        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
         let url = serve(build_router_with_observer(vec![route], observer)).await;
 
         let response = reqwest::Client::new()
