@@ -1029,11 +1029,11 @@ pub struct RunCommandRequest {
     /// How long the command may run. Required — a defaulted deadline is a hang waiting for a slow
     /// day.
     ///
-    /// It bounds the command, not the call. What expiry does to the session differs by backend:
-    /// where the data plane has no timeout of its own the only lever is ending the session, so
-    /// the call returns once that is confirmed and lands somewhat after the deadline. Where the
-    /// agent supervises the process it kills the process group and the session stays usable.
-    /// Either way the command is stopped; only the session's fate differs.
+    /// It bounds the command, not the call, and the call lands just after it. Where the agent
+    /// supervises the process it kills the process group; where the data plane has no timeout of
+    /// its own the command runs under `timeout` inside the session. Either way the session stays
+    /// usable. Only a session that cannot run `timeout` is ended instead, and that call returns
+    /// once the session is gone.
     pub deadline: Duration,
 }
 

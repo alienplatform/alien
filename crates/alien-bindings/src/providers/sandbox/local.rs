@@ -16,6 +16,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::{ErrorData, Result};
+use crate::providers::sandbox::{
+    refuse_unrepresentable_deadline, timeout_prefix, DEADLINE_GRACE, TIMEOUT_EXIT_CODE,
+    TIMEOUT_PROBE,
+};
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxSession, SandboxSessionState,
@@ -65,6 +69,9 @@ pub struct LocalSandbox {
     client: reqwest::Client,
     base_url: String,
     token: String,
+    /// Whether the session image can run `timeout`, learned once from the first command's
+    /// session: every session is created from the same image, so one answer holds for all.
+    has_timeout: tokio::sync::OnceCell<bool>,
 }
 
 impl LocalSandbox {
@@ -110,6 +117,7 @@ impl LocalSandbox {
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.trim().to_string(),
+            has_timeout: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -173,6 +181,43 @@ impl LocalSandbox {
             operation: capability.to_string(),
             reason: "not supported on local".to_string(),
         })
+    }
+
+    /// Runs one argv under the client-side guard.
+    ///
+    /// The guard is the deadline plus the grace the in-session `timeout` needs to report back.
+    /// When it fires the session itself did not end the command, so the session is ended — a
+    /// force-remove, so the call returns one kill later — and the caller hears that it was.
+    /// It lands late only on a session that could not run `timeout`.
+    async fn exec_within(
+        &self,
+        session_id: &str,
+        command: &[String],
+        request: &RunCommandRequest,
+    ) -> Result<ExecResponse> {
+        match tokio::time::timeout(
+            request.deadline + DEADLINE_GRACE,
+            self.send(
+                self.client
+                    .post(self.url(&format!("/v1/sessions/{session_id}/exec")))
+                    .json(&json!({ "command": command })),
+                "sandbox.runCommand",
+            ),
+        )
+        .await
+        {
+            Ok(inner) => inner,
+            Err(_) => {
+                self.terminate(session_id).await?;
+                Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "deadlineExceeded".to_string(),
+                    reason: format!(
+                        "the command exceeded its {}s deadline and the session could not end it, so the session was terminated",
+                        request.deadline.as_secs()
+                    ),
+                }))
+            }
+        }
     }
 }
 
@@ -251,33 +296,38 @@ impl Sandbox for LocalSandbox {
                 reason: "a command must carry a non-zero deadline".to_string(),
             }));
         }
+        refuse_unrepresentable_deadline(request.deadline)?;
 
         // The deadline bounds the untrusted code, not the caller's patience. The route runs the
-        // command to completion, so the only lever that actually stops one past its ceiling is
-        // ending the session — a command that overran took the session with it.
-        let response: ExecResponse = match tokio::time::timeout(
-            request.deadline,
-            self.send(
-                self.client
-                    .post(self.url(&format!("/v1/sessions/{session_id}/exec")))
-                    .json(&json!({ "command": request.command })),
-                "sandbox.runCommand",
-            ),
-        )
-        .await
-        {
-            Ok(inner) => inner?,
-            Err(_) => {
-                self.terminate(session_id).await?;
-                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                    failure: "deadlineExceeded".to_string(),
-                    reason: format!(
-                        "the command exceeded its {}s deadline and the session was terminated",
-                        request.deadline.as_secs()
-                    ),
-                }));
-            }
+        // command to completion, so the deadline is enforced inside the session: `timeout` kills
+        // the process at it, the session survives, and the call lands right after — the shape the
+        // agent-supervised backends give. The client-side guard is the backstop for a session
+        // that cannot run `timeout` at all; there the only lever left is ending the session, which
+        // the manager does with a force-remove, one kill after the deadline.
+        // Which of the two applies is asked once, never inferred from a run: the caller's command
+        // executes exactly once either way.
+        let has_timeout = *self
+            .has_timeout
+            .get_or_try_init(|| async {
+                let probe: ExecResponse = self
+                    .send(
+                        self.client
+                            .post(self.url(&format!("/v1/sessions/{session_id}/exec")))
+                            .json(&json!({ "command": ["sh", "-c", TIMEOUT_PROBE] })),
+                        "sandbox.runCommand",
+                    )
+                    .await?;
+                Ok::<bool, AlienError<ErrorData>>(probe.exit_code == 0)
+            })
+            .await?;
+        let argv: Vec<String> = if has_timeout {
+            let mut bounded: Vec<String> = timeout_prefix(request.deadline).to_vec();
+            bounded.extend(request.command.iter().cloned());
+            bounded
+        } else {
+            request.command.clone()
         };
+        let response = self.exec_within(session_id, &argv, &request).await?;
 
         let mut frames: Vec<Result<CommandOutput>> = Vec::new();
         for (index, frame) in response.output.into_iter().enumerate() {
@@ -300,10 +350,22 @@ impl Sandbox for LocalSandbox {
             }));
         }
 
-        frames.push(Ok(CommandOutput::Exit {
-            code: response.exit_code as i32,
-            truncated: false,
-        }));
+        if response.exit_code == i64::from(TIMEOUT_EXIT_CODE) {
+            // The output is kept and the terminal item says why it ends, as the agent-backed
+            // providers do; the session is untouched.
+            frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "deadlineExceeded".to_string(),
+                reason: format!(
+                    "the command exceeded its {}s deadline and was killed; the session is still usable",
+                    request.deadline.as_secs()
+                ),
+            })));
+        } else {
+            frames.push(Ok(CommandOutput::Exit {
+                code: response.exit_code as i32,
+                truncated: false,
+            }));
+        }
 
         Ok(Box::pin(stream::iter(frames)))
     }
@@ -417,5 +479,193 @@ impl Sandbox for LocalSandbox {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::{Path, State};
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    /// A route double: exec answers from a script, in order, and hangs once it runs out; delete
+    /// is recorded. What the provider sent is kept so a test can read the argv it built.
+    #[derive(Default)]
+    struct Route {
+        execs: Mutex<std::collections::VecDeque<serde_json::Value>>,
+        commands: Mutex<Vec<Vec<String>>>,
+        deleted: Mutex<Vec<String>>,
+    }
+
+    fn exec_response(exit_code: i64, stdout: &str, stderr: &str) -> serde_json::Value {
+        let mut output = Vec::new();
+        if !stdout.is_empty() {
+            output.push(json!({ "stream": "stdout", "dataBase64": BASE64.encode(stdout) }));
+        }
+        if !stderr.is_empty() {
+            output.push(json!({ "stream": "stderr", "dataBase64": BASE64.encode(stderr) }));
+        }
+        json!({ "output": output, "exitCode": exit_code })
+    }
+
+    async fn serve(route: Arc<Route>) -> LocalSandbox {
+        async fn exec(
+            State(route): State<Arc<Route>>,
+            Path(_session): Path<String>,
+            Json(body): Json<serde_json::Value>,
+        ) -> Json<serde_json::Value> {
+            let command: Vec<String> =
+                serde_json::from_value(body["command"].clone()).expect("argv");
+            route.commands.lock().expect("commands").push(command);
+            let next = route.execs.lock().expect("execs").pop_front();
+            match next {
+                Some(response) => Json(response),
+                None => std::future::pending().await,
+            }
+        }
+        async fn delete(
+            State(route): State<Arc<Route>>,
+            Path(session): Path<String>,
+        ) -> Json<serde_json::Value> {
+            route.deleted.lock().expect("deleted").push(session);
+            Json(json!({}))
+        }
+
+        let router = Router::new()
+            .route("/v1/sessions/{session}/exec", post(exec))
+            .route("/v1/sessions/{session}", axum::routing::delete(delete))
+            .with_state(route);
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+
+        LocalSandbox {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{address}"),
+            token: "test-token".to_string(),
+            has_timeout: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    fn command(deadline_secs: u64) -> RunCommandRequest {
+        RunCommandRequest {
+            command: vec!["sleep".to_string(), "forever".to_string()],
+            working_directory: None,
+            env: BTreeMap::new(),
+            deadline: std::time::Duration::from_secs(deadline_secs),
+        }
+    }
+
+    /// The deadline is enforced inside the session: the argv is prefixed with `timeout`, and when
+    /// it fires the output is kept, the stream ends in `deadlineExceeded`, and the session is not
+    /// touched.
+    #[tokio::test]
+    async fn a_command_past_its_deadline_is_killed_in_place_and_the_session_survives() {
+        let route = Arc::new(Route::default());
+        {
+            let mut execs = route.execs.lock().expect("execs");
+            execs.push_back(exec_response(0, "", ""));
+            execs.push_back(exec_response(i64::from(TIMEOUT_EXIT_CODE), "partial\n", ""));
+        }
+        let sandbox = serve(route.clone()).await;
+
+        let frames: Vec<Result<CommandOutput>> = sandbox
+            .run_command("s1", command(30))
+            .await
+            .expect("the deadline is reported in the stream")
+            .collect()
+            .await;
+
+        assert!(
+            matches!(&frames[0], Ok(CommandOutput::Stdout { data, .. }) if data == b"partial\n"),
+            "{frames:?}"
+        );
+        let terminal = frames[1]
+            .as_ref()
+            .expect_err("the stream must end in the deadline error, not an exit frame");
+        assert!(
+            terminal.to_string().contains("deadlineExceeded"),
+            "{terminal}"
+        );
+        assert!(
+            route.deleted.lock().expect("deleted").is_empty(),
+            "the session survives an in-session kill"
+        );
+        let sent = route.commands.lock().expect("commands").clone();
+        assert_eq!(sent.len(), 2, "one probe, one command: {sent:?}");
+        assert_eq!(sent[0], vec!["sh", "-c", TIMEOUT_PROBE]);
+        assert_eq!(
+            sent[1],
+            vec!["timeout", "-s", "KILL", "30", "sleep", "forever"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A session image without `timeout` cannot be bounded from inside: the probe says so once,
+    /// and the command runs as given, under the guard — exactly once.
+    #[tokio::test]
+    async fn a_session_without_timeout_runs_the_command_as_given() {
+        let route = Arc::new(Route::default());
+        {
+            let mut execs = route.execs.lock().expect("execs");
+            execs.push_back(exec_response(127, "", ""));
+            execs.push_back(exec_response(0, "ok\n", ""));
+        }
+        let sandbox = serve(route.clone()).await;
+
+        let frames: Vec<Result<CommandOutput>> = sandbox
+            .run_command("s1", command(30))
+            .await
+            .expect("the fallback runs")
+            .collect()
+            .await;
+
+        assert!(
+            matches!(&frames[0], Ok(CommandOutput::Stdout { data, .. }) if data == b"ok\n"),
+            "{frames:?}"
+        );
+        assert!(matches!(
+            &frames[1],
+            Ok(CommandOutput::Exit { code: 0, .. })
+        ));
+        let sent = route.commands.lock().expect("commands").clone();
+        assert_eq!(sent.len(), 2, "one probe, one command: {sent:?}");
+        assert_eq!(sent[0], vec!["sh", "-c", TIMEOUT_PROBE]);
+        assert_eq!(sent[1], vec!["sleep".to_string(), "forever".to_string()]);
+    }
+
+    /// When the session cannot end the command — the route never answers — the guard ends the
+    /// session and reports the deadline. Time is paused, so the guard fires instantly.
+    #[tokio::test(start_paused = true)]
+    async fn a_command_the_session_cannot_end_takes_the_session_with_it() {
+        let route = Arc::new(Route::default());
+        route
+            .execs
+            .lock()
+            .expect("execs")
+            .push_back(exec_response(0, "", ""));
+        let sandbox = serve(route.clone()).await;
+
+        let error = sandbox
+            .run_command("s1", command(30))
+            .await
+            .err()
+            .expect("a command that outran its deadline has not succeeded");
+
+        assert!(error.to_string().contains("deadlineExceeded"), "{error}");
+        assert_eq!(
+            route.deleted.lock().expect("deleted").clone(),
+            vec!["s1".to_string()],
+            "the session must actually be removed, not merely reported as terminated"
+        );
     }
 }
