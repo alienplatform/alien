@@ -1,5 +1,7 @@
 packages:
   - byob-storage-ts
+  - customer-keys-ts
+  - customer-models-ts
   - ai-quickstart-ts
   - ai-chatbot-ts
   - basic-worker-ts
