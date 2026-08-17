@@ -783,17 +783,7 @@ async fn forward_request(
     let mut req = state.http_client.request(method.clone(), upstream_url);
 
     // Forward relevant request headers.
-    for key in &[
-        "content-type",
-        "content-length",
-        "content-range",
-        "accept",
-        "range",
-        "if-match",
-        "if-none-match",
-        "if-modified-since",
-        "if-unmodified-since",
-    ] {
+    for key in &["content-type", "content-length", "accept"] {
         if let Some(val) = original_headers.get(*key) {
             req = req.header(*key, val);
         }
