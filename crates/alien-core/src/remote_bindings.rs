@@ -5,7 +5,6 @@ pub enum RemoteBindingKind {
     Storage,
     Key,
     Ai,
-    ArtifactRegistry,
 }
 
 /// One resource type's provider-neutral Remote Bindings contract.
@@ -49,14 +48,6 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         permission_set: "ai/invoke",
         kind: RemoteBindingKind::Ai,
         description: "Invoke models through this AI resource",
-        setup_support_resource_types: &["azure_resource_group", "service_activation"],
-        revision: 1,
-    },
-    RemoteBindingDefinition {
-        resource_type: "artifact-registry",
-        permission_set: "artifact-registry/remote-read-write",
-        kind: RemoteBindingKind::ArtifactRegistry,
-        description: "Pull and push OCI artifacts in this registry",
         setup_support_resource_types: &["azure_resource_group", "service_activation"],
         revision: 1,
     },

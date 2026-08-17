@@ -20,7 +20,6 @@ const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-pl
 pub(crate) const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 pub(crate) const AZURE_KEY_VAULT_SCOPE: &str = "https://vault.azure.net/.default";
 pub(crate) const AZURE_AI_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
-pub(crate) const AZURE_MANAGEMENT_SCOPE: &str = "https://management.azure.com/.default";
 const REMOTE_STORAGE_DURATION_SECONDS: i32 = 3600;
 const AZURE_MINT_SCOPES: [&str; 5] = [
     "https://management.azure.com/.default",
@@ -46,9 +45,6 @@ pub(crate) enum RemoteBindingCredentialScope {
     AwsAi,
     GcpAi,
     AzureAi,
-    AwsArtifactRegistry,
-    GcpArtifactRegistry,
-    AzureArtifactRegistry,
 }
 
 impl std::fmt::Debug for MaterializedCredentialLease {
@@ -168,7 +164,6 @@ pub(crate) async fn materialize_remote_binding_lease(
                 RemoteBindingCredentialScope::AzureBlob => AZURE_STORAGE_SCOPE,
                 RemoteBindingCredentialScope::AzureKeyVault => AZURE_KEY_VAULT_SCOPE,
                 RemoteBindingCredentialScope::AzureAi => AZURE_AI_SCOPE,
-                RemoteBindingCredentialScope::AzureArtifactRegistry => AZURE_MANAGEMENT_SCOPE,
                 _ => {
                     return Err(ErrorData::internal(
                         "Remote Bindings credential scope does not match Azure",
@@ -231,15 +226,12 @@ fn remote_binding_scope_platform(scope: &RemoteBindingCredentialScope) -> Platfo
         RemoteBindingCredentialScope::AwsS3 => Platform::Aws,
         RemoteBindingCredentialScope::AwsKms => Platform::Aws,
         RemoteBindingCredentialScope::AwsAi => Platform::Aws,
-        RemoteBindingCredentialScope::AwsArtifactRegistry => Platform::Aws,
         RemoteBindingCredentialScope::GcpGcs => Platform::Gcp,
         RemoteBindingCredentialScope::GcpCloudKms => Platform::Gcp,
         RemoteBindingCredentialScope::GcpAi => Platform::Gcp,
-        RemoteBindingCredentialScope::GcpArtifactRegistry => Platform::Gcp,
         RemoteBindingCredentialScope::AzureBlob => Platform::Azure,
         RemoteBindingCredentialScope::AzureKeyVault => Platform::Azure,
         RemoteBindingCredentialScope::AzureAi => Platform::Azure,
-        RemoteBindingCredentialScope::AzureArtifactRegistry => Platform::Azure,
     }
 }
 

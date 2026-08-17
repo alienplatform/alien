@@ -14,29 +14,16 @@
 //! Runs in `cloud-tests.yml` CI workflow.
 
 use std::collections::HashMap;
-use std::io::Read as _;
 use std::net::TcpListener;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use alien_aws_clients::ecr::{BatchDeleteImageRequest, EcrApi, EcrClient, ImageIdentifier};
-use alien_aws_clients::{AwsClientConfig, AwsCredentialProvider, AwsCredentials};
-use alien_bindings::BindingsProviderApi;
 use alien_core::{
     DeploymentModel, DeploymentState, DeploymentStatus, Platform, ReadinessProbe, ReleaseInfo,
     Stack, StackSettings, Worker, WorkerCode,
 };
-use alien_gcp_clients::{
-    ArtifactRegistryApi as GcpArtifactRegistryApi, ArtifactRegistryClient, GcpClientConfig,
-    GcpCredentials,
-};
-use alien_manager::AlienManagerBuilder;
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
-use alien_manager::routes::registry_proxy::{
-    ExternalRegistryAccessError, ExternalRegistryBroker, ExternalRegistryOperation,
-    ExternalRegistryTarget,
-};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
@@ -44,8 +31,7 @@ use alien_manager::traits::{
     CreateDeploymentGroupParams, CreateDeploymentParams, CreateReleaseParams, CreateTokenParams,
     DeploymentStore, ReconcileData, ReleaseStore, TokenStore, TokenType,
 };
-use async_trait::async_trait;
-use futures_util::FutureExt as _;
+use alien_manager::AlienManagerBuilder;
 use sha2::{Digest, Sha256};
 use tracing::info;
 
@@ -137,7 +123,6 @@ async fn build_test_image(
     registry_host: &str,
     repo_name: &str,
     tag: &str,
-    layer_size_mb: usize,
 ) -> (String, std::path::PathBuf) {
     let image_name = format!("{}/{}:{}", registry_host, repo_name, tag);
     let temp_dir = tempfile::tempdir().unwrap();
@@ -152,7 +137,8 @@ async fn build_test_image(
         uuid::Uuid::new_v4()
     )
     .into_bytes();
-    large_content.resize(layer_size_mb * 1024 * 1024, b'x');
+    // Pad to ~400MB to reproduce large E2E image layers
+    large_content.resize(400 * 1024 * 1024, b'x');
     let layer = dockdash::Layer::builder()
         .unwrap()
         .data("app/test.bin", &large_content, None)
@@ -176,56 +162,6 @@ async fn build_test_image(
     (image_name, output_file)
 }
 
-fn pushed_manifest_digest(path: &std::path::Path) -> String {
-    let file = std::fs::File::open(path).expect("OCI archive should exist");
-    let mut archive = tar::Archive::new(file);
-    let mut files = HashMap::new();
-    for entry in archive.entries().expect("OCI archive should be readable") {
-        let mut entry = entry.expect("OCI archive entry should be readable");
-        let entry_path = entry
-            .path()
-            .expect("OCI entry path should be valid")
-            .to_string_lossy()
-            .to_string();
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .expect("OCI archive entry should be readable");
-        files.insert(entry_path, bytes);
-    }
-    let index: serde_json::Value = serde_json::from_slice(
-        files
-            .get("index.json")
-            .expect("OCI archive should contain index.json"),
-    )
-    .expect("OCI index should be JSON");
-    let descriptor_digest = index["manifests"][0]["digest"]
-        .as_str()
-        .expect("OCI index should identify its manifest digest");
-    let manifest_path = descriptor_digest
-        .strip_prefix("sha256:")
-        .map(|digest| format!("blobs/sha256/{digest}"))
-        .expect("OCI manifest should use sha256");
-    // dockdash parses the OCI-layout manifest into oci-client and serializes
-    // that typed value for the registry PUT. Reproduce that exact conversion
-    // instead of hashing source JSON whitespace or field order.
-    let manifest: oci_client::manifest::OciImageManifest = serde_json::from_slice(
-        files
-            .get(&manifest_path)
-            .expect("OCI archive should contain its manifest blob"),
-    )
-    .expect("OCI manifest should match the client schema");
-    let manifest = oci_client::manifest::OciManifest::Image(manifest);
-    let mut pushed_bytes = Vec::new();
-    let mut serializer = serde_json::Serializer::with_formatter(
-        &mut pushed_bytes,
-        olpc_cjson::CanonicalFormatter::new(),
-    );
-    serde::Serialize::serialize(&manifest, &mut serializer)
-        .expect("OCI manifest should serialize canonically");
-    format!("sha256:{:x}", Sha256::digest(&pushed_bytes))
-}
-
 // ---------------------------------------------------------------------------
 // Test harness: start manager + push + create deployment + pull
 // ---------------------------------------------------------------------------
@@ -237,59 +173,6 @@ struct CloudProxyTest {
     deployment_id: String,
     _server_handle: tokio::task::JoinHandle<()>,
     _state_dir: tempfile::TempDir,
-}
-
-struct StaticExternalBroker {
-    authorization: String,
-    target: ExternalRegistryTarget,
-}
-
-#[async_trait]
-impl ExternalRegistryBroker for StaticExternalBroker {
-    async fn authenticate_probe(
-        &self,
-        authorization: Option<&str>,
-    ) -> Result<(), ExternalRegistryAccessError> {
-        if authorization == Some(self.authorization.as_str()) {
-            Ok(())
-        } else {
-            Err(ExternalRegistryAccessError::Unauthorized)
-        }
-    }
-
-    async fn authorize(
-        &self,
-        authorization: Option<&str>,
-        repository: &str,
-        _operation: ExternalRegistryOperation,
-    ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError> {
-        self.authenticate_probe(authorization).await?;
-        if repository != self.target.external_repository {
-            return Err(ExternalRegistryAccessError::NotFound);
-        }
-        Ok(self.target.clone())
-    }
-
-    async fn resolve_signed_session(
-        &self,
-        repository: &str,
-        credential_id: &str,
-    ) -> Result<ExternalRegistryTarget, ExternalRegistryAccessError> {
-        if repository != self.target.external_repository
-            || credential_id != self.target.credential_id
-        {
-            return Err(ExternalRegistryAccessError::Denied);
-        }
-        Ok(self.target.clone())
-    }
-
-    async fn record_manifest_success(
-        &self,
-        _target: &ExternalRegistryTarget,
-        _operation: ExternalRegistryOperation,
-        _digest: &str,
-    ) {
-    }
 }
 
 impl CloudProxyTest {
@@ -308,26 +191,6 @@ impl CloudProxyTest {
             binding_json,
             env_vars,
             None::<(String, u16)>,
-            None,
-        )
-        .await
-    }
-
-    async fn start_external(
-        platform: Platform,
-        binding_env_var: &str,
-        binding_json: &str,
-        env_vars: HashMap<String, String>,
-        upstream_repository: String,
-        password: String,
-    ) -> Self {
-        Self::start_with_base_url(
-            platform,
-            binding_env_var,
-            binding_json,
-            env_vars,
-            None::<(String, u16)>,
-            Some((upstream_repository, password)),
         )
         .await
     }
@@ -338,7 +201,6 @@ impl CloudProxyTest {
         binding_json: &str,
         env_vars: HashMap<String, String>,
         base_url_override: Option<(String, u16)>,
-        external: Option<(String, String)>,
     ) -> Self {
         let port = base_url_override
             .as_ref()
@@ -428,39 +290,15 @@ impl CloudProxyTest {
         };
 
         let toml_config = alien_manager::standalone_config::ManagerTomlConfig::default();
-        let external_broker = if let Some((upstream_repository, password)) = external {
-            let artifact_registry = bindings_provider
-                .load_artifact_registry("artifacts")
-                .await
-                .expect("Failed to load external ArtifactRegistry binding");
-            Some(Arc::new(StaticExternalBroker {
-                authorization: format!("Basic {}", base64_encode(&format!("alien:{password}"))),
-                target: ExternalRegistryTarget {
-                    route_id: "cloudroute".to_string(),
-                    credential_id: "cloudcredential".to_string(),
-                    desired_revision: 1,
-                    resource_revision: "cloud-resource-v1".to_string(),
-                    logical_repository: "application".to_string(),
-                    external_repository: "external/cloudroute/application".to_string(),
-                    upstream_repository,
-                    artifact_registry,
-                    admission: None,
-                },
-            }) as Arc<dyn ExternalRegistryBroker>)
-        } else {
-            None
-        };
-
-        let mut builder = AlienManagerBuilder::new(config)
+        let server = AlienManagerBuilder::new(config)
             .token_store(token_store.clone())
             .bindings_provider(bindings_provider)
             .with_standalone_defaults(&toml_config)
             .await
+            .unwrap()
+            .build()
+            .await
             .unwrap();
-        if let Some(broker) = external_broker {
-            builder = builder.external_registry_broker(broker);
-        }
-        let server = builder.build().await.unwrap();
 
         let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
         let server_handle = tokio::spawn(async move {
@@ -547,7 +385,7 @@ impl CloudProxyTest {
         let manager_host = self.manager_url.trim_start_matches("http://");
 
         // Build and push through proxy
-        let (image_name, _tar_path) = build_test_image(manager_host, repo_name, &tag, 400).await;
+        let (image_name, _tar_path) = build_test_image(manager_host, repo_name, &tag).await;
 
         let image = dockdash::Image::from_tarball(&_tar_path).unwrap();
         image
@@ -669,155 +507,10 @@ impl CloudProxyTest {
 
         info!(%repo_name, %tag, "Pull through proxy with deployment token succeeded");
     }
-
-    async fn external_push_and_pull(&self, password: &str, tag: &str) {
-        let repository = "external/cloudroute/application";
-        println!("External registry test tag: {tag}");
-        let manager_host = self.manager_url.trim_start_matches("http://");
-        let client = reqwest::Client::new();
-        let denied = client
-            .get(format!(
-                "{}/v2/{repository}/manifests/missing",
-                self.manager_url
-            ))
-            .basic_auth("alien", Some("wrong-password"))
-            .send()
-            .await
-            .expect("Denied external request should complete");
-        assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
-        let wrong_route = client
-            .get(format!(
-                "{}/v2/external/other-route/application/manifests/missing",
-                self.manager_url
-            ))
-            .basic_auth("alien", Some(password))
-            .send()
-            .await
-            .expect("Wrong-route external request should complete");
-        assert_eq!(wrong_route.status(), reqwest::StatusCode::NOT_FOUND);
-
-        let (image_name, tar_path) = build_test_image(manager_host, repository, &tag, 64).await;
-        let source_manifest_digest = pushed_manifest_digest(&tar_path);
-        let image = dockdash::Image::from_tarball(&tar_path).unwrap();
-        image
-            .push(
-                &image_name,
-                &dockdash::PushOptions {
-                    auth: dockdash::RegistryAuth::Basic("alien".to_string(), password.to_string()),
-                    protocol: dockdash::ClientProtocol::Http,
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("External push through proxy should succeed");
-
-        let response = client
-            .get(format!(
-                "{}/v2/{repository}/manifests/{tag}",
-                self.manager_url
-            ))
-            .basic_auth("alien", Some(password))
-            .header(
-                "Accept",
-                "application/vnd.oci.image.manifest.v1+json, \
-                 application/vnd.docker.distribution.manifest.v2+json",
-            )
-            .send()
-            .await
-            .expect("External manifest request should complete");
-        assert!(
-            response.status().is_success(),
-            "External manifest pull should succeed: {}",
-            response.status()
-        );
-        let advertised_digest = response
-            .headers()
-            .get("docker-content-digest")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
-        let manifest = response.bytes().await.unwrap();
-        let computed_digest = format!("sha256:{:x}", Sha256::digest(&manifest));
-        assert_eq!(source_manifest_digest, computed_digest);
-        if let Some(advertised_digest) = advertised_digest {
-            assert_eq!(advertised_digest, computed_digest);
-        }
-        serde_json::from_slice::<serde_json::Value>(&manifest)
-            .expect("Pulled external manifest should be valid JSON");
-        info!(%repository, %tag, %computed_digest, "External push and pull succeeded");
-    }
-}
-
-async fn delete_ecr_test_image(
-    region: String,
-    access_key: String,
-    secret_key: String,
-    account_id: String,
-    repository: &str,
-    tag: &str,
-) {
-    let config = AwsClientConfig {
-        account_id,
-        region,
-        credentials: AwsCredentials::AccessKeys {
-            access_key_id: access_key,
-            secret_access_key: secret_key,
-            session_token: None,
-        },
-        service_overrides: None,
-    };
-    let client = EcrClient::new(
-        reqwest::Client::new(),
-        AwsCredentialProvider::from_config_sync(config),
-    );
-    let response = client
-        .batch_delete_image(
-            BatchDeleteImageRequest::builder()
-                .repository_name(repository.to_string())
-                .image_ids(vec![ImageIdentifier {
-                    image_tag: Some(tag.to_string()),
-                    image_digest: None,
-                }])
-                .build(),
-        )
-        .await
-        .expect("AWS external registry test image should be deleted");
-    assert!(
-        response.failures.is_empty(),
-        "AWS external registry cleanup failed: {:?}",
-        response.failures
-    );
-}
-
-async fn delete_gar_test_package(
-    service_account_key: String,
-    project_id: String,
-    region: String,
-    repository: &str,
-    package: &str,
-) {
-    let config = GcpClientConfig {
-        project_id: project_id.clone(),
-        region: region.clone(),
-        credentials: GcpCredentials::ServiceAccountKey {
-            json: service_account_key,
-        },
-        service_overrides: None,
-        project_number: None,
-    };
-    let client = ArtifactRegistryClient::new(reqwest::Client::new(), config);
-    client
-        .delete_package(
-            project_id,
-            region,
-            repository.to_string(),
-            package.to_string(),
-        )
-        .await
-        .expect("GCP external registry test package deletion should start");
 }
 
 fn base64_encode(input: &str) -> String {
-    use base64::engine::{Engine, general_purpose::STANDARD};
+    use base64::engine::{general_purpose::STANDARD, Engine};
     STANDARD.encode(input.as_bytes())
 }
 
@@ -861,58 +554,6 @@ async fn test_proxy_push_pull_ecr() {
 
     let db_path = test._state_dir.path().join("test.db");
     test.push_and_pull("alien-e2e", &db_path).await;
-}
-
-#[tokio::test]
-async fn test_external_proxy_push_pull_ecr() {
-    let _guard = cloud_proxy_env_lock().await;
-    load_test_env();
-
-    let region = require_env!("AWS_MANAGEMENT_REGION");
-    let access_key = require_env!("AWS_MANAGEMENT_ACCESS_KEY_ID");
-    let secret_key = require_env!("AWS_MANAGEMENT_SECRET_ACCESS_KEY");
-    let account_id = require_env!("AWS_MANAGEMENT_ACCOUNT_ID");
-    let push_role = require_env!("E2E_AWS_AR_PUSH_ROLE_ARN");
-    let pull_role = require_env!("E2E_AWS_AR_PULL_ROLE_ARN");
-    let binding = serde_json::json!({
-        "service": "ecr",
-        "repositoryPrefix": "alien-e2e",
-        "pullRoleArn": pull_role,
-        "pushRoleArn": push_role,
-    });
-    let env_vars = HashMap::from([
-        ("AWS_REGION".into(), region),
-        ("AWS_ACCESS_KEY_ID".into(), access_key),
-        ("AWS_SECRET_ACCESS_KEY".into(), secret_key),
-        ("AWS_ACCOUNT_ID".into(), account_id),
-        ("ALIEN_DEPLOYMENT_TYPE".into(), "aws".into()),
-    ]);
-    let password = format!("registry-{}", uuid::Uuid::new_v4());
-    let tag = format!("external-cloud-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let test = CloudProxyTest::start_external(
-        Platform::Aws,
-        "ALIEN_AWS_ARTIFACTS_BINDING",
-        &binding.to_string(),
-        env_vars,
-        "alien-e2e".to_string(),
-        password.clone(),
-    )
-    .await;
-    let result = std::panic::AssertUnwindSafe(test.external_push_and_pull(&password, &tag))
-        .catch_unwind()
-        .await;
-    delete_ecr_test_image(
-        require_env!("AWS_MANAGEMENT_REGION"),
-        require_env!("AWS_MANAGEMENT_ACCESS_KEY_ID"),
-        require_env!("AWS_MANAGEMENT_SECRET_ACCESS_KEY"),
-        require_env!("AWS_MANAGEMENT_ACCOUNT_ID"),
-        "alien-e2e",
-        &tag,
-    )
-    .await;
-    if let Err(payload) = result {
-        std::panic::resume_unwind(payload);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -962,57 +603,6 @@ async fn test_proxy_push_pull_gar() {
     let repo_name = format!("{}/{}/default", project_id, gar_repo_name);
     let db_path = test._state_dir.path().join("test.db");
     test.push_and_pull(&repo_name, &db_path).await;
-}
-
-#[tokio::test]
-async fn test_external_proxy_push_pull_gar() {
-    let _guard = cloud_proxy_env_lock().await;
-    load_test_env();
-
-    let sa_key = require_env!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY");
-    let project_id = require_env!("GOOGLE_MANAGEMENT_PROJECT_ID");
-    let region = require_env!("GOOGLE_MANAGEMENT_REGION");
-    let gar_repo_url = require_env!("E2E_GCP_GAR_REPOSITORY");
-    let push_sa = require_env!("E2E_GCP_AR_PUSH_SA_EMAIL");
-    let pull_sa = require_env!("E2E_GCP_AR_PULL_SA_EMAIL");
-    let gar_repo_name = gar_repo_url.rsplit('/').next().unwrap_or("alien-e2e");
-    let package = format!("external-cloud-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let binding = serde_json::json!({
-        "service": "gar",
-        "repositoryName": gar_repo_name,
-        "pullServiceAccountEmail": pull_sa,
-        "pushServiceAccountEmail": push_sa,
-    });
-    let env_vars = HashMap::from([
-        ("GOOGLE_SERVICE_ACCOUNT_KEY".into(), sa_key),
-        ("GCP_PROJECT_ID".into(), project_id.clone()),
-        ("GCP_REGION".into(), region),
-        ("ALIEN_DEPLOYMENT_TYPE".into(), "gcp".into()),
-    ]);
-    let password = format!("registry-{}", uuid::Uuid::new_v4());
-    let test = CloudProxyTest::start_external(
-        Platform::Gcp,
-        "ALIEN_GCP_ARTIFACTS_BINDING",
-        &binding.to_string(),
-        env_vars,
-        format!("{project_id}/{gar_repo_name}/{package}"),
-        password.clone(),
-    )
-    .await;
-    let result = std::panic::AssertUnwindSafe(test.external_push_and_pull(&password, "verified"))
-        .catch_unwind()
-        .await;
-    delete_gar_test_package(
-        require_env!("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY"),
-        require_env!("GOOGLE_MANAGEMENT_PROJECT_ID"),
-        require_env!("GOOGLE_MANAGEMENT_REGION"),
-        gar_repo_name,
-        &package,
-    )
-    .await;
-    if let Err(payload) = result {
-        std::panic::resume_unwind(payload);
-    }
 }
 
 /// Same as test_proxy_push_pull_gar but pushes through an ngrok HTTPS tunnel.
@@ -1092,13 +682,12 @@ async fn test_proxy_push_gar_via_ngrok() {
         &binding.to_string(),
         env_vars,
         Some((ngrok_url.clone(), port)),
-        None,
     )
     .await;
 
     let repo_name = format!("{}/{}/default", project_id, gar_repo_name);
     let tag = format!("ngrok-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let (image_name, tar_path) = build_test_image(ngrok_host, &repo_name, &tag, 400).await;
+    let (image_name, tar_path) = build_test_image(ngrok_host, &repo_name, &tag).await;
 
     let image = dockdash::Image::from_tarball(&tar_path).unwrap();
     image

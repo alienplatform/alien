@@ -7,8 +7,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build,
-    ComputePoolSelection, ComputeSettings, RemoteBindings, ResourceLifecycle, ResourceRef, Stack,
-    StackSettings, Worker, WorkerCode,
+    ComputePoolSelection, ComputeSettings, ResourceLifecycle, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
@@ -33,34 +33,6 @@ fn azure_artifact_registry_renders_premium_acr_with_pull_push_uami() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_artifact_registry", &module);
     assert_terraform_valid(&module, "azure_artifact_registry");
-}
-
-#[test]
-fn azure_remote_artifact_registry_grants_access_identity_acr_push() {
-    let mut stack = Stack::new("remote-registry".to_string())
-        .add(resource_group(), ResourceLifecycle::Frozen)
-        .add_with_remote_access(
-            ArtifactRegistry::new("registry".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            RemoteBindings::new("access".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    stack.resources.get_mut("registry").unwrap().dependencies =
-        vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
-    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
-    let rendered = module
-        .files
-        .values()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("registry_remote_access_role"));
-    assert!(rendered.contains("role_definition_name = \"AcrPush\""));
-    assert!(!rendered.contains("AcrDelete"));
-    assert_terraform_valid(&module, "azure_remote_artifact_registry");
 }
 
 #[test]
