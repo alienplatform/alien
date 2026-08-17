@@ -207,10 +207,21 @@ pub async fn stream(
     // `incoming` is moved in so it is dropped the moment forwarding stops. Holding it would
     // leave the producer writing into a channel nobody reads, which is exactly the runaway a
     // departed caller is supposed to end.
+    // The caller leaving is watched directly, not only noticed on the next failed send: a
+    // command that prints nothing never produces a frame to fail on, so without `closed()` it
+    // would run to its deadline for a receiver that is already gone.
     let forward = async move {
-        while let Some(frame) = incoming.recv().await {
-            if frames.send(Frame::from(frame)).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                frame = incoming.recv() => match frame {
+                    Some(frame) => {
+                        if frames.send(Frame::from(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                () = frames.closed() => break,
             }
         }
     };
@@ -414,6 +425,31 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), producer)
             .await
             .expect("a command whose caller left must be killed, not left running")
+            .expect("the producer task must not panic");
+    }
+
+    /// A command that prints nothing gives forwarding no send to fail on, so the caller leaving
+    /// has to be noticed on its own; otherwise a departed caller's silent command runs to its
+    /// deadline.
+    #[tokio::test]
+    async fn a_silent_command_whose_caller_left_is_killed() {
+        let (sender, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
+        let request = request(&["/bin/sh", "-c", "sleep 30"], 60_000);
+
+        let producer = tokio::spawn(async move {
+            stream(&request, None, same_identity(), 1 << 30, sender).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(
+            !producer.is_finished(),
+            "a sleeping command must still be running"
+        );
+
+        drop(receiver);
+        tokio::time::timeout(Duration::from_secs(10), producer)
+            .await
+            .expect("a silent command whose caller left must be killed, not run to its deadline")
             .expect("the producer task must not panic");
     }
 
