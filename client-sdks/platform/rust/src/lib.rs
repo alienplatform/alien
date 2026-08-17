@@ -378,10 +378,14 @@ mod tests {
             }
         });
 
-        let sdk_state: types::SyncReconcileRequestState =
-            serde_json::from_value(state).expect("deployment state should deserialize");
+        let request = serde_json::json!({
+            "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc",
+            "state": state
+        });
+        let sdk_request: types::SyncReconcileRequest =
+            serde_json::from_value(request).expect("reconcile request should deserialize");
         let serialized =
-            serde_json::to_value(sdk_state).expect("deployment state should serialize");
+            serde_json::to_value(sdk_request.state).expect("deployment state should serialize");
 
         assert_eq!(
             serialized["runtimeMetadata"]["pendingPreparedStack"]["id"],
