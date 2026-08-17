@@ -13,6 +13,9 @@ use tracing::info;
 pub(super) const STORAGE_BINDING: &str = "alien-storage";
 const KV_BINDING: &str = "alien-kv";
 const SANDBOX_BINDING: &str = "alien-sandbox";
+/// The whole sandbox check, end to end: the app bounds create (2 min), the exercise (3 min) and
+/// teardown (5 tries plus a 30 s confirmation window) itself, and this sits above their sum.
+const SANDBOX_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
@@ -1100,7 +1103,12 @@ pub async fn check_sandbox(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking sandbox binding");
 
-    let client = reqwest::Client::new();
+    // Bounded above the app's own budgets (create, exercise, terminate and its confirmation), so
+    // an app that hangs is a failed check rather than a hung suite.
+    let client = reqwest::Client::builder()
+        .timeout(SANDBOX_CHECK_TIMEOUT)
+        .build()
+        .context("Failed to build the sandbox check client")?;
     let resp = post_empty(&client, format!("{}/sandbox-test/{}", url, SANDBOX_BINDING))
         .send()
         .await

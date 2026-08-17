@@ -50,20 +50,49 @@ pub async fn test_sandbox(
             binding_name: binding_name.clone(),
         })?;
 
-    let session = sandbox
-        .create(CreateSessionRequest {
-            session_id: Some(format!("e2e-{}", Utc::now().timestamp_millis())),
+    // Bounded, like everything after it: a stalled create is a failed test, not a hung suite.
+    // The id is chosen here so a create that answers late can still be ended by name below.
+    let session_id = format!("e2e-{}", Utc::now().timestamp_millis());
+    let created = tokio::time::timeout(
+        CREATE_TIMEOUT,
+        sandbox.create(CreateSessionRequest {
+            session_id: Some(session_id.clone()),
             tenant_key: None,
             env: BTreeMap::new(),
-        })
-        .await
-        .context(ErrorData::SandboxOperationFailed {
+        }),
+    )
+    .await;
+    let session = match created {
+        Ok(created) => created.context(ErrorData::SandboxOperationFailed {
             operation: "create".to_string(),
-        })?;
+        })?,
+        Err(_) => {
+            // The create may still complete after this returns; ending the chosen id makes that
+            // a no-op session rather than a leak, and a refusal here is reported over the timeout.
+            terminate_and_confirm(sandbox.as_ref(), &session_id).await?;
+            return Err(AlienError::new(ErrorData::TestValidationFailed {
+                reason: format!("create gave no answer in {}s", CREATE_TIMEOUT.as_secs()),
+            }));
+        }
+    };
 
     // Everything after create runs in a helper so a failure still reaches terminate below. A
-    // session left running is a session still billing.
-    let outcome = exercise(sandbox.as_ref(), &session.session_id).await;
+    // session left running is a session still billing. The exercise is bounded as a whole so a
+    // command or file operation that never answers still lets terminate run.
+    let outcome = match tokio::time::timeout(
+        EXERCISE_TIMEOUT,
+        exercise(sandbox.as_ref(), &session.session_id),
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => Err(AlienError::new(ErrorData::TestValidationFailed {
+            reason: format!(
+                "the sandbox exercise gave no answer in {}s",
+                EXERCISE_TIMEOUT.as_secs()
+            ),
+        })),
+    };
     let terminated = terminate_and_confirm(sandbox.as_ref(), &session.session_id).await;
 
     // A leaked session is reported first even when the exercise also failed: an exercise failure
@@ -79,35 +108,81 @@ pub async fn test_sandbox(
     }))
 }
 
-/// How long to wait for a terminate to converge before calling the session leaked.
+/// How long a create may take. Longer than a command: on AWS a session waits for the MicroVM
+/// to answer before create returns.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long the whole exercise — commands and files — may take before terminate runs anyway.
+const EXERCISE_TIMEOUT: Duration = Duration::from_secs(180);
+/// How many times a refused terminate is retried before the session is called leaked.
+const TERMINATE_ATTEMPTS: u32 = 5;
+/// How long to wait for an accepted terminate to converge before calling the session leaked.
 const TERMINATE_POLL_ATTEMPTS: u32 = 15;
 const TERMINATE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// How long one status read may take before it counts as a failed read: a stalled manager must
+/// cost one attempt, not the whole test.
+const STATUS_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one terminate call may take before it counts as refused. Longer than a read: a
+/// backend may confirm deletion inside the call, and that is bounded on its side too.
+const TERMINATE_CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Terminates the session and reads it back to confirm it is gone.
 ///
 /// A successful terminate is not the same claim: the backends return once deletion is accepted,
 /// so a test that stops at the return value passes while the session keeps running.
 async fn terminate_and_confirm(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
-    sandbox
-        .terminate(session_id)
-        .await
-        .context(ErrorData::SandboxOperationFailed {
-            operation: "terminate".to_string(),
-        })?;
-
     // Polled rather than read once: every backend returns from terminate as soon as the deletion
     // is accepted, so a single read races normal convergence and would fail a teardown that was
     // simply still finishing.
+    // The terminate itself is retried, because it is idempotent and a transient refusal is the
+    // one failure that leaves a session running: giving up on it would hand back an error and a
+    // billable sandbox nobody will look for.
     // A failed read inside the window is retried like a non-terminal state: the session may well
     // be gone, and giving up on the first blip would fail a teardown that had already converged.
     // A read that never succeeds still fails, carrying the last error rather than a bare timeout.
-    let mut last = String::from("unread");
+    // The two budgets are separate so a terminate accepted on its last try still gets the whole
+    // convergence window rather than one immediate read.
+    // Carried as the reason text: an answer that never came and an answer that refused are the
+    // same thing to the test — a session it could not end.
+    let mut refused: Option<String> = None;
+    for attempt in 0..TERMINATE_ATTEMPTS {
+        match tokio::time::timeout(TERMINATE_CALL_TIMEOUT, sandbox.terminate(session_id)).await {
+            Ok(Ok(())) => {
+                refused = None;
+                break;
+            }
+            Ok(Err(error)) => refused = Some(error.to_string()),
+            Err(_) => {
+                refused = Some(format!(
+                    "no answer in {}s",
+                    TERMINATE_CALL_TIMEOUT.as_secs()
+                ))
+            }
+        }
+        if attempt + 1 < TERMINATE_ATTEMPTS {
+            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
+        }
+    }
+    // A refused terminate is not yet a leak: the request may have succeeded with its response
+    // lost, so the confirmation poll below decides, and the refusal is what is reported if the
+    // session turns out to still be there.
+    let mut last = match &refused {
+        Some(reason) => format!("running (terminate refused: {reason})"),
+        None => String::from("unread"),
+    };
     for attempt in 0..TERMINATE_POLL_ATTEMPTS {
-        match sandbox.get(session_id).await {
-            Ok(None) => return Ok(()),
-            Ok(Some(session)) if session.state == SandboxSessionState::Terminated => return Ok(()),
-            Ok(Some(session)) => last = format!("{:?}", session.state),
-            Err(error) => last = format!("unreadable ({error})"),
+        match tokio::time::timeout(STATUS_READ_TIMEOUT, sandbox.get(session_id)).await {
+            Err(_) => {
+                last = format!(
+                    "unreadable (no answer in {}s)",
+                    STATUS_READ_TIMEOUT.as_secs()
+                )
+            }
+            Ok(Ok(None)) => return Ok(()),
+            Ok(Ok(Some(session))) if session.state == SandboxSessionState::Terminated => {
+                return Ok(())
+            }
+            Ok(Ok(Some(session))) => last = format!("{:?}", session.state),
+            Ok(Err(error)) => last = format!("unreadable ({error})"),
         }
 
         if attempt + 1 < TERMINATE_POLL_ATTEMPTS {
@@ -115,6 +190,13 @@ async fn terminate_and_confirm(sandbox: &dyn Sandbox, session_id: &str) -> Resul
         }
     }
 
+    if let Some(reason) = refused {
+        return Err(AlienError::new(ErrorData::TestValidationFailed {
+            reason: format!(
+                "session '{session_id}' could not be terminated ({reason}); it may still be billing"
+            ),
+        }));
+    }
     Err(AlienError::new(ErrorData::TestValidationFailed {
         reason: format!(
             "session '{session_id}' is still {last} {}s after terminate; it may still be billing",
@@ -156,7 +238,7 @@ async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
 
     if exit_code != Some(0) {
         return Err(AlienError::new(ErrorData::TestValidationFailed {
-                reason: format!("run_command exited with {exit_code:?}, expected 0"),
+            reason: format!("run_command exited with {exit_code:?}, expected 0"),
         }));
     }
 
@@ -188,7 +270,7 @@ async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
 
     if read_back != marker.as_bytes() {
         return Err(AlienError::new(ErrorData::TestValidationFailed {
-                reason: "read_file returned different bytes than write_files sent".to_string(),
+            reason: "read_file returned different bytes than write_files sent".to_string(),
         }));
     }
 
