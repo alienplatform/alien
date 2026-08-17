@@ -2009,8 +2009,15 @@ impl GcpWorkerController {
                     Ok(()) => {
                         // Probe succeeded, proceed to Ready
                     }
-                    Err(_) => {
-                        // Probe failed, let the framework handle retries
+                    Err(error) => {
+                        // Recorded, not discarded: when the budget runs out the caller is told
+                        // only "timed out after N attempts", which cannot tell a container that
+                        // never started from one still warming up.
+                        warn!(
+                            name=%ctx.desired_config.id(),
+                            %url,
+                            "readiness probe attempt failed: {error}"
+                        );
                         return Ok(HandlerAction::Stay {
                             max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
@@ -3320,8 +3327,15 @@ impl GcpWorkerController {
                     Ok(()) => {
                         // Probe succeeded, proceed to Ready
                     }
-                    Err(_) => {
-                        // Probe failed, let the framework handle retries
+                    Err(error) => {
+                        // Recorded, not discarded: when the budget runs out the caller is told
+                        // only "timed out after N attempts", which cannot tell a container that
+                        // never started from one still warming up.
+                        warn!(
+                            name=%ctx.desired_config.id(),
+                            %url,
+                            "readiness probe attempt failed: {error}"
+                        );
                         return Ok(HandlerAction::Stay {
                             max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
