@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sandbox-agent"
-version = "3.3.11"
+version = "3.3.13"
 dependencies = [
  "alien-core",
  "alien-error",
