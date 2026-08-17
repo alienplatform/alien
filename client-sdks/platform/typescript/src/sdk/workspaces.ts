@@ -4,7 +4,6 @@
 
 import { workspacesAddMember } from "../funcs/workspacesAddMember.js";
 import { workspacesDelete } from "../funcs/workspacesDelete.js";
-import { workspacesDismissOnboarding } from "../funcs/workspacesDismissOnboarding.js";
 import { workspacesGet } from "../funcs/workspacesGet.js";
 import { workspacesGetSettings } from "../funcs/workspacesGetSettings.js";
 import { workspacesList } from "../funcs/workspacesList.js";
@@ -48,20 +47,6 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Delete a workspace. The workspace must have no projects.
-   */
-  async delete(
-    request: operations.DeleteWorkspaceRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(workspacesDelete(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update a workspace.
    */
   async update(
@@ -69,6 +54,20 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Workspace> {
     return unwrapAsync(workspacesUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Delete a workspace. The workspace must have no projects.
+   */
+  async delete(
+    request: operations.DeleteWorkspaceRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(workspacesDelete(
       this,
       request,
       options,
@@ -104,20 +103,6 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Remove a member from a workspace.
-   */
-  async removeMember(
-    request: operations.RemoveWorkspaceMemberRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(workspacesRemoveMember(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update a workspace member's role.
    */
   async updateMember(
@@ -132,13 +117,13 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
+   * Remove a member from a workspace.
    */
-  async dismissOnboarding(
-    request: operations.DismissWorkspaceOnboardingRequest,
+  async removeMember(
+    request: operations.RemoveWorkspaceMemberRequest,
     options?: RequestOptions,
-  ): Promise<models.Workspace> {
-    return unwrapAsync(workspacesDismissOnboarding(
+  ): Promise<void> {
+    return unwrapAsync(workspacesRemoveMember(
       this,
       request,
       options,

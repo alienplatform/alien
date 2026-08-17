@@ -12,6 +12,6 @@ let value: EventListItemResponseFailed = {};
 
 ## Fields
 
-| Field                                          | Type                                           | Required                                       | Description                                    |
-| ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
-| `error`                                        | *models.EventListItemResponseFailedErrorUnion* | :heavy_minus_sign:                             | N/A                                            |
+| Field                                         | Type                                          | Required                                      | Description                                   |
+| --------------------------------------------- | --------------------------------------------- | --------------------------------------------- | --------------------------------------------- |
+| `error`                                       | *models.EventListItemResponseStateErrorUnion* | :heavy_minus_sign:                            | N/A                                           |
