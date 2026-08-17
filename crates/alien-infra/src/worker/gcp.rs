@@ -6,7 +6,7 @@ use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
+use crate::worker::run_readiness_probe;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_gcp_clients::cloudrun::{
     Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
@@ -34,6 +34,17 @@ use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienErro
 use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+
+/// Readiness probe attempts before a GCP worker is declared failed.
+///
+/// A public Cloud Run worker is reached through a global HTTPS load balancer, and a new
+/// frontend keeps returning 404 or refusing connections until its URL map has propagated to
+/// the edge — routinely a few minutes for a fresh forwarding rule. The shared budget of ten
+/// attempts at five seconds gives that fifty seconds, which a first deploy misses as often as
+/// it makes; sixty attempts is five minutes, past the propagation Google documents. GCP-local
+/// on purpose: AWS and Azure front their workers differently and their budget is not the
+/// thing that fails here.
+const READINESS_PROBE_MAX_ATTEMPTS: u32 = 60;
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
@@ -6411,8 +6422,7 @@ mod tests {
                     .expect("a revision template")
                     .containers[0];
                 container.sandbox_launcher == Some(true)
-                    && service.launch_stage
-                        == Some(alien_gcp_clients::cloudrun::LaunchStage::Beta)
+                    && service.launch_stage == Some(alien_gcp_clients::cloudrun::LaunchStage::Beta)
             })
             .returning(|_, _, _, _| Ok(create_successful_operation_response("create-worker")));
         mock_cloudrun
