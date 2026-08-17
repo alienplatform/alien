@@ -2,8 +2,8 @@
 
 use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
-    Ai, ArtifactRegistry, DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings,
-    ResourceEntry, ResourceLifecycle, Stack, StackState,
+    Ai, DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
+    ResourceLifecycle, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -100,9 +100,7 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
         .filter(|(_, entry)| {
             matches!(
                 entry.config.resource_type(),
-                resource_type if resource_type == Key::RESOURCE_TYPE
-                    || resource_type == Ai::RESOURCE_TYPE
-                    || resource_type == ArtifactRegistry::RESOURCE_TYPE
+                resource_type if resource_type == Key::RESOURCE_TYPE || resource_type == Ai::RESOURCE_TYPE
             )
         })
         .collect::<Vec<_>>();
@@ -129,8 +127,8 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
 mod tests {
     use super::*;
     use alien_core::{
-        Ai, ArtifactRegistry, EnvironmentVariablesSnapshot, ExternalBindings, Key,
-        ManagementConfig, StackSettings, Storage,
+        Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, StackSettings,
+        Storage,
     };
 
     fn config() -> DeploymentConfig {
@@ -332,59 +330,6 @@ mod tests {
             .mutate(stack, &StackState::new(Platform::Test), &config())
             .await
             .expect_err("remote AI must reject another remotely published resource");
-
-        assert_eq!(error.code, "STACK_MUTATION_FAILED");
-        assert!(error.to_string().contains("only remoteAccess resource"));
-    }
-
-    #[tokio::test]
-    async fn remote_artifact_registry_gets_only_data_access_and_allows_non_remote_siblings() {
-        let stack = Stack::new("application".to_string())
-            .add_with_remote_access(
-                ArtifactRegistry::new("images".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add(
-                Storage::new("internal".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-
-        let mutated = RemoteBindingsMutation
-            .mutate(stack, &StackState::new(Platform::Test), &config())
-            .await
-            .expect("non-remote siblings are allowed beside a remote registry");
-        let bindings = mutated
-            .resources
-            .get(REMOTE_BINDINGS_ID)
-            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
-            .expect("Remote Bindings config");
-
-        assert_eq!(bindings.grants.len(), 1);
-        assert_eq!(bindings.grants[0].resource_id, "images");
-        assert_eq!(
-            bindings.grants[0].permission_set,
-            "artifact-registry/remote-read-write"
-        );
-    }
-
-    #[tokio::test]
-    async fn remote_artifact_registry_rejects_another_published_resource() {
-        let stack = Stack::new("application".to_string())
-            .add_with_remote_access(
-                ArtifactRegistry::new("images".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .add_with_remote_access(
-                Storage::new("exports".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
-
-        let error = RemoteBindingsMutation
-            .mutate(stack, &StackState::new(Platform::Test), &config())
-            .await
-            .expect_err("remote registry must reject another remotely published resource");
 
         assert_eq!(error.code, "STACK_MUTATION_FAILED");
         assert!(error.to_string().contains("only remoteAccess resource"));

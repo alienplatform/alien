@@ -25,6 +25,8 @@
             "ecr:DescribeRepositories",
             "ecr:DescribeImages",
             "ecr:ListImages",
+            "ecr:CreateRepository",
+            "ecr:DeleteRepository",
             "ecr:CompleteLayerUpload",
             "ecr:UploadLayerPart",
             "ecr:InitiateLayerUpload",
@@ -58,6 +60,8 @@
       {
         "grant": {
           "permissions": [
+            "artifactregistry.repositories.create",
+            "artifactregistry.repositories.delete",
             "artifactregistry.repositories.get",
             "artifactregistry.repositories.list",
             "artifactregistry.repositories.downloadArtifacts",
@@ -67,7 +71,9 @@
             "artifactregistry.versions.list",
             "artifactregistry.repositories.uploadArtifacts",
             "artifactregistry.tags.create",
-            "artifactregistry.tags.update"
+            "artifactregistry.tags.update",
+            "artifactregistry.tags.delete",
+            "artifactregistry.versions.delete"
           ]
         },
         "binding": {
