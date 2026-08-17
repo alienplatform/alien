@@ -374,22 +374,41 @@ fn test_azure_wildcard_scope_error() {
         .contains("uses wildcard scope"));
 }
 
-/// Session lifecycle is a data action on a sandbox group's children, and an Azure RBAC scope has
-/// to name a concrete resource — so a stack-level binding could only be the whole resource group,
-/// where it would let a holder terminate sessions in a sibling sandbox group. Nothing needs that:
-/// sessions are created and destroyed by the application through its resource binding.
-/// A resource-group-scoped read enumerates sibling sandbox groups. The heartbeat reports on the
-/// sandbox it is bound to, so it has no reason to see them.
+/// The heartbeat's stack binding stops at the resource group, and reads only.
+///
+/// A resource-group scope enumerates sibling sandbox groups, which the resource binding does not,
+/// so the resource binding is the one to prefer. The stack binding exists for the reason
+/// `provision` is resource-group-scoped: `Microsoft.App/sandboxGroups` has no ARM template
+/// representation, so setup can neither create the group nor scope an assignment to one. What
+/// this pins is how far that concession goes — the resource group and no further, and a read
+/// rather than anything that reaches a session.
 #[test]
-fn sandbox_heartbeat_grants_nothing_at_stack_scope() {
+fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set = get_permission_set("sandbox/heartbeat").expect("permission set exists");
     let context = create_test_context();
 
-    let error = generator
+    let stack_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
-        .expect_err("a stack-scoped read would enumerate sibling sandbox groups");
-    assert_eq!(error.code, "BINDING_TARGET_NOT_SUPPORTED");
+        .expect("the heartbeat has to reach the manager before the group exists");
+    assert_eq!(stack_plan.bindings.len(), 1);
+    let scope = &stack_plan.bindings[0].scope;
+    assert!(
+        scope.ends_with("/resourceGroups/rg-observability-prod"),
+        "the stack scope must stop at the resource group: {scope}"
+    );
+    for role in &stack_plan.custom_roles {
+        assert!(
+            role.role_definition.data_actions.is_empty(),
+            "a resource-group-wide grant must not carry data actions: {:?}",
+            role.role_definition.data_actions
+        );
+    }
+
+    let resource_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("resource grant plan should generate");
+    assert!(resource_plan.bindings[0].scope.contains("/sandboxGroups/"));
 }
 
 /// The Data Owner role reaches inside a session. At the only stack-level scope Azure RBAC can
@@ -412,16 +431,36 @@ fn sandbox_execute_grants_nothing_at_stack_scope() {
     assert!(resource_plan.bindings[0].scope.contains("/sandboxGroups/"));
 }
 
+/// Management's stack binding stops at the resource group, and never reaches session contents.
+///
+/// At that scope a holder can terminate sessions in a sibling sandbox group, so the resource
+/// binding is the one to prefer; the stack binding exists only because setup cannot scope an
+/// assignment to a group that `Microsoft.App/sandboxGroups` gives it no way to create. The
+/// boundary this pins is the one `sandbox/execute` exists to hold: session lifecycle here,
+/// never a read or exec that reaches inside a session.
 #[test]
-fn sandbox_management_grants_nothing_at_stack_scope() {
+fn sandbox_management_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set = get_permission_set("sandbox/management").expect("permission set exists");
     let context = create_test_context();
 
-    let error = generator
+    let stack_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
-        .expect_err("a resource-group-scoped session grant reaches sibling sandbox groups");
-    assert_eq!(error.code, "BINDING_TARGET_NOT_SUPPORTED");
+        .expect("management has to reach the manager before the group exists");
+    assert_eq!(stack_plan.bindings.len(), 1);
+    let scope = &stack_plan.bindings[0].scope;
+    assert!(
+        scope.ends_with("/resourceGroups/rg-observability-prod"),
+        "the stack scope must stop at the resource group: {scope}"
+    );
+    for role in &stack_plan.custom_roles {
+        for action in &role.role_definition.data_actions {
+            assert!(
+                !action.contains("/exec/") && !action.contains("/files/"),
+                "session contents belong to sandbox/execute, not management: {action}"
+            );
+        }
+    }
 
     let resource_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)

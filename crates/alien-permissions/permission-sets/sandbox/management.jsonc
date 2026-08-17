@@ -73,12 +73,15 @@
             "Microsoft.App/sandboxGroups/sandboxes/count/read"
           ]
         },
-        // Resource-scoped only, unlike every other grant here. An Azure RBAC scope has to name a
-        // concrete resource, so the stack-level scope can only be the whole resource group — and
-        // there it would let a holder terminate sessions in a sibling sandbox group. Nothing
-        // needs it: sessions are created and destroyed by the application through its resource
-        // binding at runtime, and the sandbox group's own lifecycle is a control-plane action.
+        // Prefer the resource binding: at the resource group a holder can terminate sessions in a
+        // sibling sandbox group. The stack binding exists for the same reason `provision` is
+        // resource-group-scoped — the target does not exist yet. `Microsoft.App/sandboxGroups` has
+        // no ARM template representation, so setup can neither create the group nor scope an
+        // assignment to one, and Azure has no scope between a group and its resource group.
         "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
           }

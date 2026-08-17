@@ -35,10 +35,17 @@
           // whatever the sandbox writes.
           "actions": ["Microsoft.App/sandboxGroups/read"]
         },
-        // Resource-scoped only. At the resource group — the sole stack-level scope Azure RBAC
-        // can express — this read would enumerate sibling sandbox groups. Nothing needs it: the
-        // heartbeat reports on the sandbox it is bound to.
+        // Prefer the resource binding. The stack binding is the resource group, which is wider —
+        // it enumerates sibling sandbox groups — and it exists for the same reason `provision`
+        // is resource-group-scoped: the target does not exist yet. `Microsoft.App/sandboxGroups`
+        // has no ARM template representation, so setup cannot create the group and cannot scope
+        // an assignment to one, and Azure expresses no scope between a group and its resource
+        // group. The widening is a read of provisioning state over the deployment's own resource
+        // group, and reaches no session contents.
         "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
           }
