@@ -181,8 +181,8 @@ run();
 * [list](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
 * [create](docs/sdks/apikeys/README.md#create) - Create a new API key.
 * [get](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
-* [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 * [update](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
+* [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 * [deleteMultiple](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
 
 ### [Auth](docs/sdks/auth/README.md)
@@ -206,8 +206,8 @@ run();
 * [listNames](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 * [resolveTarget](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
-* [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+* [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [dispatch](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 * [complete](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 * [incrementAttempt](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
@@ -229,8 +229,8 @@ run();
 
 * [list](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
 * [create](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
-* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 * [update](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 
 ### [Deployment](docs/sdks/deployment/README.md)
 
@@ -240,14 +240,14 @@ run();
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
-* [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+* [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
-* [getDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [ensureDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
+* [getDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
-* [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+* [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
@@ -292,6 +292,10 @@ run();
 * [list](docs/sdks/events/README.md#list) - Retrieve all events.
 * [get](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 
+### [Gateways](docs/sdks/gateways/README.md)
+
+* [getWorkspaceOverview](docs/sdks/gateways/README.md#getworkspaceoverview) - Get compact cross-Project setup and customer status for a workspace Gateway.
+
 ### [Machines](docs/sdks/machines/README.md)
 
 * [listJoinTokens](docs/sdks/machines/README.md#listjointokens)
@@ -299,14 +303,14 @@ run();
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
-* [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
+* [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
 
-* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [create](docs/sdks/managers/README.md#create) - Create a new manager.
+* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 * [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -354,8 +358,8 @@ run();
 * [list](docs/sdks/projects/README.md#list) - Retrieve all projects.
 * [create](docs/sdks/projects/README.md#create) - Create a new project.
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
-* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [update](docs/sdks/projects/README.md#update) - Update a project.
+* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [configureSource](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
@@ -440,13 +444,12 @@ run();
 
 * [list](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 * [get](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
-* [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 * [update](docs/sdks/workspaces/README.md#update) - Update a workspace.
+* [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 * [listMembers](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
 * [addMember](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
-* [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
-* [dismissOnboarding](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
+* [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [getSettings](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
 * [updateSettings](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
@@ -560,6 +563,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
 - [`finalizeAwsVirtualKeyDeletion`](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
+- [`gatewaysGetWorkspaceOverview`](docs/sdks/gateways/README.md#getworkspaceoverview) - Get compact cross-Project setup and customer status for a workspace Gateway.
 - [`getAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
 - [`getWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
@@ -671,7 +675,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`userUpdateProfile`](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
 - [`workspacesAddMember`](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
 - [`workspacesDelete`](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
-- [`workspacesDismissOnboarding`](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 - [`workspacesGet`](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
 - [`workspacesGetSettings`](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
 - [`workspacesList`](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.

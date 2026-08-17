@@ -91,8 +91,8 @@ const value: models.DataAzureManagedIdentity1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "warning",
+        reason: "api-unavailable",
+        severity: "error",
         source: "<value>",
       },
     ],

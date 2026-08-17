@@ -23,20 +23,6 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class DeploymentGroups extends ClientSDK {
   /**
-   * List deployment groups
-   */
-  async listDeploymentGroups(
-    request?: operations.ListDeploymentGroupsRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<operations.ListDeploymentGroupsResponse> {
-    return unwrapAsync(deploymentGroupsListDeploymentGroups(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Create a new deployment group
    */
   async createDeploymentGroup(
@@ -44,6 +30,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentGroup> {
     return unwrapAsync(deploymentGroupsCreateDeploymentGroup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * List deployment groups
+   */
+  async listDeploymentGroups(
+    request?: operations.ListDeploymentGroupsRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.ListDeploymentGroupsResponse> {
+    return unwrapAsync(deploymentGroupsListDeploymentGroups(
       this,
       request,
       options,
@@ -65,20 +65,6 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Get a deployment group by project and external ID
-   */
-  async getDeploymentGroupByExternalId(
-    request: operations.GetDeploymentGroupByExternalIdRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentGroup> {
-    return unwrapAsync(deploymentGroupsGetDeploymentGroupByExternalId(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Get or create a deployment group by project and external ID
    */
   async ensureDeploymentGroupByExternalId(
@@ -86,6 +72,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentGroup> {
     return unwrapAsync(deploymentGroupsEnsureDeploymentGroupByExternalId(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get a deployment group by project and external ID
+   */
+  async getDeploymentGroupByExternalId(
+    request: operations.GetDeploymentGroupByExternalIdRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsGetDeploymentGroupByExternalId(
       this,
       request,
       options,
@@ -107,20 +107,6 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Delete deployment group
-   */
-  async deleteDeploymentGroup(
-    request: operations.DeleteDeploymentGroupRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(deploymentGroupsDeleteDeploymentGroup(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update deployment group
    */
   async updateDeploymentGroup(
@@ -128,6 +114,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentGroup> {
     return unwrapAsync(deploymentGroupsUpdateDeploymentGroup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Delete deployment group
+   */
+  async deleteDeploymentGroup(
+    request: operations.DeleteDeploymentGroupRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(deploymentGroupsDeleteDeploymentGroup(
       this,
       request,
       options,

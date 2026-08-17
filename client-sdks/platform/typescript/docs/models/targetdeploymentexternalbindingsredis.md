@@ -1,0 +1,24 @@
+# TargetDeploymentExternalBindingsRedis
+
+Redis KV binding configuration
+
+## Example Usage
+
+```typescript
+import { TargetDeploymentExternalBindingsRedis } from "@alienplatform/platform-api/models";
+
+let value: TargetDeploymentExternalBindingsRedis = {
+  service: "redis",
+  type: "kv",
+};
+```
+
+## Fields
+
+| Field                                                                                                                | Type                                                                                                                 | Required                                                                                                             | Description                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `connectionUrl`                                                                                                      | *models.TargetDeploymentConnectionUrlUnion*                                                                          | :heavy_minus_sign:                                                                                                   | Represents a value that can be either a concrete value, a template expression,<br/>or a reference to a Kubernetes Secret |
+| `database`                                                                                                           | *any*                                                                                                                | :heavy_minus_sign:                                                                                                   | N/A                                                                                                                  |
+| `keyPrefix`                                                                                                          | *any*                                                                                                                | :heavy_minus_sign:                                                                                                   | N/A                                                                                                                  |
+| `service`                                                                                                            | *"redis"*                                                                                                            | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
+| `type`                                                                                                               | [models.ConfigTypeKv4](../models/configtypekv4.md)                                                                   | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
