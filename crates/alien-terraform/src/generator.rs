@@ -24,7 +24,7 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
+    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
     NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Stack,
     StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
@@ -429,7 +429,6 @@ pub fn generate_terraform_module(
             options.registration.as_ref(),
             &import_depends_on,
             terraform_input_values_expression(&stack_inputs),
-            setup_only,
         ))?,
     );
     if let Some(helm_install) = options
@@ -456,6 +455,10 @@ pub fn generate_terraform_module(
     if let Some(contents) = remote_bindings_permissions_md(stack, target) {
         files.insert("PERMISSIONS.md".to_string(), contents);
     }
+    let retained_key_detach = retained_key_detach_script(stack, target, &labels);
+    if let Some(contents) = &retained_key_detach {
+        files.insert("detach-retained-keys.sh".to_string(), contents.clone());
+    }
     files.insert(
         "README.md".to_string(),
         readme_md(
@@ -466,6 +469,7 @@ pub fn generate_terraform_module(
             &stack_settings,
             options.helm_install.as_ref(),
             &stack_inputs,
+            retained_key_detach.is_some(),
         ),
     );
 
@@ -482,6 +486,60 @@ pub fn generate_terraform_module(
     let _ = format_with_terraform(&mut module);
 
     Ok(module)
+}
+
+fn retained_key_detach_script(
+    stack: &Stack,
+    target: TerraformTarget,
+    labels: &IndexMap<String, String>,
+) -> Option<String> {
+    let mut addresses = Vec::new();
+    for (resource_id, entry) in stack.resources() {
+        if entry.config.resource_type() != Key::RESOURCE_TYPE {
+            continue;
+        }
+        let label = labels.get(resource_id)?;
+        match target.cloud_platform() {
+            alien_core::Platform::Aws => {
+                addresses.push(format!("aws_kms_key.{label}"));
+            }
+            alien_core::Platform::Gcp => {
+                addresses.push(format!("google_kms_crypto_key.{label}"));
+                addresses.push(format!("google_kms_key_ring.{label}_ring"));
+            }
+            alien_core::Platform::Azure => {
+                addresses.push(format!("azurerm_key_vault_key.{label}"));
+                addresses.push(format!("azurerm_key_vault.{label}"));
+            }
+            _ => {}
+        }
+    }
+    if addresses.is_empty() {
+        return None;
+    }
+
+    let mut script = String::from(
+        "#!/bin/sh\nset -eu\n\n\
+if [ \"${ALIEN_CONFIRM_DETACH_RETAINED_KEYS:-}\" != \"yes\" ]; then\n\
+  echo \"Set ALIEN_CONFIRM_DETACH_RETAINED_KEYS=yes after removing all key consumers and remote access.\" >&2\n\
+  exit 1\n\
+fi\n\n\
+TF_CLI=${TF_CLI:-terraform}\n\
+case \"$TF_CLI\" in\n\
+  terraform|tofu) ;;\n\
+  *) echo \"TF_CLI must be terraform or tofu\" >&2; exit 1 ;;\n\
+esac\n\n\
+detach_if_present() {\n\
+  address=$1\n\
+  if \"$TF_CLI\" state list | grep -F -x -q \"$address\"; then\n\
+    \"$TF_CLI\" state rm \"$address\"\n\
+  fi\n\
+}\n\n",
+    );
+    for address in addresses {
+        script.push_str(&format!("detach_if_present '{address}'\n"));
+    }
+    Some(script)
 }
 
 fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Option<String> {
@@ -1267,13 +1325,17 @@ fn variables_body(
         None,
         true,
     )));
+    blocks.push(nested(variable_block(
+        "management_url",
+        if setup_only {
+            "Management endpoint used to register this deployment."
+        } else {
+            "Optional management endpoint used by pull-style runtimes."
+        },
+        Some(Expression::String("".to_string())),
+        false,
+    )));
     if !setup_only {
-        blocks.push(nested(variable_block(
-            "management_url",
-            "Optional management endpoint used by pull-style runtimes.",
-            Some(Expression::String("".to_string())),
-            false,
-        )));
         blocks.push(nested(string_enum_variable_block(
             "deployment_model",
             "How runtime updates are delivered after setup.",
@@ -2640,7 +2702,6 @@ fn registration_body(
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
     input_values: Expression,
-    setup_only: bool,
 ) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -2675,14 +2736,7 @@ fn registration_body(
             ),
             attr("platform", expr::raw("local.deployment_platform")),
             attr("region", expr::raw("local.deployment_region")),
-            attr(
-                "management_url",
-                if setup_only {
-                    Expression::String(String::new())
-                } else {
-                    expr::raw("var.management_url")
-                },
-            ),
+            attr("management_url", expr::raw("var.management_url")),
             attr(
                 "management_config",
                 expr::raw("jsondecode(jsonencode(local.deployment_management_config))"),
@@ -2753,14 +2807,7 @@ fn registration_body(
                             .unwrap_or_default(),
                     ))),
                 ),
-                (
-                    "management_url",
-                    if setup_only {
-                        Expression::String(String::new())
-                    } else {
-                        expr::raw("var.management_url")
-                    },
-                ),
+                ("management_url", expr::raw("var.management_url")),
                 (
                     "management_config",
                     expr::raw("local.deployment_management_config"),
@@ -3031,6 +3078,7 @@ fn readme_md(
     stack_settings: &StackSettings,
     helm_install: Option<&TerraformHelmInstall>,
     stack_inputs: &[StackInputDefinition],
+    has_retained_keys: bool,
 ) -> String {
     let required_env = if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
@@ -3087,6 +3135,11 @@ fn readme_md(
         .is_kubernetes()
         .then(|| readme_kubernetes_operations(target))
         .unwrap_or_default();
+    let retained_key_operations = if has_retained_keys {
+        "\n\n## Retained encryption keys\n\nEncryption keys are protected from Terraform deletion. Before destroying this setup, remove remote access and every key consumer, wait for active operations to finish, and run:\n\n```bash\nALIEN_CONFIRM_DETACH_RETAINED_KEYS=yes sh ./detach-retained-keys.sh\nterraform destroy\n```\n\nThe script only removes the listed keys and their provider containers from Terraform state; it does not delete them. It is idempotent and also supports OpenTofu with `TF_CLI=tofu`."
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -3105,13 +3158,14 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
-{kubernetes_operations}",
+{kubernetes_operations}{retained_key_operations}",
         display_name = display_name,
         target = target.name(),
         inputs = inputs,
         required_env = required_env,
         registration_note = registration_note,
-        kubernetes_operations = kubernetes_operations
+        kubernetes_operations = kubernetes_operations,
+        retained_key_operations = retained_key_operations
     )
 }
 
@@ -3126,7 +3180,7 @@ fn readme_required_inputs(has_registration: bool) -> String {
 
 fn readme_common_inputs(setup_only: bool) -> String {
     if setup_only {
-        return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one."
+        return "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target."
             .to_string();
     }
     "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.\n- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.".to_string()
@@ -3263,7 +3317,6 @@ mod tests {
             Some(&registration),
             &[],
             Expression::Object(Default::default()),
-            false,
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));

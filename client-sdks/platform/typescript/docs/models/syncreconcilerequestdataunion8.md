@@ -30,7 +30,7 @@ const value: models.DataCloudSQL = {
       {
         message: "<value>",
         reason: "forbidden",
-        severity: "warning",
+        severity: "info",
         source: "<value>",
       },
     ],

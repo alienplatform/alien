@@ -88,6 +88,7 @@ beforeAll(async () => {
         platform: "local",
         deploymentProtocolVersion: 1,
         deploymentGroupId,
+        purpose: "storage",
         releaseChannel: "production",
         stackSettings: {},
         retryRequested: false,

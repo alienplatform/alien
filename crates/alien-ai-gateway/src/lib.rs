@@ -6,15 +6,27 @@
 //! passes its URL to the app; routing lives in `router`, credential injection in
 //! `creds`.
 
-mod availability;
 mod config;
 mod creds;
 mod error;
 mod router;
-pub use config::{bindings_from_env, bindings_from_env_map};
-pub use creds::{AmbientCred, AwsSigV4Cred, BearerTokenCred};
+mod usage;
+pub use config::{bindings_from_env, bindings_from_env_map, route_from_remote_ai_lease};
+pub use creds::{
+    AmbientCred, AnthropicApiKeyCred, AwsSigV4Cred, BearerTokenCred, OpenAiApiKeyCred,
+};
 pub use error::{ErrorData, Result};
-pub use router::{build_router, GatewayRoute};
+pub use router::{
+    build_router, build_router_with_availability, build_router_with_availability_and_observer,
+    build_router_with_observed_models, build_router_with_observed_models_and_observer,
+    build_router_with_observer, route_from_direct_anthropic, route_from_direct_databricks,
+    route_from_direct_openai, AvailableModels, GatewayRoute, GatewayTarget,
+    ObservedModelAvailability, ObservedModels,
+};
+pub use usage::{
+    parse_ai_token_usage, AiTokenUsage, AiUsageClientApi, AiUsageEvent, AiUsageObserver,
+    AiUsageOutcome, AiUsageProvider,
+};
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -166,7 +178,10 @@ mod tests {
     async fn dropping_the_handle_stops_the_server() {
         let handle = start_gateway(vec![]).await.expect("gateway should start");
         let url = format!("{}/healthz/ready", handle.url);
-        assert!(reqwest::get(&url).await.is_ok(), "the gateway serves while the handle is held");
+        assert!(
+            reqwest::get(&url).await.is_ok(),
+            "the gateway serves while the handle is held"
+        );
 
         drop(handle);
         // The abort lands on the next scheduler pass.

@@ -4,6 +4,7 @@ use alien_aws_clients::{
     apigateway::{ApiGatewayApi, ApiGatewayClient},
     apigatewayv2::{ApiGatewayV2Api, ApiGatewayV2Client},
     autoscaling::{AutoScalingApi, AutoScalingClient},
+    bedrock::{BedrockApi, BedrockClient},
     cloudformation::{CloudFormationApi, CloudFormationClient},
     codebuild::{CodeBuildApi, CodeBuildClient},
     dynamodb::{DynamoDbApi, DynamoDbClient},
@@ -13,6 +14,7 @@ use alien_aws_clients::{
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
+    kms::{KmsApi, KmsClient},
     lambda::{LambdaApi, LambdaClient},
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
@@ -34,8 +36,9 @@ use alien_azure_clients::{
     event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
     keyvault::{
-        AzureKeyVaultCertificatesClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
-        KeyVaultCertificatesApi, KeyVaultManagementApi, KeyVaultSecretsApi,
+        AzureKeyVaultCertificatesClient, AzureKeyVaultKeysClient, AzureKeyVaultManagementClient,
+        AzureKeyVaultSecretsClient, KeyVaultCertificatesApi, KeyVaultKeysApi,
+        KeyVaultManagementApi, KeyVaultSecretsApi,
     },
     load_balancers::{AzureLoadBalancerClient, LoadBalancerApi},
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
@@ -56,6 +59,7 @@ use alien_azure_clients::{
 use alien_error::Context;
 use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
+    cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
@@ -65,6 +69,7 @@ use alien_gcp_clients::{
     firestore::{FirestoreApi, FirestoreClient},
     gcs::{GcsApi, GcsClient},
     iam::{IamApi as GcpIamApi, IamClient as GcpIamClient},
+    model_garden::{ModelGardenApi, ModelGardenClient},
     pubsub::{PubSubApi, PubSubClient},
     resource_manager::{ResourceManagerApi, ResourceManagerClient},
     secret_manager::{SecretManagerApi, SecretManagerClient},
@@ -93,6 +98,8 @@ use mockall::automock;
 pub trait PlatformServiceProvider: Send + Sync {
     // AWS clients
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>>;
+    async fn get_aws_bedrock_client(&self, config: &AwsClientConfig)
+        -> Result<Arc<dyn BedrockApi>>;
     async fn get_aws_lambda_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn LambdaApi>>;
     async fn get_aws_s3_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn S3Api>>;
     async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>>;
@@ -136,6 +143,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn EventBridgeApi>>;
+    async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
 
     // GCP clients
     fn get_gcp_iam_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpIamApi>>;
@@ -150,6 +158,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn ServiceUsageApi>>;
+    fn get_gcp_model_garden_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ModelGardenApi>>;
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>>;
     fn get_gcp_artifact_registry_client(
         &self,
@@ -171,6 +183,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>>;
+    fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>>;
 
     // Azure clients
     fn get_azure_application_gateway_client(
@@ -245,6 +258,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn KeyVaultSecretsApi>>;
+    fn get_azure_key_vault_keys_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn KeyVaultKeysApi>>;
     fn get_azure_key_vault_certificates_client(
         &self,
         config: &AzureClientConfig,
@@ -437,6 +454,22 @@ impl DefaultPlatformServiceProvider {
 #[async_trait::async_trait]
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     // AWS implementations
+    async fn get_aws_bedrock_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn BedrockApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(BedrockClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_iam_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn IamApi>> {
         let credentials = AwsCredentialProvider::from_config(config.clone())
             .await
@@ -471,6 +504,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(S3Client::new(reqwest::Client::new(), credentials)))
+    }
+
+    async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(KmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
     }
 
     async fn get_aws_ses_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SesApi>> {
@@ -763,6 +809,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_model_garden_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn ModelGardenApi>> {
+        Ok(Arc::new(ModelGardenClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     fn get_gcp_gcs_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcsApi>> {
         Ok(Arc::new(GcsClient::new(
             reqwest::Client::new(),
@@ -785,6 +841,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>> {
         Ok(Arc::new(SecretManagerClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>> {
+        Ok(Arc::new(CloudKmsClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))
@@ -1014,6 +1077,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn KeyVaultSecretsApi>> {
         Ok(Arc::new(AzureKeyVaultSecretsClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_key_vault_keys_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn KeyVaultKeysApi>> {
+        Ok(Arc::new(AzureKeyVaultKeysClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

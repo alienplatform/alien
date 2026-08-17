@@ -7,10 +7,108 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, ResourceLifecycle,
+    Ai, Key, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, ResourceLifecycle,
     ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
+
+#[test]
+fn aws_key_package_is_valid_and_retained() {
+    let mut stack = Stack::new("enterprise-key".to_string())
+        .add_with_remote_access(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    stack
+        .resources
+        .get_mut("customer-key")
+        .unwrap()
+        .dependencies = vec![ResourceRef::new(RemoteBindings::RESOURCE_TYPE, "access")];
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("prevent_destroy = true"));
+    assert!(rendered.contains("\"kms:Encrypt\""));
+    assert!(rendered.contains("\"kms:Decrypt\""));
+    assert!(rendered.contains("aws_kms_key.customer_key.arn"));
+    let detach = module
+        .get("detach-retained-keys.sh")
+        .expect("retained Key detach operation");
+    assert!(detach.contains("detach_if_present 'aws_kms_key.customer_key'"));
+    assert!(module
+        .get("README.md")
+        .unwrap()
+        .contains("terraform destroy"));
+    assert_terraform_valid(&module, "aws_key_package");
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_key_detach_operation_is_idempotent_and_narrow() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let stack = Stack::new("enterprise-key".to_string())
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let temp = tempfile::tempdir().unwrap();
+    let detach_path = temp.path().join("detach-retained-keys.sh");
+    fs::write(&detach_path, module.get("detach-retained-keys.sh").unwrap()).unwrap();
+    fs::write(
+        temp.path().join("state"),
+        "aws_kms_key.customer_key\naws_iam_role.unrelated\n",
+    )
+    .unwrap();
+    let terraform_path = temp.path().join("terraform");
+    fs::write(
+        &terraform_path,
+        "#!/bin/sh\nset -eu\nif [ \"$1 $2\" = \"state list\" ]; then cat \"$TEST_STATE\"; exit 0; fi\nif [ \"$1 $2\" = \"state rm\" ]; then\n  grep -F -x -v \"$3\" \"$TEST_STATE\" > \"$TEST_STATE.next\"\n  mv \"$TEST_STATE.next\" \"$TEST_STATE\"\n  echo \"$3\" >> \"$TEST_LOG\"\n  exit 0\nfi\nexit 2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&terraform_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+    for _ in 0..2 {
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let status = Command::new("sh")
+            .arg(&detach_path)
+            .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes")
+            .env("PATH", path)
+            .env("TEST_STATE", temp.path().join("state"))
+            .env("TEST_LOG", temp.path().join("log"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join("state")).unwrap(),
+        "aws_iam_role.unrelated\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("log")).unwrap(),
+        "aws_kms_key.customer_key\n"
+    );
+}
 
 #[test]
 fn aws_storage_minimal_renders_idiomatic_module() {
@@ -23,6 +121,43 @@ fn aws_storage_minimal_renders_idiomatic_module() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_storage_minimal", &module);
     assert_terraform_valid(&module, "aws_storage_minimal");
+}
+
+#[test]
+fn aws_storage_uses_customer_managed_key() {
+    let stack = Stack::new("encrypted-storage".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("data", ["storage/data-write"]),
+        ))
+        .add(
+            Key::new("customer-key".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string())
+                .encryption_key(ResourceRef::new(Key::RESOURCE_TYPE, "customer-key"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("sse_algorithm     = \"aws:kms\""));
+    assert!(rendered.contains("kms_master_key_id = aws_kms_key.customer_key.arn"));
+    assert!(rendered.contains("kms:GenerateDataKey"));
+    assert!(rendered.contains("kms:Decrypt"));
+    assert_terraform_valid(&module, "aws_encrypted_storage");
 }
 
 #[test]
@@ -226,4 +361,27 @@ fn aws_ai_invoke_permissions_attach_to_service_account_role() {
         "bedrock foundation-model ARN must appear"
     );
     assert_terraform_valid(&module, "aws_ai_invoke_permissions");
+}
+
+#[test]
+fn aws_remote_ai_invoke_permissions_attach_to_access_role() {
+    let stack = Stack::new("remote-ai".to_string())
+        .add_with_remote_access(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("bedrock:InvokeModel"));
+    assert!(rendered.contains("aws_iam_role.access.name"));
+    assert_terraform_valid(&module, "aws_remote_ai_invoke_permissions");
 }

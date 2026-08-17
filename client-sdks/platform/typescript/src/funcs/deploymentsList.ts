@@ -97,6 +97,7 @@ async function $do(
     "managerId": payload?.managerId,
     "name": payload?.name,
     "project": payload?.project,
+    "purpose": payload?.purpose,
     "search": payload?.search,
     "status": payload?.status,
     "workspace": payload?.workspace,

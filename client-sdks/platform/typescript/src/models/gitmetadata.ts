@@ -43,7 +43,7 @@ export type GitMetadata = {
    */
   commitAuthorName?: string | null | undefined;
   /**
-   * The email of the author of the commit (from git config)
+   * The author identity recorded by Git. This is not guaranteed to be an RFC-valid email address.
    */
   commitAuthorEmail?: string | null | undefined;
   /**

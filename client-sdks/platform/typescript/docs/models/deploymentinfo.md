@@ -38,6 +38,50 @@ let value: DeploymentInfo = {
       "<value 2>",
     ],
   },
+  modelAvailabilitySources: [],
+  setupItems: [
+    {
+      item: "registry",
+      source: {
+        type: "built-in",
+        definitionId: "customer-registry",
+        version: "<value>",
+        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+      required: true,
+      status: "not-started",
+      deploymentIds: [
+        "<value 1>",
+        "<value 2>",
+        "<value 3>",
+      ],
+    },
+  ],
+  setupConfig: {
+    metadata: {
+      "key": "<value>",
+      "key1": "<value>",
+    },
+    policy: {
+      allowedPlatforms: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
+    },
+    environmentVariables: [],
+    items: [
+      {
+        item: "deployment",
+        source: {
+          type: "built-in",
+          definitionId: "customer-ai",
+          version: "<value>",
+          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        required: false,
+      },
+    ],
+  },
 };
 ```
 
@@ -53,5 +97,7 @@ let value: DeploymentInfo = {
 | `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `supportedRegions`                                                                 | [models.SupportedCloudRegions](../models/supportedcloudregions.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `modelAvailabilitySources`                                                         | [models.ModelAvailabilitySource](../models/modelavailabilitysource.md)[]           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `setupItems`                                                                       | [models.SetupItemStatus](../models/setupitemstatus.md)[]                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `setupConfig`                                                                      | [models.DeploymentInfoSetupConfig](../models/deploymentinfosetupconfig.md)         | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `readiness`                                                                        | [models.Readiness](../models/readiness.md)                                         | :heavy_minus_sign:                                                                 | N/A                                                                                |

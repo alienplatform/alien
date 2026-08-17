@@ -9,11 +9,9 @@ pub use azure::{
 
 // Re-export all client APIs
 pub use azure::application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient};
-pub use azure::cognitive_services::{
-    AzureCognitiveServicesClient, CognitiveServicesAccountsApi,
-};
 pub use azure::authorization::{AuthorizationApi, AzureAuthorizationClient};
 pub use azure::blob_containers::{AzureBlobContainerClient, BlobContainerApi};
+pub use azure::cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi};
 pub use azure::compute::{AzureVmssClient, VirtualMachineScaleSetsApi};
 pub use azure::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
 pub use azure::containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi};
@@ -21,8 +19,8 @@ pub use azure::disks::{AzureManagedDisksClient, ManagedDisksApi};
 pub use azure::event_grid::{AzureEventGridClient, EventGridApi};
 pub use azure::flexible_server::{AzureFlexibleServerClient, FlexibleServerApi};
 pub use azure::keyvault::{
-    AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient, KeyVaultManagementApi,
-    KeyVaultSecretsApi,
+    AzureKeyVaultKeysClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
+    KeyVaultKeysApi, KeyVaultManagementApi, KeyVaultSecretsApi,
 };
 pub use azure::load_balancers::{AzureLoadBalancerClient, LoadBalancerApi};
 pub use azure::long_running_operation::{LongRunningOperationApi, LongRunningOperationClient};

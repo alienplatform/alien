@@ -21,6 +21,9 @@ pub use email::*;
 mod storage;
 pub use storage::*;
 
+mod key;
+pub use key::*;
+
 mod queue;
 pub use queue::*;
 

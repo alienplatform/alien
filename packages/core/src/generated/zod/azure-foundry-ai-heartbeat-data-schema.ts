@@ -4,10 +4,14 @@
 */
 
 import * as z from "zod";
+import { AiAvailabilityObservationSchema } from "./ai-availability-observation-schema.js";
 import { AiHeartbeatStatusSchema } from "./ai-heartbeat-status-schema.js";
 
 export const AzureFoundryAiHeartbeatDataSchema = z.object({
     "accountName": z.string(),
+get "availability"(){
+                return AiAvailabilityObservationSchema
+              },
 "endpoint": z.string().nullish(),
 "location": z.string().nullish(),
 "resourceGroup": z.string().nullish(),

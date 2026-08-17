@@ -266,6 +266,84 @@ export type ProjectDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type ProjectDeployments = {
+  enabled: boolean;
+};
+
+export type ProjectKeys = {
+  enabled: boolean;
+  applicationEncryption: boolean;
+};
+
+export const ProjectAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type ProjectAllowedProvider = ClosedEnum<typeof ProjectAllowedProvider>;
+
+export const ProjectClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type ProjectClientApi = ClosedEnum<typeof ProjectClientApi>;
+
+export type ProjectRequirement = {
+  publicModelId: string;
+  clientApis: Array<ProjectClientApi>;
+  required: boolean;
+};
+
+export type ProjectModels = {
+  enabled: boolean;
+  allowedProviders: Array<ProjectAllowedProvider>;
+  requirements: Array<ProjectRequirement>;
+};
+
+export const ProjectAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type ProjectAccess = ClosedEnum<typeof ProjectAccess>;
+
+export type ProjectBuckets = {
+  enabled: boolean;
+  access: ProjectAccess;
+};
+
+export const ProjectCredentialPolicy = {
+  PullOnly: "pull-only",
+  PushAndPull: "push-and-pull",
+} as const;
+export type ProjectCredentialPolicy = ClosedEnum<
+  typeof ProjectCredentialPolicy
+>;
+
+export type ProjectRegistry = {
+  enabled: boolean;
+  repositories: Array<string>;
+  credentialPolicy: ProjectCredentialPolicy;
+};
+
+export type ProjectProjectCapabilitiesCapabilities = {
+  deployments?: ProjectDeployments | undefined;
+  keys?: ProjectKeys | undefined;
+  models?: ProjectModels | undefined;
+  buckets?: ProjectBuckets | undefined;
+  registry?: ProjectRegistry | undefined;
+};
+
+/**
+ * Capabilities this Project may offer through setup links.
+ */
+export type ProjectProjectCapabilities = {
+  schemaVersion: number;
+  capabilities: ProjectProjectCapabilitiesCapabilities;
+};
+
 export type Project = {
   /**
    * Unique identifier for the project.
@@ -302,6 +380,10 @@ export type Project = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: ProjectDefaultManagers | null | undefined;
+  /**
+   * Capabilities this Project may offer through setup links.
+   */
+  projectCapabilities?: ProjectProjectCapabilities | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -510,6 +592,179 @@ export function projectDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ProjectDeployments$inboundSchema: z.ZodType<
+  ProjectDeployments,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+});
+
+export function projectDeploymentsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectDeployments, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectDeployments$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectDeployments' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectKeys$inboundSchema: z.ZodType<ProjectKeys, unknown> = z
+  .object({
+    enabled: z.boolean(),
+    applicationEncryption: z.boolean(),
+  });
+
+export function projectKeysFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectKeys, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectKeys$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectKeys' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof ProjectAllowedProvider
+> = z.enum(ProjectAllowedProvider);
+
+/** @internal */
+export const ProjectClientApi$inboundSchema: z.ZodEnum<
+  typeof ProjectClientApi
+> = z.enum(ProjectClientApi);
+
+/** @internal */
+export const ProjectRequirement$inboundSchema: z.ZodType<
+  ProjectRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(ProjectClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function projectRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectModels$inboundSchema: z.ZodType<ProjectModels, unknown> = z
+  .object({
+    enabled: z.boolean(),
+    allowedProviders: z.array(ProjectAllowedProvider$inboundSchema),
+    requirements: z.array(z.lazy(() => ProjectRequirement$inboundSchema)),
+  });
+
+export function projectModelsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectModels, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectModels$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectModels' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectAccess$inboundSchema: z.ZodEnum<typeof ProjectAccess> = z
+  .enum(ProjectAccess);
+
+/** @internal */
+export const ProjectBuckets$inboundSchema: z.ZodType<ProjectBuckets, unknown> =
+  z.object({
+    enabled: z.boolean(),
+    access: ProjectAccess$inboundSchema,
+  });
+
+export function projectBucketsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectBuckets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectBuckets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectBuckets' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectCredentialPolicy$inboundSchema: z.ZodEnum<
+  typeof ProjectCredentialPolicy
+> = z.enum(ProjectCredentialPolicy);
+
+/** @internal */
+export const ProjectRegistry$inboundSchema: z.ZodType<
+  ProjectRegistry,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  repositories: z.array(z.string()),
+  credentialPolicy: ProjectCredentialPolicy$inboundSchema,
+});
+
+export function projectRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectProjectCapabilitiesCapabilities$inboundSchema: z.ZodType<
+  ProjectProjectCapabilitiesCapabilities,
+  unknown
+> = z.object({
+  deployments: z.lazy(() => ProjectDeployments$inboundSchema).optional(),
+  keys: z.lazy(() => ProjectKeys$inboundSchema).optional(),
+  models: z.lazy(() => ProjectModels$inboundSchema).optional(),
+  buckets: z.lazy(() => ProjectBuckets$inboundSchema).optional(),
+  registry: z.lazy(() => ProjectRegistry$inboundSchema).optional(),
+});
+
+export function projectProjectCapabilitiesCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectProjectCapabilitiesCapabilities, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectProjectCapabilitiesCapabilities$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectProjectCapabilitiesCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectProjectCapabilities$inboundSchema: z.ZodType<
+  ProjectProjectCapabilities,
+  unknown
+> = z.object({
+  schemaVersion: z.number(),
+  capabilities: z.lazy(() =>
+    ProjectProjectCapabilitiesCapabilities$inboundSchema
+  ),
+});
+
+export function projectProjectCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectProjectCapabilities, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectProjectCapabilities$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectProjectCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
 export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   id: z.string(),
   name: z.string(),
@@ -524,6 +779,9 @@ export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   domainId: z.nullable(z.string()).optional(),
   defaultManagers: z.nullable(
     z.lazy(() => ProjectDefaultManagers$inboundSchema),
+  ).optional(),
+  projectCapabilities: z.nullable(
+    z.lazy(() => ProjectProjectCapabilities$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),

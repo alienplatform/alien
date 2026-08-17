@@ -36,6 +36,7 @@ impl TfEmitter for AzureStorageAccountEmitter {
         let label = required_label(ctx)?;
 
         let versioning_enabled = stack_has_versioned_storage(ctx);
+        let encryption_key_label = stack_encryption_key_label(ctx);
 
         let mut body: Vec<hcl::structure::Structure> = vec![
             attr("name", storage_account_name_local()),
@@ -64,11 +65,95 @@ impl TfEmitter for AzureStorageAccountEmitter {
             ],
         )));
 
-        Ok(TfFragment::default().with_resource(resource_block(
-            "azurerm_storage_account",
-            label,
-            body,
-        )))
+        let mut fragment = TfFragment::default();
+        if let Some(key_label) = encryption_key_label {
+            let identity_label = format!("{label}_encryption");
+            let role_label = format!("{label}_encryption_key");
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_user_assigned_identity",
+                &identity_label,
+                [
+                    attr(
+                        "name",
+                        expr::raw("\"${local.resource_prefix}-storage-encryption\""),
+                    ),
+                    attr(
+                        "resource_group_name",
+                        expr::raw("var.azure_resource_group_name"),
+                    ),
+                    attr("location", expr::raw("var.azure_location")),
+                ],
+            ));
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_role_assignment",
+                &role_label,
+                [
+                    attr(
+                        "scope",
+                        expr::traversal([
+                            "azurerm_key_vault_key",
+                            key_label,
+                            "resource_versionless_id",
+                        ]),
+                    ),
+                    attr(
+                        "role_definition_name",
+                        Expression::String("Key Vault Crypto Service Encryption User".to_string()),
+                    ),
+                    attr(
+                        "principal_id",
+                        expr::traversal([
+                            "azurerm_user_assigned_identity",
+                            identity_label.as_str(),
+                            "principal_id",
+                        ]),
+                    ),
+                ],
+            ));
+            body.push(nested(block(
+                "identity",
+                [
+                    attr("type", Expression::String("UserAssigned".to_string())),
+                    attr(
+                        "identity_ids",
+                        Expression::Array(vec![expr::traversal([
+                            "azurerm_user_assigned_identity",
+                            identity_label.as_str(),
+                            "id",
+                        ])]),
+                    ),
+                ],
+            )));
+            body.push(nested(block(
+                "customer_managed_key",
+                [
+                    attr(
+                        "key_vault_key_id",
+                        expr::traversal(["azurerm_key_vault_key", key_label, "versionless_id"]),
+                    ),
+                    attr(
+                        "user_assigned_identity_id",
+                        expr::traversal([
+                            "azurerm_user_assigned_identity",
+                            identity_label.as_str(),
+                            "id",
+                        ]),
+                    ),
+                ],
+            )));
+            body.push(attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal([
+                    "azurerm_role_assignment",
+                    role_label.as_str(),
+                ])]),
+            ));
+        }
+
+        fragment
+            .resource_blocks
+            .push(resource_block("azurerm_storage_account", label, body));
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -114,5 +199,15 @@ fn stack_has_versioned_storage(ctx: &EmitContext<'_>) -> bool {
             .downcast_ref::<Storage>()
             .map(|storage| storage.versioning)
             .unwrap_or(false)
+    })
+}
+
+fn stack_encryption_key_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Storage>()
+            .and_then(|storage| storage.encryption_key.as_ref())
+            .and_then(|key| ctx.name_for(&key.id))
     })
 }

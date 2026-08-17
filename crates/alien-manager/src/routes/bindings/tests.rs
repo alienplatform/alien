@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alien_core::{
-    ExternalBinding, ExternalBindings, Platform, Resource, Stack, StackResourceState,
+    Ai, ExternalBinding, ExternalBindings, Platform, Resource, Stack, StackResourceState,
     StackSettings, StackState,
 };
 use alien_error::AlienError;
@@ -73,9 +73,26 @@ fn stack_state_with_resource(
                 versioning: false,
                 lifecycle_rules: Vec::new(),
                 cors_allowed_origins: Vec::new(),
+                encryption_key: None,
             }))
             .maybe_lifecycle(lifecycle)
             .maybe_remote_binding_params(remote_binding_params)
+            .dependencies(Vec::new())
+            .build(),
+    );
+    stack_state
+}
+
+fn ai_stack_state(binding: AiBinding, platform: Platform) -> StackState {
+    let mut stack_state = StackState::new(platform);
+    stack_state.resources.insert(
+        "models".to_string(),
+        StackResourceState::builder()
+            .resource_type(Ai::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(Resource::new(Ai::new("models".to_string()).build()))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .remote_binding_params(serde_json::to_value(binding).unwrap())
             .dependencies(Vec::new())
             .build(),
     );
@@ -130,6 +147,7 @@ fn storage() -> Storage {
         versioning: false,
         lifecycle_rules: Vec::new(),
         cors_allowed_origins: Vec::new(),
+        encryption_key: None,
     }
 }
 
@@ -196,11 +214,72 @@ fn external_storage_binding_is_rejected_even_with_synchronized_params() {
         ..StackSettings::default()
     });
 
-    let error = require_setup_owned_remote_storage(&deployment, "files")
+    let error = require_setup_owned_remote_binding(&deployment, "files")
         .expect_err("existing buckets are outside the Remote Bindings v0 contract");
     assert_eq!(error.code, "BAD_REQUEST");
     assert!(error.message.contains("cannot use an external binding"));
     assert!(error.message.contains("created by setup"));
+}
+
+#[test]
+fn remote_key_validation_returns_only_concrete_provider_topology() {
+    let cases = [
+        (
+            Platform::Aws,
+            KeyBinding::aws_kms("arn:aws:kms:us-east-1:123:key/abc", Some("us-east-1")),
+        ),
+        (
+            Platform::Gcp,
+            KeyBinding::gcp_cloud_kms(
+                "projects/example/locations/us/keyRings/data/cryptoKeys/customer",
+            ),
+        ),
+        (
+            Platform::Azure,
+            KeyBinding::azure_key_vault("https://example.vault.azure.net/keys/customer/version"),
+        ),
+    ];
+
+    for (platform, binding) in cases {
+        let mut state = stack_state_with_resource(
+            Key::RESOURCE_TYPE.as_ref(),
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            Some(serde_json::to_value(binding).unwrap()),
+        );
+        state.platform = platform;
+        assert!(remote_key_binding(&deployment_on_platform(state, platform), "files").is_ok());
+    }
+}
+
+#[test]
+fn remote_ai_validation_accepts_each_managed_provider_and_rejects_external_keys() {
+    let cases = [
+        (Platform::Aws, AiBinding::bedrock("us-east-1")),
+        (
+            Platform::Gcp,
+            AiBinding::vertex("customer-project", "us-central1"),
+        ),
+        (
+            Platform::Azure,
+            AiBinding::foundry("https://customer.services.ai.azure.com", "customer-ai"),
+        ),
+    ];
+
+    for (platform, binding) in cases {
+        let deployment = deployment_on_platform(ai_stack_state(binding, platform), platform);
+        assert!(remote_ai_binding(&deployment, "models").is_ok());
+    }
+
+    let deployment = deployment_on_platform(
+        ai_stack_state(AiBinding::external("anthropic", "secret"), Platform::Aws),
+        Platform::Aws,
+    );
+    let error = remote_ai_binding(&deployment, "models")
+        .err()
+        .expect("external API-key bindings must never be published remotely");
+    assert_eq!(error.code, "BAD_REQUEST");
+    assert!(error.message.contains("external binding"));
 }
 
 #[tokio::test]
@@ -229,6 +308,95 @@ async fn remote_access_uses_the_current_release_not_the_desired_release() {
     require_current_release_remote_access(&store, &deployment, "files")
         .await
         .expect("the current release explicitly enables remote access");
+}
+
+#[tokio::test]
+async fn deployment_level_ai_selector_requires_exactly_one_remote_ai() {
+    let one_ai = Stack::new("stack".to_string())
+        .add_with_remote_access(
+            Ai::new("models".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(storage(), ResourceLifecycle::Frozen)
+        .build();
+    let mut deployment = deployment(StackState::new(Platform::Aws));
+    deployment.current_release_id = Some("current".to_string());
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, one_ai),
+        )]),
+    };
+    assert_eq!(
+        unique_current_release_remote_ai(&store, &deployment)
+            .await
+            .expect("one remote AI and an unrelated resource is unambiguous"),
+        "models"
+    );
+    assert!(matches!(
+        require_current_release_remote_access(&store, &deployment, "models")
+            .await
+            .expect("an unrelated remote binding does not make AI ambiguous"),
+        alien_core::remote_bindings::RemoteBindingKind::Ai
+    ));
+
+    let no_ai = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, storage_stack(false)),
+        )]),
+    };
+    let error = unique_current_release_remote_ai(&no_ai, &deployment)
+        .await
+        .expect_err("zero remote AI resources must fail");
+    assert!(error.message.contains("no Frozen AI"));
+
+    let two_ai = Stack::new("stack".to_string())
+        .add_with_remote_access(
+            Ai::new("primary".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            Ai::new("secondary".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, two_ai),
+        )]),
+    };
+    let error = unique_current_release_remote_ai(&store, &deployment)
+        .await
+        .expect_err("multiple remote AI resources must fail");
+    assert!(error.message.contains("more than one"));
+}
+
+#[tokio::test]
+async fn key_resolution_rechecks_that_no_sibling_is_remotely_published() {
+    let stack = Stack::new("stack".to_string())
+        .add_with_remote_access(
+            Key {
+                id: "customer-key".to_string(),
+            },
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(storage(), ResourceLifecycle::Frozen)
+        .build();
+    let mut deployment = deployment(StackState::new(Platform::Aws));
+    deployment.current_release_id = Some("current".to_string());
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, stack),
+        )]),
+    };
+
+    let error = require_current_release_remote_access(&store, &deployment, "customer-key")
+        .await
+        .expect_err("resolver must repeat the one-remote-resource rule");
+    assert!(error.message.contains("only remoteAccess resource"));
 }
 
 #[tokio::test]

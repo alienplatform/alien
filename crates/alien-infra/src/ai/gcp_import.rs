@@ -25,6 +25,8 @@ impl ResourceImporter for GcpAiImporter {
             state: GcpAiState::Ready,
             project: Some(data.project_id),
             location: Some(data.location),
+            availability: None,
+            availability_observed_at: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

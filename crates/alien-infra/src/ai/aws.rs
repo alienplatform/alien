@@ -1,12 +1,16 @@
+use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
+use alien_aws_clients::bedrock::{BedrockApi, FoundationModelAvailability};
 use alien_core::{
-    bindings::AiBinding, Ai, AiHeartbeatData, AiHeartbeatStatus, AiOutputs,
-    AwsBedrockAiHeartbeatData, HeartbeatBackend, Platform, ResourceHeartbeat,
+    ai_catalog, bindings::AiBinding, Ai, AiAccessTest, AiAvailabilityBlocker,
+    AiAvailabilityObservation, AiAvailabilitySource, AiHeartbeatData, AiHeartbeatStatus,
+    AiModelAvailability, AiModelAvailabilityObservation, AiOutputs, AwsBedrockAiHeartbeatData,
+    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -17,6 +21,131 @@ use chrono::Utc;
 pub struct AwsAiController {
     /// AWS region where Bedrock is accessed. None until create_start runs.
     pub(crate) region: Option<String>,
+    #[serde(default)]
+    pub(crate) availability: Option<AiAvailabilityObservation>,
+    #[serde(default)]
+    pub(crate) availability_observed_at: Option<chrono::DateTime<Utc>>,
+}
+
+const AVAILABILITY_REFRESH_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
+
+fn classify_bedrock_availability(
+    model: &ai_catalog::CatalogModel,
+    response: &FoundationModelAvailability,
+    tested_at: chrono::DateTime<Utc>,
+) -> AiModelAvailabilityObservation {
+    let agreement = response
+        .agreement_availability
+        .as_ref()
+        .and_then(|value| value.status.as_deref());
+    let entitlement = response.entitlement_availability.as_deref();
+    let authorization = response.authorization_status.as_deref();
+    let region = response.region_availability.as_deref();
+    let complete =
+        agreement.is_some() && entitlement.is_some() && authorization.is_some() && region.is_some();
+    let mut blockers = Vec::new();
+    if agreement != Some("AVAILABLE") {
+        blockers.push(AiAvailabilityBlocker::AgreementRequired);
+    }
+    if entitlement != Some("AVAILABLE") {
+        blockers.push(AiAvailabilityBlocker::EntitlementRequired);
+    }
+    if authorization != Some("AUTHORIZED") {
+        blockers.push(AiAvailabilityBlocker::AccessDenied);
+    }
+    if region != Some("AVAILABLE") {
+        blockers.push(AiAvailabilityBlocker::RegionUnavailable);
+    }
+    AiModelAvailabilityObservation {
+        public_model_id: model.public_id.to_string(),
+        client_apis: model.client_apis.to_vec(),
+        availability: if !complete {
+            AiModelAvailability::Unknown
+        } else if blockers.is_empty() {
+            AiModelAvailability::Available
+        } else {
+            AiModelAvailability::Blocked
+        },
+        blockers: if complete {
+            blockers
+        } else {
+            vec![AiAvailabilityBlocker::ObservationFailed]
+        },
+        // This heartbeat only reads the provider control plane. It deliberately
+        // does not invoke a model, consume quota, or claim a successful request.
+        access_test: AiAccessTest::NotChecked,
+        tested_at: Some(tested_at),
+        error_code: None,
+    }
+}
+
+async fn observe_bedrock_availability(
+    client: Arc<dyn BedrockApi>,
+    region: &str,
+) -> AiAvailabilityObservation {
+    let tested_at = Utc::now();
+    // The GPT-5 family is served by bedrock-mantle, which has no foundation-model
+    // record: `GetFoundationModelAvailability` rejects those ids outright
+    // (verified live 2026-08-09 — `openai.gpt-5.6-sol` returns
+    // ValidationException while `openai.gpt-oss-20b-1:0` returns AVAILABLE).
+    // Probing them anyway reported every one as a failed observation on every
+    // account, so they are reported unknown-but-not-broken instead.
+    let (mantle_only, candidates): (Vec<_>, Vec<_>) = ai_catalog::models_for(Platform::Aws)
+        .into_iter()
+        .partition(|model| model.provider_api == ai_catalog::ProviderApi::OpenAiResponses);
+    // The qualified catalog contains many models. Keep the observation fast but
+    // avoid turning one heartbeat into an unbounded provider request burst.
+    let mut responses = Vec::with_capacity(candidates.len());
+    for chunk in candidates.chunks(8) {
+        let requests = chunk.iter().copied().map(|model| {
+            let client = Arc::clone(&client);
+            async move {
+                (
+                    model,
+                    client
+                        .get_foundation_model_availability(model.upstream_id)
+                        .await,
+                )
+            }
+        });
+        responses.extend(futures::future::join_all(requests).await);
+    }
+    let mut models: Vec<AiModelAvailabilityObservation> = mantle_only
+        .into_iter()
+        .map(|model| AiModelAvailabilityObservation {
+            public_model_id: model.public_id.to_string(),
+            client_apis: model.client_apis.to_vec(),
+            availability: AiModelAvailability::Unknown,
+            // No blocker: nothing is wrong with the account, the control plane
+            // simply cannot answer for a mantle-served model. The gateway's own
+            // call is the first authoritative signal.
+            blockers: Vec::new(),
+            access_test: AiAccessTest::NotChecked,
+            tested_at: Some(tested_at),
+            error_code: None,
+        })
+        .collect();
+    models.extend(responses.into_iter().map(|(model, result)| match result {
+        Ok(response) => classify_bedrock_availability(model, &response, tested_at),
+        Err(error) => {
+            warn!(model = model.public_id, %error, "Bedrock availability observation failed");
+            AiModelAvailabilityObservation {
+                public_model_id: model.public_id.to_string(),
+                client_apis: model.client_apis.to_vec(),
+                availability: AiModelAvailability::Unknown,
+                blockers: vec![AiAvailabilityBlocker::ObservationFailed],
+                access_test: AiAccessTest::NotChecked,
+                tested_at: Some(tested_at),
+                error_code: Some("bedrock-observation-failed".to_string()),
+            }
+        }
+    }));
+    AiAvailabilityObservation {
+        source: AiAvailabilitySource::AwsBedrock,
+        catalog_revision: ai_catalog::AI_CATALOG_REVISION.to_string(),
+        location: Some(region.to_string()),
+        models,
+    }
 }
 
 #[controller]
@@ -81,13 +210,47 @@ impl AwsAiController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Ai>()?;
-        let region = self.region.as_ref().ok_or_else(|| {
+        let region = self.region.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 resource_id: Some(config.id.clone()),
                 message: "Region not set in state".to_string(),
             })
         })?;
         info!(id=%config.id, "AWS AI heartbeat tick");
+        let refresh = self.availability_observed_at.is_none_or(|observed_at| {
+            Utc::now().signed_duration_since(observed_at) >= AVAILABILITY_REFRESH_INTERVAL
+        });
+        if refresh {
+            let client = ctx
+                .service_provider
+                .get_aws_bedrock_client(ctx.get_aws_config()?)
+                .await?;
+            self.availability = Some(observe_bedrock_availability(client, &region).await);
+            self.availability_observed_at = Some(Utc::now());
+        }
+        let availability = self.availability.clone().unwrap_or_else(|| {
+            AiAvailabilityObservation::unobserved(
+                AiAvailabilitySource::AwsBedrock,
+                Platform::Aws,
+                Some(region.clone()),
+            )
+        });
+        let partial = availability
+            .models
+            .iter()
+            .any(|model| model.availability == AiModelAvailability::Unknown);
+        let status = AiHeartbeatStatus {
+            health: if partial {
+                ObservedHealth::Degraded
+            } else {
+                ObservedHealth::Healthy
+            },
+            lifecycle: ProviderLifecycleState::Running,
+            message: partial.then(|| "Some model availability could not be observed".to_string()),
+            stale: false,
+            partial,
+            collection_issues: vec![],
+        };
         ctx.emit_heartbeat(ResourceHeartbeat {
             deployment_id: None,
             resource_id: config.id.clone(),
@@ -97,8 +260,9 @@ impl AwsAiController {
             observed_at: Utc::now(),
             data: ResourceHeartbeatData::Ai(AiHeartbeatData::AwsBedrock(
                 AwsBedrockAiHeartbeatData {
-                    status: AiHeartbeatStatus::default(),
+                    status,
                     region: region.clone(),
+                    availability,
                 },
             )),
             raw: vec![],
@@ -185,5 +349,93 @@ impl AwsAiController {
                     message: "Failed to serialize AI binding parameters".to_string(),
                 })?,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_aws_clients::bedrock::BedrockAvailabilityStatus;
+
+    fn response(
+        agreement: Option<&str>,
+        entitlement: Option<&str>,
+        authorization: Option<&str>,
+        region: Option<&str>,
+    ) -> FoundationModelAvailability {
+        FoundationModelAvailability {
+            agreement_availability: agreement.map(|status| BedrockAvailabilityStatus {
+                status: Some(status.to_string()),
+            }),
+            entitlement_availability: entitlement.map(str::to_string),
+            authorization_status: authorization.map(str::to_string),
+            region_availability: region.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn classifies_complete_bedrock_control_plane_response() {
+        let model = ai_catalog::models_for(Platform::Aws)[0];
+        let observed = classify_bedrock_availability(
+            model,
+            &response(
+                Some("AVAILABLE"),
+                Some("AVAILABLE"),
+                Some("AUTHORIZED"),
+                Some("AVAILABLE"),
+            ),
+            Utc::now(),
+        );
+
+        assert_eq!(observed.availability, AiModelAvailability::Available);
+        assert!(observed.blockers.is_empty());
+        assert_eq!(observed.access_test, AiAccessTest::NotChecked);
+    }
+
+    #[test]
+    fn incomplete_response_is_unknown_instead_of_overstating_access() {
+        let model = ai_catalog::models_for(Platform::Aws)[0];
+        let observed = classify_bedrock_availability(
+            model,
+            &response(
+                Some("AVAILABLE"),
+                None,
+                Some("AUTHORIZED"),
+                Some("AVAILABLE"),
+            ),
+            Utc::now(),
+        );
+
+        assert_eq!(observed.availability, AiModelAvailability::Unknown);
+        assert_eq!(
+            observed.blockers,
+            vec![AiAvailabilityBlocker::ObservationFailed]
+        );
+    }
+
+    #[test]
+    fn reports_each_bedrock_activation_blocker() {
+        let model = ai_catalog::models_for(Platform::Aws)[0];
+        let observed = classify_bedrock_availability(
+            model,
+            &response(
+                Some("NOT_AVAILABLE"),
+                Some("NOT_AVAILABLE"),
+                Some("NOT_AUTHORIZED"),
+                Some("NOT_AVAILABLE"),
+            ),
+            Utc::now(),
+        );
+
+        assert_eq!(observed.availability, AiModelAvailability::Blocked);
+        assert_eq!(
+            observed.blockers,
+            vec![
+                AiAvailabilityBlocker::AgreementRequired,
+                AiAvailabilityBlocker::EntitlementRequired,
+                AiAvailabilityBlocker::AccessDenied,
+                AiAvailabilityBlocker::RegionUnavailable,
+            ]
+        );
     }
 }

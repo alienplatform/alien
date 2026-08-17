@@ -4,6 +4,7 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../../types/enums.js";
+import * as models from "../index.js";
 
 /**
  * Represents the target cloud platform.
@@ -85,6 +86,10 @@ export type GetDeploymentStatsRequest = {
    */
   managerId?: string | undefined;
   /**
+   * Filter by deployment purpose
+   */
+  purpose?: models.DeploymentPurpose | undefined;
+  /**
    * Filter deployments by effective environment
    */
   environment?: Array<GetDeploymentStatsEnvironment> | undefined;
@@ -114,6 +119,7 @@ export type GetDeploymentStatsRequest$Outbound = {
   project?: string | undefined;
   deploymentGroup?: string | undefined;
   managerId?: string | undefined;
+  purpose?: string | undefined;
   environment?: Array<string> | undefined;
   status?: Array<string> | undefined;
   search?: string | undefined;
@@ -128,6 +134,7 @@ export const GetDeploymentStatsRequest$outboundSchema: z.ZodType<
   project: z.string().optional(),
   deploymentGroup: z.string().optional(),
   managerId: z.string().optional(),
+  purpose: models.DeploymentPurpose$outboundSchema.optional(),
   environment: z.array(GetDeploymentStatsEnvironment$outboundSchema).optional(),
   status: z.array(GetDeploymentStatsStatus$outboundSchema).optional(),
   search: z.string().optional(),

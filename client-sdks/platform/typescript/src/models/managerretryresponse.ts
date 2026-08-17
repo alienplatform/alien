@@ -21,6 +21,92 @@ import {
   ManagerRetryDeploymentResponse$inboundSchema,
 } from "./managerretrydeploymentresponse.js";
 
+export const ManagerRetryResponseItemEnum = {
+  Deployment: "deployment",
+  Models: "models",
+  Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
+} as const;
+export type ManagerRetryResponseItemEnum = ClosedEnum<
+  typeof ManagerRetryResponseItemEnum
+>;
+
+export const ManagerRetryResponseDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
+} as const;
+export type ManagerRetryResponseDefinitionId = ClosedEnum<
+  typeof ManagerRetryResponseDefinitionId
+>;
+
+export type ManagerRetryResponseSourceBuiltIn = {
+  type: "built-in";
+  definitionId: ManagerRetryResponseDefinitionId;
+  version: string;
+  /**
+   * Unique identifier for the release.
+   */
+  sourceReleaseId: string;
+};
+
+export type ManagerRetryResponseSourceProjectRelease = {
+  type: "project-release";
+  releaseChannel: string;
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type ManagerRetryResponseSourceUnion =
+  | ManagerRetryResponseSourceProjectRelease
+  | ManagerRetryResponseSourceBuiltIn;
+
+export const ManagerRetryResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type ManagerRetryResponseAllowedProvider = ClosedEnum<
+  typeof ManagerRetryResponseAllowedProvider
+>;
+
+export const ManagerRetryResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type ManagerRetryResponseClientApi = ClosedEnum<
+  typeof ManagerRetryResponseClientApi
+>;
+
+export type ManagerRetryResponseModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<ManagerRetryResponseClientApi>;
+  required: boolean;
+};
+
+export type ManagerRetryResponseConfiguration = {
+  allowedProviders?: Array<ManagerRetryResponseAllowedProvider> | undefined;
+  modelRequirements?: Array<ManagerRetryResponseModelRequirement> | undefined;
+};
+
+export type ManagerRetryResponseItem = {
+  item: ManagerRetryResponseItemEnum;
+  source:
+    | ManagerRetryResponseSourceProjectRelease
+    | ManagerRetryResponseSourceBuiltIn;
+  required: boolean;
+  configuration?: ManagerRetryResponseConfiguration | undefined;
+};
+
 export const ManagerRetryResponseEnvironmentVariableType = {
   Plain: "plain",
   Secret: "secret",
@@ -40,13 +126,39 @@ export type ManagerRetryResponseSetupConfig = {
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
   /**
+   * Immutable setup items and exact sources captured when this setup link is created.
+   */
+  items?: Array<ManagerRetryResponseItem> | undefined;
+  /**
    * Operator-pinned deployment subdomain for this setup token.
    */
   publicSubdomain?: string | undefined;
   environmentVariables: Array<ManagerRetryResponseEnvironmentVariable>;
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ManagerRetryResponseFailureDomains6 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ManagerRetryResponseFailureDomainsUnion6 =
+  | ManagerRetryResponseFailureDomains6
+  | any;
+
 export type ManagerRetryResponsePoolsAutoscale3 = {
+  failureDomains?: ManagerRetryResponseFailureDomains6 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -62,7 +174,29 @@ export type ManagerRetryResponsePoolsAutoscale3 = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ManagerRetryResponseFailureDomains5 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ManagerRetryResponseFailureDomainsUnion5 =
+  | ManagerRetryResponseFailureDomains5
+  | any;
+
 export type ManagerRetryResponsePoolsFixed3 = {
+  failureDomains?: ManagerRetryResponseFailureDomains5 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1208,7 +1342,29 @@ export type ManagerRetryResponseSetupTerraform = {
   stackSettings: ManagerRetryResponseStackSettings3;
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ManagerRetryResponseFailureDomains4 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ManagerRetryResponseFailureDomainsUnion4 =
+  | ManagerRetryResponseFailureDomains4
+  | any;
+
 export type ManagerRetryResponsePoolsAutoscale2 = {
+  failureDomains?: ManagerRetryResponseFailureDomains4 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1224,7 +1380,29 @@ export type ManagerRetryResponsePoolsAutoscale2 = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ManagerRetryResponseFailureDomains3 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ManagerRetryResponseFailureDomainsUnion3 =
+  | ManagerRetryResponseFailureDomains3
+  | any;
+
 export type ManagerRetryResponsePoolsFixed2 = {
+  failureDomains?: ManagerRetryResponseFailureDomains3 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -2365,7 +2543,29 @@ export type ManagerRetryResponseSetupGoogleOauth = {
   stackSettings: ManagerRetryResponseStackSettings2;
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ManagerRetryResponseFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ManagerRetryResponseFailureDomainsUnion2 =
+  | ManagerRetryResponseFailureDomains2
+  | any;
+
 export type ManagerRetryResponsePoolsAutoscale1 = {
+  failureDomains?: ManagerRetryResponseFailureDomains2 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -2381,7 +2581,29 @@ export type ManagerRetryResponsePoolsAutoscale1 = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type ManagerRetryResponseFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type ManagerRetryResponseFailureDomainsUnion1 =
+  | ManagerRetryResponseFailureDomains1
+  | any;
+
 export type ManagerRetryResponsePoolsFixed1 = {
+  failureDomains?: ManagerRetryResponseFailureDomains1 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -3552,6 +3774,161 @@ export type ManagerRetryResponse =
   | ManagerRetryDeploymentResponse;
 
 /** @internal */
+export const ManagerRetryResponseItemEnum$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseItemEnum
+> = z.enum(ManagerRetryResponseItemEnum);
+
+/** @internal */
+export const ManagerRetryResponseDefinitionId$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseDefinitionId
+> = z.enum(ManagerRetryResponseDefinitionId);
+
+/** @internal */
+export const ManagerRetryResponseSourceBuiltIn$inboundSchema: z.ZodType<
+  ManagerRetryResponseSourceBuiltIn,
+  unknown
+> = z.object({
+  type: z.literal("built-in"),
+  definitionId: ManagerRetryResponseDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
+});
+
+export function managerRetryResponseSourceBuiltInFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseSourceBuiltIn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseSourceBuiltIn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseSourceBuiltIn' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseSourceProjectRelease$inboundSchema: z.ZodType<
+  ManagerRetryResponseSourceProjectRelease,
+  unknown
+> = z.object({
+  type: z.literal("project-release"),
+  releaseChannel: z.string(),
+  releaseId: z.string(),
+  resourceId: z.string().optional(),
+});
+
+export function managerRetryResponseSourceProjectReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseSourceProjectRelease,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseSourceProjectRelease$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseSourceProjectRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseSourceUnion$inboundSchema: z.ZodType<
+  ManagerRetryResponseSourceUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseSourceProjectRelease$inboundSchema),
+  z.lazy(() => ManagerRetryResponseSourceBuiltIn$inboundSchema),
+]);
+
+export function managerRetryResponseSourceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseSourceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseSourceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseAllowedProvider
+> = z.enum(ManagerRetryResponseAllowedProvider);
+
+/** @internal */
+export const ManagerRetryResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseClientApi
+> = z.enum(ManagerRetryResponseClientApi);
+
+/** @internal */
+export const ManagerRetryResponseModelRequirement$inboundSchema: z.ZodType<
+  ManagerRetryResponseModelRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(ManagerRetryResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function managerRetryResponseModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseModelRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseModelRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseConfiguration$inboundSchema: z.ZodType<
+  ManagerRetryResponseConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(ManagerRetryResponseAllowedProvider$inboundSchema)
+    .optional(),
+  modelRequirements: z.array(
+    z.lazy(() => ManagerRetryResponseModelRequirement$inboundSchema),
+  ).optional(),
+});
+
+export function managerRetryResponseConfigurationFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseConfiguration, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseConfiguration' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseItem$inboundSchema: z.ZodType<
+  ManagerRetryResponseItem,
+  unknown
+> = z.object({
+  item: ManagerRetryResponseItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() => ManagerRetryResponseSourceProjectRelease$inboundSchema),
+    z.lazy(() => ManagerRetryResponseSourceBuiltIn$inboundSchema),
+  ]),
+  required: z.boolean(),
+  configuration: z.lazy(() => ManagerRetryResponseConfiguration$inboundSchema)
+    .optional(),
+});
+
+export function managerRetryResponseItemFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerRetryResponseItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseItem' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseEnvironmentVariableType$inboundSchema:
   z.ZodEnum<typeof ManagerRetryResponseEnvironmentVariableType> = z.enum(
     ManagerRetryResponseEnvironmentVariableType,
@@ -3592,6 +3969,8 @@ export const ManagerRetryResponseSetupConfig$inboundSchema: z.ZodType<
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
     .optional(),
+  items: z.array(z.lazy(() => ManagerRetryResponseItem$inboundSchema))
+    .optional(),
   publicSubdomain: z.string().optional(),
   environmentVariables: z.array(
     z.lazy(() => ManagerRetryResponseEnvironmentVariable$inboundSchema),
@@ -3609,14 +3988,69 @@ export function managerRetryResponseSetupConfigFromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseFailureDomains6$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomains6,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function managerRetryResponseFailureDomains6FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseFailureDomains6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomains6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseFailureDomains6' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseFailureDomainsUnion6$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomainsUnion6,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseFailureDomains6$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseFailureDomainsUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseFailureDomainsUnion6,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomainsUnion6$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseFailureDomainsUnion6' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponsePoolsAutoscale3$inboundSchema: z.ZodType<
   ManagerRetryResponsePoolsAutoscale3,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseFailureDomains6$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function managerRetryResponsePoolsAutoscale3FromJSON(
@@ -3631,13 +4065,68 @@ export function managerRetryResponsePoolsAutoscale3FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseFailureDomains5$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomains5,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function managerRetryResponseFailureDomains5FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseFailureDomains5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomains5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseFailureDomains5' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseFailureDomainsUnion5$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomainsUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseFailureDomains5$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseFailureDomainsUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseFailureDomainsUnion5,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomainsUnion5$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseFailureDomainsUnion5' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponsePoolsFixed3$inboundSchema: z.ZodType<
   ManagerRetryResponsePoolsFixed3,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseFailureDomains5$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function managerRetryResponsePoolsFixed3FromJSON(
@@ -5568,14 +6057,69 @@ export function managerRetryResponseSetupTerraformFromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseFailureDomains4$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomains4,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function managerRetryResponseFailureDomains4FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseFailureDomains4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomains4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseFailureDomains4' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseFailureDomainsUnion4$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomainsUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseFailureDomains4$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseFailureDomainsUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseFailureDomainsUnion4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomainsUnion4$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseFailureDomainsUnion4' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponsePoolsAutoscale2$inboundSchema: z.ZodType<
   ManagerRetryResponsePoolsAutoscale2,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseFailureDomains4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function managerRetryResponsePoolsAutoscale2FromJSON(
@@ -5590,13 +6134,68 @@ export function managerRetryResponsePoolsAutoscale2FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseFailureDomains3$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomains3,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function managerRetryResponseFailureDomains3FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseFailureDomains3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomains3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseFailureDomains3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseFailureDomainsUnion3$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomainsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseFailureDomains3$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseFailureDomainsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseFailureDomainsUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomainsUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseFailureDomainsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponsePoolsFixed2$inboundSchema: z.ZodType<
   ManagerRetryResponsePoolsFixed2,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseFailureDomains3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function managerRetryResponsePoolsFixed2FromJSON(
@@ -7522,14 +8121,69 @@ export function managerRetryResponseSetupGoogleOauthFromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseFailureDomains2$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function managerRetryResponseFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseFailureDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseFailureDomainsUnion2$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomainsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseFailureDomains2$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseFailureDomainsUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomainsUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponsePoolsAutoscale1$inboundSchema: z.ZodType<
   ManagerRetryResponsePoolsAutoscale1,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseFailureDomains2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function managerRetryResponsePoolsAutoscale1FromJSON(
@@ -7544,13 +8198,68 @@ export function managerRetryResponsePoolsAutoscale1FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseFailureDomains1$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function managerRetryResponseFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerRetryResponseFailureDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponseFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseFailureDomainsUnion1$inboundSchema: z.ZodType<
+  ManagerRetryResponseFailureDomainsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => ManagerRetryResponseFailureDomains1$inboundSchema),
+  z.any(),
+]);
+
+export function managerRetryResponseFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponseFailureDomainsUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponseFailureDomainsUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponseFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponsePoolsFixed1$inboundSchema: z.ZodType<
   ManagerRetryResponsePoolsFixed1,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => ManagerRetryResponseFailureDomains1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function managerRetryResponsePoolsFixed1FromJSON(

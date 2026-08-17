@@ -10,6 +10,7 @@
 
 mod container;
 mod error;
+mod key;
 mod kv;
 mod postgres;
 mod queue;
@@ -26,6 +27,7 @@ use napi_derive::napi;
 use std::sync::Arc;
 
 pub use container::ContainerHandle;
+pub use key::KeyHandle;
 pub use kv::KvHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
@@ -33,6 +35,15 @@ pub use queue::QueueHandle;
 pub use remote_storage::RemoteStorageHandle;
 pub use storage::StorageHandle;
 pub use vault::VaultHandle;
+
+#[cfg(feature = "platform-sdk")]
+#[napi(object)]
+pub struct RemoteAiLeaseJs {
+    pub resource_id: String,
+    pub binding_json: String,
+    pub client_config_json: String,
+    pub expires_at: String,
+}
 
 /// Returns the addon crate version. A synchronous surface used to smoke-test
 /// that the native module loads and calls under a given runtime.
@@ -66,6 +77,14 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let storage = inner.storage(&name).await.map_err(map_alien_error)?;
         Ok(StorageHandle::new(storage, name))
+    }
+
+    /// Resolve the provider-backed key binding named `name`.
+    #[napi]
+    pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {
+        let inner = self.inner.clone();
+        let key = inner.key(&name).await.map_err(map_alien_error)?;
+        Ok(KeyHandle::new(key))
     }
 
     /// Resolve the key-value binding named `name`.
@@ -112,7 +131,7 @@ impl BindingsHandle {
     }
 }
 
-/// The JS-facing remote entry point. Its narrow surface makes unsupported
+/// The JS-facing remote entry point. Its typed surface makes unsupported
 /// binding kinds impossible to request through the native addon.
 #[cfg(feature = "platform-sdk")]
 #[napi]
@@ -123,6 +142,27 @@ pub struct RemoteBindingsHandle {
 #[cfg(feature = "platform-sdk")]
 #[napi]
 impl RemoteBindingsHandle {
+    /// Select a customer's Storage deployment by Project and external ID.
+    #[napi(factory)]
+    pub async fn for_environment(
+        project: String,
+        external_id: String,
+        token: String,
+        api_base_url: Option<String>,
+    ) -> napi::Result<Self> {
+        let bindings = RemoteBindings::for_environment(
+            &project,
+            &external_id,
+            &token,
+            api_base_url.as_deref(),
+        )
+        .await
+        .map_err(map_alien_error)?;
+        Ok(Self {
+            inner: Arc::new(bindings),
+        })
+    }
+
     /// Discover a deployment's assigned manager and create remote bindings.
     #[napi(factory)]
     pub async fn for_deployment(
@@ -144,5 +184,26 @@ impl RemoteBindingsHandle {
     pub async fn storage(&self, name: String) -> napi::Result<RemoteStorageHandle> {
         let storage = self.inner.storage(&name).await.map_err(map_alien_error)?;
         Ok(RemoteStorageHandle::new(storage, name))
+    }
+
+    /// Resolve the key binding named `name`.
+    #[napi]
+    pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {
+        let key = self.inner.key(&name).await.map_err(map_alien_error)?;
+        Ok(KeyHandle::new(key))
+    }
+
+    /// Resolve the deployment's unique managed AI binding.
+    #[napi]
+    pub async fn ai(&self) -> napi::Result<RemoteAiLeaseJs> {
+        let lease = self.inner.ai().await.map_err(map_alien_error)?;
+        Ok(RemoteAiLeaseJs {
+            resource_id: lease.resource_id,
+            binding_json: serde_json::to_string(&lease.binding)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
+            client_config_json: serde_json::to_string(&lease.client_config)
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?,
+            expires_at: lease.expires_at.to_rfc3339(),
+        })
     }
 }

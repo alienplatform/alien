@@ -66,6 +66,10 @@ export type ListDeploymentGroupsItem = {
    */
   name: string;
   /**
+   * Case-sensitive, URL- and header-safe identifier from the integrating application.
+   */
+  externalId: string | null;
+  /**
    * Unique identifier for the project.
    */
   projectId: string;
@@ -162,6 +166,7 @@ export const ListDeploymentGroupsItem$inboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   name: z.string(),
+  externalId: z.nullable(z.string()),
   projectId: z.string(),
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),

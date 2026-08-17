@@ -15,8 +15,8 @@ let value: DataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "info",
+          reason: "collection-failed",
+          severity: "warning",
           source: "<value>",
         },
       ],

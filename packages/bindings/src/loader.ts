@@ -91,6 +91,11 @@ export interface RawStorageHandle {
   signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>
 }
 
+export interface RawKeyHandle {
+  encrypt(plaintext: Buffer, context?: Record<string, string> | null): Promise<Buffer>
+  decrypt(ciphertext: Buffer, context?: Record<string, string> | null): Promise<Buffer>
+}
+
 /** Raw napi remote Storage v0 handle. */
 export interface RawRemoteStorageHandle {
   get(path: string): Promise<StorageGetResult>
@@ -98,6 +103,13 @@ export interface RawRemoteStorageHandle {
   delete(path: string): Promise<void>
   list(prefix?: string | null): Promise<RawObjectMeta[]>
   head(path: string): Promise<StorageHeadResult>
+}
+
+export interface RawRemoteAiLease {
+  resourceId: string
+  bindingJson: string
+  clientConfigJson: string
+  expiresAt: string
 }
 
 /** Raw napi key-value handle. */
@@ -165,6 +177,7 @@ export interface RawVaultHandle {
 /** Raw napi bindings entry point. Construction validates the environment. */
 export interface RawBindingsHandle {
   storage(name: string): Promise<RawStorageHandle>
+  key(name: string): Promise<RawKeyHandle>
   kv(name: string): Promise<RawKvHandle>
   queue(name: string): Promise<RawQueueHandle>
   vault(name: string): Promise<RawVaultHandle>
@@ -172,9 +185,11 @@ export interface RawBindingsHandle {
   postgres(name: string): Promise<RawPostgresHandle>
 }
 
-/** Raw napi remote bindings entry point. Storage is the entire v0 surface. */
+/** Raw napi remote bindings entry point. */
 export interface RawRemoteBindingsHandle {
   storage(name: string): Promise<RawRemoteStorageHandle>
+  key(name: string): Promise<RawKeyHandle>
+  ai(): Promise<RawRemoteAiLease>
 }
 
 /** Native environment-backed bindings class. */
@@ -184,6 +199,12 @@ export interface RawBindingsHandleConstructor {
 
 /** Native remote bindings class. */
 export interface RawRemoteBindingsHandleConstructor {
+  forCustomer(
+    project: string,
+    externalId: string,
+    token: string,
+    apiBaseUrl?: string,
+  ): Promise<RawRemoteBindingsHandle>
   forDeployment(
     deploymentId: string,
     token: string,

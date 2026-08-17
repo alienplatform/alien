@@ -4,6 +4,7 @@
 
 ### Available Operations
 
+* [bootstrap](#bootstrap) - Resolve a deployment's current manager and mint a five-minute command capability. Sender tokens can dispatch and observe commands only for this deployment. Receiver tokens can lease and complete commands only for the resolved Container or Daemon target.
 * [list](#list) - Retrieve commands. Use for dashboard analytics and command history.
 * [create](#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 * [listNames](#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
@@ -14,6 +15,85 @@
 * [dispatch](#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 * [complete](#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 * [incrementAttempt](#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
+
+## bootstrap
+
+Resolve a deployment's current manager and mint a five-minute command capability. Sender tokens can dispatch and observe commands only for this deployment. Receiver tokens can lease and complete commands only for the resolved Container or Daemon target.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="bootstrapCommands" method="post" path="/v1/commands/bootstrap" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.commands.bootstrap({
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    role: "receiver",
+    target: "<value>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsBootstrap } from "@alienplatform/platform-api/funcs/commandsBootstrap.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await commandsBootstrap(alien, {
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    role: "receiver",
+    target: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("commandsBootstrap failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.CommandBootstrapRequest](../../models/commandbootstraprequest.md)                                                                                                      | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.CommandBootstrapResponse](../../models/commandbootstrapresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 401, 403, 404, 422  | application/json         |
+| errors.APIError          | 500, 503                 | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## list
 

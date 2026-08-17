@@ -26,7 +26,7 @@ export type CreateProjectTypeRequest = ClosedEnum<
 /**
  * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
-export type GitRepositoryRequest = {
+export type CreateProjectGitRepositoryRequest = {
   /**
    * The Git Provider of the repository
    */
@@ -192,6 +192,15 @@ export type CreateProjectPackagesConfigRequest = {
   terraform?: CreateProjectTerraformRequest | null | undefined;
 };
 
+export const EnabledCapability = {
+  Deployments: "deployments",
+  Models: "models",
+  Keys: "keys",
+  Buckets: "buckets",
+  Registry: "registry",
+} as const;
+export type EnabledCapability = ClosedEnum<typeof EnabledCapability>;
+
 export type CreateProjectRequestBody = {
   /**
    * Project name.
@@ -200,7 +209,7 @@ export type CreateProjectRequestBody = {
   /**
    * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
-  gitRepository?: GitRepositoryRequest | null | undefined;
+  gitRepository?: CreateProjectGitRepositoryRequest | null | undefined;
   /**
    * The name of a directory or relative path to the source code of your project. When null is used it will default to the project root
    */
@@ -209,6 +218,7 @@ export type CreateProjectRequestBody = {
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
   packagesConfig?: CreateProjectPackagesConfigRequest | null | undefined;
+  enabledCapabilities?: Array<EnabledCapability> | undefined;
 };
 
 export type CreateProjectRequest = {
@@ -469,6 +479,86 @@ export type CreateProjectDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type CreateProjectDeployments = {
+  enabled: boolean;
+};
+
+export type CreateProjectKeys = {
+  enabled: boolean;
+  applicationEncryption: boolean;
+};
+
+export const CreateProjectAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type CreateProjectAllowedProvider = ClosedEnum<
+  typeof CreateProjectAllowedProvider
+>;
+
+export const CreateProjectClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type CreateProjectClientApi = ClosedEnum<typeof CreateProjectClientApi>;
+
+export type CreateProjectRequirement = {
+  publicModelId: string;
+  clientApis: Array<CreateProjectClientApi>;
+  required: boolean;
+};
+
+export type CreateProjectModels = {
+  enabled: boolean;
+  allowedProviders: Array<CreateProjectAllowedProvider>;
+  requirements: Array<CreateProjectRequirement>;
+};
+
+export const CreateProjectAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type CreateProjectAccess = ClosedEnum<typeof CreateProjectAccess>;
+
+export type CreateProjectBuckets = {
+  enabled: boolean;
+  access: CreateProjectAccess;
+};
+
+export const CreateProjectCredentialPolicy = {
+  PullOnly: "pull-only",
+  PushAndPull: "push-and-pull",
+} as const;
+export type CreateProjectCredentialPolicy = ClosedEnum<
+  typeof CreateProjectCredentialPolicy
+>;
+
+export type CreateProjectRegistry = {
+  enabled: boolean;
+  repositories: Array<string>;
+  credentialPolicy: CreateProjectCredentialPolicy;
+};
+
+export type CreateProjectCapabilities = {
+  deployments?: CreateProjectDeployments | undefined;
+  keys?: CreateProjectKeys | undefined;
+  models?: CreateProjectModels | undefined;
+  buckets?: CreateProjectBuckets | undefined;
+  registry?: CreateProjectRegistry | undefined;
+};
+
+/**
+ * Capabilities this Project may offer through setup links.
+ */
+export type CreateProjectProjectCapabilities = {
+  schemaVersion: number;
+  capabilities: CreateProjectCapabilities;
+};
+
 export type CreateProjectGithubSetup = {
   /**
    * URL to the pull request with the Alien build workflow
@@ -519,6 +609,10 @@ export type CreateProjectResponse = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: CreateProjectDefaultManagers | null | undefined;
+  /**
+   * Capabilities this Project may offer through setup links.
+   */
+  projectCapabilities?: CreateProjectProjectCapabilities | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -534,25 +628,27 @@ export const CreateProjectTypeRequest$outboundSchema: z.ZodEnum<
 > = z.enum(CreateProjectTypeRequest);
 
 /** @internal */
-export type GitRepositoryRequest$Outbound = {
+export type CreateProjectGitRepositoryRequest$Outbound = {
   type: string;
   repo: string;
 };
 
 /** @internal */
-export const GitRepositoryRequest$outboundSchema: z.ZodType<
-  GitRepositoryRequest$Outbound,
-  GitRepositoryRequest
+export const CreateProjectGitRepositoryRequest$outboundSchema: z.ZodType<
+  CreateProjectGitRepositoryRequest$Outbound,
+  CreateProjectGitRepositoryRequest
 > = z.object({
   type: CreateProjectTypeRequest$outboundSchema,
   repo: z.string(),
 });
 
-export function gitRepositoryRequestToJSON(
-  gitRepositoryRequest: GitRepositoryRequest,
+export function createProjectGitRepositoryRequestToJSON(
+  createProjectGitRepositoryRequest: CreateProjectGitRepositoryRequest,
 ): string {
   return JSON.stringify(
-    GitRepositoryRequest$outboundSchema.parse(gitRepositoryRequest),
+    CreateProjectGitRepositoryRequest$outboundSchema.parse(
+      createProjectGitRepositoryRequest,
+    ),
   );
 }
 
@@ -740,14 +836,20 @@ export function createProjectPackagesConfigRequestToJSON(
 }
 
 /** @internal */
+export const EnabledCapability$outboundSchema: z.ZodEnum<
+  typeof EnabledCapability
+> = z.enum(EnabledCapability);
+
+/** @internal */
 export type CreateProjectRequestBody$Outbound = {
   name: string;
-  gitRepository?: GitRepositoryRequest$Outbound | null | undefined;
+  gitRepository?: CreateProjectGitRepositoryRequest$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
   packagesConfig?:
     | CreateProjectPackagesConfigRequest$Outbound
     | null
     | undefined;
+  enabledCapabilities?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -756,12 +858,14 @@ export const CreateProjectRequestBody$outboundSchema: z.ZodType<
   CreateProjectRequestBody
 > = z.object({
   name: z.string(),
-  gitRepository: z.nullable(z.lazy(() => GitRepositoryRequest$outboundSchema))
-    .optional(),
+  gitRepository: z.nullable(
+    z.lazy(() => CreateProjectGitRepositoryRequest$outboundSchema),
+  ).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectPackagesConfigRequest$outboundSchema),
   ).optional(),
+  enabledCapabilities: z.array(EnabledCapability$outboundSchema).optional(),
 });
 
 export function createProjectRequestBodyToJSON(
@@ -1022,6 +1126,183 @@ export function createProjectDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const CreateProjectDeployments$inboundSchema: z.ZodType<
+  CreateProjectDeployments,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+});
+
+export function createProjectDeploymentsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectDeployments, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectDeployments$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectDeployments' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectKeys$inboundSchema: z.ZodType<
+  CreateProjectKeys,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
+});
+
+export function createProjectKeysFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectKeys, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectKeys$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectKeys' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof CreateProjectAllowedProvider
+> = z.enum(CreateProjectAllowedProvider);
+
+/** @internal */
+export const CreateProjectClientApi$inboundSchema: z.ZodEnum<
+  typeof CreateProjectClientApi
+> = z.enum(CreateProjectClientApi);
+
+/** @internal */
+export const CreateProjectRequirement$inboundSchema: z.ZodType<
+  CreateProjectRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(CreateProjectClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function createProjectRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectModels$inboundSchema: z.ZodType<
+  CreateProjectModels,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  allowedProviders: z.array(CreateProjectAllowedProvider$inboundSchema),
+  requirements: z.array(z.lazy(() => CreateProjectRequirement$inboundSchema)),
+});
+
+export function createProjectModelsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectModels, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectModels$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectModels' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectAccess$inboundSchema: z.ZodEnum<
+  typeof CreateProjectAccess
+> = z.enum(CreateProjectAccess);
+
+/** @internal */
+export const CreateProjectBuckets$inboundSchema: z.ZodType<
+  CreateProjectBuckets,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  access: CreateProjectAccess$inboundSchema,
+});
+
+export function createProjectBucketsFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectBuckets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectBuckets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectBuckets' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectCredentialPolicy$inboundSchema: z.ZodEnum<
+  typeof CreateProjectCredentialPolicy
+> = z.enum(CreateProjectCredentialPolicy);
+
+/** @internal */
+export const CreateProjectRegistry$inboundSchema: z.ZodType<
+  CreateProjectRegistry,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  repositories: z.array(z.string()),
+  credentialPolicy: CreateProjectCredentialPolicy$inboundSchema,
+});
+
+export function createProjectRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectCapabilities$inboundSchema: z.ZodType<
+  CreateProjectCapabilities,
+  unknown
+> = z.object({
+  deployments: z.lazy(() => CreateProjectDeployments$inboundSchema).optional(),
+  keys: z.lazy(() => CreateProjectKeys$inboundSchema).optional(),
+  models: z.lazy(() => CreateProjectModels$inboundSchema).optional(),
+  buckets: z.lazy(() => CreateProjectBuckets$inboundSchema).optional(),
+  registry: z.lazy(() => CreateProjectRegistry$inboundSchema).optional(),
+});
+
+export function createProjectCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectCapabilities, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectCapabilities$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateProjectProjectCapabilities$inboundSchema: z.ZodType<
+  CreateProjectProjectCapabilities,
+  unknown
+> = z.object({
+  schemaVersion: z.number(),
+  capabilities: z.lazy(() => CreateProjectCapabilities$inboundSchema),
+});
+
+export function createProjectProjectCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectProjectCapabilities, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectProjectCapabilities$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectProjectCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectGithubSetup$inboundSchema: z.ZodType<
   CreateProjectGithubSetup,
   unknown
@@ -1060,6 +1341,9 @@ export const CreateProjectResponse$inboundSchema: z.ZodType<
   domainId: z.nullable(z.string()).optional(),
   defaultManagers: z.nullable(
     z.lazy(() => CreateProjectDefaultManagers$inboundSchema),
+  ).optional(),
+  projectCapabilities: z.nullable(
+    z.lazy(() => CreateProjectProjectCapabilities$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),

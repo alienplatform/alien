@@ -24,6 +24,92 @@ export type CreateManagerResponseSetupStatus = ClosedEnum<
   typeof CreateManagerResponseSetupStatus
 >;
 
+export const CreateManagerResponseItemEnum = {
+  Deployment: "deployment",
+  Models: "models",
+  Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
+} as const;
+export type CreateManagerResponseItemEnum = ClosedEnum<
+  typeof CreateManagerResponseItemEnum
+>;
+
+export const CreateManagerResponseDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
+} as const;
+export type CreateManagerResponseDefinitionId = ClosedEnum<
+  typeof CreateManagerResponseDefinitionId
+>;
+
+export type CreateManagerResponseSourceBuiltIn = {
+  type: "built-in";
+  definitionId: CreateManagerResponseDefinitionId;
+  version: string;
+  /**
+   * Unique identifier for the release.
+   */
+  sourceReleaseId: string;
+};
+
+export type CreateManagerResponseSourceProjectRelease = {
+  type: "project-release";
+  releaseChannel: string;
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type CreateManagerResponseSourceUnion =
+  | CreateManagerResponseSourceProjectRelease
+  | CreateManagerResponseSourceBuiltIn;
+
+export const CreateManagerResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type CreateManagerResponseAllowedProvider = ClosedEnum<
+  typeof CreateManagerResponseAllowedProvider
+>;
+
+export const CreateManagerResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type CreateManagerResponseClientApi = ClosedEnum<
+  typeof CreateManagerResponseClientApi
+>;
+
+export type CreateManagerResponseModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<CreateManagerResponseClientApi>;
+  required: boolean;
+};
+
+export type CreateManagerResponseConfiguration = {
+  allowedProviders?: Array<CreateManagerResponseAllowedProvider> | undefined;
+  modelRequirements?: Array<CreateManagerResponseModelRequirement> | undefined;
+};
+
+export type CreateManagerResponseItem = {
+  item: CreateManagerResponseItemEnum;
+  source:
+    | CreateManagerResponseSourceProjectRelease
+    | CreateManagerResponseSourceBuiltIn;
+  required: boolean;
+  configuration?: CreateManagerResponseConfiguration | undefined;
+};
+
 export const CreateManagerResponseEnvironmentVariableType = {
   Plain: "plain",
   Secret: "secret",
@@ -43,13 +129,43 @@ export type CreateManagerResponseSetupConfig = {
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
   /**
+   * Immutable setup items and exact sources captured when this setup link is created.
+   */
+  items?: Array<CreateManagerResponseItem> | undefined;
+  /**
    * Operator-pinned deployment subdomain for this setup token.
    */
   publicSubdomain?: string | undefined;
   environmentVariables: Array<CreateManagerResponseEnvironmentVariable>;
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains6 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion6 =
+  | CreateManagerResponseFailureDomains6
+  | any;
+
 export type CreateManagerResponsePoolsAutoscale3 = {
+  failureDomains?:
+    | CreateManagerResponseFailureDomains6
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -65,7 +181,33 @@ export type CreateManagerResponsePoolsAutoscale3 = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains5 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion5 =
+  | CreateManagerResponseFailureDomains5
+  | any;
+
 export type CreateManagerResponsePoolsFixed3 = {
+  failureDomains?:
+    | CreateManagerResponseFailureDomains5
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1219,7 +1361,33 @@ export type CreateManagerResponseSetupTerraform = {
   stackSettings: CreateManagerResponseStackSettings3;
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains4 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion4 =
+  | CreateManagerResponseFailureDomains4
+  | any;
+
 export type CreateManagerResponsePoolsAutoscale2 = {
+  failureDomains?:
+    | CreateManagerResponseFailureDomains4
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1235,7 +1403,33 @@ export type CreateManagerResponsePoolsAutoscale2 = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains3 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion3 =
+  | CreateManagerResponseFailureDomains3
+  | any;
+
 export type CreateManagerResponsePoolsFixed2 = {
+  failureDomains?:
+    | CreateManagerResponseFailureDomains3
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -2384,7 +2578,33 @@ export type CreateManagerResponseSetupGoogleOauth = {
   stackSettings: CreateManagerResponseStackSettings2;
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion2 =
+  | CreateManagerResponseFailureDomains2
+  | any;
+
 export type CreateManagerResponsePoolsAutoscale1 = {
+  failureDomains?:
+    | CreateManagerResponseFailureDomains2
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -2400,7 +2620,33 @@ export type CreateManagerResponsePoolsAutoscale1 = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type CreateManagerResponseFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type CreateManagerResponseFailureDomainsUnion1 =
+  | CreateManagerResponseFailureDomains1
+  | any;
+
 export type CreateManagerResponsePoolsFixed1 = {
+  failureDomains?:
+    | CreateManagerResponseFailureDomains1
+    | any
+    | null
+    | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -3574,6 +3820,163 @@ export const CreateManagerResponseSetupStatus$inboundSchema: z.ZodEnum<
 > = z.enum(CreateManagerResponseSetupStatus);
 
 /** @internal */
+export const CreateManagerResponseItemEnum$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseItemEnum
+> = z.enum(CreateManagerResponseItemEnum);
+
+/** @internal */
+export const CreateManagerResponseDefinitionId$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseDefinitionId
+> = z.enum(CreateManagerResponseDefinitionId);
+
+/** @internal */
+export const CreateManagerResponseSourceBuiltIn$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceBuiltIn,
+  unknown
+> = z.object({
+  type: z.literal("built-in"),
+  definitionId: CreateManagerResponseDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
+});
+
+export function createManagerResponseSourceBuiltInFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSourceBuiltIn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSourceBuiltIn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSourceBuiltIn' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSourceProjectRelease$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceProjectRelease,
+  unknown
+> = z.object({
+  type: z.literal("project-release"),
+  releaseChannel: z.string(),
+  releaseId: z.string(),
+  resourceId: z.string().optional(),
+});
+
+export function createManagerResponseSourceProjectReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseSourceProjectRelease,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseSourceProjectRelease$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseSourceProjectRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseSourceUnion$inboundSchema: z.ZodType<
+  CreateManagerResponseSourceUnion,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseSourceProjectRelease$inboundSchema),
+  z.lazy(() => CreateManagerResponseSourceBuiltIn$inboundSchema),
+]);
+
+export function createManagerResponseSourceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseSourceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSourceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseAllowedProvider
+> = z.enum(CreateManagerResponseAllowedProvider);
+
+/** @internal */
+export const CreateManagerResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseClientApi
+> = z.enum(CreateManagerResponseClientApi);
+
+/** @internal */
+export const CreateManagerResponseModelRequirement$inboundSchema: z.ZodType<
+  CreateManagerResponseModelRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(CreateManagerResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function createManagerResponseModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseModelRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseModelRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseConfiguration$inboundSchema: z.ZodType<
+  CreateManagerResponseConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(CreateManagerResponseAllowedProvider$inboundSchema)
+    .optional(),
+  modelRequirements: z.array(
+    z.lazy(() => CreateManagerResponseModelRequirement$inboundSchema),
+  ).optional(),
+});
+
+export function createManagerResponseConfigurationFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseConfiguration, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseConfiguration$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseConfiguration' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseItem$inboundSchema: z.ZodType<
+  CreateManagerResponseItem,
+  unknown
+> = z.object({
+  item: CreateManagerResponseItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() => CreateManagerResponseSourceProjectRelease$inboundSchema),
+    z.lazy(() => CreateManagerResponseSourceBuiltIn$inboundSchema),
+  ]),
+  required: z.boolean(),
+  configuration: z.lazy(() => CreateManagerResponseConfiguration$inboundSchema)
+    .optional(),
+});
+
+export function createManagerResponseItemFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseItem' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseEnvironmentVariableType$inboundSchema:
   z.ZodEnum<typeof CreateManagerResponseEnvironmentVariableType> = z.enum(
     CreateManagerResponseEnvironmentVariableType,
@@ -3614,6 +4017,8 @@ export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
     .optional(),
+  items: z.array(z.lazy(() => CreateManagerResponseItem$inboundSchema))
+    .optional(),
   publicSubdomain: z.string().optional(),
   environmentVariables: z.array(
     z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
@@ -3631,14 +4036,69 @@ export function createManagerResponseSetupConfigFromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseFailureDomains6$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains6,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains6FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains6' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion6$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion6,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains6$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseFailureDomainsUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion6,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion6$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion6' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponsePoolsAutoscale3$inboundSchema: z.ZodType<
   CreateManagerResponsePoolsAutoscale3,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains6$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function createManagerResponsePoolsAutoscale3FromJSON(
@@ -3653,13 +4113,68 @@ export function createManagerResponsePoolsAutoscale3FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseFailureDomains5$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains5,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains5FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains5' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion5$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains5$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseFailureDomainsUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion5,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion5$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion5' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponsePoolsFixed3$inboundSchema: z.ZodType<
   CreateManagerResponsePoolsFixed3,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains5$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function createManagerResponsePoolsFixed3FromJSON(
@@ -5614,14 +6129,69 @@ export function createManagerResponseSetupTerraformFromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseFailureDomains4$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains4,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains4FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion4$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains4$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseFailureDomainsUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion4$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion4' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponsePoolsAutoscale2$inboundSchema: z.ZodType<
   CreateManagerResponsePoolsAutoscale2,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function createManagerResponsePoolsAutoscale2FromJSON(
@@ -5636,13 +6206,68 @@ export function createManagerResponsePoolsAutoscale2FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseFailureDomains3$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains3,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains3$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseFailureDomainsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponsePoolsFixed2$inboundSchema: z.ZodType<
   CreateManagerResponsePoolsFixed2,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function createManagerResponsePoolsFixed2FromJSON(
@@ -7592,14 +8217,69 @@ export function createManagerResponseSetupGoogleOauthFromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseFailureDomains2$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains2$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponsePoolsAutoscale1$inboundSchema: z.ZodType<
   CreateManagerResponsePoolsAutoscale1,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function createManagerResponsePoolsAutoscale1FromJSON(
@@ -7614,13 +8294,68 @@ export function createManagerResponsePoolsAutoscale1FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseFailureDomains1$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function createManagerResponseFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseFailureDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseFailureDomainsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseFailureDomainsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseFailureDomains1$inboundSchema),
+  z.any(),
+]);
+
+export function createManagerResponseFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponseFailureDomainsUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponseFailureDomainsUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponsePoolsFixed1$inboundSchema: z.ZodType<
   CreateManagerResponsePoolsFixed1,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => CreateManagerResponseFailureDomains1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function createManagerResponsePoolsFixed1FromJSON(

@@ -6,9 +6,15 @@ import { deploymentGroupsCreateDeploymentGroup } from "../funcs/deploymentGroups
 import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
 import { deploymentGroupsCreateFirstPartyDeploymentSession } from "../funcs/deploymentGroupsCreateFirstPartyDeploymentSession.js";
 import { deploymentGroupsDeleteDeploymentGroup } from "../funcs/deploymentGroupsDeleteDeploymentGroup.js";
+import { deploymentGroupsDeleteExternalAIBinding } from "../funcs/deploymentGroupsDeleteExternalAIBinding.js";
+import { deploymentGroupsEnsureDeploymentGroupByExternalId } from "../funcs/deploymentGroupsEnsureDeploymentGroupByExternalId.js";
 import { deploymentGroupsEnsureDeploymentGroupByName } from "../funcs/deploymentGroupsEnsureDeploymentGroupByName.js";
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
+import { deploymentGroupsGetDeploymentGroupByExternalId } from "../funcs/deploymentGroupsGetDeploymentGroupByExternalId.js";
+import { deploymentGroupsGetExternalAIBinding } from "../funcs/deploymentGroupsGetExternalAIBinding.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
+import { deploymentGroupsPutExternalAIBinding } from "../funcs/deploymentGroupsPutExternalAIBinding.js";
+import { deploymentGroupsSetDeploymentGroupExternalId } from "../funcs/deploymentGroupsSetDeploymentGroupExternalId.js";
 import { deploymentGroupsUpdateDeploymentGroup } from "../funcs/deploymentGroupsUpdateDeploymentGroup.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -59,6 +65,34 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
+   * Get or create a deployment group by project and external ID
+   */
+  async ensureDeploymentGroupByExternalId(
+    request: operations.EnsureDeploymentGroupByExternalIdRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsEnsureDeploymentGroupByExternalId(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get a deployment group by project and external ID
+   */
+  async getDeploymentGroupByExternalId(
+    request: operations.GetDeploymentGroupByExternalIdRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsGetDeploymentGroupByExternalId(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Get deployment group details
    */
   async getDeploymentGroup(
@@ -101,6 +135,20 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
+   * Set or clear a deployment group's external ID
+   */
+  async setDeploymentGroupExternalId(
+    request: operations.SetDeploymentGroupExternalIdRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsSetDeploymentGroupExternalId(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Create deployment group token
    *
    * @remarks
@@ -128,6 +176,48 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CreateFirstPartyDeploymentSessionResponse> {
     return unwrapAsync(deploymentGroupsCreateFirstPartyDeploymentSession(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get external AI connection state
+   */
+  async getExternalAIBinding(
+    request: operations.GetExternalAIBindingRequest,
+    options?: RequestOptions,
+  ): Promise<models.ExternalAIBindingState> {
+    return unwrapAsync(deploymentGroupsGetExternalAIBinding(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Connect or rotate an external AI provider key
+   */
+  async putExternalAIBinding(
+    request: operations.PutExternalAIBindingRequest,
+    options?: RequestOptions,
+  ): Promise<models.ExternalAIBinding> {
+    return unwrapAsync(deploymentGroupsPutExternalAIBinding(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Revoke the external AI connection
+   */
+  async deleteExternalAIBinding(
+    request: operations.DeleteExternalAIBindingRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(deploymentGroupsDeleteExternalAIBinding(
       this,
       request,
       options,

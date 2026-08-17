@@ -2,6 +2,7 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod container;
+pub mod key;
 pub mod kv;
 #[cfg(feature = "local")]
 pub(crate) mod local_store;

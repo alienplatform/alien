@@ -4,6 +4,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawContainerHandle,
+  RawKeyHandle,
   RawKvHandle,
   RawPostgresHandle,
   RawQueueHandle,
@@ -46,8 +47,27 @@ function fakeRemoteAddon() {
     copy: async () => {},
     signedUrl: async () => ({ url: "https://example.invalid", method: "GET", headers: {} }),
   }
+  const key: RawKeyHandle = {
+    encrypt: async (plaintext, context) =>
+      Buffer.concat([plaintext, Buffer.from(context?.tenant ?? "")]),
+    decrypt: async ciphertext => ciphertext,
+  }
+  const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
+  const resolveAi = vi.fn<RawRemoteBindingsHandle["ai"]>(async () => ({
+    resourceId: "models",
+    bindingJson: JSON.stringify({ service: "bedrock", region: "us-east-1" }),
+    clientConfigJson: JSON.stringify({
+      platform: "aws",
+      accountId: "123456789012",
+      region: "us-east-1",
+      credentials: { type: "sessionCredentials" },
+    }),
+    expiresAt: "2026-08-05T08:00:00Z",
+  }))
 
   class FakeBindingsHandle implements RawBindingsHandle {
+    key = resolveKey
+
     async storage(): Promise<RawStorageHandle> {
       return localStorage
     }
@@ -74,6 +94,13 @@ function fakeRemoteAddon() {
   }
 
   class FakeRemoteBindingsHandle implements RawRemoteBindingsHandle {
+    static forCustomer: (
+      project: string,
+      externalId: string,
+      token: string,
+      apiBaseUrl?: string,
+    ) => Promise<RawRemoteBindingsHandle>
+
     static forDeployment: (
       deploymentId: string,
       token: string,
@@ -81,11 +108,24 @@ function fakeRemoteAddon() {
     ) => Promise<RawRemoteBindingsHandle>
 
     storage = resolveStorage
+
+    key = resolveKey
+
+    ai = resolveAi
   }
 
   const forRemoteDeployment = vi.fn<
     (deploymentId: string, token: string, apiBaseUrl?: string) => Promise<RawRemoteBindingsHandle>
   >(async () => new FakeRemoteBindingsHandle())
+  const forRemoteCustomer = vi.fn<
+    (
+      project: string,
+      externalId: string,
+      token: string,
+      apiBaseUrl?: string,
+    ) => Promise<RawRemoteBindingsHandle>
+  >(async () => new FakeRemoteBindingsHandle())
+  FakeRemoteBindingsHandle.forCustomer = forRemoteCustomer
   FakeRemoteBindingsHandle.forDeployment = forRemoteDeployment
 
   return {
@@ -94,15 +134,40 @@ function fakeRemoteAddon() {
       RemoteBindingsHandle: FakeRemoteBindingsHandle,
       version: () => "test",
     },
+    forRemoteCustomer,
     forRemoteDeployment,
     resolveStorage,
     head,
     put,
+    resolveKey,
+    resolveAi,
   }
 }
 
 beforeEach(() => {
   loadAddon.mockReset()
+})
+
+describe("Bindings.forRemoteCustomer", () => {
+  it("forwards the Project, external ID, token, and API base URL", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+
+    const bindings = await Bindings.forRemoteCustomer({
+      project: "customer-files",
+      externalId: "customer_123",
+      token: "token_123",
+      apiBaseUrl: "https://api.example.com",
+    })
+
+    expect(fixture.forRemoteCustomer).toHaveBeenCalledWith(
+      "customer-files",
+      "customer_123",
+      "token_123",
+      "https://api.example.com",
+    )
+    expect(bindings.storage("storage")).toBeDefined()
+  })
 })
 
 describe("Bindings.forRemoteDeployment", () => {
@@ -127,7 +192,42 @@ describe("Bindings.forRemoteDeployment", () => {
     expect("kv" in bindings).toBe(false)
     expect("queue" in bindings).toBe(false)
     expect("vault" in bindings).toBe(false)
+    expect("key" in bindings).toBe(true)
     expect(Object.keys(storage).sort()).toEqual(["delete", "get", "head", "list", "put"])
+  })
+
+  it("resolves a typed remote Key and forwards bytes and context", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+
+    const ciphertext = await bindings
+      .key("customer-key")
+      .encrypt(Buffer.from("root"), { context: { tenant: "acme" } })
+
+    expect(ciphertext.toString()).toBe("rootacme")
+    expect(fixture.resolveKey).toHaveBeenCalledOnce()
+    expect(fixture.resolveKey).toHaveBeenCalledWith("customer-key")
+  })
+
+  it("resolves the deployment-level AI lease without a resource name", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+
+    const lease = await bindings.ai()
+
+    expect(fixture.resolveAi).toHaveBeenCalledWith()
+    expect(lease.resourceId).toBe("models")
+    expect(lease.binding).toEqual({ service: "bedrock", region: "us-east-1" })
+    expect(lease.clientConfig.platform).toBe("aws")
+    expect(lease.expiresAt).toEqual(new Date("2026-08-05T08:00:00Z"))
   })
 
   it("reuses one native bindings handle and resolves each Storage handle lazily once", async () => {

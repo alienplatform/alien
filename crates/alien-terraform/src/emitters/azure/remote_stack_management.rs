@@ -20,7 +20,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, NetworkSettings, PermissionProfile, PermissionSet,
-    PermissionSetReference, RemoteStackManagement, Result,
+    PermissionSetReference, RemoteStackManagement, ResourceLifecycle, Result,
 };
 use alien_error::Context;
 use alien_permissions::{
@@ -88,10 +88,24 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
         emit_management_role(&mut fragment, label, &grant_plan.plan);
         let merged_gates = merged_grant_gates(ctx, &resource_scoped_refs);
         emit_management_assignments(&mut fragment, label, &grant_plan, merged_gates.as_deref())?;
-        if matches!(
-            ctx.stack_settings.network.as_ref(),
-            Some(NetworkSettings::ByoVnetAzure { .. })
-        ) {
+        // A bindings-only setup has no Live resource that uses the selected
+        // application network. Emitting this grant there is both unnecessary
+        // privilege and invalid because setup-only registration deliberately
+        // omits application network settings.
+        let setup_only =
+            ctx.stack.resources.values().any(|entry| {
+                alien_core::remote_bindings::remote_binding_for_entry(entry).is_some()
+            }) && !ctx
+                .stack
+                .resources
+                .values()
+                .any(|entry| entry.lifecycle == ResourceLifecycle::Live);
+        if !setup_only
+            && matches!(
+                ctx.stack_settings.network.as_ref(),
+                Some(NetworkSettings::ByoVnetAzure { .. })
+            )
+        {
             emit_existing_network_reader_assignments(&mut fragment, label);
         }
 
@@ -166,8 +180,7 @@ fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &s
     let is_existing_azure_vnet =
         "try(local.deployment_settings.network.type, \"\") == \"byo-vnet-azure\"";
     let existing_vnet_resource_id = "try(local.deployment_settings.network.vnet_resource_id, \"\")";
-    let reader_role_definition_id =
-        "\"/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7\"";
+    let reader_role_definition_id = "\"/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7\"";
 
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_assignment",

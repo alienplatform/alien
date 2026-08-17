@@ -8,13 +8,14 @@ use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::azure::resource_graph::ResourceGraphQueryRequest;
 use alien_azure_clients::{
-    AzureResourceGraphClient, AzureServiceBusManagementClient, AzureTokenCache, ResourceGraphApi,
-    ServiceBusManagementApi,
+    AzureCognitiveServicesClient, AzureResourceGraphClient, AzureServiceBusManagementClient,
+    AzureTokenCache, CognitiveServicesAccountsApi, ResourceGraphApi, ServiceBusManagementApi,
 };
 use alien_core::{
     import::{
         data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
-        AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
+        AzureAiImportData, AzureRemoteStackManagementImportData,
+        AzureServiceBusNamespaceImportData, GcpAiImportData, GcpKeyImportData,
         GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
         StackImportResponse,
     },
@@ -28,7 +29,7 @@ use alien_core::{
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, Kv, Queue, ResourceSpec, Storage, Vault};
-use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
+use alien_gcp_clients::{CloudKmsApi, GcpClientConfigExt, ModelGardenApi, ResourceManagerApi};
 use anyhow::Context;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -94,6 +95,15 @@ impl DistributionArtifactCleanup {
             DistributionArtifactCleanup::CloudFormation { env, .. }
             | DistributionArtifactCleanup::Terraform { env, .. }
             | DistributionArtifactCleanup::Helm { env, .. } => env,
+        }
+    }
+
+    /// Terraform state directory for focused qualification operations.
+    pub fn terraform_workdir(&self) -> Option<&Path> {
+        match self {
+            DistributionArtifactCleanup::Terraform { workdir, .. } => Some(workdir.path()),
+            DistributionArtifactCleanup::CloudFormation { .. }
+            | DistributionArtifactCleanup::Helm { .. } => None,
         }
     }
 
@@ -231,6 +241,16 @@ impl DistributionArtifactCleanup {
                     workdir = %workdir.path().display(),
                     "destroying Terraform setup artifacts"
                 );
+                let detach_script = workdir.path().join("detach-retained-keys.sh");
+                if detach_script.exists() {
+                    let mut detach = Command::new("sh");
+                    detach
+                        .current_dir(workdir.path())
+                        .arg("./detach-retained-keys.sh")
+                        .env("ALIEN_CONFIRM_DETACH_RETAINED_KEYS", "yes");
+                    apply_env(&mut detach, &env);
+                    run_command(detach, "detach retained Terraform keys").await?;
+                }
                 for attempt in 1..=3 {
                     let mut cmd = Command::new("terraform");
                     cmd.current_dir(workdir.path()).args([
@@ -2425,6 +2445,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
             anyhow::anyhow!("Deployment failed to reach running within {timeout:?}: {error}")
         })?;
     if ctx.model == DeploymentModel::Push
+        && !matches!(ctx.app, TestApp::ByoEncryptionKey | TestApp::ByoAi)
         && matches!(
             ctx.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
@@ -2908,13 +2929,27 @@ async fn wait_for_gcp_management_permissions(
             }
         };
 
-        let resource_manager = alien_gcp_clients::ResourceManagerClient::new(
-            http.clone(),
-            impersonated_config.clone(),
-        );
-        let result = resource_manager
-            .get_project_metadata(target.project_id.clone())
-            .await;
+        // Probe the narrowest concrete permission this package requested.
+        // A Key-only management identity intentionally has no project-wide
+        // Resource Manager read access.
+        let result = if let Some(key) =
+            optional_terraform_import_data::<GcpKeyImportData>(&resources, "key")?
+        {
+            alien_gcp_clients::CloudKmsClient::new(http.clone(), impersonated_config.clone())
+                .get_crypto_key(&key.crypto_key_name)
+                .await
+                .map(|_| ())
+        } else if optional_terraform_import_data::<GcpAiImportData>(&resources, "ai")?.is_some() {
+            alien_gcp_clients::ModelGardenClient::new(http.clone(), impersonated_config.clone())
+                .list_publisher_models("google")
+                .await
+                .map(|_| ())
+        } else {
+            alien_gcp_clients::ResourceManagerClient::new(http.clone(), impersonated_config.clone())
+                .get_project_metadata(target.project_id.clone())
+                .await
+                .map(|_| ())
+        };
 
         match result {
             Ok(_) => {
@@ -2957,6 +2992,7 @@ fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error
 #[derive(Debug, PartialEq, Eq)]
 enum AzureManagementPermissionProbe {
     ServiceBus(AzureServiceBusNamespaceImportData),
+    Ai(AzureAiImportData),
     ResourceGraph,
 }
 
@@ -2968,6 +3004,9 @@ fn azure_management_permission_probe(
         "azure_service_bus_namespace",
     )? {
         return Ok(AzureManagementPermissionProbe::ServiceBus(service_bus));
+    }
+    if let Some(ai) = optional_terraform_import_data::<AzureAiImportData>(resources, "ai")? {
+        return Ok(AzureManagementPermissionProbe::Ai(ai));
     }
 
     Ok(AzureManagementPermissionProbe::ResourceGraph)
@@ -3095,6 +3134,44 @@ async fn wait_for_azure_management_permissions(
                     }
                 }
 
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+        AzureManagementPermissionProbe::Ai(ai) => {
+            let client = AzureCognitiveServicesClient::new(
+                reqwest::Client::new(),
+                AzureTokenCache::new(azure_config),
+            );
+            loop {
+                attempt += 1;
+                match client
+                    .list_deployments(&ai.resource_group, &ai.account_name)
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            client_id = %management.client_id,
+                            attempts = attempt,
+                            "Azure AI management permissions are ready"
+                        );
+                        return Ok(());
+                    }
+                    Err(error) if azure_management_permission_probe_should_retry(&error) => {
+                        if started.elapsed() >= timeout {
+                            anyhow::bail!(
+                                "Azure AI management permissions did not propagate for {} within {timeout:?}: {error}",
+                                management.client_id
+                            );
+                        }
+                        warn!(
+                            client_id = %management.client_id,
+                            attempt,
+                            %error,
+                            "Azure AI management permissions are not ready yet"
+                        );
+                    }
+                    Err(error) => anyhow::bail!("Azure AI management probe failed: {error}"),
+                }
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
@@ -3334,6 +3411,8 @@ fn terraform_tfvars(
                 &mut vars,
                 azure_target,
                 prepared.config.azure_mgmt.as_ref(),
+                &std::env::var("AZURE_TARGET_RESOURCE_GROUP")
+                    .context("AZURE_TARGET_RESOURCE_GROUP is required")?,
                 target,
             );
         }
@@ -3419,6 +3498,7 @@ fn insert_azure_tfvars(
     vars: &mut serde_json::Map<String, Value>,
     azure_target: &AzureConfig,
     azure_mgmt: Option<&AzureConfig>,
+    resource_group: &str,
     target: alien_terraform::TerraformTarget,
 ) {
     vars.insert(
@@ -3437,10 +3517,7 @@ fn insert_azure_tfvars(
     );
     vars.insert(
         "azure_resource_group_name".to_string(),
-        Value::String(format!(
-            "alien-e2e-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        )),
+        Value::String(resource_group.to_string()),
     );
     if let Some(mgmt) = azure_mgmt {
         vars.insert(
@@ -3856,6 +3933,22 @@ mod tests {
             .expect("probe resource should be selected");
 
         assert_eq!(probe, AzureManagementPermissionProbe::ResourceGraph);
+    }
+
+    #[test]
+    fn azure_management_probe_uses_ai_account_when_stack_emits_it() {
+        let ai = AzureAiImportData {
+            account_name: "models".to_string(),
+            endpoint: "https://models.services.ai.azure.com/".to_string(),
+            resource_group: "resource-group".to_string(),
+            location: "eastus2".to_string(),
+        };
+        let resources = vec![imported_resource("ai", &ai)];
+
+        let probe = azure_management_permission_probe(&resources)
+            .expect("AI probe resource should be selected");
+
+        assert_eq!(probe, AzureManagementPermissionProbe::Ai(ai));
     }
 
     #[test]
@@ -4407,6 +4500,7 @@ mod tests {
             &mut vars,
             &azure_target,
             Some(&azure_mgmt),
+            "target-rg",
             alien_terraform::TerraformTarget::Azure,
         );
 
@@ -4439,6 +4533,7 @@ mod tests {
             &mut vars,
             &azure_target,
             None,
+            "target-rg",
             alien_terraform::TerraformTarget::Aks,
         );
 
@@ -4457,6 +4552,7 @@ mod tests {
             &mut vars,
             &azure_target,
             None,
+            "target-rg",
             alien_terraform::TerraformTarget::Azure,
         );
 

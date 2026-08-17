@@ -3,6 +3,8 @@ use crate::{ResourceEntry, ResourceLifecycle, ResourceType};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
     Storage,
+    Key,
+    Ai,
 }
 
 /// One resource type's provider-neutral Remote Bindings contract.
@@ -20,18 +22,36 @@ pub struct RemoteBindingDefinition {
     pub revision: u32,
 }
 
-const DEFINITIONS: &[RemoteBindingDefinition] = &[RemoteBindingDefinition {
-    resource_type: "storage",
-    permission_set: "storage/remote-data-write",
-    kind: RemoteBindingKind::Storage,
-    description: "Read and write objects in this storage resource",
-    setup_support_resource_types: &[
-        "azure_resource_group",
-        "azure_storage_account",
-        "service_activation",
-    ],
-    revision: 1,
-}];
+const DEFINITIONS: &[RemoteBindingDefinition] = &[
+    RemoteBindingDefinition {
+        resource_type: "storage",
+        permission_set: "storage/remote-data-write",
+        kind: RemoteBindingKind::Storage,
+        description: "Read and write objects in this storage resource",
+        setup_support_resource_types: &[
+            "azure_resource_group",
+            "azure_storage_account",
+            "service_activation",
+        ],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "key",
+        permission_set: "key/remote-cryptography",
+        kind: RemoteBindingKind::Key,
+        description: "Encrypt and decrypt small values with this key",
+        setup_support_resource_types: &["azure_resource_group", "service_activation"],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "ai",
+        permission_set: "ai/invoke",
+        kind: RemoteBindingKind::Ai,
+        description: "Invoke models through this AI resource",
+        setup_support_resource_types: &["azure_resource_group", "service_activation"],
+        revision: 1,
+    },
+];
 
 pub fn remote_binding_definition(
     resource_type: &ResourceType,

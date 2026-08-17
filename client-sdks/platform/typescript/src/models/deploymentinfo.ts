@@ -7,6 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  AiAvailabilityObservation,
+  AiAvailabilityObservation$inboundSchema,
+} from "./aiavailabilityobservation.js";
+import {
   DeploymentInfoSetupConfig,
   DeploymentInfoSetupConfig$inboundSchema,
 } from "./deploymentinfosetupconfig.js";
@@ -15,6 +19,10 @@ import {
   DeploymentPortalAppearance$inboundSchema,
 } from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  SetupItemStatus,
+  SetupItemStatus$inboundSchema,
+} from "./setupitemstatus.js";
 import {
   SupportedCloudRegions,
   SupportedCloudRegions$inboundSchema,
@@ -107,6 +115,10 @@ export type ResourceCounts = {
   workers: number;
   containers: number;
   /**
+   * Daemon resources that run on managed runtime machines
+   */
+  daemons?: number | undefined;
+  /**
    * Resources that declare managed public HTTPS endpoint setup
    */
   publicHttpsEndpoints: number;
@@ -133,6 +145,10 @@ export type StackSummary = {
    * Whether the stack contains resources that require cloud VPC networking
    */
   requiresNetwork: boolean;
+  /**
+   * Whether this release offers one remotely accessible AI resource
+   */
+  customerModels: boolean;
   resourceCounts: ResourceCounts;
   /**
    * Public endpoints declared by the active release stack
@@ -686,6 +702,23 @@ export type DeploymentInfoInstallContext = {
   targets: { [k: string]: InstallContextTargets };
 };
 
+export const ModelAvailabilitySourceStatus = {
+  Current: "current",
+  Stale: "stale",
+  Invalid: "invalid",
+} as const;
+export type ModelAvailabilitySourceStatus = ClosedEnum<
+  typeof ModelAvailabilitySourceStatus
+>;
+
+export type ModelAvailabilitySource = {
+  deploymentId: string;
+  resourceId: string;
+  observedAt: Date;
+  status: ModelAvailabilitySourceStatus;
+  availability?: AiAvailabilityObservation | undefined;
+};
+
 export const ReadinessStatus = {
   Ready: "ready",
   NotReady: "notReady",
@@ -731,6 +764,8 @@ export type DeploymentInfo = {
   packages: Packages;
   installContext: DeploymentInfoInstallContext;
   supportedRegions: SupportedCloudRegions;
+  modelAvailabilitySources: Array<ModelAvailabilitySource>;
+  setupItems?: Array<SetupItemStatus> | undefined;
   setupConfig?: DeploymentInfoSetupConfig | undefined;
   readiness?: Readiness | undefined;
 };
@@ -829,6 +864,7 @@ export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
   z.object({
     workers: z.int(),
     containers: z.int(),
+    daemons: z.int().optional(),
     publicHttpsEndpoints: z.int(),
     externalInfra: z.int(),
     total: z.int(),
@@ -868,6 +904,7 @@ export const StackSummary$inboundSchema: z.ZodType<StackSummary, unknown> = z
   .object({
     platforms: z.array(StackSummaryPlatform$inboundSchema),
     requiresNetwork: z.boolean(),
+    customerModels: z.boolean(),
     resourceCounts: z.lazy(() => ResourceCounts$inboundSchema),
     publicEndpoints: z.array(z.lazy(() => PublicEndpoint$inboundSchema)),
   });
@@ -1498,6 +1535,33 @@ export function deploymentInfoInstallContextFromJSON(
 }
 
 /** @internal */
+export const ModelAvailabilitySourceStatus$inboundSchema: z.ZodEnum<
+  typeof ModelAvailabilitySourceStatus
+> = z.enum(ModelAvailabilitySourceStatus);
+
+/** @internal */
+export const ModelAvailabilitySource$inboundSchema: z.ZodType<
+  ModelAvailabilitySource,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  resourceId: z.string(),
+  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  status: ModelAvailabilitySourceStatus$inboundSchema,
+  availability: AiAvailabilityObservation$inboundSchema.optional(),
+});
+
+export function modelAvailabilitySourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ModelAvailabilitySource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ModelAvailabilitySource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ModelAvailabilitySource' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReadinessStatus$inboundSchema: z.ZodEnum<typeof ReadinessStatus> =
   z.enum(ReadinessStatus);
 
@@ -1552,6 +1616,10 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     packages: z.lazy(() => Packages$inboundSchema),
     installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
     supportedRegions: SupportedCloudRegions$inboundSchema,
+    modelAvailabilitySources: z.array(
+      z.lazy(() => ModelAvailabilitySource$inboundSchema),
+    ),
+    setupItems: z.array(SetupItemStatus$inboundSchema).optional(),
     setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
     readiness: z.lazy(() => Readiness$inboundSchema).optional(),
   });

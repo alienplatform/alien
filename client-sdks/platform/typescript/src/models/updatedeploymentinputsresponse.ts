@@ -6,6 +6,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  DeploymentUpdateOperationSummary,
+  DeploymentUpdateOperationSummary$inboundSchema,
+} from "./deploymentupdateoperationsummary.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   StackInputValueRequest,
@@ -265,6 +269,14 @@ export type UpdateDeploymentInputsResponseInput = {
     | undefined;
 };
 
+export const UpdateDeploymentInputsResponseOutcome = {
+  Accepted: "accepted",
+  Unchanged: "unchanged",
+} as const;
+export type UpdateDeploymentInputsResponseOutcome = ClosedEnum<
+  typeof UpdateDeploymentInputsResponseOutcome
+>;
+
 export type UpdateDeploymentInputsResponse = {
   inputs: Array<UpdateDeploymentInputsResponseInput>;
   /**
@@ -276,6 +288,8 @@ export type UpdateDeploymentInputsResponse = {
    */
   providedInputIds: Array<string>;
   runtimeUpdateRequested: boolean;
+  outcome: UpdateDeploymentInputsResponseOutcome;
+  operation: DeploymentUpdateOperationSummary | null;
 };
 
 /** @internal */
@@ -585,6 +599,11 @@ export function updateDeploymentInputsResponseInputFromJSON(
 }
 
 /** @internal */
+export const UpdateDeploymentInputsResponseOutcome$inboundSchema: z.ZodEnum<
+  typeof UpdateDeploymentInputsResponseOutcome
+> = z.enum(UpdateDeploymentInputsResponseOutcome);
+
+/** @internal */
 export const UpdateDeploymentInputsResponse$inboundSchema: z.ZodType<
   UpdateDeploymentInputsResponse,
   unknown
@@ -595,6 +614,8 @@ export const UpdateDeploymentInputsResponse$inboundSchema: z.ZodType<
   values: z.record(z.string(), StackInputValueRequest$inboundSchema),
   providedInputIds: z.array(z.string()),
   runtimeUpdateRequested: z.boolean(),
+  outcome: UpdateDeploymentInputsResponseOutcome$inboundSchema,
+  operation: z.nullable(DeploymentUpdateOperationSummary$inboundSchema),
 });
 
 export function updateDeploymentInputsResponseFromJSON(

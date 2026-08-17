@@ -12,13 +12,20 @@
 import { createFactories } from "./factories.js"
 import { loadAddon } from "./loader.js"
 
-export type { RemoteDeploymentBindingsOptions } from "./remote.js"
+export type {
+  RemoteAiBinding,
+  RemoteAiClientConfig,
+  RemoteAiLease,
+  RemoteDeploymentBindingsOptions,
+} from "./remote.js"
 export { Bindings } from "./remote.js"
 
 const factories = createFactories(loadAddon)
 
 /** Resolve the storage binding named `name`. */
 export const storage = factories.storage
+/** Resolve the provider-backed key binding named `name`. */
+export const key = factories.key
 /** Resolve the key-value binding named `name`. */
 export const kv = factories.kv
 /** Resolve the queue binding named `name`. */
@@ -41,6 +48,8 @@ export {
 
 export type {
   Container,
+  Key,
+  KeyOptions,
   Kv,
   KvDeleteOptions,
   KvEntry,

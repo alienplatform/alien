@@ -124,7 +124,12 @@ pub fn collect_git_metadata<P: AsRef<Path>>(repo_path: P) -> Result<GitMetadata>
     if let Ok(email) = run_git_command(repo_path, &["log", "-1", "--pretty=format:%ae"]) {
         let email = email.trim();
         if !email.is_empty() {
-            inner.commit_author_email = Some(email.to_string());
+            inner.commit_author_email = Some(email.parse().into_alien_error().context(
+                ErrorData::ValidationError {
+                    field: "commit_author_email".to_string(),
+                    message: "Invalid git author email format".to_string(),
+                },
+            )?);
         }
     }
 

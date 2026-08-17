@@ -274,6 +274,90 @@ export type ProjectListItemResponseDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export type ProjectListItemResponseDeployments = {
+  enabled: boolean;
+};
+
+export type ProjectListItemResponseKeys = {
+  enabled: boolean;
+  applicationEncryption: boolean;
+};
+
+export const ProjectListItemResponseAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type ProjectListItemResponseAllowedProvider = ClosedEnum<
+  typeof ProjectListItemResponseAllowedProvider
+>;
+
+export const ProjectListItemResponseClientApi = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type ProjectListItemResponseClientApi = ClosedEnum<
+  typeof ProjectListItemResponseClientApi
+>;
+
+export type ProjectListItemResponseRequirement = {
+  publicModelId: string;
+  clientApis: Array<ProjectListItemResponseClientApi>;
+  required: boolean;
+};
+
+export type ProjectListItemResponseModels = {
+  enabled: boolean;
+  allowedProviders: Array<ProjectListItemResponseAllowedProvider>;
+  requirements: Array<ProjectListItemResponseRequirement>;
+};
+
+export const ProjectListItemResponseAccess = {
+  ReadWrite: "read-write",
+} as const;
+export type ProjectListItemResponseAccess = ClosedEnum<
+  typeof ProjectListItemResponseAccess
+>;
+
+export type ProjectListItemResponseBuckets = {
+  enabled: boolean;
+  access: ProjectListItemResponseAccess;
+};
+
+export const ProjectListItemResponseCredentialPolicy = {
+  PullOnly: "pull-only",
+  PushAndPull: "push-and-pull",
+} as const;
+export type ProjectListItemResponseCredentialPolicy = ClosedEnum<
+  typeof ProjectListItemResponseCredentialPolicy
+>;
+
+export type ProjectListItemResponseRegistry = {
+  enabled: boolean;
+  repositories: Array<string>;
+  credentialPolicy: ProjectListItemResponseCredentialPolicy;
+};
+
+export type ProjectListItemResponseCapabilities = {
+  deployments?: ProjectListItemResponseDeployments | undefined;
+  keys?: ProjectListItemResponseKeys | undefined;
+  models?: ProjectListItemResponseModels | undefined;
+  buckets?: ProjectListItemResponseBuckets | undefined;
+  registry?: ProjectListItemResponseRegistry | undefined;
+};
+
+/**
+ * Capabilities this Project may offer through setup links.
+ */
+export type ProjectListItemResponseProjectCapabilities = {
+  schemaVersion: number;
+  capabilities: ProjectListItemResponseCapabilities;
+};
+
 export type ProjectListItemResponse = {
   /**
    * Unique identifier for the project.
@@ -310,6 +394,13 @@ export type ProjectListItemResponse = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: ProjectListItemResponseDefaultManagers | null | undefined;
+  /**
+   * Capabilities this Project may offer through setup links.
+   */
+  projectCapabilities?:
+    | ProjectListItemResponseProjectCapabilities
+    | null
+    | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -540,6 +631,199 @@ export function projectListItemResponseDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseDeployments$inboundSchema: z.ZodType<
+  ProjectListItemResponseDeployments,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+});
+
+export function projectListItemResponseDeploymentsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseDeployments, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseDeployments$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseDeployments' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseKeys$inboundSchema: z.ZodType<
+  ProjectListItemResponseKeys,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
+});
+
+export function projectListItemResponseKeysFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseKeys, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseKeys$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseKeys' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseAllowedProvider$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseAllowedProvider
+> = z.enum(ProjectListItemResponseAllowedProvider);
+
+/** @internal */
+export const ProjectListItemResponseClientApi$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseClientApi
+> = z.enum(ProjectListItemResponseClientApi);
+
+/** @internal */
+export const ProjectListItemResponseRequirement$inboundSchema: z.ZodType<
+  ProjectListItemResponseRequirement,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  clientApis: z.array(ProjectListItemResponseClientApi$inboundSchema),
+  required: z.boolean(),
+});
+
+export function projectListItemResponseRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseRequirement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseRequirement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseModels$inboundSchema: z.ZodType<
+  ProjectListItemResponseModels,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  allowedProviders: z.array(
+    ProjectListItemResponseAllowedProvider$inboundSchema,
+  ),
+  requirements: z.array(
+    z.lazy(() => ProjectListItemResponseRequirement$inboundSchema),
+  ),
+});
+
+export function projectListItemResponseModelsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseModels, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseModels$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseModels' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseAccess$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseAccess
+> = z.enum(ProjectListItemResponseAccess);
+
+/** @internal */
+export const ProjectListItemResponseBuckets$inboundSchema: z.ZodType<
+  ProjectListItemResponseBuckets,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  access: ProjectListItemResponseAccess$inboundSchema,
+});
+
+export function projectListItemResponseBucketsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseBuckets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseBuckets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseBuckets' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseCredentialPolicy$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseCredentialPolicy
+> = z.enum(ProjectListItemResponseCredentialPolicy);
+
+/** @internal */
+export const ProjectListItemResponseRegistry$inboundSchema: z.ZodType<
+  ProjectListItemResponseRegistry,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  repositories: z.array(z.string()),
+  credentialPolicy: ProjectListItemResponseCredentialPolicy$inboundSchema,
+});
+
+export function projectListItemResponseRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseCapabilities$inboundSchema: z.ZodType<
+  ProjectListItemResponseCapabilities,
+  unknown
+> = z.object({
+  deployments: z.lazy(() => ProjectListItemResponseDeployments$inboundSchema)
+    .optional(),
+  keys: z.lazy(() => ProjectListItemResponseKeys$inboundSchema).optional(),
+  models: z.lazy(() => ProjectListItemResponseModels$inboundSchema).optional(),
+  buckets: z.lazy(() => ProjectListItemResponseBuckets$inboundSchema)
+    .optional(),
+  registry: z.lazy(() => ProjectListItemResponseRegistry$inboundSchema)
+    .optional(),
+});
+
+export function projectListItemResponseCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseCapabilities, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseCapabilities$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProjectListItemResponseProjectCapabilities$inboundSchema:
+  z.ZodType<ProjectListItemResponseProjectCapabilities, unknown> = z.object({
+    schemaVersion: z.number(),
+    capabilities: z.lazy(() =>
+      ProjectListItemResponseCapabilities$inboundSchema
+    ),
+  });
+
+export function projectListItemResponseProjectCapabilitiesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ProjectListItemResponseProjectCapabilities,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseProjectCapabilities$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ProjectListItemResponseProjectCapabilities' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponse$inboundSchema: z.ZodType<
   ProjectListItemResponse,
   unknown
@@ -561,6 +845,9 @@ export const ProjectListItemResponse$inboundSchema: z.ZodType<
   domainId: z.nullable(z.string()).optional(),
   defaultManagers: z.nullable(
     z.lazy(() => ProjectListItemResponseDefaultManagers$inboundSchema),
+  ).optional(),
+  projectCapabilities: z.nullable(
+    z.lazy(() => ProjectListItemResponseProjectCapabilities$inboundSchema),
   ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),

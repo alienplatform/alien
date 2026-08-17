@@ -60,10 +60,10 @@
     "azure": [
       {
         "grant": {
-          // "Cognitive Services OpenAI User" is the least-privilege data-plane role for the
-          // OpenAI-compatible inference endpoint: it grants inference only, not deployment
-          // management or account configuration.
-          "predefinedRoles": ["Cognitive Services OpenAI User"]
+          // "Cognitive Services User" is the least-privilege built-in role that can invoke
+          // both OpenAI and partner models such as Claude. "Cognitive Services OpenAI User"
+          // only authorizes OpenAI models.
+          "predefinedRoles": ["Cognitive Services User"]
         },
         "binding": {
           "stack": {

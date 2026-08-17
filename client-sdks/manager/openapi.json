@@ -2764,6 +2764,37 @@
           }
         }
       },
+      "AwsKmsKeyHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "keyArn",
+          "keyState",
+          "enabled",
+          "keySpec",
+          "keyUsage"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "keyArn": {
+            "type": "string"
+          },
+          "keySpec": {
+            "type": "string"
+          },
+          "keyState": {
+            "type": "string"
+          },
+          "keyUsage": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/KeyHeartbeatStatus"
+          }
+        }
+      },
       "AwsLambdaWorkerHeartbeatData": {
         "type": "object",
         "required": [
@@ -4541,6 +4572,44 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "AzureKeyVaultKeyHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "keyId",
+          "keyType",
+          "keyOperations"
+        ],
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "keyOperations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keyType": {
+            "type": "string"
+          },
+          "recoveryLevel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/KeyHeartbeatStatus"
           }
         }
       },
@@ -7660,6 +7729,43 @@
           }
         }
       },
+      "GcpCloudKmsKeyHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "cryptoKeyName",
+          "purpose"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cryptoKeyName": {
+            "type": "string"
+          },
+          "primaryState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "primaryVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/KeyHeartbeatStatus"
+          }
+        }
+      },
       "GcpCloudRunWorkerHeartbeatData": {
         "type": "object",
         "required": [
@@ -9282,6 +9388,85 @@
             "$ref": "#/components/schemas/DeploymentModel"
           },
           "token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "KeyHeartbeatData": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "provider"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/AwsKmsKeyHeartbeatData"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "aws-kms"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "provider"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/GcpCloudKmsKeyHeartbeatData"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "gcp-cloud-kms"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "provider"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/AzureKeyVaultKeyHeartbeatData"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "azure-key-vault"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "KeyHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle"
+        ],
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
             "type": [
               "string",
               "null"
@@ -13846,6 +14031,18 @@
           }
         }
       },
+      "RemoteAwsBedrockAiBinding": {
+        "type": "object",
+        "required": [
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteAwsClientConfig": {
         "type": "object",
         "description": "Response-safe AWS client configuration. The public contract deliberately\nhas no static, profile, metadata, or web-identity credential variants.",
@@ -13910,6 +14107,24 @@
         ],
         "description": "The only AWS credential form remote binding resolution can return."
       },
+      "RemoteAwsKmsKeyBinding": {
+        "type": "object",
+        "required": [
+          "keyArn"
+        ],
+        "properties": {
+          "keyArn": {
+            "type": "string"
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteAzureClientConfig": {
         "type": "object",
         "description": "Response-safe Azure client configuration containing one storage-audience\naccess token for the stack's Remote Bindings identity.",
@@ -13965,6 +14180,34 @@
         ],
         "description": "The only Azure credential form remote binding resolution can return."
       },
+      "RemoteAzureFoundryAiBinding": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "account"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAzureKeyVaultKeyBinding": {
+        "type": "object",
+        "required": [
+          "keyId"
+        ],
+        "properties": {
+          "keyId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteBlobStorageBinding": {
         "type": "object",
         "description": "Concrete Azure Blob Storage topology returned to remote clients.",
@@ -14015,6 +14258,18 @@
         },
         "additionalProperties": false
       },
+      "RemoteGcpCloudKmsKeyBinding": {
+        "type": "object",
+        "required": [
+          "cryptoKeyName"
+        ],
+        "properties": {
+          "cryptoKeyName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteGcpCredentials": {
         "oneOf": [
           {
@@ -14039,6 +14294,22 @@
           }
         ],
         "description": "The only GCP credential form remote binding resolution can return."
+      },
+      "RemoteGcpVertexAiBinding": {
+        "type": "object",
+        "required": [
+          "project",
+          "location"
+        ],
+        "properties": {
+          "location": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "RemoteGcsStorageBinding": {
         "type": "object",
@@ -14186,21 +14457,40 @@
           }
         }
       },
+      "ResolveBindingKind": {
+        "type": "string",
+        "enum": [
+          "ai"
+        ]
+      },
       "ResolveBindingRequest": {
         "type": "object",
         "description": "Request body for `POST /v1/bindings/resolve`.",
         "required": [
-          "deploymentId",
-          "resourceId"
+          "deploymentId"
         ],
         "properties": {
           "deploymentId": {
             "type": "string",
             "description": "Deployment containing the remote-enabled resource."
           },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolveBindingKind",
+                "description": "Deployment-level binding selector. V1 supports the unique managed AI resource."
+              }
+            ]
+          },
           "resourceId": {
-            "type": "string",
-            "description": "Logical Storage resource id in the deployment's stack state."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Logical remote-enabled resource id in the deployment's stack state."
           }
         },
         "additionalProperties": false
@@ -14284,6 +14574,180 @@
                 "type": "string",
                 "enum": [
                   "gcs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS KMS key and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAwsKmsKeyBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "kms"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GCP Cloud KMS key and an access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteGcpCloudKmsKeyBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "cloud-kms"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Key Vault key and a vault-audience access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAzureKeyVaultKeyBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "key-vault-key"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS Bedrock and an AWS session.",
+            "required": [
+              "resourceId",
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAwsBedrockAiBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "resourceId": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "bedrock"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GCP Vertex AI and an access token.",
+            "required": [
+              "resourceId",
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteGcpVertexAiBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "resourceId": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "vertex"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure AI Foundry and a Cognitive Services access token.",
+            "required": [
+              "resourceId",
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAzureFoundryAiBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "resourceId": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "foundry"
                 ]
               }
             }
@@ -14739,6 +15203,24 @@
                 "type": "string",
                 "enum": [
                   "ai"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/KeyHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "key"
                 ]
               }
             }

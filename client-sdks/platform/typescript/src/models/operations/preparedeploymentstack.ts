@@ -7,6 +7,17 @@ import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
 import * as models from "../index.js";
 
+export const PrepareDeploymentStackSetupItem = {
+  Deployment: "deployment",
+  Models: "models",
+  Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
+} as const;
+export type PrepareDeploymentStackSetupItem = ClosedEnum<
+  typeof PrepareDeploymentStackSetupItem
+>;
+
 export const PrepareDeploymentStackPlatform = {
   Aws: "aws",
   Gcp: "gcp",
@@ -1115,6 +1126,7 @@ export type PrepareDeploymentStackStackSettings = {
 };
 
 export type PrepareDeploymentStackRequestBody = {
+  setupItem?: PrepareDeploymentStackSetupItem | undefined;
   platform: PrepareDeploymentStackPlatform;
   setupMethod: models.DeploymentSetupMethod;
   region?: string | undefined;
@@ -1128,6 +1140,11 @@ export type PrepareDeploymentStackRequest = {
   workspace?: string | undefined;
   requestBody?: PrepareDeploymentStackRequestBody | undefined;
 };
+
+/** @internal */
+export const PrepareDeploymentStackSetupItem$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackSetupItem
+> = z.enum(PrepareDeploymentStackSetupItem);
 
 /** @internal */
 export const PrepareDeploymentStackPlatform$outboundSchema: z.ZodEnum<
@@ -3550,6 +3567,7 @@ export function prepareDeploymentStackStackSettingsToJSON(
 
 /** @internal */
 export type PrepareDeploymentStackRequestBody$Outbound = {
+  setupItem?: string | undefined;
   platform: string;
   setupMethod: string;
   region?: string | undefined;
@@ -3561,6 +3579,7 @@ export const PrepareDeploymentStackRequestBody$outboundSchema: z.ZodType<
   PrepareDeploymentStackRequestBody$Outbound,
   PrepareDeploymentStackRequestBody
 > = z.object({
+  setupItem: PrepareDeploymentStackSetupItem$outboundSchema.optional(),
   platform: PrepareDeploymentStackPlatform$outboundSchema,
   setupMethod: models.DeploymentSetupMethod$outboundSchema,
   region: z.string().optional(),

@@ -20,15 +20,15 @@ let value: DataGcp2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "forbidden",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "failed",
-    partial: true,
-    stale: false,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: true,
   },
   backend: "gcp",
 };
@@ -36,15 +36,15 @@ let value: DataGcp2 = {
 
 ## Fields
 
-| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `backendClusterId`                                                         | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `capacityGroups`                                                           | [models.CapacityGroup2](../models/capacitygroup2.md)[]                     | :heavy_check_mark:                                                         | N/A                                                                        |
-| `cpu`                                                                      | *models.CpuUnion8*                                                         | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `memory`                                                                   | *models.MemoryUnion8*                                                      | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `name`                                                                     | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `nodes`                                                                    | [models.Nodes2](../models/nodes2.md)                                       | :heavy_check_mark:                                                         | N/A                                                                        |
-| `providerFleets`                                                           | [models.ProviderFleet2](../models/providerfleet2.md)[]                     | :heavy_check_mark:                                                         | N/A                                                                        |
-| `region`                                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus20](../models/resourceheartbeatstatus20.md) | :heavy_check_mark:                                                         | N/A                                                                        |
-| `backend`                                                                  | *"gcp"*                                                                    | :heavy_check_mark:                                                         | N/A                                                                        |
+| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `backendClusterId`                                                               | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `capacityGroups`                                                                 | [models.CapacityGroup2](../models/capacitygroup2.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
+| `cpu`                                                                            | *models.CpuUnion8*                                                               | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `memory`                                                                         | *models.MemoryUnion8*                                                            | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `nodes`                                                                          | [models.Nodes2](../models/nodes2.md)                                             | :heavy_check_mark:                                                               | N/A                                                                              |
+| `providerFleets`                                                                 | [models.ProviderFleet2](../models/providerfleet2.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
+| `region`                                                                         | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.SyncReconcileRequestStatus20](../models/syncreconcilerequeststatus20.md) | :heavy_check_mark:                                                               | N/A                                                                              |
+| `backend`                                                                        | *"gcp"*                                                                          | :heavy_check_mark:                                                               | N/A                                                                              |

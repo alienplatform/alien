@@ -1,11 +1,6 @@
 import assert from "node:assert/strict"
 
-const requiredEnvironmentVariables = [
-  "ALIEN_API_URL",
-  "ALIEN_API_KEY",
-  "ALIEN_DEPLOYMENT_ID",
-  "ALIEN_STORAGE_BINDING",
-]
+const requiredEnvironmentVariables = ["ALIEN_API_URL", "ALIEN_API_KEY", "ALIEN_STORAGE_BINDING"]
 
 const payload = Buffer.from("alien remote storage smoke")
 const attributes = {
@@ -19,7 +14,7 @@ const attributes = {
  * @typedef {object} RemoteStorageSmokeConfig
  * @property {string} apiUrl
  * @property {string} apiKey
- * @property {string} deploymentId
+ * @property {{type: "deployment", deploymentId: string} | {type: "customer", project: string, externalId: string}} selector
  * @property {string} storageBinding
  */
 
@@ -38,10 +33,19 @@ export function readRemoteStorageSmokeConfig(environment) {
     if (!value) throw new Error(`${name} is required`)
     return value
   }
+  const deploymentId = environment.ALIEN_DEPLOYMENT_ID?.trim()
+  const project = environment.ALIEN_PROJECT?.trim()
+  const externalId = environment.ALIEN_EXTERNAL_ID?.trim()
+  const hasCustomerSelector = Boolean(project && externalId)
+  if (Boolean(deploymentId) === hasCustomerSelector) {
+    throw new Error("Set either ALIEN_DEPLOYMENT_ID or both ALIEN_PROJECT and ALIEN_EXTERNAL_ID")
+  }
   return {
     apiUrl: required("ALIEN_API_URL"),
     apiKey: required("ALIEN_API_KEY"),
-    deploymentId: required("ALIEN_DEPLOYMENT_ID"),
+    selector: deploymentId
+      ? { type: "deployment", deploymentId }
+      : { type: "customer", project, externalId },
     storageBinding: required("ALIEN_STORAGE_BINDING"),
   }
 }

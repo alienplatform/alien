@@ -37,13 +37,25 @@ impl CfEmitter for AwsStorageEmitter {
         bucket
             .properties
             .insert("BucketName".to_string(), bucket_name(storage.id()));
+        let encryption = if let Some(key_id) = storage
+            .encryption_key
+            .as_ref()
+            .and_then(|key| ctx.name_for(&key.id))
+        {
+            CfExpression::object([
+                ("SSEAlgorithm", CfExpression::from("aws:kms")),
+                ("KMSMasterKeyID", CfExpression::get_att(key_id, "Arn")),
+            ])
+        } else {
+            CfExpression::object([("SSEAlgorithm", CfExpression::from("AES256"))])
+        };
         bucket.properties.insert(
             "BucketEncryption".to_string(),
             CfExpression::object([(
                 "ServerSideEncryptionConfiguration",
                 CfExpression::list([CfExpression::object([(
                     "ServerSideEncryptionByDefault",
-                    CfExpression::object([("SSEAlgorithm", CfExpression::from("AES256"))]),
+                    encryption,
                 )])]),
             )]),
         );
@@ -393,6 +405,49 @@ fn storage_iam_policies(
                 CfExpression::list([CfExpression::ref_(&role_id)]),
             );
             policy_resource.depends_on.push(bucket_id.to_string());
+            policy_resource.depends_on.push(role_id.clone());
+            resources.push(policy_resource);
+        }
+
+        if let Some(key_id) = storage
+            .encryption_key
+            .as_ref()
+            .and_then(|key| ctx.name_for(&key.id))
+        {
+            let policy_id = format!("{bucket_id}{role_id}NativeEncryption{owner_index}");
+            let mut policy_resource = CfResource::new(policy_id, "AWS::IAM::Policy".to_string());
+            policy_resource.properties.insert(
+                "PolicyName".to_string(),
+                CfExpression::sub(format!(
+                    "${{AWS::StackName}}-{}-native-encryption",
+                    storage.id()
+                )),
+            );
+            policy_resource.properties.insert(
+                "PolicyDocument".to_string(),
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list([CfExpression::object([
+                            ("Effect", CfExpression::from("Allow")),
+                            (
+                                "Action",
+                                CfExpression::list([
+                                    CfExpression::from("kms:GenerateDataKey"),
+                                    CfExpression::from("kms:Decrypt"),
+                                ]),
+                            ),
+                            ("Resource", CfExpression::get_att(key_id, "Arn")),
+                        ])]),
+                    ),
+                ]),
+            );
+            policy_resource.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(&role_id)]),
+            );
+            policy_resource.depends_on.push(key_id.to_string());
             policy_resource.depends_on.push(role_id.clone());
             resources.push(policy_resource);
         }

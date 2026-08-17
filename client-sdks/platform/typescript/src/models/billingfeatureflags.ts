@@ -11,6 +11,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 export type BillingFeatureFlags = {
   customDomains: boolean;
   privateManagers: boolean;
+  operationsCustomPlugins: boolean;
   ssoSaml: boolean;
   auditLogs: boolean;
   airgapped: boolean;
@@ -23,6 +24,7 @@ export const BillingFeatureFlags$inboundSchema: z.ZodType<
 > = z.object({
   custom_domains: z.boolean(),
   private_managers: z.boolean(),
+  operations_custom_plugins: z.boolean(),
   sso_saml: z.boolean(),
   audit_logs: z.boolean(),
   airgapped: z.boolean(),
@@ -30,6 +32,7 @@ export const BillingFeatureFlags$inboundSchema: z.ZodType<
   return remap$(v, {
     "custom_domains": "customDomains",
     "private_managers": "privateManagers",
+    "operations_custom_plugins": "operationsCustomPlugins",
     "sso_saml": "ssoSaml",
     "audit_logs": "auditLogs",
   });

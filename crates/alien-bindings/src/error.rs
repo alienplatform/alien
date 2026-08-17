@@ -13,6 +13,26 @@ pub fn binding_env_var(binding_name: &str) -> String {
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Plaintext or context is outside the portable Key binding limits.
+    #[error(
+        code = "KEY_INPUT_INVALID",
+        message = "Key input is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    KeyInputInvalid { reason: String },
+
+    /// Decrypted provider data is not a valid Alien Key frame.
+    #[error(
+        code = "KEY_CIPHERTEXT_INVALID",
+        message = "Key ciphertext is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    KeyCiphertextInvalid { reason: String },
+
     /// No binding configuration was found for the requested binding name (the
     /// `ALIEN_<NAME>_BINDING` environment variable was not set).
     #[error(
@@ -75,6 +95,37 @@ pub enum ErrorData {
         /// Name of the storage binding
         binding_name: String,
         /// Description of the operation that failed
+        operation: String,
+    },
+
+    /// Storage credentials are missing permission for an operation.
+    #[error(
+        code = "STORAGE_ACCESS_DENIED",
+        message = "Storage access denied for binding '{binding_name}' while attempting to {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403,
+        hint = "Check that the customer's Storage connection is active and its Access identity still has the required permissions."
+    )]
+    StorageAccessDenied {
+        /// Name of the storage binding.
+        binding_name: String,
+        /// Provider-independent operation name.
+        operation: String,
+    },
+
+    /// The requested object does not exist.
+    #[error(
+        code = "STORAGE_OBJECT_NOT_FOUND",
+        message = "Storage object not found for binding '{binding_name}' while attempting to {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    StorageObjectNotFound {
+        /// Name of the storage binding.
+        binding_name: String,
+        /// Provider-independent operation name.
         operation: String,
     },
 

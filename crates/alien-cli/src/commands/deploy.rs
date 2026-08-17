@@ -1115,6 +1115,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             .create_deployment()
                             .workspace(&workspace_name)
                             .body(alien_platform_api::types::NewDeploymentRequest {
+                                setup_item: None,
                                 name: resolved_args
                                     .name
                                     .clone()

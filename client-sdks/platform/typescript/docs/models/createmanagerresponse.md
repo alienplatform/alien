@@ -18,8 +18,21 @@ let value: CreateManagerResponse = {
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
     },
+    items: [
+      {
+        item: "deployment",
+        source: {
+          type: "project-release",
+          releaseChannel: "<value>",
+          releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        required: false,
+      },
+    ],
     environmentVariables: [],
   },
   setup: {

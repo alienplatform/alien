@@ -5,6 +5,7 @@
 import { managersCancelSetup } from "../funcs/managersCancelSetup.js";
 import { managersCreate } from "../funcs/managersCreate.js";
 import { managersDelete } from "../funcs/managersDelete.js";
+import { managersGenerateManagerBindingToken } from "../funcs/managersGenerateManagerBindingToken.js";
 import { managersGenerateManagerToken } from "../funcs/managersGenerateManagerToken.js";
 import { managersGet } from "../funcs/managersGet.js";
 import { managersGetDeployment } from "../funcs/managersGetDeployment.js";
@@ -215,6 +216,20 @@ export class Managers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.GenerateManagerTokenResponse> {
     return unwrapAsync(managersGenerateManagerToken(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Generate a short-lived deployment-scoped token for resolving opted-in remote bindings through the currently assigned manager.
+   */
+  async generateManagerBindingToken(
+    request: operations.GenerateManagerBindingTokenRequest,
+    options?: RequestOptions,
+  ): Promise<models.GenerateManagerBindingTokenResponse> {
+    return unwrapAsync(managersGenerateManagerBindingToken(
       this,
       request,
       options,

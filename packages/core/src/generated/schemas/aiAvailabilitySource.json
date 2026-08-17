@@ -1,0 +1,1 @@
+{"type":"string","description":"Provider control plane used to observe model availability without invoking\na model, spending customer quota, or accepting provider terms.","enum":["aws-bedrock","gcp-vertex","azure-foundry","anthropic"],"x-readme-ref-name":"AiAvailabilitySource"}

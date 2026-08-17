@@ -94,6 +94,7 @@ impl LocalAiController {
             data: ResourceHeartbeatData::Ai(AiHeartbeatData::External(ExternalAiHeartbeatData {
                 status: AiHeartbeatStatus::default(),
                 provider,
+                availability: None,
             })),
             raw: vec![],
         });

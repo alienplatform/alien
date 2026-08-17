@@ -147,7 +147,18 @@ fn generate_auto_management_profile(
                 permission_set_ids.insert(format!("{}/provision", permission_resource_type));
             }
             ResourceLifecycle::Frozen if policy.requires_management_permissions() => {
-                permission_set_ids.insert(format!("{}/management", permission_resource_type));
+                let permission = format!("{}/management", permission_resource_type);
+                if resource_type == "key" {
+                    // Key metadata access must name the exact customer key.
+                    // The Key emitter binds this permission after setup knows
+                    // the provider resource identifier.
+                    resource_permission_set_ids
+                        .entry(resource_id.clone())
+                        .or_default()
+                        .insert(permission);
+                } else {
+                    permission_set_ids.insert(permission);
+                }
             }
             ResourceLifecycle::Frozen => {
                 // Frozen resources are setup-owned by default. Heartbeat,

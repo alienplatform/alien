@@ -1,0 +1,1 @@
+{"type":"object","description":"A customer-managed encryption key.","required":["id"],"properties":{"id":{"type":"string","description":"Identifier for the key resource."}},"additionalProperties":false,"x-readme-ref-name":"Key"}

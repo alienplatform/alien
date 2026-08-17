@@ -80,6 +80,7 @@ url = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
+alien-ai-gateway = { workspace = true }
 alien-bindings = { workspace = true, default-features = false, features = ["aws", "azure", "gcp", "platform-sdk"] }
 axum = { workspace = true, features = ["http1", "json", "tokio"] }
 chrono = { workspace = true }

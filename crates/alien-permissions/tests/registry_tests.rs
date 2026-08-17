@@ -15,6 +15,29 @@ fn test_ai_permission_sets_resolve_via_registry() {
 }
 
 #[test]
+fn test_ai_heartbeat_can_resolve_gcp_project_number() {
+    let heartbeat = get_permission_set("ai/heartbeat").expect("ai/heartbeat must resolve");
+    let gcp = heartbeat
+        .platforms
+        .gcp
+        .as_ref()
+        .expect("ai/heartbeat must have GCP platform");
+
+    assert!(
+        gcp.iter().any(|entry| {
+            entry
+                .grant
+                .permissions
+                .as_ref()
+                .is_some_and(|permissions| {
+                    permissions.contains(&"resourcemanager.projects.get".to_string())
+                })
+        }),
+        "AI heartbeat must read project metadata so frozen-resource management can compile project-number IAM conditions"
+    );
+}
+
+#[test]
 fn test_ai_invoke_is_inference_only() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
 
@@ -55,9 +78,10 @@ fn test_ai_invoke_is_inference_only() {
                 entry.grant.predefined_roles.is_none(),
                 "ai/invoke GCP entry {i} must not use predefinedRoles (grants over-broad control-plane access); use a permissions list instead"
             );
-            let permissions = entry.grant.permissions.as_ref().unwrap_or_else(|| {
-                panic!("ai/invoke GCP entry {i} must have a permissions list")
-            });
+            let permissions =
+                entry.grant.permissions.as_ref().unwrap_or_else(|| {
+                    panic!("ai/invoke GCP entry {i} must have a permissions list")
+                });
             for perm in permissions {
                 // No control-plane write actions.
                 assert!(
@@ -82,8 +106,7 @@ fn test_ai_invoke_is_inference_only() {
             if let Some(actions) = &entry.grant.actions {
                 for action in actions {
                     assert_ne!(
-                        action,
-                        "Microsoft.CognitiveServices/accounts/deployments/write",
+                        action, "Microsoft.CognitiveServices/accounts/deployments/write",
                         "ai/invoke must not grant deployments/write; that belongs in ai/provision"
                     );
                 }
@@ -118,9 +141,8 @@ fn test_ai_provision_has_deployment_writes() {
             .actions
             .as_ref()
             .map(|actions| {
-                actions.contains(
-                    &"Microsoft.CognitiveServices/accounts/deployments/write".to_string(),
-                )
+                actions
+                    .contains(&"Microsoft.CognitiveServices/accounts/deployments/write".to_string())
             })
             .unwrap_or(false)
     });
@@ -142,9 +164,8 @@ fn test_ai_provision_has_deployment_writes() {
             .actions
             .as_ref()
             .map(|actions| {
-                actions.contains(
-                    &"Microsoft.CognitiveServices/accounts/deployments/write".to_string(),
-                )
+                actions
+                    .contains(&"Microsoft.CognitiveServices/accounts/deployments/write".to_string())
             })
             .unwrap_or(false)
     });
@@ -155,34 +176,44 @@ fn test_ai_provision_has_deployment_writes() {
 }
 
 #[test]
-fn test_ai_invoke_uses_openai_user_role() {
+fn test_ai_invoke_uses_cognitive_services_user_role() {
     let invoke = get_permission_set("ai/invoke").expect("ai/invoke must resolve");
     let azure = invoke
         .platforms
         .azure
         .as_ref()
         .expect("ai/invoke must have Azure platform");
-    let uses_openai_user = azure.iter().any(|entry| {
+    let uses_cognitive_services_user = azure.iter().any(|entry| {
         entry
             .grant
             .predefined_roles
             .as_ref()
-            .map(|roles| roles.contains(&"Cognitive Services OpenAI User".to_string()))
+            .map(|roles| roles.contains(&"Cognitive Services User".to_string()))
             .unwrap_or(false)
     });
     assert!(
-        uses_openai_user,
-        "ai/invoke Azure must use the least-privilege 'Cognitive Services OpenAI User' role"
+        uses_cognitive_services_user,
+        "ai/invoke Azure must use 'Cognitive Services User' so partner models are authorized"
     );
 }
 
 #[test]
-fn test_openai_user_role_id_resolves() {
+fn test_cognitive_services_user_role_id_resolves() {
     use alien_permissions::generators::azure_runtime::azure_predefined_role_id;
     assert_eq!(
-        azure_predefined_role_id("Cognitive Services OpenAI User"),
-        Some("5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"),
-        "the OpenAI-User role GUID must be registered"
+        azure_predefined_role_id("Cognitive Services User"),
+        Some("a97b65f3-24c7-4388-baec-2e87135dc908"),
+        "the Cognitive Services User role GUID must be registered"
+    );
+}
+
+#[test]
+fn test_key_vault_reader_role_id_resolves() {
+    use alien_permissions::generators::azure_runtime::azure_predefined_role_id;
+    assert_eq!(
+        azure_predefined_role_id("Key Vault Reader"),
+        Some("21090545-7ca7-4776-b22c-e363652d74d2"),
+        "the metadata-only Key Vault Reader role GUID must be registered"
     );
 }
 
@@ -191,10 +222,22 @@ fn test_ai_permission_sets_have_all_platforms() {
     for id in ["ai/provision", "ai/management", "ai/heartbeat", "ai/invoke"] {
         let perm_set = get_permission_set(id).unwrap_or_else(|| panic!("{id} must resolve"));
         assert_eq!(perm_set.id, id);
-        assert!(!perm_set.description.is_empty(), "{id} must have a description");
-        assert!(perm_set.platforms.aws.is_some(), "{id} must have AWS platform");
-        assert!(perm_set.platforms.gcp.is_some(), "{id} must have GCP platform");
-        assert!(perm_set.platforms.azure.is_some(), "{id} must have Azure platform");
+        assert!(
+            !perm_set.description.is_empty(),
+            "{id} must have a description"
+        );
+        assert!(
+            perm_set.platforms.aws.is_some(),
+            "{id} must have AWS platform"
+        );
+        assert!(
+            perm_set.platforms.gcp.is_some(),
+            "{id} must have GCP platform"
+        );
+        assert!(
+            perm_set.platforms.azure.is_some(),
+            "{id} must have Azure platform"
+        );
     }
 }
 

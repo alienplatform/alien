@@ -1,0 +1,56 @@
+# DataAzureKeyVault1
+
+## Example Usage
+
+```typescript
+import { DataAzureKeyVault1 } from "@alienplatform/platform-api/models";
+
+let value: DataAzureKeyVault1 = {
+  accessPolicyCount: 582917,
+  name: "<value>",
+  privateEndpointConnectionCount: 112234,
+  publicNetworkAccess: "<value>",
+  rbacAuthorizationEnabled: true,
+  secretMetadataListed: false,
+  softDeleteEnabled: true,
+  softDeleteRetentionDays: 457442,
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "updating",
+    partial: false,
+    stale: false,
+  },
+  backend: "azureKeyVault",
+};
+```
+
+## Fields
+
+| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `accessPolicyCount`                                                              | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `location`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `privateEndpointConnectionCount`                                                 | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `provisioningState`                                                              | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `publicNetworkAccess`                                                            | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `purgeProtectionEnabled`                                                         | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `rbacAuthorizationEnabled`                                                       | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `resourceGroup`                                                                  | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `resourceId`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `secretMetadataListed`                                                           | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `skuFamily`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `skuName`                                                                        | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `softDeleteEnabled`                                                              | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `softDeleteRetentionDays`                                                        | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.SyncReconcileRequestStatus39](../models/syncreconcilerequeststatus39.md) | :heavy_check_mark:                                                               | N/A                                                                              |
+| `vaultUri`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `backend`                                                                        | *"azureKeyVault"*                                                                | :heavy_check_mark:                                                               | N/A                                                                              |

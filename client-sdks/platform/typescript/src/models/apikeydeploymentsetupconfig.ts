@@ -4,6 +4,7 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
   APIKeyDeploymentSetupEnvironmentVariable,
@@ -15,11 +16,275 @@ import {
 } from "./deploymentsetuppolicy.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export const APIKeyDeploymentSetupConfigItemEnum = {
+  Deployment: "deployment",
+  Models: "models",
+  Keys: "keys",
+  Bucket: "bucket",
+  Registry: "registry",
+} as const;
+export type APIKeyDeploymentSetupConfigItemEnum = ClosedEnum<
+  typeof APIKeyDeploymentSetupConfigItemEnum
+>;
+
+export const APIKeyDeploymentSetupConfigDefinitionId = {
+  CustomerAi: "customer-ai",
+  CustomerKey: "customer-key",
+  CustomerStorage: "customer-storage",
+  CustomerRegistry: "customer-registry",
+} as const;
+export type APIKeyDeploymentSetupConfigDefinitionId = ClosedEnum<
+  typeof APIKeyDeploymentSetupConfigDefinitionId
+>;
+
+export type APIKeyDeploymentSetupConfigSourceBuiltIn = {
+  type: "built-in";
+  definitionId: APIKeyDeploymentSetupConfigDefinitionId;
+  version: string;
+  /**
+   * Unique identifier for the release.
+   */
+  sourceReleaseId: string;
+};
+
+export type APIKeyDeploymentSetupConfigSourceProjectRelease = {
+  type: "project-release";
+  releaseChannel: string;
+  /**
+   * Unique identifier for the release.
+   */
+  releaseId: string;
+  resourceId?: string | undefined;
+};
+
+export type APIKeyDeploymentSetupConfigSourceUnion =
+  | APIKeyDeploymentSetupConfigSourceProjectRelease
+  | APIKeyDeploymentSetupConfigSourceBuiltIn;
+
+export const APIKeyDeploymentSetupConfigAllowedProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type APIKeyDeploymentSetupConfigAllowedProvider = ClosedEnum<
+  typeof APIKeyDeploymentSetupConfigAllowedProvider
+>;
+
+export const APIKeyDeploymentSetupConfigClientAPI = {
+  OpenaiChat: "openai-chat",
+  OpenaiResponses: "openai-responses",
+  AnthropicMessages: "anthropic-messages",
+} as const;
+export type APIKeyDeploymentSetupConfigClientAPI = ClosedEnum<
+  typeof APIKeyDeploymentSetupConfigClientAPI
+>;
+
+export type APIKeyDeploymentSetupConfigModelRequirement = {
+  publicModelId: string;
+  clientApis: Array<APIKeyDeploymentSetupConfigClientAPI>;
+  required: boolean;
+};
+
+export type APIKeyDeploymentSetupConfigConfiguration = {
+  allowedProviders?:
+    | Array<APIKeyDeploymentSetupConfigAllowedProvider>
+    | undefined;
+  modelRequirements?:
+    | Array<APIKeyDeploymentSetupConfigModelRequirement>
+    | undefined;
+};
+
+export type APIKeyDeploymentSetupConfigItem = {
+  item: APIKeyDeploymentSetupConfigItemEnum;
+  source:
+    | APIKeyDeploymentSetupConfigSourceProjectRelease
+    | APIKeyDeploymentSetupConfigSourceBuiltIn;
+  required: boolean;
+  configuration?: APIKeyDeploymentSetupConfigConfiguration | undefined;
+};
+
 export type APIKeyDeploymentSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   environmentVariables: Array<APIKeyDeploymentSetupEnvironmentVariable>;
+  items?: Array<APIKeyDeploymentSetupConfigItem> | undefined;
 };
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigItemEnum$inboundSchema: z.ZodEnum<
+  typeof APIKeyDeploymentSetupConfigItemEnum
+> = z.enum(APIKeyDeploymentSetupConfigItemEnum);
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigDefinitionId$inboundSchema: z.ZodEnum<
+  typeof APIKeyDeploymentSetupConfigDefinitionId
+> = z.enum(APIKeyDeploymentSetupConfigDefinitionId);
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigSourceBuiltIn$inboundSchema: z.ZodType<
+  APIKeyDeploymentSetupConfigSourceBuiltIn,
+  unknown
+> = z.object({
+  type: z.literal("built-in"),
+  definitionId: APIKeyDeploymentSetupConfigDefinitionId$inboundSchema,
+  version: z.string(),
+  sourceReleaseId: z.string(),
+});
+
+export function apiKeyDeploymentSetupConfigSourceBuiltInFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  APIKeyDeploymentSetupConfigSourceBuiltIn,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigSourceBuiltIn$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'APIKeyDeploymentSetupConfigSourceBuiltIn' from JSON`,
+  );
+}
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema:
+  z.ZodType<APIKeyDeploymentSetupConfigSourceProjectRelease, unknown> = z
+    .object({
+      type: z.literal("project-release"),
+      releaseChannel: z.string(),
+      releaseId: z.string(),
+      resourceId: z.string().optional(),
+    });
+
+export function apiKeyDeploymentSetupConfigSourceProjectReleaseFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  APIKeyDeploymentSetupConfigSourceProjectRelease,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'APIKeyDeploymentSetupConfigSourceProjectRelease' from JSON`,
+  );
+}
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigSourceUnion$inboundSchema: z.ZodType<
+  APIKeyDeploymentSetupConfigSourceUnion,
+  unknown
+> = z.union([
+  z.lazy(() => APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema),
+  z.lazy(() => APIKeyDeploymentSetupConfigSourceBuiltIn$inboundSchema),
+]);
+
+export function apiKeyDeploymentSetupConfigSourceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<APIKeyDeploymentSetupConfigSourceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigSourceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'APIKeyDeploymentSetupConfigSourceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigAllowedProvider$inboundSchema:
+  z.ZodEnum<typeof APIKeyDeploymentSetupConfigAllowedProvider> = z.enum(
+    APIKeyDeploymentSetupConfigAllowedProvider,
+  );
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigClientAPI$inboundSchema: z.ZodEnum<
+  typeof APIKeyDeploymentSetupConfigClientAPI
+> = z.enum(APIKeyDeploymentSetupConfigClientAPI);
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigModelRequirement$inboundSchema:
+  z.ZodType<APIKeyDeploymentSetupConfigModelRequirement, unknown> = z.object({
+    publicModelId: z.string(),
+    clientApis: z.array(APIKeyDeploymentSetupConfigClientAPI$inboundSchema),
+    required: z.boolean(),
+  });
+
+export function apiKeyDeploymentSetupConfigModelRequirementFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  APIKeyDeploymentSetupConfigModelRequirement,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigModelRequirement$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'APIKeyDeploymentSetupConfigModelRequirement' from JSON`,
+  );
+}
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigConfiguration$inboundSchema: z.ZodType<
+  APIKeyDeploymentSetupConfigConfiguration,
+  unknown
+> = z.object({
+  allowedProviders: z.array(
+    APIKeyDeploymentSetupConfigAllowedProvider$inboundSchema,
+  ).optional(),
+  modelRequirements: z.array(
+    z.lazy(() => APIKeyDeploymentSetupConfigModelRequirement$inboundSchema),
+  ).optional(),
+});
+
+export function apiKeyDeploymentSetupConfigConfigurationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  APIKeyDeploymentSetupConfigConfiguration,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      APIKeyDeploymentSetupConfigConfiguration$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'APIKeyDeploymentSetupConfigConfiguration' from JSON`,
+  );
+}
+
+/** @internal */
+export const APIKeyDeploymentSetupConfigItem$inboundSchema: z.ZodType<
+  APIKeyDeploymentSetupConfigItem,
+  unknown
+> = z.object({
+  item: APIKeyDeploymentSetupConfigItemEnum$inboundSchema,
+  source: z.union([
+    z.lazy(() => APIKeyDeploymentSetupConfigSourceProjectRelease$inboundSchema),
+    z.lazy(() => APIKeyDeploymentSetupConfigSourceBuiltIn$inboundSchema),
+  ]),
+  required: z.boolean(),
+  configuration: z.lazy(() =>
+    APIKeyDeploymentSetupConfigConfiguration$inboundSchema
+  ).optional(),
+});
+
+export function apiKeyDeploymentSetupConfigItemFromJSON(
+  jsonString: string,
+): SafeParseResult<APIKeyDeploymentSetupConfigItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => APIKeyDeploymentSetupConfigItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'APIKeyDeploymentSetupConfigItem' from JSON`,
+  );
+}
 
 /** @internal */
 export const APIKeyDeploymentSetupConfig$inboundSchema: z.ZodType<
@@ -31,6 +296,8 @@ export const APIKeyDeploymentSetupConfig$inboundSchema: z.ZodType<
   environmentVariables: z.array(
     APIKeyDeploymentSetupEnvironmentVariable$inboundSchema,
   ),
+  items: z.array(z.lazy(() => APIKeyDeploymentSetupConfigItem$inboundSchema))
+    .optional(),
 });
 
 export function apiKeyDeploymentSetupConfigFromJSON(

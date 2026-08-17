@@ -8,6 +8,7 @@ Developer-facing CLI for Alien.
 - **`alien build`** — Build the application into OCI images
 - **`alien release`** — Push images and create a release on the manager
 - **`alien onboard`** — Create a deployment group and generate a deployment link
+- **`alien projects create`** — Create a name-only Platform project for Dashboard, CLI, or agent onboarding
 - **`alien deployments`** — List and manage deployments
 - **`alien deploy`** / **`alien destroy`** — Deploy to or destroy from a cloud platform
 - **`alien vault`** — Manage vault secrets for a deployment

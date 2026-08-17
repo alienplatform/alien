@@ -5,9 +5,9 @@
 //! binding topology together with materialized, short-lived credentials.
 
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, BindingValue,
-    ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Platform, ResourceLifecycle,
-    ResourceStatus, Storage, StorageBinding,
+    Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
+    BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
+    Platform, ResourceLifecycle, ResourceStatus, Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{auth, current_release_resource, load_current_release, AppState};
 use crate::credential_materialization::{
-    materialize_remote_storage_lease, MaterializedCredentialLease, RemoteStorageCredentialScope,
+    materialize_remote_binding_lease, MaterializedCredentialLease, RemoteBindingCredentialScope,
 };
 use crate::error::ErrorData;
 use crate::traits::{deployment_status_from_record, DeploymentRecord, ReleaseStore};
@@ -38,8 +38,17 @@ const REMOTE_BINDING_REFRESH_HINT_SECONDS: i64 = 3600;
 pub struct ResolveBindingRequest {
     /// Deployment containing the remote-enabled resource.
     pub deployment_id: String,
-    /// Logical Storage resource id in the deployment's stack state.
-    pub resource_id: String,
+    /// Logical remote-enabled resource id in the deployment's stack state.
+    pub resource_id: Option<String>,
+    /// Deployment-level binding selector. V1 supports the unique managed AI resource.
+    pub kind: Option<ResolveBindingKind>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ResolveBindingKind {
+    Ai,
 }
 
 /// One approved remote Storage binding paired with credentials for the same
@@ -72,6 +81,108 @@ pub enum ResolveBindingResponse {
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
+    /// AWS KMS key and an AWS session.
+    #[serde(rename = "kms")]
+    Kms {
+        binding: RemoteAwsKmsKeyBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// GCP Cloud KMS key and an access token.
+    #[serde(rename = "cloud-kms")]
+    CloudKms {
+        binding: RemoteGcpCloudKmsKeyBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Azure Key Vault key and a vault-audience access token.
+    #[serde(rename = "key-vault-key")]
+    KeyVaultKey {
+        binding: RemoteAzureKeyVaultKeyBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAzureClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// AWS Bedrock and an AWS session.
+    Bedrock {
+        #[serde(rename = "resourceId")]
+        resource_id: String,
+        binding: RemoteAwsBedrockAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// GCP Vertex AI and an access token.
+    Vertex {
+        #[serde(rename = "resourceId")]
+        resource_id: String,
+        binding: RemoteGcpVertexAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+    /// Azure AI Foundry and a Cognitive Services access token.
+    Foundry {
+        #[serde(rename = "resourceId")]
+        resource_id: String,
+        binding: RemoteAzureFoundryAiBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAzureClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAwsBedrockAiBinding {
+    pub region: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteGcpVertexAiBinding {
+    pub project: String,
+    pub location: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAzureFoundryAiBinding {
+    pub endpoint: String,
+    pub account: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAwsKmsKeyBinding {
+    pub key_arn: String,
+    pub region: Option<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteGcpCloudKmsKeyBinding {
+    pub crypto_key_name: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAzureKeyVaultKeyBinding {
+    pub key_id: String,
 }
 
 /// Concrete S3 topology returned to remote clients.
@@ -214,12 +325,60 @@ pub enum RemoteStorageBinding {
     Gcs(RemoteGcsStorageBinding),
 }
 
-impl RemoteStorageBinding {
-    fn credential_scope(&self) -> RemoteStorageCredentialScope {
+enum RemoteKeyBinding {
+    Aws(RemoteAwsKmsKeyBinding),
+    Gcp(RemoteGcpCloudKmsKeyBinding),
+    Azure(RemoteAzureKeyVaultKeyBinding),
+}
+
+enum RemoteAiBinding {
+    Aws(RemoteAwsBedrockAiBinding),
+    Gcp(RemoteGcpVertexAiBinding),
+    Azure(RemoteAzureFoundryAiBinding),
+}
+
+enum ResolvedRemoteBinding {
+    Storage(RemoteStorageBinding),
+    Key(RemoteKeyBinding),
+    Ai(RemoteAiBinding),
+}
+
+impl ResolvedRemoteBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
         match self {
-            Self::S3(_) => RemoteStorageCredentialScope::AwsS3,
-            Self::Gcs(_) => RemoteStorageCredentialScope::GcpGcs,
-            Self::Blob(_) => RemoteStorageCredentialScope::AzureBlob,
+            Self::Storage(binding) => binding.credential_scope(),
+            Self::Key(binding) => binding.credential_scope(),
+            Self::Ai(binding) => binding.credential_scope(),
+        }
+    }
+}
+
+impl RemoteAiBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsAi,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpAi,
+            Self::Azure(_) => RemoteBindingCredentialScope::AzureAi,
+        }
+    }
+}
+
+impl RemoteKeyBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsKms,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpCloudKms,
+            Self::Azure(_) => RemoteBindingCredentialScope::AzureKeyVault,
+        }
+    }
+}
+
+impl RemoteStorageBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::S3(_) => RemoteBindingCredentialScope::AwsS3,
+            Self::Gcs(_) => RemoteBindingCredentialScope::GcpGcs,
+            Self::Blob(_) => RemoteBindingCredentialScope::AzureBlob,
         }
     }
 }
@@ -240,7 +399,7 @@ impl TryFrom<AwsClientConfig> for RemoteAwsClientConfig {
     fn try_from(config: AwsClientConfig) -> Result<Self, Self::Error> {
         if config.service_overrides.is_some() {
             return Err(ErrorData::internal(
-                "Remote AWS Storage response contains service endpoint overrides",
+                "Remote Bindings AWS response contains service endpoint overrides",
             ));
         }
         let AwsCredentials::SessionCredentials {
@@ -251,7 +410,7 @@ impl TryFrom<AwsClientConfig> for RemoteAwsClientConfig {
         } = config.credentials
         else {
             return Err(ErrorData::internal(
-                "Remote AWS Storage response credentials are not a short-lived session",
+                "Remote Bindings AWS response credentials are not a short-lived session",
             ));
         };
 
@@ -274,12 +433,12 @@ impl TryFrom<GcpClientConfig> for RemoteGcpClientConfig {
     fn try_from(config: GcpClientConfig) -> Result<Self, Self::Error> {
         if config.service_overrides.is_some() {
             return Err(ErrorData::internal(
-                "Remote GCP Storage response contains service endpoint overrides",
+                "Remote Bindings GCP response contains service endpoint overrides",
             ));
         }
         let GcpCredentials::AccessToken { token } = config.credentials else {
             return Err(ErrorData::internal(
-                "Remote GCP Storage response credentials are not a short-lived access token",
+                "Remote Bindings GCP response credentials are not a short-lived access token",
             ));
         };
 
@@ -298,12 +457,12 @@ impl TryFrom<AzureClientConfig> for RemoteAzureClientConfig {
     fn try_from(config: AzureClientConfig) -> Result<Self, Self::Error> {
         if config.service_overrides.is_some() {
             return Err(ErrorData::internal(
-                "Remote Azure Storage response contains service endpoint overrides",
+                "Remote Bindings Azure response contains service endpoint overrides",
             ));
         }
         let AzureCredentials::AccessToken { token } = config.credentials else {
             return Err(ErrorData::internal(
-                "Remote Azure Storage response credentials are not a short-lived access token",
+                "Remote Bindings Azure response credentials are not a short-lived access token",
             ));
         };
 
@@ -323,7 +482,7 @@ fn concrete_binding_value(
     match value {
         BindingValue::Value(value) if !value.is_empty() => Ok(value.clone()),
         _ => Err(ErrorData::internal(format!(
-            "Remote Storage binding field '{field}' is not a concrete value"
+            "Remote binding field '{field}' is not a concrete value"
         ))),
     }
 }
@@ -356,6 +515,72 @@ impl ResolveBindingResponse {
             }
             _ => Err(ErrorData::internal(
                 "Remote Storage binding and materialized credential platforms do not match",
+            )),
+        }
+    }
+
+    fn from_key_parts(
+        binding: RemoteKeyBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteKeyBinding::Aws(binding), ClientConfig::Aws(client_config)) => Ok(Self::Kms {
+                binding,
+                client_config: (*client_config).try_into()?,
+                expires_at,
+            }),
+            (RemoteKeyBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => {
+                Ok(Self::CloudKms {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteKeyBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
+                Ok(Self::KeyVaultKey {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote Key binding and materialized credential platforms do not match",
+            )),
+        }
+    }
+
+    fn from_ai_parts(
+        resource_id: String,
+        binding: RemoteAiBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteAiBinding::Aws(binding), ClientConfig::Aws(client_config)) => {
+                Ok(Self::Bedrock {
+                    resource_id,
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteAiBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => Ok(Self::Vertex {
+                resource_id,
+                binding,
+                client_config: (*client_config).try_into()?,
+                expires_at,
+            }),
+            (RemoteAiBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
+                Ok(Self::Foundry {
+                    resource_id,
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote AI binding and materialized credential platforms do not match",
             )),
         }
     }
@@ -403,6 +628,22 @@ async fn resolve_binding(
         Ok(None) => return ErrorData::not_found_deployment(&request.deployment_id).into_response(),
         Err(error) => return error.into_response(),
     };
+    let resource_id = match (&request.resource_id, &request.kind) {
+        (Some(resource_id), None) => resource_id.clone(),
+        (None, Some(ResolveBindingKind::Ai)) => {
+            match unique_current_release_remote_ai(state.release_store.as_ref(), &deployment).await
+            {
+                Ok(resource_id) => resource_id,
+                Err(error) => return error.into_response(),
+            }
+        }
+        _ => {
+            return ErrorData::bad_request(
+                "Specify exactly one of resourceId or kind when resolving a remote binding",
+            )
+            .into_response()
+        }
+    };
     if !state
         .authz
         .can_resolve_remote_bindings(&subject, &deployment)
@@ -420,21 +661,33 @@ async fn resolve_binding(
         .into_response();
     }
 
-    if let Err(error) = require_current_release_remote_access(
+    let binding_kind = match require_current_release_remote_access(
         state.release_store.as_ref(),
         &deployment,
-        &request.resource_id,
+        &resource_id,
     )
     .await
     {
+        Ok(kind) => kind,
+        Err(error) => return error.into_response(),
+    };
+
+    if let Err(error) = require_setup_owned_remote_binding(&deployment, &resource_id) {
         return error.into_response();
     }
 
-    if let Err(error) = require_setup_owned_remote_storage(&deployment, &request.resource_id) {
-        return error.into_response();
-    }
-
-    let binding = match remote_storage_binding(&deployment, &request.resource_id) {
+    let binding = match binding_kind {
+        alien_core::remote_bindings::RemoteBindingKind::Storage => {
+            remote_storage_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Storage)
+        }
+        alien_core::remote_bindings::RemoteBindingKind::Key => {
+            remote_key_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Key)
+        }
+        alien_core::remote_bindings::RemoteBindingKind::Ai => {
+            remote_ai_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Ai)
+        }
+    };
+    let binding = match binding {
         Ok(binding) => binding,
         Err(error) => return error.into_response(),
     };
@@ -442,7 +695,7 @@ async fn resolve_binding(
     let scope = binding.credential_scope();
     let resolved = match state
         .credential_resolver
-        .resolve_remote_storage_source(&deployment, &request.resource_id)
+        .resolve_remote_storage_source(&deployment, &resource_id)
         .await
     {
         Ok(source) => source,
@@ -455,7 +708,7 @@ async fn resolve_binding(
                 .into_response()
         }
     };
-    let lease = match materialize_remote_storage_lease(resolved, scope).await {
+    let lease = match materialize_remote_binding_lease(resolved, scope).await {
         Ok(materialized) => materialized,
         Err(error) => return error.into_response(),
     };
@@ -466,7 +719,21 @@ async fn resolve_binding(
         Err(error) => return error.into_response(),
     };
 
-    let response = match ResolveBindingResponse::from_parts(binding, lease, expires_at.clone()) {
+    let response = match binding {
+        ResolvedRemoteBinding::Storage(binding) => {
+            ResolveBindingResponse::from_parts(binding, lease, expires_at.clone())
+        }
+        ResolvedRemoteBinding::Key(binding) => {
+            ResolveBindingResponse::from_key_parts(binding, lease, expires_at.clone())
+        }
+        ResolvedRemoteBinding::Ai(binding) => ResolveBindingResponse::from_ai_parts(
+            resource_id.clone(),
+            binding,
+            lease,
+            expires_at.clone(),
+        ),
+    };
+    let response = match response {
         Ok(response) => response,
         Err(error) => return error.into_response(),
     };
@@ -474,10 +741,10 @@ async fn resolve_binding(
     tracing::info!(
         event = "remote_binding_credentials_issued",
         deployment_id = %request.deployment_id,
-        resource_id = %request.resource_id,
+        resource_id = %resource_id,
         platform = %deployment.platform,
         expires_at = %expires_at,
-        "Issued remote Storage credentials"
+        "Issued remote binding credentials"
     );
 
     (
@@ -487,11 +754,52 @@ async fn resolve_binding(
         .into_response()
 }
 
+async fn unique_current_release_remote_ai(
+    release_store: &dyn ReleaseStore,
+    deployment: &DeploymentRecord,
+) -> Result<String, alien_error::AlienError<ErrorData>> {
+    let release_id = deployment.current_release_id.as_deref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no current release; remote AI cannot be resolved")
+    })?;
+    let release = load_current_release(
+        release_store,
+        deployment,
+        release_id,
+        "remote AI resolution",
+    )
+    .await?;
+    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        ErrorData::internal(format!(
+            "Current release '{release_id}' has no {} stack",
+            deployment.platform
+        ))
+    })?;
+    let candidates = stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| {
+            entry.config.resource_type() == Ai::RESOURCE_TYPE
+                && entry.lifecycle == ResourceLifecycle::Frozen
+                && entry.remote_access
+        })
+        .map(|(resource_id, _)| resource_id)
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [resource_id] => Ok((*resource_id).clone()),
+        [] => Err(ErrorData::bad_request(
+            "Deployment has no Frozen AI resource enabled for remote access",
+        )),
+        _ => Err(ErrorData::bad_request(
+            "Deployment has more than one Frozen AI resource enabled for remote access",
+        )),
+    }
+}
+
 /// External bindings import caller-supplied resource references; they do not
 /// prove that generated setup created the resource. Remote Bindings v0 must
 /// therefore reject them even if stale synchronized state contains binding
 /// parameters from an older manager.
-fn require_setup_owned_remote_storage(
+fn require_setup_owned_remote_binding(
     deployment: &DeploymentRecord,
     resource_id: &str,
 ) -> Result<(), alien_error::AlienError<ErrorData>> {
@@ -506,7 +814,7 @@ fn require_setup_owned_remote_storage(
         .is_some_and(|bindings| bindings.has(resource_id));
     if in_deployment_config || in_stack_settings {
         return Err(ErrorData::bad_request(format!(
-            "Remote Storage resource '{resource_id}' cannot use an external binding; remote access is limited to resources created by setup"
+            "Remote resource '{resource_id}' cannot use an external binding; remote access is limited to resources created by setup"
         )));
     }
     Ok(())
@@ -550,7 +858,7 @@ fn remote_binding_expiry(
 
     if expires_at <= now {
         return Err(ErrorData::internal(
-            "Remote Storage credential lease is already expired",
+            "Remote binding credential lease is already expired",
         ));
     }
 
@@ -568,7 +876,7 @@ async fn require_current_release_remote_access(
     release_store: &dyn ReleaseStore,
     deployment: &DeploymentRecord,
     resource_id: &str,
-) -> Result<(), alien_error::AlienError<ErrorData>> {
+) -> Result<alien_core::remote_bindings::RemoteBindingKind, alien_error::AlienError<ErrorData>> {
     let release_id = deployment.current_release_id.as_deref().ok_or_else(|| {
         ErrorData::bad_request(
             "Deployment has no current release; remote bindings cannot be resolved",
@@ -582,7 +890,8 @@ async fn require_current_release_remote_access(
         "remote binding resolution",
     )
     .await?;
-    let (_, resource) = current_release_resource(&release, deployment, release_id, resource_id)?;
+    let (stack, resource) =
+        current_release_resource(&release, deployment, release_id, resource_id)?;
 
     let definition =
         alien_core::remote_bindings::remote_binding_definition(&resource.config.resource_type())
@@ -591,23 +900,30 @@ async fn require_current_release_remote_access(
                     "Resource '{resource_id}' does not support Remote Bindings"
                 ))
             })?;
-    if definition.kind != alien_core::remote_bindings::RemoteBindingKind::Storage {
-        return Err(ErrorData::bad_request(format!(
-            "Resource '{resource_id}' has a Remote Binding kind this endpoint does not support"
-        )));
-    }
     if resource.lifecycle != ResourceLifecycle::Frozen {
         return Err(ErrorData::bad_request(format!(
-            "Storage resource '{resource_id}' is not Frozen in the deployment's current release"
+            "Remote resource '{resource_id}' is not Frozen in the deployment's current release"
         )));
     }
     if !resource.remote_access {
         return Err(ErrorData::bad_request(format!(
-            "Storage resource '{resource_id}' is not enabled for remote access in the deployment's current release"
+            "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
         )));
     }
+    if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
+        && stack
+            .resources
+            .values()
+            .filter(|entry| entry.remote_access)
+            .count()
+            != 1
+    {
+        return Err(ErrorData::bad_request(
+            "A remotely published Key must be the deployment's only remoteAccess resource",
+        ));
+    }
 
-    Ok(())
+    Ok(definition.kind)
 }
 
 fn remote_storage_binding(
@@ -682,6 +998,160 @@ fn remote_storage_binding(
         }
         _ => Err(ErrorData::bad_request(format!(
             "Storage resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
+}
+
+fn remote_key_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteKeyBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote Key is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Key::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not a key"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "Key resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "Key resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Key resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: KeyBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("Key resource '{resource_id}' has an invalid remote binding"),
+            })?;
+    match (deployment.platform, binding) {
+        (Platform::Aws, KeyBinding::AwsKms(binding)) => {
+            Ok(RemoteKeyBinding::Aws(RemoteAwsKmsKeyBinding {
+                key_arn: concrete_binding_value(&binding.key_arn, "AWS KMS keyArn")?,
+                region: binding
+                    .region
+                    .as_ref()
+                    .map(|region| concrete_binding_value(region, "AWS KMS region"))
+                    .transpose()?,
+            }))
+        }
+        (Platform::Gcp, KeyBinding::GcpCloudKms(binding)) => {
+            Ok(RemoteKeyBinding::Gcp(RemoteGcpCloudKmsKeyBinding {
+                crypto_key_name: concrete_binding_value(
+                    &binding.crypto_key_name,
+                    "GCP Cloud KMS cryptoKeyName",
+                )?,
+            }))
+        }
+        (Platform::Azure, KeyBinding::AzureKeyVault(binding)) => {
+            Ok(RemoteKeyBinding::Azure(RemoteAzureKeyVaultKeyBinding {
+                key_id: concrete_binding_value(&binding.key_id, "Azure Key Vault keyId")?,
+            }))
+        }
+        _ => Err(ErrorData::bad_request(format!(
+            "Key resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
+}
+
+fn remote_ai_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteAiBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote AI is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Ai::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not AI"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: AiBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("AI resource '{resource_id}' has an invalid remote binding"),
+            })?;
+
+    match (deployment.platform, binding) {
+        (Platform::Aws, AiBinding::Bedrock(binding)) => {
+            Ok(RemoteAiBinding::Aws(RemoteAwsBedrockAiBinding {
+                region: binding.region,
+            }))
+        }
+        (Platform::Gcp, AiBinding::Vertex(binding)) => {
+            Ok(RemoteAiBinding::Gcp(RemoteGcpVertexAiBinding {
+                project: binding.project,
+                location: binding.location,
+            }))
+        }
+        (Platform::Azure, AiBinding::Foundry(binding)) => {
+            Ok(RemoteAiBinding::Azure(RemoteAzureFoundryAiBinding {
+                endpoint: binding.endpoint,
+                account: binding.account,
+            }))
+        }
+        (_, AiBinding::External(_)) => Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' uses an external binding and cannot be resolved remotely"
+        ))),
+        _ => Err(ErrorData::bad_request(format!(
+            "AI resource '{resource_id}' binding does not match deployment platform '{}'",
             deployment.platform
         ))),
     }

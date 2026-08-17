@@ -76,7 +76,7 @@ pub enum OperatorOutputFormat {
     RawManifest,
     /// Helm-templated documents to paste into an existing chart's `templates/`.
     /// Namespace resolves to `.Release.Namespace` and the per-environment name
-    /// to `.Values.alien.environmentName`, so one file serves every install.
+    /// to `.Release.Name`, so one file serves every install without another value.
     HelmTemplate,
 }
 
@@ -111,7 +111,7 @@ pub struct OperatorManifestOptions<'a> {
     pub project_name: &'a str,
     /// The per-environment identity reported as `OPERATOR_NAME`. Required for
     /// `RawManifest`; ignored for `HelmTemplate`, which sources it from
-    /// `.Values.alien.environmentName` so each install is distinct.
+    /// `.Release.Name` so each install is distinct.
     pub environment_name: Option<&'a str>,
     /// The namespace the operator installs into. Required (non-empty) for
     /// `RawManifest`; ignored for `HelmTemplate`, which uses `.Release.Namespace`.
@@ -273,7 +273,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     // concrete name; a Helm template sources it per install from values so one
     // file registers every customer environment distinctly.
     let environment_name_expr = match options.format {
-        OperatorOutputFormat::HelmTemplate => "{{ .Values.alien.environmentName }}".to_string(),
+        OperatorOutputFormat::HelmTemplate => "{{ .Release.Name }}".to_string(),
         OperatorOutputFormat::RawManifest => options
             .environment_name
             .expect("validated by validate_operator_options")
@@ -4561,7 +4561,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             operator_env_value(&deployment, "OPERATOR_NAME"),
-            Some("{{ .Values.alien.environmentName }}"),
+            Some("{{ .Release.Name }}"),
             "each install registers under its own environment name"
         );
         // Object names still come from the project, not from any environment.

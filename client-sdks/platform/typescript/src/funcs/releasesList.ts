@@ -89,8 +89,10 @@ async function $do(
   const path = pathToFunc("/v1/releases")();
 
   const query = encodeFormQuery({
+    "allChannels": payload?.allChannels,
     "author": payload?.author,
     "branch": payload?.branch,
+    "channel": payload?.channel,
     "createdAfter": payload?.createdAfter,
     "createdBefore": payload?.createdBefore,
     "cursor": payload?.cursor,

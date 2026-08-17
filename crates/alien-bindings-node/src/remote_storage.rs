@@ -3,8 +3,8 @@
 
 use crate::error::map_object_store_error;
 use crate::storage::{
-    object_attributes_to_js, object_meta_to_js, object_store_put_options, put_result_to_js,
     ObjectMetaJs, StorageGetResultJs, StorageHeadResultJs, StoragePutOptionsJs, StoragePutResultJs,
+    object_attributes_to_js, object_meta_to_js, object_store_put_options, put_result_to_js,
 };
 use alien_bindings::RemoteStorage;
 use futures::StreamExt;
