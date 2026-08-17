@@ -57,6 +57,9 @@ pub enum PackagesAction {
         /// Replace an existing destination file.
         #[arg(long)]
         force: bool,
+        /// Permit an insecure HTTP artifact URL for local development only.
+        #[arg(long, hide = true)]
+        allow_insecure: bool,
     },
 }
 
@@ -146,6 +149,7 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
             artifact,
             output,
             force,
+            allow_insecure,
         } => {
             let url = package_api_url(&auth.base_url, &format!("/v1/packages/{id}"), &workspace)?;
             let package = get_json(&auth, url, "getting package").await?;
@@ -155,7 +159,7 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
                 .unwrap_or_default();
             let selected = select_artifact(&artifacts, artifact.as_deref())?;
             let destination = output.unwrap_or_else(|| artifact_filename(selected));
-            download_artifact(selected, &destination, force).await?;
+            download_artifact(selected, &destination, force, allow_insecure).await?;
             if args.json {
                 print_json(&serde_json::json!({
                     "packageId": id,
@@ -205,7 +209,12 @@ async fn get_json(
         })
 }
 
-async fn download_artifact(artifact: &Artifact, destination: &Path, force: bool) -> Result<()> {
+async fn download_artifact(
+    artifact: &Artifact,
+    destination: &Path,
+    force: bool,
+    allow_insecure: bool,
+) -> Result<()> {
     if destination.exists() && !force {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
@@ -214,6 +223,8 @@ async fn download_artifact(artifact: &Artifact, destination: &Path, force: bool)
             ),
         }));
     }
+    validate_artifact(artifact, allow_insecure)?;
+    let expected = artifact.checksum.as_deref().expect("validated checksum");
     // Artifact URLs can point at a different host (for example, object
     // storage). Never forward the platform API bearer token to that host.
     let response = reqwest::Client::new()
@@ -240,16 +251,14 @@ async fn download_artifact(artifact: &Artifact, destination: &Path, force: bool)
             message: format!("reading artifact '{}'", artifact.path),
             url: Some(artifact.url.clone()),
         })?;
-    if let Some(expected) = &artifact.checksum {
-        let actual = hex::encode(Sha256::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "Checksum mismatch for '{}': expected {}, received {}.",
-                    artifact.path, expected, actual
-                ),
-            }));
-        }
+    let actual = hex::encode(Sha256::digest(&bytes));
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Checksum mismatch for '{}': expected {}, received {}.",
+                artifact.path, expected, actual
+            ),
+        }));
     }
     if let Some(parent) = destination
         .parent()
@@ -272,6 +281,36 @@ async fn download_artifact(artifact: &Artifact, destination: &Path, force: bool)
             file_path: destination.display().to_string(),
             reason: "Failed to write downloaded artifact".to_string(),
         })
+}
+
+fn validate_artifact(artifact: &Artifact, allow_insecure: bool) -> Result<()> {
+    let url = reqwest::Url::parse(&artifact.url)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Artifact URL for '{}' is invalid.", artifact.path),
+        })?;
+    if url.scheme() != "https" && !(allow_insecure && url.scheme() == "http") {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Artifact '{}' must use HTTPS; --allow-insecure is for local development only.",
+                artifact.path
+            ),
+        }));
+    }
+    let expected = artifact.checksum.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Artifact '{}' has no SHA-256 checksum.", artifact.path),
+        })
+    })?;
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Artifact '{}' has an invalid SHA-256 checksum.",
+                artifact.path
+            ),
+        }));
+    }
+    Ok(())
 }
 
 fn package_api_url(base_url: &str, path: &str, workspace: &str) -> Result<reqwest::Url> {
@@ -479,5 +518,21 @@ mod tests {
             url.as_str(),
             "https://platform.example/proxy/api/v1/packages/pkg_123?workspace=example-workspace"
         );
+    }
+
+    #[test]
+    fn package_download_requires_https_and_sha256() {
+        let insecure = Artifact {
+            path: "binaries.linux-x64".to_string(),
+            url: "http://packages.example/tool".to_string(),
+            checksum: Some("a".repeat(64)),
+        };
+        let missing_checksum = Artifact {
+            path: "binaries.linux-x64".to_string(),
+            url: "https://packages.example/tool".to_string(),
+            checksum: None,
+        };
+        assert!(validate_artifact(&insecure, false).is_err());
+        assert!(validate_artifact(&missing_checksum, false).is_err());
     }
 }
