@@ -41,9 +41,37 @@ use crate::infra_requirements::azure_utils::{
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
 
-/// Generates a deterministic Azure Container Apps name for a worker.
+/// Azure rejects a Container App name over 32 characters, and a deployment prefix may be 40 on
+/// its own, so `{prefix}-{worker}` overflows for names that are otherwise ordinary.
+const CONTAINER_APP_NAME_MAX_LEN: usize = 32;
+
+/// Generates a deterministic Azure Container Apps name for a worker, within Azure's 32-character
+/// limit.
+///
+/// Only a name past the limit is shortened. A Container App's name is its identity and Azure
+/// treats it as immutable, so rewriting one that already fits would orphan the app a running
+/// worker serves from and build a second one beside it. Nothing else derives this name
+/// independently: a worker is `live_only`, so setup never emits a Container App for one and the
+/// runtime is the only side that names it.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
+    let full = format!("{prefix}-{name}");
+    if full.len() <= CONTAINER_APP_NAME_MAX_LEN {
+        return full;
+    }
+
+    let digest = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, full.as_bytes())
+        .simple()
+        .to_string();
+    let digest = &digest[..8];
+    let mut head: String = full
+        .chars()
+        .take(CONTAINER_APP_NAME_MAX_LEN - digest.len() - 1)
+        .collect();
+    // Azure also refuses a trailing separator and a doubled hyphen, either of which a cut leaves.
+    while head.ends_with('-') {
+        head.pop();
+    }
+    format!("{head}-{digest}")
 }
 
 /// Azure rejects a Dapr component name over 60 characters, and a deployment prefix may be 40 on
@@ -5156,8 +5184,8 @@ mod tests {
 
     use super::{
         azure_storage_event_types, current_unix_timestamp_secs, dapr_component_name,
-        dns_name_from_url, get_azure_storage_event_subscription_name, AZURE_RBAC_WAIT_POLL_SECS,
-        DAPR_COMPONENT_NAME_MAX_LEN,
+        dns_name_from_url, get_azure_container_app_name, get_azure_storage_event_subscription_name,
+        AZURE_RBAC_WAIT_POLL_SECS, CONTAINER_APP_NAME_MAX_LEN, DAPR_COMPONENT_NAME_MAX_LEN,
     };
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
@@ -5187,6 +5215,76 @@ mod tests {
             ]
         );
         assert!(azure_storage_event_types(&["metadataUpdated".to_string()], "worker").is_err());
+    }
+
+    /// The Container App name Azure refused in a real deployment.
+    ///
+    /// `e2e-03-azure-terraform-sa-e5500912c9` + `test-alien-ts-function` is 58 characters against
+    /// a documented cap of 32, and the create comes back 400 `Invalid ContainerApp name`, failing
+    /// the worker non-retryably. A prefix may be 40 characters on its own, so under a realistic
+    /// prefix no worker name fits and the cap is reached without contrivance.
+    #[test]
+    fn a_long_container_app_name_is_shortened_to_what_azure_accepts() {
+        let refused = get_azure_container_app_name(
+            "e2e-03-azure-terraform-sa-e5500912c9",
+            "test-alien-ts-function",
+        );
+        assert!(
+            refused.len() <= CONTAINER_APP_NAME_MAX_LEN,
+            "still over Azure's cap at {} chars: {refused}",
+            refused.len()
+        );
+        assert!(
+            refused
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic()),
+            "must start with a letter: {refused}"
+        );
+        assert!(
+            refused
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_ascii_alphanumeric()),
+            "must end alphanumeric: {refused}"
+        );
+        assert!(!refused.contains("--"), "'--' is refused: {refused}");
+        assert!(
+            refused
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            "unexpected character: {refused}"
+        );
+
+        // Stable, or each reconcile would name a different app.
+        assert_eq!(
+            refused,
+            get_azure_container_app_name(
+                "e2e-03-azure-terraform-sa-e5500912c9",
+                "test-alien-ts-function"
+            )
+        );
+    }
+
+    /// A name already inside the cap keeps its exact spelling: Azure treats the name as the app's
+    /// identity, so rewriting a working one orphans it and builds a second app beside it.
+    #[test]
+    fn a_short_container_app_name_is_left_alone() {
+        assert_eq!(get_azure_container_app_name("acme", "jobs"), "acme-jobs");
+        let exactly_at_cap = get_azure_container_app_name("acme-prod-0123456789", "jobs-worker");
+        assert_eq!(exactly_at_cap.len(), CONTAINER_APP_NAME_MAX_LEN);
+        assert_eq!(exactly_at_cap, "acme-prod-0123456789-jobs-worker");
+    }
+
+    /// Two workers sharing a prefix must not collapse onto one app once their heads are cut.
+    #[test]
+    fn container_app_names_stay_distinct_when_their_heads_collide() {
+        let prefix = "acme-production-us-east-1-long";
+        let first = get_azure_container_app_name(prefix, "order-processor");
+        let second = get_azure_container_app_name(prefix, "order-processor-v2");
+        assert_ne!(first, second, "collided: {first}");
+        assert!(first.len() <= CONTAINER_APP_NAME_MAX_LEN);
+        assert!(second.len() <= CONTAINER_APP_NAME_MAX_LEN);
     }
 
     /// The name Azure refused in a real deployment, and the rules it stated when refusing.
