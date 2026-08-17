@@ -35,13 +35,18 @@
           // whatever the sandbox writes.
           "actions": ["Microsoft.App/sandboxGroups/read"]
         },
-        // Prefer the resource binding. The stack binding is the resource group, which is wider —
-        // it enumerates sibling sandbox groups — and it exists for the same reason `provision`
-        // is resource-group-scoped: the target does not exist yet. `Microsoft.App/sandboxGroups`
-        // has no ARM template representation, so setup cannot create the group and cannot scope
-        // an assignment to one, and Azure expresses no scope between a group and its resource
-        // group. The widening is a read of provisioning state over the deployment's own resource
-        // group, and reaches no session contents.
+        // The stack binding is the resource group, wider than the one group this heartbeat reports
+        // on: it can read the state of every sandbox group there, including one the deployment
+        // did not create — a deployment can be pointed at a resource group its owner already uses,
+        // as `provision` notes. It exists for the same reason `provision` is resource-group-scoped:
+        // the target does not exist yet. `Microsoft.App/sandboxGroups` has no ARM template
+        // representation, so setup cannot create the group and cannot scope an assignment to one,
+        // and Azure expresses no scope between a group and its resource group. The resource
+        // binding is the narrower grant, but on Azure it is not deliverable for a sandbox today:
+        // the setup path compiles resource-scoped management only for `worker/dispatch-command`,
+        // and the runtime path only for a Kubernetes cluster, so a per-sandbox entry reaches
+        // nobody. It stays declared for the day one of those paths learns to deliver it. What the
+        // stack grant reaches is provisioning state, and no session contents.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"

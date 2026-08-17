@@ -50,9 +50,13 @@ const CONTAINER_APP_NAME_MAX_LEN: usize = 32;
 ///
 /// Only a name past the limit is shortened. A Container App's name is its identity and Azure
 /// treats it as immutable, so rewriting one that already fits would orphan the app a running
-/// worker serves from and build a second one beside it. Nothing else derives this name
-/// independently: a worker is `live_only`, so setup never emits a Container App for one and the
-/// runtime is the only side that names it.
+/// worker serves from and build a second one beside it. On the setup path a worker is
+/// `live_only`, so no emitter names its Container App there; the runtime is the side that does.
+///
+/// A shortened name keeps the worker id and cuts the prefix, because the prefix is shared by every
+/// worker in a deployment: cut from the front and every one of them would read as the same
+/// prefix stub plus a digest. The digest is of the full name, so two workers that share a
+/// truncated prefix still get distinct apps.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     let full = format!("{prefix}-{name}");
     if full.len() <= CONTAINER_APP_NAME_MAX_LEN {
@@ -63,19 +67,31 @@ fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
         .simple()
         .to_string();
     let digest = &digest[..8];
-    let mut head: String = full
-        .chars()
-        .take(CONTAINER_APP_NAME_MAX_LEN - digest.len() - 1)
-        .collect();
-    // Azure also refuses a trailing separator and a doubled hyphen, either of which a cut leaves.
+    // What is left for the readable part once the digest and its two separators are paid for.
+    let budget = CONTAINER_APP_NAME_MAX_LEN - digest.len() - 2;
+    // Give the worker id as much of the budget as it needs (up to all of it), the prefix the rest.
+    let name_len = name.len().min(budget);
+    let prefix_len = budget - name_len;
+    let mut head = format!(
+        "{}-{}",
+        prefix.chars().take(prefix_len).collect::<String>(),
+        name.chars().take(name_len).collect::<String>()
+    );
+    // Azure refuses a leading or doubled hyphen and a trailing separator, any of which a cut leaves.
+    while head.starts_with('-') || head.contains("--") {
+        head = head.trim_start_matches('-').replace("--", "-");
+    }
     while head.ends_with('-') {
         head.pop();
     }
     format!("{head}-{digest}")
 }
 
-/// Azure rejects a Dapr component name over 60 characters, and a deployment prefix may be 40 on
-/// its own, so `servicebus-{prefix}-{worker}-commands` overflows for ordinary names.
+/// Azure refuses a Dapr component name over 60 characters. The number is the API's own: a create
+/// past it returns 400 with "The length must not be more than 60 characters", which is how it was
+/// found — the ARM schema does not publish it. With the app name capped at 32 the `commands`
+/// component tops out at 52, so only a queue-trigger component (`servicebus-{app}-{queue}`) can
+/// still reach the cap; that path is the one this number has to be exact for.
 const DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
 
 /// Builds `servicebus-{container_app_name}-{suffix}`, shortened only when Azure would refuse it.
@@ -3645,7 +3661,14 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = dapr_component_name(container_app_name, "commands");
+        // The recorded identity wins over a fresh derivation: the component is what the running
+        // worker receives commands through, and re-deriving would rename it — and so replace it —
+        // if the derivation ever changes under a live deployment. Derive only when nothing was
+        // recorded, which is a worker that predates recording.
+        let component_name = self
+            .commands_dapr_component
+            .clone()
+            .unwrap_or_else(|| dapr_component_name(container_app_name, "commands"));
 
         let mut metadata = vec![
             DaprMetadata {
@@ -5217,53 +5240,58 @@ mod tests {
         assert!(azure_storage_event_types(&["metadataUpdated".to_string()], "worker").is_err());
     }
 
-    /// The Container App name Azure refused in a real deployment.
+    /// A prefix long enough to overflow the cap on its own, with an ordinary worker name.
     ///
-    /// `e2e-03-azure-terraform-sa-e5500912c9` + `test-alien-ts-function` is 58 characters against
-    /// a documented cap of 32, and the create comes back 400 `Invalid ContainerApp name`, failing
-    /// the worker non-retryably. A prefix may be 40 characters on its own, so under a realistic
-    /// prefix no worker name fits and the cap is reached without contrivance.
+    /// A 36-character prefix plus a 22-character worker name is 58 characters against a documented
+    /// cap of 32, and Azure answers with 400 `Invalid ContainerApp name`, failing the worker
+    /// non-retryably. A prefix may be 40 characters on its own, so under a realistic prefix no
+    /// worker name fits and the cap is reached without contrivance.
     #[test]
     fn a_long_container_app_name_is_shortened_to_what_azure_accepts() {
-        let refused = get_azure_container_app_name(
-            "e2e-03-azure-terraform-sa-e5500912c9",
-            "test-alien-ts-function",
+        let prefix = "acme-production-eu-west-deploy-0123";
+        let worker = "order-processing-worker";
+        let shortened = get_azure_container_app_name(prefix, worker);
+        assert!(
+            shortened.len() <= CONTAINER_APP_NAME_MAX_LEN,
+            "still over Azure's cap at {} chars: {shortened}",
+            shortened.len()
         );
         assert!(
-            refused.len() <= CONTAINER_APP_NAME_MAX_LEN,
-            "still over Azure's cap at {} chars: {refused}",
-            refused.len()
-        );
-        assert!(
-            refused
+            shortened
                 .chars()
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic()),
-            "must start with a letter: {refused}"
+            "must start with a letter: {shortened}"
         );
         assert!(
-            refused
+            shortened
                 .chars()
                 .last()
                 .is_some_and(|c| c.is_ascii_alphanumeric()),
-            "must end alphanumeric: {refused}"
+            "must end alphanumeric: {shortened}"
         );
-        assert!(!refused.contains("--"), "'--' is refused: {refused}");
+        assert!(!shortened.contains("--"), "'--' is refused: {shortened}");
         assert!(
-            refused
+            shortened
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
-            "unexpected character: {refused}"
+            "unexpected character: {shortened}"
+        );
+        // The prefix is shared by every worker in the deployment, so it is the part that gives
+        // way; the readable half of a shortened name has to be the worker, or two workers under
+        // one long prefix would read as the same stub plus a digest. The worker itself may lose
+        // a trailing character to fit, but it must lead, and none of the prefix may.
+        assert!(
+            shortened.starts_with("order-processing-work"),
+            "the worker id must lead a shortened name: {shortened}"
+        );
+        assert!(
+            !shortened.starts_with("acme"),
+            "the shared prefix must not be what survives: {shortened}"
         );
 
         // Stable, or each reconcile would name a different app.
-        assert_eq!(
-            refused,
-            get_azure_container_app_name(
-                "e2e-03-azure-terraform-sa-e5500912c9",
-                "test-alien-ts-function"
-            )
-        );
+        assert_eq!(shortened, get_azure_container_app_name(prefix, worker));
     }
 
     /// A name already inside the cap keeps its exact spelling: Azure treats the name as the app's
@@ -5287,18 +5315,16 @@ mod tests {
         assert!(second.len() <= CONTAINER_APP_NAME_MAX_LEN);
     }
 
-    /// The name Azure refused in a real deployment, and the rules it stated when refusing.
+    /// The one shape that can still overflow now that the app name is capped at 32.
     ///
-    /// `servicebus-e2e-03-azure-terraform-sa-4fbbd75055-test-alien-ts-function-commands` is 78
-    /// characters, and Azure answers a Dapr component create over 60 with a 400 that fails the
-    /// worker outright. A 40-character prefix is permitted on its own, so this is reachable with
-    /// ordinary names rather than contrived ones.
+    /// `servicebus-` plus a 32-character app name plus `-commands` is 52, inside the cap; the
+    /// queue-trigger component `servicebus-{app}-{queue}` is the path that can pass 60, and a
+    /// 22-character queue id such as `order-processing-queue` is ordinary. Azure answers a create
+    /// over 60 with a 400 stating the rules asserted here.
     #[test]
     fn a_long_dapr_component_name_is_shortened_to_what_azure_accepts() {
-        let refused = dapr_component_name(
-            "e2e-03-azure-terraform-sa-4fbbd75055-test-alien-ts-function",
-            "commands",
-        );
+        let refused =
+            dapr_component_name("acme-prod-0123456789-jobs-worker", "order-processing-queue");
         assert!(
             refused.len() <= DAPR_COMPONENT_NAME_MAX_LEN,
             "still over Azure's cap at {} chars: {refused}",
@@ -5333,10 +5359,7 @@ mod tests {
         // Stable across calls, or every reconcile would replace the component.
         assert_eq!(
             refused,
-            dapr_component_name(
-                "e2e-03-azure-terraform-sa-4fbbd75055-test-alien-ts-function",
-                "commands"
-            )
+            dapr_component_name("acme-prod-0123456789-jobs-worker", "order-processing-queue")
         );
     }
 
@@ -5353,9 +5376,10 @@ mod tests {
     /// Two workers whose truncated heads agree still need separate components.
     #[test]
     fn dapr_component_names_stay_distinct_when_their_heads_collide() {
-        let head = "e2e-03-azure-terraform-sandbox-worker-with-a-very-long";
-        let first = dapr_component_name(&format!("{head}-alpha"), "commands");
-        let second = dapr_component_name(&format!("{head}-beta"), "commands");
+        // Two queue triggers on one worker whose queue ids share a long head.
+        let app = "acme-prod-0123456789-jobs-worker";
+        let first = dapr_component_name(app, "order-processing-queue-alpha");
+        let second = dapr_component_name(app, "order-processing-queue-beta");
         assert_ne!(first, second, "collided: {first}");
         assert!(first.len() <= DAPR_COMPONENT_NAME_MAX_LEN);
         assert!(second.len() <= DAPR_COMPONENT_NAME_MAX_LEN);

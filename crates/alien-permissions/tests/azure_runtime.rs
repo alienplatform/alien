@@ -397,13 +397,24 @@ fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
         scope.ends_with("/resourceGroups/rg-observability-prod"),
         "the stack scope must stop at the resource group: {scope}"
     );
-    for role in &stack_plan.custom_roles {
-        assert!(
-            role.role_definition.data_actions.is_empty(),
-            "a resource-group-wide grant must not carry data actions: {:?}",
-            role.role_definition.data_actions
-        );
-    }
+    // Pinned by equality, not by absence: "no data actions" would still pass if a control-plane
+    // write crept in beside the read, and nothing else in the suite guards this set's actions.
+    assert_eq!(
+        stack_plan.custom_roles.len(),
+        1,
+        "one role carries the read"
+    );
+    let role = &stack_plan.custom_roles[0].role_definition;
+    assert_eq!(
+        role.actions,
+        vec!["Microsoft.App/sandboxGroups/read".to_string()],
+        "the resource-group-wide heartbeat is a read of the group and nothing else"
+    );
+    assert!(
+        role.data_actions.is_empty(),
+        "a resource-group-wide grant must not carry data actions: {:?}",
+        role.data_actions
+    );
 
     let resource_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
@@ -457,14 +468,32 @@ fn sandbox_management_stack_scope_stops_at_the_resource_group() {
         scope.ends_with("/resourceGroups/rg-observability-prod"),
         "the stack scope must stop at the resource group: {scope}"
     );
-    for role in &stack_plan.custom_roles {
-        for action in &role.role_definition.data_actions {
-            assert!(
-                !action.contains("/exec/") && !action.contains("/files/"),
-                "session contents belong to sandbox/execute, not management: {action}"
-            );
-        }
-    }
+    // Pinned by equality, not by a denylist: `executeShellCommand/action` and
+    // `downloadContentPackage/action` both reach inside a session and neither contains the
+    // substrings a denylist would look for. Any action added here has to be added deliberately.
+    assert_eq!(
+        stack_plan.custom_roles.len(),
+        1,
+        "one role carries the lifecycle grant"
+    );
+    let role = &stack_plan.custom_roles[0].role_definition;
+    let mut data_actions = role.data_actions.clone();
+    data_actions.sort();
+    assert_eq!(
+        data_actions,
+        vec![
+            "Microsoft.App/sandboxGroups/sandboxes/count/read".to_string(),
+            "Microsoft.App/sandboxGroups/sandboxes/delete".to_string(),
+            "Microsoft.App/sandboxGroups/sandboxes/read".to_string(),
+            "Microsoft.App/sandboxGroups/sandboxes/write".to_string(),
+        ],
+        "resource-group-wide management is session lifecycle only; contents belong to sandbox/execute"
+    );
+    assert!(
+        role.actions.is_empty(),
+        "management carries no control-plane actions at stack scope: {:?}",
+        role.actions
+    );
 
     let resource_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)

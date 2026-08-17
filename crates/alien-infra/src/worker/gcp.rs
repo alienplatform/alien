@@ -41,10 +41,12 @@ use sha2::{Digest, Sha256};
 /// frontend keeps returning 404 or refusing connections until its URL map has propagated to
 /// the edge — routinely a few minutes for a fresh forwarding rule. The shared budget of ten
 /// attempts at five seconds gives that fifty seconds, which a first deploy misses as often as
-/// it makes; sixty attempts is five minutes, past the propagation Google documents. GCP-local
-/// on purpose: AWS and Azure front their workers differently and their budget is not the
-/// thing that fails here.
-const READINESS_PROBE_MAX_ATTEMPTS: u32 = 60;
+/// it makes. Sixty attempts is five minutes when the probe fails fast, which a 404 or a refused
+/// connection does; a probe that hangs to its 30-second request timeout stretches the ceiling to
+/// about thirty-five minutes in Provisioning, so this is a bound on attempts, not wall clock.
+/// GCP-local on purpose, and named so: AWS and Azure front their workers differently and their
+/// shared budget is not the thing that fails here.
+const GCP_READINESS_PROBE_MAX_ATTEMPTS: u32 = 60;
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
@@ -2030,7 +2032,7 @@ impl GcpWorkerController {
                             "readiness probe attempt failed: {error}"
                         );
                         return Ok(HandlerAction::Stay {
-                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
+                            max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -3348,7 +3350,7 @@ impl GcpWorkerController {
                             "readiness probe attempt failed: {error}"
                         );
                         return Ok(HandlerAction::Stay {
-                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
+                            max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }

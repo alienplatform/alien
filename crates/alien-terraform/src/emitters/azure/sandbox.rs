@@ -8,7 +8,7 @@
 
 use crate::{
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label},
+    emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
 use alien_core::{import::EmitContext, Result, Sandbox};
@@ -21,9 +21,12 @@ pub struct AzureSandboxEmitter;
 /// The group name the runtime controller creates and the data plane addresses.
 ///
 /// Derived rather than emitted as a resource: both sides compute it from the same prefix and id,
-/// so there is nothing to look up and nothing to keep in step.
+/// so there is nothing to look up and nothing to keep in step. The prefix must be the resolved
+/// `local.resource_prefix` — the deployer's `var.resource_prefix` defaults to empty and is
+/// replaced by a generated one, so naming from the variable registers a group of `-<id>` while
+/// the management grant is scoped to the real one.
 fn sandbox_group(ctx: &EmitContext<'_>) -> Expression {
-    expr::template(format!("${{var.resource_prefix}}-{}", ctx.resource_id))
+    resource_prefix_template(&ctx.resource_id)
 }
 
 impl TfEmitter for AzureSandboxEmitter {
@@ -39,10 +42,7 @@ impl TfEmitter for AzureSandboxEmitter {
         Ok(expr::object([
             ("sandboxGroup", sandbox_group(ctx)),
             ("region", expr::raw("var.azure_location")),
-            (
-                "resourceGroup",
-                expr::raw("var.azure_resource_group_name"),
-            ),
+            ("resourceGroup", expr::raw("var.azure_resource_group_name")),
         ]))
     }
 
@@ -59,10 +59,7 @@ impl TfEmitter for AzureSandboxEmitter {
                 expr::template("https://management.${var.azure_location}.azuredevcompute.io"),
             ),
             ("region", expr::raw("var.azure_location")),
-            (
-                "resourceGroup",
-                expr::raw("var.azure_resource_group_name"),
-            ),
+            ("resourceGroup", expr::raw("var.azure_resource_group_name")),
         ])))
     }
 }

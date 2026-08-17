@@ -50,10 +50,12 @@
     "azure": [
       {
         "grant": {
-          // Azure gates its whole data plane behind this one role, so exec and session
-          // lifecycle cannot be separated. The merge lands here rather than in
+          // The predefined role is the one grant Microsoft documents as sufficient for the
+          // sandbox data plane, and it carries session lifecycle and exec together — so this
+          // set cannot hand out exec without lifecycle. The merge lands here rather than in
           // sandbox/management, because a set that reaches inside a session must not be one of
-          // the implicit-management sets. Subscription Owner returns 403 against this plane.
+          // the implicit-management sets; management grants only the granular lifecycle
+          // `dataActions` for the same reason. Subscription Owner returns 403 against this plane.
           "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
         },
         // Resource-scoped only. This role reaches inside a session, and the sole stack-level
