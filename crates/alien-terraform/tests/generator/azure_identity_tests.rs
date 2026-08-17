@@ -387,11 +387,10 @@ fn azure_network_byo_vnet_emits_data_lookups() {
 /// The sandbox management grants have to reach the module.
 ///
 /// Both are compiled at stack scope, because an Azure sandbox group is created at runtime and
-/// `Microsoft.App/sandboxGroups` has no ARM representation for setup to scope against. A binding
-/// target the platform does not declare refuses package generation outright, which is how this
-/// last failed — so assert the actions render rather than that generation merely succeeded, since
-/// a grant compiled to a scope no emitter renders leaves the module valid and the manager unable
-/// to read the sandbox it owns.
+/// `Microsoft.App/sandboxGroups` has no ARM representation for setup to scope against. Generation
+/// hard-errors if a platform doesn't declare the binding target, so success alone doesn't prove
+/// the actions rendered — a grant compiled to a scope no emitter renders leaves the module valid
+/// and the manager unable to read the sandbox it owns.
 #[test]
 fn azure_sandbox_management_grants_reach_the_module() {
     let stack = Stack::new("acme-sbx".to_string())

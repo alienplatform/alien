@@ -57,6 +57,9 @@ const CONTAINER_APP_NAME_MAX_LEN: usize = 32;
 /// worker in a deployment: cut from the front and every one of them would read as the same
 /// prefix stub plus a digest. The digest is of the full name, so two workers that share a
 /// truncated prefix still get distinct apps.
+///
+/// Length is measured in bytes and cut in chars, which agree only for ASCII — and both inputs
+/// are: `is_valid_resource_prefix` admits `[a-z0-9-]` and a resource id `[A-Za-z0-9_-]`.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     let full = format!("{prefix}-{name}");
     if full.len() <= CONTAINER_APP_NAME_MAX_LEN {
@@ -114,7 +117,7 @@ fn dapr_component_name(container_app_name: &str, suffix: &str) -> String {
         .chars()
         .take(DAPR_COMPONENT_NAME_MAX_LEN - digest.len() - 1)
         .collect();
-    // Azure also refuses a name ending in a separator or carrying '--', which a cut can leave.
+    // Azure also refuses a name ending in a separator, which a cut can leave.
     while head.ends_with('-') || head.ends_with('.') {
         head.pop();
     }
