@@ -46,6 +46,37 @@ fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 
+/// Azure rejects a Dapr component name over 60 characters, and a deployment prefix may be 40 on
+/// its own, so `servicebus-{prefix}-{worker}-commands` overflows for ordinary names.
+const DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
+
+/// Builds `servicebus-{container_app_name}-{suffix}`, shortened only when Azure would refuse it.
+///
+/// Shortening past the cap and not before it is the whole point: a component's name is its
+/// identity, so renaming one that already fits would delete the component a running worker
+/// receives commands through. Truncation keeps a readable head and ends in a digest of the full
+/// name, so two workers whose heads collide still get separate components.
+fn dapr_component_name(container_app_name: &str, suffix: &str) -> String {
+    let name = format!("servicebus-{container_app_name}-{suffix}");
+    if name.len() <= DAPR_COMPONENT_NAME_MAX_LEN {
+        return name;
+    }
+
+    let digest = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, name.as_bytes())
+        .simple()
+        .to_string();
+    let digest = &digest[..8];
+    let mut head: String = name
+        .chars()
+        .take(DAPR_COMPONENT_NAME_MAX_LEN - digest.len() - 1)
+        .collect();
+    // Azure also refuses a name ending in a separator or carrying '--', which a cut can leave.
+    while head.ends_with('-') || head.ends_with('.') {
+        head.pop();
+    }
+    format!("{head}-{digest}")
+}
+
 fn get_azure_storage_event_subscription_name(worker_id: &str, storage_id: &str) -> String {
     let mut stem: String = format!("alien{worker_id}{storage_id}")
         .chars()
@@ -1746,7 +1777,7 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = format!("servicebus-{}-commands", container_app_name);
+        let component_name = dapr_component_name(container_app_name, "commands");
 
         // Use Dapr input binding (not pubsub) because the manager sends directly
         // to Service Bus via Azure SDK — this is external-system integration, not
@@ -3586,7 +3617,7 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = format!("servicebus-{}-commands", container_app_name);
+        let component_name = dapr_component_name(container_app_name, "commands");
 
         let mut metadata = vec![
             DaprMetadata {
@@ -4321,7 +4352,7 @@ impl AzureWorkerController {
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace);
 
         // Generate component name: servicebus-{containerAppName}-{queueId}
-        let component_name = format!("servicebus-{}-{}", container_app_name, queue_ref.id);
+        let component_name = dapr_component_name(container_app_name, &queue_ref.id);
 
         // Use Dapr input binding — the manager/user code sends directly to Service Bus
         // via Azure SDK, not through Dapr pubsub. Input bindings auto-deliver from the
@@ -5124,8 +5155,9 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        azure_storage_event_types, current_unix_timestamp_secs, dns_name_from_url,
-        get_azure_storage_event_subscription_name, AZURE_RBAC_WAIT_POLL_SECS,
+        azure_storage_event_types, current_unix_timestamp_secs, dapr_component_name,
+        dns_name_from_url, get_azure_storage_event_subscription_name, AZURE_RBAC_WAIT_POLL_SECS,
+        DAPR_COMPONENT_NAME_MAX_LEN,
     };
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
@@ -5155,6 +5187,80 @@ mod tests {
             ]
         );
         assert!(azure_storage_event_types(&["metadataUpdated".to_string()], "worker").is_err());
+    }
+
+    /// The name Azure refused in a real deployment, and the rules it stated when refusing.
+    ///
+    /// `servicebus-e2e-03-azure-terraform-sa-4fbbd75055-test-alien-ts-function-commands` is 78
+    /// characters, and Azure answers a Dapr component create over 60 with a 400 that fails the
+    /// worker outright. A 40-character prefix is permitted on its own, so this is reachable with
+    /// ordinary names rather than contrived ones.
+    #[test]
+    fn a_long_dapr_component_name_is_shortened_to_what_azure_accepts() {
+        let refused = dapr_component_name(
+            "e2e-03-azure-terraform-sa-4fbbd75055-test-alien-ts-function",
+            "commands",
+        );
+        assert!(
+            refused.len() <= DAPR_COMPONENT_NAME_MAX_LEN,
+            "still over Azure's cap at {} chars: {refused}",
+            refused.len()
+        );
+        assert!(
+            refused.starts_with("servicebus-"),
+            "the name should stay recognisable: {refused}"
+        );
+        assert!(
+            refused
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic()),
+            "must start with a letter: {refused}"
+        );
+        assert!(
+            refused
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_ascii_alphanumeric()),
+            "must end alphanumeric: {refused}"
+        );
+        assert!(!refused.contains("--"), "'--' is refused: {refused}");
+        assert!(
+            refused
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.'),
+            "unexpected character: {refused}"
+        );
+
+        // Stable across calls, or every reconcile would replace the component.
+        assert_eq!(
+            refused,
+            dapr_component_name(
+                "e2e-03-azure-terraform-sa-4fbbd75055-test-alien-ts-function",
+                "commands"
+            )
+        );
+    }
+
+    /// A name already inside the cap must survive untouched: renaming a component that works
+    /// deletes the one a running worker receives commands through.
+    #[test]
+    fn a_short_dapr_component_name_is_left_alone() {
+        assert_eq!(
+            dapr_component_name("acme-jobs", "commands"),
+            "servicebus-acme-jobs-commands"
+        );
+    }
+
+    /// Two workers whose truncated heads agree still need separate components.
+    #[test]
+    fn dapr_component_names_stay_distinct_when_their_heads_collide() {
+        let head = "e2e-03-azure-terraform-sandbox-worker-with-a-very-long";
+        let first = dapr_component_name(&format!("{head}-alpha"), "commands");
+        let second = dapr_component_name(&format!("{head}-beta"), "commands");
+        assert_ne!(first, second, "collided: {first}");
+        assert!(first.len() <= DAPR_COMPONENT_NAME_MAX_LEN);
+        assert!(second.len() <= DAPR_COMPONENT_NAME_MAX_LEN);
     }
 
     #[test]
