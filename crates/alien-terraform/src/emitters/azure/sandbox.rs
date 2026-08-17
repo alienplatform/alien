@@ -56,7 +56,7 @@ impl TfEmitter for AzureSandboxEmitter {
             // second thing to keep in step with it.
             (
                 "dataPlaneEndpoint",
-                expr::template("https://${var.azure_location}.sandbox.azure.com"),
+                expr::template("https://management.${var.azure_location}.azuredevcompute.io"),
             ),
             ("region", expr::raw("var.azure_location")),
             (

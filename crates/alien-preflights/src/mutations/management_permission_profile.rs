@@ -5,7 +5,7 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
     KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
+    Platform, ResourceLifecycle, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
 use alien_permissions::get_permission_set;
@@ -148,15 +148,10 @@ fn generate_auto_management_profile(
             }
             ResourceLifecycle::Frozen if policy.requires_management_permissions() => {
                 let permission = format!("{}/management", permission_resource_type);
-                if resource_type == "key" || resource_type == Sandbox::RESOURCE_TYPE.as_ref() {
+                if resource_type == "key" {
                     // Key metadata access must name the exact customer key.
                     // The Key emitter binds this permission after setup knows
                     // the provider resource identifier.
-                    //
-                    // A sandbox names its own group for the same shape of reason: an Azure RBAC
-                    // scope has to name a concrete resource, so the stack-level scope would be the
-                    // whole resource group, and there this grant would let a holder terminate
-                    // sessions in a sibling sandbox group.
                     resource_permission_set_ids
                         .entry(resource_id.clone())
                         .or_default()
@@ -381,13 +376,7 @@ fn add_cloud_heartbeat_permission(
     }
 
     let permission_set_id = format!("{}/heartbeat", permission_resource_type);
-    // Scoped to the concrete resource, like KubernetesCluster: a sandbox's Azure heartbeat set
-    // declares only a resource binding on purpose, because the resource group is the sole
-    // stack-level scope Azure RBAC can express and reading there would enumerate sibling sandbox
-    // groups. AWS declares both, and the narrower one is the one worth having.
-    if resource_type == KubernetesCluster::RESOURCE_TYPE.as_ref()
-        || resource_type == Sandbox::RESOURCE_TYPE.as_ref()
-    {
+    if resource_type == KubernetesCluster::RESOURCE_TYPE.as_ref() {
         resource_permission_set_ids
             .entry(resource_id.to_string())
             .or_default()
