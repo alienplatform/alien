@@ -29,6 +29,19 @@ pub use alien_core::sandbox_process::AGENT_PORT;
 /// Named once: `send` treats it as the one operation a 5xx must not be retried for.
 const RUN_COMMAND: &str = "sandbox.runCommand";
 
+/// How long a request to the agent may take to answer with its headers.
+///
+/// Bounds reaching the agent, not what it then streams: a command's own deadline governs its
+/// output. Wrapped around `send()` alone rather than set as the request's timeout, which reqwest
+/// runs until the whole body has arrived and so would cut off any command outliving it. A caller
+/// cancelling a command waits for this request to settle before it can close the stream, so an
+/// unbounded one would leave that cancel unable to complete.
+#[cfg(not(test))]
+const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Short in tests so a stalled agent is exercised in milliseconds rather than waited out.
+#[cfg(test)]
+const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
+
 /// How a backend turns a session id into an authorized request.
 ///
 /// The only thing AWS and Kubernetes disagree on.
@@ -199,15 +212,23 @@ fn deadline_millis(deadline: Duration) -> u64 {
 /// `run_command` — that request may have already started the command. Nothing retries on this
 /// path today; whoever adds a retry layer has to treat `run_command` as the exception.
 pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<reqwest::Response> {
-    let response =
-        request
-            .send()
-            .await
+    let response = match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, request.send()).await {
+        Ok(sent) => sent
             .into_alien_error()
             .context(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
                 reason: "the request never reached the agent".to_string(),
-            })?;
+            })?,
+        Err(_) => {
+            return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason: format!(
+                    "the agent did not answer within {}s",
+                    AGENT_RESPONSE_TIMEOUT.as_secs()
+                ),
+            }));
+        }
+    };
 
     if response.status().is_success() {
         return Ok(response);
@@ -412,6 +433,89 @@ mod tests {
         frame_stream(response, "test-sandbox")
             .collect::<Vec<_>>()
             .await
+    }
+
+    /// A cancel waits for this request before it can close the stream, so a request that never
+    /// answers would leave the cancel unable to complete. Headers that never come are refused.
+    #[tokio::test]
+    async fn an_agent_that_never_answers_is_refused_within_the_bound() {
+        let handler = || async {
+            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 20).await;
+            "late".into_response()
+        };
+        let router = Router::new().route("/v1/exec", post(handler));
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+
+        let started = std::time::Instant::now();
+        let error = send(
+            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect_err("a stalled agent must be refused, not waited on");
+
+        assert!(
+            started.elapsed() < AGENT_RESPONSE_TIMEOUT * 5,
+            "refused at the bound, not at the agent's leisure: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            error.to_string().contains("did not answer"),
+            "the refusal says the agent stalled: {error}"
+        );
+    }
+
+    /// The bound is on reaching the agent, not on the command: output that arrives slowly, long
+    /// after the headers, is the ordinary shape of a command that runs for a while.
+    #[tokio::test]
+    async fn a_slow_body_after_prompt_headers_is_not_cut_off() {
+        let handler = || async {
+            let frames = async_stream_frames(vec![
+                "{\"t\":\"stdout\",\"seq\":0,\"data\":\"aGk=\"}\n",
+                "{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n",
+            ]);
+            axum::body::Body::from_stream(frames).into_response()
+        };
+        let router = Router::new().route("/v1/exec", post(handler));
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+
+        let response = send(
+            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect("headers arrive at once");
+        let outputs = frame_stream(response, "test-sandbox")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(outputs.len(), 2, "every frame arrived: {outputs:?}");
+        assert_eq!(
+            outputs[1].as_ref().expect("exit"),
+            &CommandOutput::Exit {
+                code: 0,
+                truncated: false
+            }
+        );
+    }
+
+    /// Frames emitted one at a time, each after a pause longer than the response bound, so the
+    /// body as a whole takes several bounds to finish.
+    fn async_stream_frames(
+        chunks: Vec<&'static str>,
+    ) -> impl futures::Stream<Item = std::result::Result<&'static str, std::io::Error>> {
+        futures::stream::iter(chunks).then(|chunk| async move {
+            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 2).await;
+            Ok(chunk)
+        })
     }
 
     #[tokio::test]
