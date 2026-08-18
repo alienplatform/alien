@@ -1,4 +1,4 @@
-import type { Sandbox } from "@alienplatform/sdk"
+import type { Sandbox, SandboxSession } from "@alienplatform/sdk"
 import { sandbox } from "@alienplatform/sdk"
 import { Hono } from "hono"
 import { toExternalOperationError } from "../helpers.js"
@@ -10,18 +10,24 @@ app.post("/sandbox-test/:bindingName", async c => {
   const box = sandbox(bindingName)
   const marker = `alien-sandbox-e2e-${Date.now()}`
 
-  // Bounded, like everything after it: a stalled create is a failed test, not a hung suite.
-  // The id is chosen here so a create that answers late can still be ended by name.
+  // Awaited rather than raced: only the id create returns can end a session — AWS and Azure
+  // allocate their own rather than taking the one asked for — so a bounded wait here would
+  // terminate an id no session answers to while the real one is still being created.
   const sessionId = `e2e-ts-${Date.now()}`
-  const session = await within(box.create({ sessionId }), CREATE_TIMEOUT_MS).catch(async error => {
-    // The create may still complete after this returns; ending the chosen id makes that a
-    // no-op session rather than a leak, and a refusal here is reported over the timeout.
-    const cleanup = await attempt(() => terminateAndConfirm(box, sessionId))
-    if (cleanup) {
-      throw new Error(cleanup)
-    }
-    throw await toExternalOperationError(error, "sandbox-test")
-  })
+  let session: SandboxSession
+  try {
+    session = await box.create({ sessionId })
+  } catch (error: unknown) {
+    // The create has settled, so ending the id asked for is not a race: local, Kubernetes and GCP
+    // take that id, so a session provisioned under a lost response answers to it. AWS and Azure
+    // allocate their own; there the 600s maxLifetimeSeconds in alien.ts is what reclaims it.
+    const leaked = await attempt(() => terminateAndConfirm(box, sessionId))
+    const alienError = await toExternalOperationError(error, "sandbox-test")
+    return c.json(
+      { success: false, error: leaked ?? `${alienError.code}: ${alienError.message}` },
+      500,
+    )
+  }
 
   // Both run before either is reported, and a leaked session is reported first even when the
   // exercise also failed: an exercise failure is a broken test, a surviving session is a billable
@@ -84,9 +90,6 @@ async function exercise(box: Sandbox, sessionId: string, marker: string): Promis
   return null
 }
 
-/** How long a create may take. Longer than a command: on AWS a session waits for the MicroVM
- *  to answer before create returns. */
-const CREATE_TIMEOUT_MS = 120_000
 /** How long the whole exercise — commands and files — may take before terminate runs anyway. */
 const EXERCISE_TIMEOUT_MS = 180_000
 /** How many times a refused terminate is retried before the session is called leaked. */

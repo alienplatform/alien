@@ -50,29 +50,27 @@ pub async fn test_sandbox(
             binding_name: binding_name.clone(),
         })?;
 
-    // Bounded, like everything after it: a stalled create is a failed test, not a hung suite.
-    // The id is chosen here so a create that answers late can still be ended by name below.
+    // Awaited rather than raced: only the id create returns can end a session — AWS and Azure
+    // allocate their own rather than taking the one asked for — so a bounded wait here would
+    // terminate an id no session answers to while the real one is still being created.
     let session_id = format!("e2e-{}", Utc::now().timestamp_millis());
-    let created = tokio::time::timeout(
-        CREATE_TIMEOUT,
-        sandbox.create(CreateSessionRequest {
+    let created = sandbox
+        .create(CreateSessionRequest {
             session_id: Some(session_id.clone()),
             tenant_key: None,
             env: BTreeMap::new(),
-        }),
-    )
-    .await;
+        })
+        .await;
     let session = match created {
-        Ok(created) => created.context(ErrorData::SandboxOperationFailed {
-            operation: "create".to_string(),
-        })?,
-        Err(_) => {
-            // The create may still complete after this returns; ending the chosen id makes that
-            // a no-op session rather than a leak, and a refusal here is reported over the timeout.
+        Ok(session) => session,
+        Err(error) => {
+            // The create has settled, so ending the id asked for is not a race: local, Kubernetes
+            // and GCP take that id, so a session provisioned under a lost response answers to it.
+            // AWS and Azure allocate their own; there the 600s maxLifetimeSeconds reclaims it.
             terminate_and_confirm(sandbox.as_ref(), &session_id).await?;
-            return Err(AlienError::new(ErrorData::TestValidationFailed {
-                reason: format!("create gave no answer in {}s", CREATE_TIMEOUT.as_secs()),
-            }));
+            return Err(error).context(ErrorData::SandboxOperationFailed {
+                operation: "create".to_string(),
+            });
         }
     };
 
@@ -108,9 +106,6 @@ pub async fn test_sandbox(
     }))
 }
 
-/// How long a create may take. Longer than a command: on AWS a session waits for the MicroVM
-/// to answer before create returns.
-const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long the whole exercise — commands and files — may take before terminate runs anyway.
 const EXERCISE_TIMEOUT: Duration = Duration::from_secs(180);
 /// How many times a refused terminate is retried before the session is called leaked.
