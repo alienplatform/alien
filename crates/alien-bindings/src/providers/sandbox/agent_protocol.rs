@@ -206,6 +206,25 @@ fn deadline_millis(deadline: Duration) -> u64 {
     u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// What a request that got no answer before its headers becomes, however that happened.
+///
+/// A dropped connection and a stall are the same fact for retry purposes: nothing says whether the
+/// agent received the request. For a file operation that is safe to repeat. For `run_command`,
+/// the agent may have started the command, and a repeat could run it twice — so the refusal must
+/// not carry the retry signal, and says the outcome is unknown.
+fn unanswered(operation: &str, reason: &str) -> ErrorData {
+    if operation == RUN_COMMAND {
+        return ErrorData::SandboxCommandFailed {
+            failure: "outcomeUnknown".to_string(),
+            reason: format!("{reason}; the command may have started, its outcome is unknown"),
+        };
+    }
+    ErrorData::SandboxUnreachable {
+        operation: operation.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
 /// Sends a request and turns a non-success into a typed error carrying the agent's own reason.
 ///
 /// A transport failure here is marked retryable, which holds for the file operations but not for
@@ -215,18 +234,15 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
     let response = match tokio::time::timeout(AGENT_RESPONSE_TIMEOUT, request.send()).await {
         Ok(sent) => sent
             .into_alien_error()
-            .context(ErrorData::SandboxUnreachable {
-                operation: operation.to_string(),
-                reason: "the request never reached the agent".to_string(),
-            })?,
+            .context(unanswered(operation, "the request never reached the agent"))?,
         Err(_) => {
-            return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                operation: operation.to_string(),
-                reason: format!(
+            return Err(AlienError::new(unanswered(
+                operation,
+                &format!(
                     "the agent did not answer within {}s",
                     AGENT_RESPONSE_TIMEOUT.as_secs()
                 ),
-            }));
+            )));
         }
     };
 
@@ -435,33 +451,125 @@ mod tests {
             .await
     }
 
-    /// A cancel waits for this request before it can close the stream, so a request that never
-    /// answers would leave the cancel unable to complete. Headers that never come are refused.
-    #[tokio::test]
-    async fn an_agent_that_never_answers_is_refused_within_the_bound() {
+    /// An agent that accepts any request and never sends its headers.
+    async fn stalled_agent() -> String {
         let handler = || async {
             tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 20).await;
             "late".into_response()
         };
-        let router = Router::new().route("/v1/exec", post(handler));
+        let router = Router::new().fallback(handler);
         let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
             .await
             .expect("bind");
         let address = listener.local_addr().expect("address");
         tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
 
+        format!("http://{address}")
+    }
+
+    /// A cancel waits for this request before it can close the stream, so a request that never
+    /// answers would leave the cancel unable to complete. Headers that never come are refused.
+    #[tokio::test]
+    async fn an_agent_that_never_answers_is_refused_within_the_bound() {
+        let base = stalled_agent().await;
+
         let started = std::time::Instant::now();
         let error = send(
-            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
+            reqwest::Client::new().post(format!("{base}/v1/exec")),
             RUN_COMMAND,
         )
         .await
         .expect_err("a stalled agent must be refused, not waited on");
 
+        // The agent would answer at 20x the bound; refusing well before that is the property.
+        // The margin is wide because setup shares a runtime with the rest of the suite.
         assert!(
-            started.elapsed() < AGENT_RESPONSE_TIMEOUT * 5,
+            started.elapsed() < AGENT_RESPONSE_TIMEOUT * 10,
             "refused at the bound, not at the agent's leisure: {:?}",
             started.elapsed()
+        );
+        assert!(
+            error.to_string().contains("did not answer"),
+            "the refusal says the agent stalled: {error}"
+        );
+    }
+
+    /// A connection that drops before any headers is the same unknown as a stall: the agent may
+    /// have taken the command before the socket went. It must not read as safe to repeat.
+    #[tokio::test]
+    async fn a_dropped_run_command_connection_is_not_retryable() {
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        // Accept and close at once: the request may have been read, no response ever comes.
+        tokio::spawn(async move {
+            loop {
+                if let Ok((socket, _)) = listener.accept().await {
+                    drop(socket);
+                }
+            }
+        });
+
+        let error = send(
+            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect_err("a dropped connection is a refusal, not a response");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert!(
+            !error.retryable,
+            "a command that may have started must not be retried: {error}"
+        );
+        assert!(
+            error.to_string().contains("may have started"),
+            "the refusal says the outcome is unknown: {error}"
+        );
+    }
+
+    /// The agent may have started the command before its headers stalled, so a retry could run
+    /// it twice: the refusal must not invite one.
+    #[tokio::test]
+    async fn a_stalled_run_command_is_not_retryable() {
+        let base = stalled_agent().await;
+
+        let error = send(
+            reqwest::Client::new().post(format!("{base}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect_err("a stalled agent must be refused, not waited on");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert!(
+            !error.retryable,
+            "a command with an unknown outcome must not be retried: {error}"
+        );
+        assert!(
+            error.to_string().contains("did not answer")
+                && error.to_string().contains("may have started"),
+            "the refusal says the agent stalled and the outcome is unknown: {error}"
+        );
+    }
+
+    /// A file operation is idempotent, so a stalled one is safe to repeat and says so.
+    #[tokio::test]
+    async fn a_stalled_file_operation_stays_retryable() {
+        let base = stalled_agent().await;
+
+        let error = send(
+            reqwest::Client::new().get(format!("{base}/v1/files")),
+            "sandbox.readFile",
+        )
+        .await
+        .expect_err("a stalled agent must be refused, not waited on");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "got: {error}");
+        assert!(
+            error.retryable,
+            "a stalled file read is safe to repeat: {error}"
         );
         assert!(
             error.to_string().contains("did not answer"),
