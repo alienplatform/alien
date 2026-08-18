@@ -1036,9 +1036,13 @@ pub struct RunCommandRequest {
     /// once the session is gone.
     ///
     /// On every backend `deadlineExceeded` is reported only once the command has verifiably
-    /// stopped — the agent waits for the kill, `timeout` returns after it, and the fallback
-    /// waits for the session to be absent. It is never reported on a stop that was merely
-    /// requested: a deadline that leaves untrusted code running is not a deadline.
+    /// stopped — the agent waits for its kill, and where there is no agent the session kills the
+    /// command itself and says so. It is never reported on a stop that was merely requested: a
+    /// deadline that leaves untrusted code running is not a deadline.
+    ///
+    /// What stops is the command and its process group. A descendant that detaches itself into a
+    /// session of its own is beyond any signal sent from inside, on every backend; it is bounded
+    /// by the sandbox session, which ends on terminate or at its own lifetime ceiling.
     pub deadline: Duration,
 }
 

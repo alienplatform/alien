@@ -22,75 +22,167 @@ pub mod kubernetes;
 #[cfg(feature = "local")]
 pub mod local;
 
+/// The longest command deadline these backends accept.
+///
+/// A ceiling rather than a guard: a timer takes a point in time, and a duration near
+/// `Duration::MAX` has no representable one, so accepting it would panic the caller's task.
+/// Nothing legitimate reaches this — a session outlives its commands and no cloud lets one run
+/// a day — so the far end is refused as the invalid request it is, and the arithmetic below
+/// cannot overflow.
+#[cfg(any(feature = "azure", feature = "local"))]
+pub(crate) const MAX_DEADLINE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
 /// How long past a command's deadline a provider without a supervising agent waits for the
 /// in-session `timeout` to report back before it ends the session itself. Generous against the
 /// transport's own latency and short against a caller's patience.
 #[cfg(any(feature = "azure", feature = "local"))]
 pub(crate) const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// What `timeout` exits with when the command ran out of time — GNU coreutils and BusyBox alike,
-/// whatever signal was sent.
-#[cfg(any(feature = "azure", feature = "local"))]
-pub(crate) const TIMEOUT_EXIT_CODE: i32 = 124;
-
-/// Whether the wrapper killed the command, rather than the command exiting 124 of its own accord.
+/// Bounds one command inside a session, and reports its own kill.
 ///
-/// The exit code alone cannot say: 124 is an ordinary status a command may return. The clock
-/// settles it — the wrapper cannot fire before the deadline — so a 124 that arrives early is the
-/// command's own, and is reported as an exit like any other.
+/// Neither the exit status nor the clock can say whether a command was killed at its deadline:
+/// `timeout -s KILL` exits 137 on GNU and BusyBox alike, `-k` exits 124 on one and 143 on the
+/// other, BusyBox reports 0 for a command that traps `TERM`, and what a provider measures is its
+/// own round trip rather than how long the command ran. So the wrapper does the killing itself
+/// and says so — measured on both shells rather than read off a manual page.
+///
+/// The report is a nonce the **session** draws, announced on the first line of stderr and
+/// repeated only if the killer's signal landed. Drawn there rather than passed in because the
+/// command can read its parent's `/proc/<pid>/cmdline` and `environ`: a nonce that travelled in
+/// either could be echoed back, and untrusted code would be able to claim its own deadline. A
+/// shell variable is in neither, and the command cannot read what has already been written to
+/// the stream it inherits.
+///
+/// Nothing but `sh` and `/dev/urandom` is required, which every session image has.
 #[cfg(any(feature = "azure", feature = "local"))]
-pub(crate) fn wrapper_killed(
-    exit_code: Option<i32>,
-    elapsed: std::time::Duration,
-    deadline: std::time::Duration,
-) -> bool {
-    exit_code == Some(TIMEOUT_EXIT_CODE) && elapsed >= deadline
+pub(crate) struct DeadlineReport;
+
+#[cfg(any(feature = "azure", feature = "local"))]
+impl DeadlineReport {
+    /// The shell program that runs a command under this deadline.
+    ///
+    /// The command arrives as `"$@"`, so nothing re-parses its text. It is started in a session
+    /// of its own so the kill reaches its process group rather than one pid: a command that
+    /// spawned children would otherwise leave them running while the caller is told the deadline
+    /// contained it, which is the claim this path exists to make good on. An image that cannot do
+    /// that runs nothing — a deadline that cannot be enforced is refused, not approximated.
+    ///
+    /// The killer repeats the nonce only when a signal was delivered, so a command that finished
+    /// first is never called killed, and it is stopped once the command is reaped so no sleeper
+    /// outlives it.
+    pub(crate) fn bounded_program(deadline: std::time::Duration) -> String {
+        format!(
+            "command -v setsid >/dev/null 2>&1 || exit {unboundable}; \
+             nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') || exit {unboundable}; \
+             printf '%s\\n' \"$nonce\" >&2; \
+             setsid \"$@\" & command_pid=$!; \
+             ( sleep {deadline}; kill -KILL -\"$command_pid\" 2>/dev/null && printf %s \"$nonce\" >&2 ) & killer_pid=$!; \
+             wait \"$command_pid\"; status=$?; \
+             kill \"$killer_pid\" 2>/dev/null; \
+             exit \"$status\"",
+            unboundable = Self::UNBOUNDABLE_EXIT_CODE,
+            deadline = deadline_seconds(deadline)
+        )
+    }
+
+    /// What the wrapper exits with when the session cannot bound a command at all.
+    ///
+    /// Distinct from anything the command could return, because the command never ran: the
+    /// wrapper exits before starting it.
+    const UNBOUNDABLE_EXIT_CODE: i32 = 126;
+
+    /// What became of a command the wrapper was asked to bound.
+    ///
+    /// The announcement is removed either way; a repeat of it after that is the kill, because
+    /// only the session knows the value.
+    pub(crate) fn read(exit_code: Option<i32>, stderr: &str) -> Bounded {
+        let announced = stderr
+            .split_once('\n')
+            .filter(|(nonce, _)| !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let Some((nonce, rest)) = announced else {
+            // No announcement means the wrapper exited before starting anything, so nothing of
+            // the caller's ran and nothing about a deadline can be claimed.
+            return Bounded::NotRun {
+                reason: if exit_code == Some(Self::UNBOUNDABLE_EXIT_CODE) {
+                    "the session image cannot hold a command to a deadline: `setsid` and \
+                     `/dev/urandom` are required"
+                        .to_string()
+                } else {
+                    format!(
+                        "the session could not start a bounded command: {}",
+                        stderr.trim()
+                    )
+                },
+            };
+        };
+
+        match rest.find(nonce) {
+            Some(at) => Bounded::Ran {
+                killed: true,
+                stderr: format!("{}{}", &rest[..at], &rest[at + nonce.len()..]),
+            },
+            None => Bounded::Ran {
+                killed: false,
+                stderr: rest.to_string(),
+            },
+        }
+    }
 }
 
-/// The `timeout` prefix that bounds a command inside the session: `KILL` so a process that traps
-/// `TERM` cannot outlive its deadline. The bound is the deadline itself, to the millisecond —
-/// GNU coreutils and BusyBox both take a fractional duration — so a sub-second deadline is not
-/// rounded up to the next second.
+/// What became of a command the wrapper was asked to bound.
 #[cfg(any(feature = "azure", feature = "local"))]
-pub(crate) fn timeout_prefix(deadline: std::time::Duration) -> [String; 4] {
+pub(crate) enum Bounded {
+    /// The wrapper never started it, so there is nothing to report but why.
+    NotRun { reason: String },
+    /// It ran; `killed` is the session's own report of ending it at the deadline.
+    Ran { killed: bool, stderr: String },
+}
+
+/// The deadline as `sleep` takes it, to the millisecond — both shells accept a fraction, so a
+/// sub-second deadline is not rounded up to the next second.
+#[cfg(any(feature = "azure", feature = "local"))]
+fn deadline_seconds(deadline: std::time::Duration) -> String {
     let millis = deadline.as_millis().max(1);
-    let secs = if millis % 1000 == 0 {
+    if millis % 1000 == 0 {
         (millis / 1000).to_string()
     } else {
         format!("{}.{:03}", millis / 1000, millis % 1000)
-    };
-    [
-        "timeout".to_string(),
-        "-s".to_string(),
-        "KILL".to_string(),
-        secs,
-    ]
+    }
 }
 
-/// The shell probe for `timeout`, run once per provider before the first bounded command.
+/// Refuses a deadline these backends cannot honour, and returns the guard the caller waits on.
 ///
-/// Asked, not inferred from a failed run: a command of the caller's own can exit 127 and print
-/// anything, so classifying its output would risk running it a second time. The probe runs
-/// nothing of the caller's and answers with its exit code alone.
+/// Both ends are refused rather than quietly adjusted, as the agent-supervised backends refuse a
+/// deadline that floors to zero milliseconds. Below a millisecond the in-session bound cannot
+/// express it. At the other end the guard is a point in time, not a length: a duration near
+/// `Duration::MAX` has no representable instant, and asking a timer for one panics the caller's
+/// task instead of failing its request.
 #[cfg(any(feature = "azure", feature = "local"))]
-pub(crate) const TIMEOUT_PROBE: &str = "command -v timeout >/dev/null 2>&1";
-
-/// The finest deadline the in-session bound can express. Below it the request is refused, as
-/// the agent-supervised backends refuse a deadline that floors to zero milliseconds, rather
-/// than quietly rounded up.
-#[cfg(any(feature = "azure", feature = "local"))]
-pub(crate) fn refuse_unrepresentable_deadline(
+pub(crate) fn guard_for(
     deadline: std::time::Duration,
-) -> crate::error::Result<()> {
+) -> crate::error::Result<std::time::Duration> {
+    let refuse = |reason: &str| {
+        alien_error::AlienError::new(crate::error::ErrorData::SandboxCommandFailed {
+            failure: "invalidRequest".to_string(),
+            reason: reason.to_string(),
+        })
+    };
+
     if deadline < std::time::Duration::from_millis(1) {
-        return Err(alien_error::AlienError::new(
-            crate::error::ErrorData::SandboxCommandFailed {
-                failure: "invalidRequest".to_string(),
-                reason: "a command deadline must be at least one millisecond".to_string(),
-            },
+        return Err(refuse(
+            "a command deadline must be at least one millisecond",
         ));
     }
-    Ok(())
+
+    if deadline > MAX_DEADLINE {
+        return Err(refuse(&format!(
+            "a command deadline must be at most {} hours",
+            MAX_DEADLINE.as_secs() / 3600
+        )));
+    }
+
+    Ok(deadline + DEADLINE_GRACE)
 }
 
 #[cfg(all(test, any(feature = "azure", feature = "local")))]
@@ -98,43 +190,102 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_bound_is_the_deadline_to_the_millisecond() {
-        assert_eq!(timeout_prefix(std::time::Duration::from_secs(30))[3], "30");
+    fn the_deadline_reaches_the_shell_to_the_millisecond() {
+        assert_eq!(deadline_seconds(std::time::Duration::from_secs(30)), "30");
         assert_eq!(
-            timeout_prefix(std::time::Duration::from_millis(1500))[3],
+            deadline_seconds(std::time::Duration::from_millis(1500)),
             "1.500"
         );
         assert_eq!(
-            timeout_prefix(std::time::Duration::from_millis(500))[3],
+            deadline_seconds(std::time::Duration::from_millis(500)),
             "0.500"
         );
     }
 
-    /// 124 is an ordinary exit status, so the clock is what tells the wrapper's kill from a
-    /// command that returned it itself.
+    /// A command cannot claim the deadline: the nonce is drawn inside the session, and the
+    /// command can read neither the parent's command line nor its environment for it.
     #[test]
-    fn a_command_exiting_124_early_is_not_a_deadline() {
-        let deadline = std::time::Duration::from_secs(30);
-        assert!(wrapper_killed(
-            Some(TIMEOUT_EXIT_CODE),
-            std::time::Duration::from_secs(30),
-            deadline
+    fn only_the_session_can_report_a_deadline() {
+        // The shell writes its own notice after the signal, so the repeat is not always last.
+        let killed = match DeadlineReport::read(Some(137), "abc123\nboom\nabc123Killed\n") {
+            Bounded::Ran { killed, stderr } => {
+                assert_eq!(stderr, "boom\nKilled\n");
+                killed
+            }
+            Bounded::NotRun { reason } => panic!("the command ran: {reason}"),
+        };
+        assert!(killed);
+
+        // A command echoing something nonce-shaped repeats nothing the session announced.
+        assert!(matches!(
+            DeadlineReport::read(Some(0), "abc123\nboom\ndeadbeef\n"),
+            Bounded::Ran { killed: false, .. }
         ));
-        assert!(!wrapper_killed(
-            Some(TIMEOUT_EXIT_CODE),
-            std::time::Duration::from_secs(2),
-            deadline
-        ));
-        assert!(!wrapper_killed(Some(0), deadline, deadline));
     }
 
-    /// A deadline the bound cannot express is refused, not stretched.
+    /// An image that cannot hold a command to its deadline runs nothing, and says so: reporting
+    /// an ordinary exit there would be a deadline the resource never enforced.
     #[test]
-    fn a_sub_millisecond_deadline_is_refused() {
-        let error = refuse_unrepresentable_deadline(std::time::Duration::from_micros(500))
+    fn a_session_that_cannot_bound_a_command_runs_nothing() {
+        let Bounded::NotRun { reason } = DeadlineReport::read(Some(126), "") else {
+            panic!("an unboundable session must not look like a command that ran");
+        };
+        assert!(reason.contains("setsid"), "{reason}");
+
+        // Any other silence is the session failing to start the wrapper at all.
+        let Bounded::NotRun { reason } = DeadlineReport::read(Some(127), "sh: not found\n") else {
+            panic!("stderr with no announcement is not a command that ran");
+        };
+        assert!(reason.contains("could not start"), "{reason}");
+    }
+
+    /// The command reaches the shell as arguments, the nonce is drawn in the session, the kill
+    /// reaches the whole process group, and the killer only claims a kill it made.
+    #[test]
+    fn the_bounded_program_kills_and_reports_only_what_it_killed() {
+        let program = DeadlineReport::bounded_program(std::time::Duration::from_millis(1500));
+        assert!(program.contains("/dev/urandom"), "{program}");
+        assert!(program.contains("command -v setsid"), "{program}");
+        assert!(
+            program.contains("setsid \"$@\" & command_pid=$!"),
+            "{program}"
+        );
+        assert!(program.contains("sleep 1.500"), "{program}");
+        assert!(
+            program.contains("kill -KILL -\"$command_pid\""),
+            "the kill reaches the command's process group, not one pid: {program}"
+        );
+        assert!(
+            program.contains("2>/dev/null && printf %s \"$nonce\""),
+            "the repeat follows a signal that was delivered: {program}"
+        );
+        assert!(
+            program.contains("kill \"$killer_pid\" 2>/dev/null"),
+            "no sleeper outlives the command: {program}"
+        );
+    }
+
+    /// A deadline neither end can honour is refused, not stretched or waited on.
+    #[tokio::test]
+    async fn a_deadline_outside_what_the_backends_can_honour_is_refused() {
+        let too_fine = guard_for(std::time::Duration::from_micros(500))
             .expect_err("half a millisecond cannot be bounded");
-        assert!(error.to_string().contains("invalidRequest"), "{error}");
-        refuse_unrepresentable_deadline(std::time::Duration::from_millis(1))
-            .expect("one millisecond is the finest bound");
+        assert!(
+            too_fine.to_string().contains("invalidRequest"),
+            "{too_fine}"
+        );
+
+        let too_long = guard_for(std::time::Duration::MAX)
+            .expect_err("a deadline with no representable instant cannot be waited out");
+        assert!(
+            too_long.to_string().contains("invalidRequest"),
+            "{too_long}"
+        );
+
+        assert_eq!(
+            guard_for(std::time::Duration::from_secs(30)).expect("an ordinary deadline"),
+            std::time::Duration::from_secs(30) + DEADLINE_GRACE,
+            "the guard is the deadline plus the grace"
+        );
     }
 }

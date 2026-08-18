@@ -10,9 +10,7 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 
 use crate::error::{ErrorData, Result};
-use crate::providers::sandbox::{
-    refuse_unrepresentable_deadline, timeout_prefix, wrapper_killed, DEADLINE_GRACE, TIMEOUT_PROBE,
-};
+use crate::providers::sandbox::{guard_for, Bounded, DeadlineReport};
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxSession, SandboxSessionState,
@@ -32,9 +30,6 @@ pub struct AzureSandbox {
     /// Session ceilings, in the data plane's own units.
     cpu: String,
     memory: String,
-    /// Whether the session image can run `timeout`, learned once from the first command's
-    /// session: every session is created from the same disk, so one answer holds for all.
-    has_timeout: tokio::sync::OnceCell<bool>,
 }
 
 impl AzureSandbox {
@@ -52,7 +47,6 @@ impl AzureSandbox {
             disk,
             cpu,
             memory,
-            has_timeout: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -144,36 +138,28 @@ impl Sandbox for AzureSandbox {
             }));
         }
 
-        refuse_unrepresentable_deadline(request.deadline)?;
-
         // The deadline bounds the untrusted code, not the caller's patience. Read out of the
         // preview SDK rather than assumed: `executeShellCommand` sends `command` and an optional
         // `workingDirectory` and nothing else, so there is no server-side timeout to ask for. The
-        // deadline is enforced inside the session instead — `timeout` kills the process at it, so
-        // the session survives and the call lands right after, the same shape the agent-supervised
-        // backends give. The client-side guard is the backstop for a session that cannot run
-        // `timeout` at all; there the only lever left is ending the session, and that call
-        // returns once the session is confirmed gone rather than claim containment early.
-        // Which of the two applies is asked once, never inferred from a run: the caller's command
-        // executes exactly once either way.
-        let has_timeout = *self
-            .has_timeout
-            .get_or_try_init(|| async {
-                self.client
-                    .execute_shell_command(&self.sandbox_group, session_id, TIMEOUT_PROBE, None)
-                    .await
-                    .map(|probe| probe.exit_code == Some(0))
-                    .map_err(|error| Self::failed("sandbox.runCommand", error))
-            })
-            .await?;
-        let shell = if has_timeout {
-            bounded_shell(&request.command, request.deadline)
-        } else {
-            request.command.join(" ")
-        };
-        let started = std::time::Instant::now();
+        // deadline is enforced inside the session instead — the wrapper kills the command at it,
+        // so the session survives and the call lands right after, the same shape the
+        // agent-supervised backends give. The client-side guard is the backstop for a data plane
+        // that never answers at all; there the only lever left is ending the session, and that
+        // call returns once the session is confirmed gone rather than claim containment early.
+        let shell = bounded_shell(&request.command, request.deadline);
+
         let result = self.execute_within(session_id, &shell, &request).await?;
-        let elapsed = started.elapsed();
+        // The session's own report, removed from what the caller sees.
+        let (deadline_exceeded, stderr) =
+            match DeadlineReport::read(result.exit_code, &result.stderr) {
+                Bounded::Ran { killed, stderr } => (killed, stderr),
+                Bounded::NotRun { reason } => {
+                    return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                        failure: "commandNotBounded".to_string(),
+                        reason,
+                    }))
+                }
+            };
 
         // The data plane returns a completed result, not a stream, so the frames are
         // reconstructed in order. Streaming is unverified on Azure, and pretending otherwise
@@ -185,14 +171,14 @@ impl Sandbox for AzureSandbox {
                 data: result.stdout.into_bytes(),
             }));
         }
-        if !result.stderr.is_empty() {
+        if !stderr.is_empty() {
             frames.push(Ok(CommandOutput::Stderr {
                 seq: frames.len() as u64,
-                data: result.stderr.into_bytes(),
+                data: stderr.into_bytes(),
             }));
         }
 
-        if wrapper_killed(result.exit_code, elapsed, request.deadline) {
+        if deadline_exceeded {
             // The output is kept and the terminal item says why it ends, as the agent-backed
             // providers do; the session is untouched.
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -292,9 +278,7 @@ impl AzureSandbox {
         request: &RunCommandRequest,
     ) -> Result<alien_azure_clients::azure::sandbox_data_plane::ExecResult> {
         match tokio::time::timeout(
-            // Saturating: a deadline near `Duration::MAX` is a valid request, and overflowing
-            // here would panic the caller's task instead of running its command.
-            request.deadline.saturating_add(DEADLINE_GRACE),
+            guard_for(request.deadline)?,
             self.client.execute_shell_command(
                 &self.sandbox_group,
                 session_id,
@@ -344,11 +328,21 @@ impl AzureSandbox {
 const TERMINATE_POLL_ATTEMPTS: u32 = 15;
 const TERMINATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// The command, bounded inside the session: `timeout` kills it at the deadline, and `sh -c` so a
-/// compound command is bounded as a whole rather than up to its first operator.
+/// The command, bounded inside the session.
+///
+/// The data plane takes one shell string, so the command is passed to `sh` as arguments rather
+/// than pasted into the program text: `"$@"` cannot re-parse what it holds, so an argument
+/// carrying a space or an operator stays one argument.
 fn bounded_shell(command: &[String], deadline: std::time::Duration) -> String {
-    let joined = command.join(" ").replace('\'', "'\\''");
-    format!("{} sh -c '{joined}'", timeout_prefix(deadline).join(" "))
+    let escape = |value: &str| value.replace('\'', "'\\''");
+    let arguments = command
+        .iter()
+        .map(|argument| format!(" '{}'", escape(argument)))
+        .collect::<String>();
+    format!(
+        "sh -c '{}' sh{arguments}",
+        escape(&DeadlineReport::bounded_program(deadline))
+    )
 }
 
 /// Whether an Azure data-plane failure means the session is already gone.
@@ -373,7 +367,7 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::sandbox::TIMEOUT_EXIT_CODE;
+    use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use futures::StreamExt;
 
@@ -554,14 +548,31 @@ mod tests {
                 .lock()
                 .expect("commands lock")
                 .push(command.to_string());
-            // A real data plane takes time; the deadline classification reads the clock, so a
-            // double that answered instantly would never look like a command that ran.
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             let next = self.results.lock().expect("results lock").pop_front();
             match next {
-                Some(result) => Ok(result),
+                // A scripted `DEADLINE_PLACEHOLDER` stands for "the wrapper fired": the double
+                // answers with the marker the provider itself put in the program, which is the
+                // only way a test can produce one — the nonce is made per command.
+                Some(result) => Ok(ExecResult {
+                    stderr: as_session_stderr(&result.stderr),
+                    ..result
+                }),
                 None => std::future::pending().await,
             }
+        }
+    }
+
+    /// Stands in for the wrapper's kill in a scripted result.
+    const DEADLINE_PLACEHOLDER: &str = "<deadline>";
+    /// The nonce a session would draw. Announced on the first line of stderr, and repeated by
+    /// the killer, exactly as the wrapper does.
+    const SESSION_NONCE: &str = "a1b2c3d4";
+
+    /// Wraps a scripted stderr the way a bounded session would return it.
+    fn as_session_stderr(stderr: &str) -> String {
+        match stderr {
+            DEADLINE_PLACEHOLDER => format!("{SESSION_NONCE}\npartial-err{SESSION_NONCE}"),
+            other => format!("{SESSION_NONCE}\n{other}"),
         }
     }
 
@@ -588,35 +599,31 @@ mod tests {
     /// when it fires the output is kept, the stream ends in `deadlineExceeded`, and the session
     /// is not touched — the caller can keep using it, as on the agent-supervised backends.
     ///
-    /// The fake answers instantly, so the deadline is one millisecond: `124` counts as the
-    /// wrapper's kill only once the run has reached the deadline.
+    /// The wrapper reports its own kill, so the fake answers with that report rather than the
+    /// test leaning on timing.
     #[tokio::test]
     async fn a_command_past_its_deadline_is_killed_in_place_and_the_session_survives() {
-        let client = ScriptedExec::new(vec![
-            ScriptedExec::exec_result(0, "", ""),
-            ScriptedExec::exec_result(TIMEOUT_EXIT_CODE, "partial\n", ""),
-        ]);
+        let client = ScriptedExec::new(vec![ScriptedExec::exec_result(
+            137,
+            "partial\n",
+            DEADLINE_PLACEHOLDER,
+        )]);
         let sandbox = provider(client.clone());
 
         let frames: Vec<Result<CommandOutput>> = sandbox
-            .run_command(
-                "s1",
-                RunCommandRequest {
-                    deadline: std::time::Duration::from_millis(1),
-                    ..command(30)
-                },
-            )
+            .run_command("s1", command(30))
             .await
             .expect("the call itself succeeds; the deadline is reported in the stream")
             .collect()
             .await;
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
 
         assert!(
             matches!(&frames[0], Ok(CommandOutput::Stdout { data, .. }) if data == b"partial\n"),
             "output produced before the deadline is kept: {frames:?}"
         );
-        let terminal = frames[1]
+        let terminal = frames
+            .last()
+            .expect("frames")
             .as_ref()
             .expect_err("the stream must end in the deadline error, not an exit frame");
         assert!(
@@ -628,23 +635,20 @@ mod tests {
             "the session survives an in-session kill"
         );
         let sent = client.commands.lock().expect("commands lock").clone();
-        assert_eq!(
-            sent,
-            vec![
-                TIMEOUT_PROBE.to_string(),
-                "timeout -s KILL 0.001 sh -c 'sleep forever'".to_string()
-            ]
+        assert_eq!(sent.len(), 1, "one command: {sent:?}");
+        assert!(
+            sent[0].starts_with("sh -c '") && sent[0].ends_with("' sh 'sleep' 'forever'"),
+            "the command is passed as arguments, not pasted into the program: {}",
+            sent[0]
         );
+        assert!(sent[0].contains("sleep 30"), "{}", sent[0]);
     }
 
-    /// 124 is an ordinary exit status. A command that returns it well inside its deadline
-    /// exited on its own, and saying otherwise would tell the caller its command was killed.
+    /// 124 is an ordinary exit status. Without the wrapper's report the command exited on its
+    /// own, and saying otherwise would tell the caller its command was killed.
     #[tokio::test]
     async fn a_command_exiting_124_of_its_own_accord_is_an_exit_not_a_deadline() {
-        let client = ScriptedExec::new(vec![
-            ScriptedExec::exec_result(0, "", ""),
-            ScriptedExec::exec_result(TIMEOUT_EXIT_CODE, "done\n", ""),
-        ]);
+        let client = ScriptedExec::new(vec![ScriptedExec::exec_result(124, "done\n", "")]);
         let sandbox = provider(client.clone());
 
         let frames: Vec<Result<CommandOutput>> = sandbox
@@ -655,64 +659,9 @@ mod tests {
             .await;
 
         assert!(matches!(
-            &frames[1],
+            frames.last().expect("frames"),
             Ok(CommandOutput::Exit { code: 124, .. })
         ));
-    }
-
-    /// A session image without `timeout` cannot be bounded from inside: the probe says so once,
-    /// and the command runs as given, under the guard — exactly once, never as a retry of a run
-    /// that already happened.
-    #[tokio::test]
-    async fn a_session_without_timeout_runs_the_command_as_given() {
-        let client = ScriptedExec::new(vec![
-            ScriptedExec::exec_result(127, "", ""),
-            ScriptedExec::exec_result(0, "ok\n", ""),
-        ]);
-        let sandbox = provider(client.clone());
-
-        let frames: Vec<Result<CommandOutput>> = sandbox
-            .run_command("s1", command(30))
-            .await
-            .expect("the fallback runs")
-            .collect()
-            .await;
-
-        assert!(
-            matches!(&frames[0], Ok(CommandOutput::Stdout { data, .. }) if data == b"ok\n"),
-            "{frames:?}"
-        );
-        assert!(matches!(
-            &frames[1],
-            Ok(CommandOutput::Exit { code: 0, .. })
-        ));
-        let sent = client.commands.lock().expect("commands lock").clone();
-        assert_eq!(
-            sent,
-            vec![TIMEOUT_PROBE.to_string(), "sleep forever".to_string()]
-        );
-    }
-
-    /// The probe's answer is kept: a second command asks nothing again.
-    #[tokio::test]
-    async fn the_probe_runs_once_per_provider() {
-        let client = ScriptedExec::new(vec![
-            ScriptedExec::exec_result(0, "", ""),
-            ScriptedExec::exec_result(0, "one\n", ""),
-            ScriptedExec::exec_result(0, "two\n", ""),
-        ]);
-        let sandbox = provider(client.clone());
-        for _ in 0..2 {
-            let _frames: Vec<Result<CommandOutput>> = sandbox
-                .run_command("s1", command(30))
-                .await
-                .expect("runs")
-                .collect()
-                .await;
-        }
-        let sent = client.commands.lock().expect("commands lock").clone();
-        assert_eq!(sent.len(), 3, "one probe, two commands: {sent:?}");
-        assert_eq!(sent[0], TIMEOUT_PROBE);
     }
 
     /// When the session cannot end the command — exec never returns — the guard ends the
@@ -721,7 +670,7 @@ mod tests {
     /// the confirmation polls arrive instantly.
     #[tokio::test(start_paused = true)]
     async fn a_command_the_session_cannot_end_takes_the_session_with_it() {
-        let client = ScriptedExec::new(vec![ScriptedExec::exec_result(0, "", "")]);
+        let client = ScriptedExec::new(Vec::new());
         let sandbox = provider(client.clone());
 
         let error = sandbox
@@ -740,9 +689,10 @@ mod tests {
         );
     }
 
-    /// The wrapper bounds a compound command as a whole, to the millisecond, and survives quoting.
+    /// Every argument survives quoting as itself: an operator or a space inside one is data,
+    /// because the shell receives it as an argument rather than as program text.
     #[test]
-    fn the_bounded_shell_wraps_the_whole_command() {
+    fn the_bounded_shell_passes_arguments_untouched() {
         let wrapped = bounded_shell(
             &[
                 "echo".to_string(),
@@ -752,9 +702,10 @@ mod tests {
             ],
             std::time::Duration::from_millis(1500),
         );
-        assert_eq!(
-            wrapped,
-            "timeout -s KILL 1.500 sh -c 'echo it'\\''s && sleep 5'"
+        assert!(wrapped.contains("sleep 1.500"), "{wrapped}");
+        assert!(
+            wrapped.ends_with("' sh 'echo' 'it'\\''s' '&&' 'sleep 5'"),
+            "{wrapped}"
         );
     }
 }
