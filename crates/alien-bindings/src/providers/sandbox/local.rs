@@ -197,7 +197,9 @@ impl LocalSandbox {
         request: &RunCommandRequest,
     ) -> Result<ExecResponse> {
         match tokio::time::timeout(
-            request.deadline + DEADLINE_GRACE,
+            // Saturating: a deadline near `Duration::MAX` is a valid request, and overflowing
+            // here would panic the caller's task instead of running its command.
+            request.deadline.saturating_add(DEADLINE_GRACE),
             self.send(
                 self.client
                     .post(self.url(&format!("/v1/sessions/{session_id}/exec")))

@@ -291,7 +291,9 @@ impl AzureSandbox {
         request: &RunCommandRequest,
     ) -> Result<alien_azure_clients::azure::sandbox_data_plane::ExecResult> {
         match tokio::time::timeout(
-            request.deadline + DEADLINE_GRACE,
+            // Saturating: a deadline near `Duration::MAX` is a valid request, and overflowing
+            // here would panic the caller's task instead of running its command.
+            request.deadline.saturating_add(DEADLINE_GRACE),
             self.client.execute_shell_command(
                 &self.sandbox_group,
                 session_id,
