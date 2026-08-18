@@ -84,33 +84,51 @@ pub async fn packages_task(args: PackagesArgs, ctx: ExecutionMode) -> Result<()>
             status,
             search,
         } => {
-            let mut url = package_api_url(&auth.base_url, "/v1/packages", &workspace)?;
-            {
-                let mut query = url.query_pairs_mut();
-                query.append_pair("project", &project);
-                if let Some(package_type) = package_type {
-                    query.append_pair("type", &package_type);
+            let mut items = Vec::new();
+            let mut cursor = None;
+            let mut seen_cursors = std::collections::HashSet::new();
+            loop {
+                let mut url = package_api_url(&auth.base_url, "/v1/packages", &workspace)?;
+                {
+                    let mut query = url.query_pairs_mut();
+                    query.append_pair("project", &project);
+                    query.append_pair("limit", "100");
+                    if let Some(package_type) = package_type.as_deref() {
+                        query.append_pair("type", package_type);
+                    }
+                    if let Some(status) = status.as_deref() {
+                        query.append_pair("status", status);
+                    }
+                    if let Some(search) = search.as_deref() {
+                        query.append_pair("search", search);
+                    }
+                    if let Some(cursor) = cursor.as_deref() {
+                        query.append_pair("cursor", cursor);
+                    }
                 }
-                if let Some(status) = status {
-                    query.append_pair("status", &status);
-                }
-                if let Some(search) = search {
-                    query.append_pair("search", &search);
+                let body = get_json(&auth, url, "listing packages").await?;
+                cursor = append_package_page(&body, &mut items)?;
+                match cursor.as_ref() {
+                    Some(cursor) if seen_cursors.insert(cursor.clone()) => {}
+                    Some(_) => {
+                        return Err(AlienError::new(ErrorData::ConfigurationError {
+                            message: "Package list response repeated a pagination cursor."
+                                .to_string(),
+                        }));
+                    }
+                    None => break,
                 }
             }
-            let body = get_json(&auth, url, "listing packages").await?;
             if args.json {
-                print_json(&body)?;
+                print_json(&serde_json::json!({
+                    "items": items,
+                    "nextCursor": null,
+                }))?;
             } else {
-                let items = body
-                    .get("items")
-                    .and_then(Value::as_array)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
                 if items.is_empty() {
                     println!("No packages found.");
                 } else {
-                    for package in items {
+                    for package in &items {
                         println!(
                             "{}  {}  {}  {}",
                             string_field(package, "id"),
@@ -227,7 +245,14 @@ async fn download_artifact(
     let expected = artifact.checksum.as_deref().expect("validated checksum");
     // Artifact URLs can point at a different host (for example, object
     // storage). Never forward the platform API bearer token to that host.
-    let response = reqwest::Client::new()
+    let client = reqwest::Client::builder()
+        .https_only(!allow_insecure)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to configure the artifact download client.".to_string(),
+        })?;
+    let response = client
         .get(&artifact.url)
         .send()
         .await
@@ -325,6 +350,22 @@ fn package_api_url(base_url: &str, path: &str, workspace: &str) -> Result<reqwes
     })?;
     url.query_pairs_mut().append_pair("workspace", workspace);
     Ok(url)
+}
+
+fn append_package_page(body: &Value, items: &mut Vec<Value>) -> Result<Option<String>> {
+    let page = body.get("items").and_then(Value::as_array).ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Package list response is missing an items array.".to_string(),
+        })
+    })?;
+    items.extend(page.iter().cloned());
+    match body.get("nextCursor") {
+        Some(Value::String(cursor)) => Ok(Some(cursor.clone())),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Package list response contains an invalid nextCursor.".to_string(),
+        })),
+    }
 }
 
 fn collect_artifacts(outputs: &Value) -> Vec<Artifact> {
@@ -517,6 +558,49 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://platform.example/proxy/api/v1/packages/pkg_123?workspace=example-workspace"
+        );
+    }
+
+    #[test]
+    fn package_pages_are_accumulated_until_the_cursor_is_absent() {
+        let mut items = Vec::new();
+        let cursor = append_package_page(
+            &serde_json::json!({
+                "items": [{ "id": "pkg_1" }],
+                "nextCursor": "cursor_2"
+            }),
+            &mut items,
+        )
+        .unwrap();
+        assert_eq!(cursor.as_deref(), Some("cursor_2"));
+
+        let cursor = append_package_page(
+            &serde_json::json!({
+                "items": [{ "id": "pkg_2" }],
+                "nextCursor": null
+            }),
+            &mut items,
+        )
+        .unwrap();
+        assert_eq!(cursor, None);
+        assert_eq!(
+            items,
+            vec![
+                serde_json::json!({ "id": "pkg_1" }),
+                serde_json::json!({ "id": "pkg_2" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn package_page_rejects_an_invalid_response_shape() {
+        assert!(append_package_page(&serde_json::json!({ "items": {} }), &mut Vec::new()).is_err());
+        assert!(
+            append_package_page(
+                &serde_json::json!({ "items": [], "nextCursor": 42 }),
+                &mut Vec::new()
+            )
+            .is_err()
         );
     }
 
