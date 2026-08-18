@@ -48,11 +48,11 @@ pub struct JoinArgs {
     #[arg(long)]
     pub zone: Option<String>,
 
-    /// Network interface Horizond should advertise for this machine.
+    /// Network interface Horizond should advertise, or "auto" to clear an override.
     #[arg(long)]
     pub network_interface: Option<String>,
 
-    /// WireGuard endpoint advertised to peer machines (IPv4:port).
+    /// WireGuard endpoint advertised to peers (IPv4:port), or "auto" to clear it.
     #[arg(long)]
     pub wireguard_endpoint: Option<String>,
 
@@ -100,6 +100,7 @@ struct JoinPlan {
     zone: Option<String>,
     network_interface: Option<String>,
     wireguard_endpoint: Option<String>,
+    reconcile_network: bool,
     bundle_url: String,
     control_plane_url: String,
     cluster_id: String,
@@ -259,6 +260,7 @@ enum MachineBundleConfigSource {
     BundleVersion,
     NetworkInterface,
     WireguardEndpoint,
+    ReconcileNetwork,
 }
 
 #[derive(Debug, Deserialize)]
@@ -373,26 +375,24 @@ fn build_join_request(
         }
     }
     let arch = preflight_host(host)?;
-    let network_interface = args
-        .network_interface
-        .as_deref()
-        .map(|value| normalize_non_empty("network-interface", value))
-        .transpose()?
-        .or_else(|| {
-            previous_state
-                .as_ref()
-                .and_then(|state| state.network_interface.clone())
-        });
-    let wireguard_endpoint = args
-        .wireguard_endpoint
-        .as_deref()
-        .map(validate_wireguard_endpoint)
-        .transpose()?
-        .or_else(|| {
-            previous_state
-                .as_ref()
-                .and_then(|state| state.wireguard_endpoint.clone())
-        });
+    let network_interface = resolve_persisted_override(
+        args.network_interface.as_deref(),
+        previous_state
+            .as_ref()
+            .and_then(|state| state.network_interface.clone()),
+        |value| normalize_non_empty("network-interface", value),
+    )?;
+    let wireguard_endpoint = resolve_persisted_override(
+        args.wireguard_endpoint.as_deref(),
+        previous_state
+            .as_ref()
+            .and_then(|state| state.wireguard_endpoint.clone()),
+        validate_wireguard_endpoint,
+    )?;
+    let reconcile_network = args.network_interface.is_some()
+        || args.wireguard_endpoint.is_some()
+        || network_interface.is_some()
+        || wireguard_endpoint.is_some();
 
     Ok(JoinRequest {
         token: wrapped_token
@@ -409,12 +409,25 @@ fn build_join_request(
                 .transpose()?,
             network_interface,
             wireguard_endpoint,
+            reconcile_network,
             bundle_url,
             control_plane_url,
             cluster_id,
             arch,
         },
     })
+}
+
+fn resolve_persisted_override(
+    requested: Option<&str>,
+    persisted: Option<String>,
+    validate: impl FnOnce(&str) -> Result<String>,
+) -> Result<Option<String>> {
+    match requested {
+        Some(value) if value.eq_ignore_ascii_case("auto") => Ok(None),
+        Some(value) => validate(value).map(Some),
+        None => Ok(persisted),
+    }
 }
 
 fn read_optional_install_state(install_root: &Path) -> Result<Option<MachineInstallState>> {
@@ -646,6 +659,9 @@ fn classify_join_action(
     if !install_state_matches_bundle_context(&state, request, manifest) {
         return Ok(JoinAction::Reinstall);
     }
+    if !state.executable_path.is_file() {
+        return Ok(JoinAction::Reinstall);
+    }
     if state.network_interface != request.plan.network_interface
         || state.wireguard_endpoint != request.plan.wireguard_endpoint
     {
@@ -661,10 +677,12 @@ fn classify_join_action(
     {
         return Ok(JoinAction::Reconfigure);
     }
-    let machine_id_valid = state
-        .machine_id
-        .as_deref()
-        .is_some_and(|id| !id.trim().is_empty());
+    let machine_id_valid = state.machine_id.as_deref().is_some_and(|machine_id| {
+        !machine_id.trim().is_empty()
+            && state.machine_id_path.as_ref().is_none_or(|path| {
+                read_secret_string(path, "machine id").is_ok_and(|stored| stored == machine_id)
+            })
+    });
     if !machine_id_valid || machine_service_status(&state.service_label)? != ServiceStatus::Running
     {
         return Ok(JoinAction::Repair);
@@ -678,7 +696,9 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, &request)?;
-    if let Some(state) = existing_joined_machine(&paths, &request, &manifest)? {
+    let action = classify_join_action(&paths, &request, &manifest)?;
+    if action == JoinAction::NoOp {
+        let state = read_install_state(&install_state_path(&paths))?;
         output::success("Machine is already joined");
         output::info(&format!("  Service: {}", state.service_label));
         output::info(&format!("  Bundle:  {}", state.bundle_version));
@@ -686,6 +706,10 @@ async fn install_join(request: JoinRequest) -> Result<()> {
             output::label_value("Machine", &machine_id);
         }
         return Ok(());
+    }
+
+    if matches!(action, JoinAction::Reconfigure | JoinAction::Repair) {
+        return reconcile_existing_join(&paths, &request, &manifest, action).await;
     }
 
     let artifact = select_bundle_artifact(&manifest, request.plan.arch)?;
@@ -810,6 +834,57 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     Ok(())
 }
 
+async fn reconcile_existing_join(
+    paths: &InstallPaths,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+    action: JoinAction,
+) -> Result<()> {
+    let mut state = read_install_state(&install_state_path(paths))?;
+    if !state.executable_path.is_file() {
+        return Err(AlienError::new(ErrorData::FileOperationFailed {
+            operation: "repair".to_string(),
+            file_path: state.executable_path.display().to_string(),
+            reason: "Installed machine executable is missing; rerun join with the bundle available to reinstall it".to_string(),
+        }));
+    }
+
+    output::step(
+        2,
+        4,
+        match action {
+            JoinAction::Reconfigure => "Writing updated machine configuration",
+            JoinAction::Repair => "Repairing machine configuration",
+            _ => unreachable!(),
+        },
+    );
+    let config_path = write_machine_config(paths, request, manifest)?;
+    configure_ip_forwarding(&request.install_root)?;
+    state.config_path = config_path.clone();
+    state.control_plane_url = Some(request.plan.control_plane_url.clone());
+    state.cluster_id = Some(request.plan.cluster_id.clone());
+    state.network_interface = request.plan.network_interface.clone();
+    state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
+    write_install_state(paths, &state)?;
+
+    output::step(3, 4, "Reconciling machine service");
+    install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
+
+    output::step(4, 4, "Verifying machine registration");
+    if let Some(registration) = &manifest.registration {
+        let machine_id = wait_for_registration(&request.install_root, registration).await?;
+        state.machine_id = Some(machine_id.clone());
+        write_install_state(paths, &state)?;
+        output::label_value("Machine", &machine_id);
+    }
+    output::success(match action {
+        JoinAction::Reconfigure => "Machine configuration updated",
+        JoinAction::Repair => "Machine service repaired",
+        _ => unreachable!(),
+    });
+    Ok(())
+}
+
 fn reject_different_cluster(paths: &InstallPaths, request: &JoinRequest) -> Result<()> {
     let state_path = install_state_path(paths);
     if !state_path.exists() {
@@ -830,68 +905,6 @@ fn reject_different_cluster(paths: &InstallPaths, request: &JoinRequest) -> Resu
     Ok(())
 }
 
-fn existing_joined_machine(
-    paths: &InstallPaths,
-    request: &JoinRequest,
-    manifest: &MachineBundleManifest,
-) -> Result<Option<MachineInstallState>> {
-    let state_path = install_state_path(paths);
-    if !state_path.exists() {
-        return Ok(None);
-    }
-
-    let state = read_install_state(&state_path)?;
-    if !install_state_matches_request(&state, request, manifest) {
-        return Ok(None);
-    }
-
-    let join_token_path = rooted_manifest_path(
-        &request.install_root,
-        "bundle.config.joinTokenFile",
-        &manifest.config.join_token_file,
-    )?;
-    let expected_config = render_machine_config(request, manifest, &join_token_path)?;
-    let actual_config = match std::fs::read_to_string(&state.config_path) {
-        Ok(config) => config,
-        Err(_) => return Ok(None),
-    };
-    if actual_config != expected_config {
-        return Ok(None);
-    }
-
-    let Some(machine_id) = state.machine_id.as_deref() else {
-        return Ok(None);
-    };
-    if machine_id.trim().is_empty() {
-        return Ok(None);
-    }
-
-    if let Some(machine_id_path) = &state.machine_id_path {
-        match read_secret_string(machine_id_path, "machine id") {
-            Ok(stored_machine_id) if stored_machine_id == machine_id => {}
-            _ => {
-                return Ok(None);
-            }
-        }
-    }
-
-    if machine_service_status(&state.service_label)? != ServiceStatus::Running {
-        return Ok(None);
-    }
-
-    Ok(Some(state))
-}
-
-fn install_state_matches_request(
-    state: &MachineInstallState,
-    request: &JoinRequest,
-    manifest: &MachineBundleManifest,
-) -> bool {
-    install_state_matches_bundle_context(state, request, manifest)
-        && state.network_interface == request.plan.network_interface
-        && state.wireguard_endpoint == request.plan.wireguard_endpoint
-}
-
 fn install_state_matches_bundle_context(
     state: &MachineInstallState,
     request: &JoinRequest,
@@ -902,6 +915,17 @@ fn install_state_matches_bundle_context(
         && state.service_label == manifest.service.label
         && state.control_plane_url.as_deref() == Some(request.plan.control_plane_url.as_str())
         && state.cluster_id.as_deref() == Some(request.plan.cluster_id.as_str())
+}
+
+#[cfg(test)]
+fn install_state_matches_request(
+    state: &MachineInstallState,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> bool {
+    install_state_matches_bundle_context(state, request, manifest)
+        && state.network_interface == request.plan.network_interface
+        && state.wireguard_endpoint == request.plan.wireguard_endpoint
 }
 
 fn machine_service_status(service_label: &str) -> Result<ServiceStatus> {
@@ -1209,6 +1233,9 @@ fn resolve_config_entry_value(
         MachineBundleConfigSource::BundleVersion => Ok(Some(manifest.version.clone())),
         MachineBundleConfigSource::NetworkInterface => Ok(request.plan.network_interface.clone()),
         MachineBundleConfigSource::WireguardEndpoint => Ok(request.plan.wireguard_endpoint.clone()),
+        MachineBundleConfigSource::ReconcileNetwork => {
+            Ok(Some(request.plan.reconcile_network.to_string()))
+        }
     }
 }
 
@@ -2119,6 +2146,11 @@ mod tests {
                         source: MachineBundleConfigSource::WireguardEndpoint,
                         optional: true,
                     },
+                    MachineBundleConfigEntry {
+                        key: "reconcileNetwork".to_string(),
+                        source: MachineBundleConfigSource::ReconcileNetwork,
+                        optional: false,
+                    },
                 ],
             },
             service: MachineBundleService {
@@ -2753,6 +2785,89 @@ mod tests {
         assert_eq!(
             request.plan.wireguard_endpoint.as_deref(),
             Some("203.0.113.10:51820")
+        );
+    }
+
+    #[test]
+    fn rejoin_clears_network_overrides_when_flags_are_auto() {
+        let root = tempfile::tempdir().expect("install root");
+        let paths = install_paths(root.path());
+        let state = MachineInstallState {
+            bundle_version: "old".to_string(),
+            bundle_url: None,
+            service_label: "dev.alien.machine".to_string(),
+            executable_path: PathBuf::from("/old/bin"),
+            config_path: PathBuf::from("/old/config.toml"),
+            join_token_path: PathBuf::from("/old/join-token"),
+            machine_id_path: None,
+            machine_token_path: None,
+            control_plane_url: None,
+            cluster_id: Some("cluster-123".to_string()),
+            machine_id: Some("machine-123".to_string()),
+            network_interface: Some("ens3f0np0".to_string()),
+            wireguard_endpoint: Some("203.0.113.10:51820".to_string()),
+        };
+        write_install_state(&paths, &state).expect("write state");
+
+        let request = build_join_request(
+            &JoinArgs {
+                install_root: root.path().to_path_buf(),
+                network_interface: Some("auto".to_string()),
+                wireguard_endpoint: Some("auto".to_string()),
+                ..test_join_args()
+            },
+            None,
+            linux_host(root.path()),
+        )
+        .expect("request");
+
+        assert_eq!(request.plan.network_interface, None);
+        assert_eq!(request.plan.wireguard_endpoint, None);
+        assert!(request.plan.reconcile_network);
+    }
+
+    #[test]
+    fn changed_network_override_is_reconfigured_without_reinstalling() {
+        let root = tempfile::tempdir().expect("install root");
+        let request = build_join_request(
+            &JoinArgs {
+                install_root: root.path().to_path_buf(),
+                network_interface: Some("ens3f0np0".to_string()),
+                ..test_join_args()
+            },
+            None,
+            linux_host(root.path()),
+        )
+        .expect("request");
+        let manifest = test_manifest();
+        let paths = install_paths(root.path());
+        let executable_path = root.path().join("bin/machine");
+        std::fs::create_dir_all(executable_path.parent().expect("bin parent"))
+            .expect("create bin directory");
+        std::fs::write(&executable_path, b"machine").expect("write executable");
+        write_install_state(
+            &paths,
+            &MachineInstallState {
+                bundle_version: manifest.version.clone(),
+                bundle_url: Some(request.plan.bundle_url.clone()),
+                service_label: manifest.service.label.clone(),
+                executable_path,
+                config_path: root.path().join("etc/machine.toml"),
+                join_token_path: root.path().join("join-token"),
+                machine_id_path: None,
+                machine_token_path: None,
+                control_plane_url: Some(request.plan.control_plane_url.clone()),
+                cluster_id: Some(request.plan.cluster_id.clone()),
+                machine_id: Some("machine-123".to_string()),
+                network_interface: None,
+                wireguard_endpoint: None,
+            },
+        )
+        .expect("write state");
+
+        assert_eq!(
+            classify_join_action(&paths, &request, &manifest).expect("join action"),
+            JoinAction::Reconfigure
         );
     }
 
