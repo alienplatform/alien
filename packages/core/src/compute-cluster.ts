@@ -58,6 +58,8 @@ export type ComputePoolScale =
 export type ComputePoolInput = {
   requirements: ComputePoolRequirements
   scale: ComputePoolScale
+  /** Number of provider failure domains across which the pool must be spread. */
+  failureDomainSpread?: number
 }
 
 /**
@@ -89,6 +91,14 @@ export class ComputeCluster {
   }
 
   public pool(groupId: string, config: ComputePoolInput): this {
+    if (
+      config.failureDomainSpread !== undefined &&
+      (!Number.isInteger(config.failureDomainSpread) ||
+        config.failureDomainSpread < 1 ||
+        config.failureDomainSpread > 255)
+    ) {
+      throw new Error("Compute pool failureDomainSpread must be an integer from 1 to 255")
+    }
     const { minSize, maxSize } = selectedScaleBounds(config.scale)
     this._config.capacityGroups!.push({
       groupId,
@@ -98,6 +108,10 @@ export class ComputeCluster {
       scalePolicy: scalePolicyFromInput(config.scale),
       nestedVirtualization: config.requirements.nestedVirtualization,
     })
+    if (config.failureDomainSpread !== undefined) {
+      this._config.failureDomainSpread ??= {}
+      this._config.failureDomainSpread[groupId] = config.failureDomainSpread
+    }
     return this
   }
 

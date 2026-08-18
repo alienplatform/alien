@@ -379,7 +379,7 @@ mod tests {
         });
 
         let request = serde_json::json!({
-            "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc",
+            "deploymentId": "dep_0000000000000000000000000000",
             "state": state
         });
         let sdk_request: types::SyncReconcileRequest =

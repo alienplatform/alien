@@ -283,18 +283,36 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
 }
 
 fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
+    let resolved_path = resolved_config_path(path);
     let contents = std::fs::read_to_string(path).into_alien_error().context(
         ErrorData::FileOperationFailed {
             operation: "read".to_string(),
-            file_path: path.display().to_string(),
-            reason: "Failed to read deploy config".to_string(),
+            file_path: resolved_path.display().to_string(),
+            reason: format!(
+                "Failed to read deploy config '{}' (relative paths are resolved from the current working directory)",
+                path.display()
+            ),
         },
     )?;
     toml::from_str(&contents)
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: format!("Failed to parse deploy config {}", path.display()),
+            message: format!(
+                "Failed to parse deploy config '{}' (resolved as '{}')",
+                path.display(),
+                resolved_path.display()
+            ),
         })
+}
+
+fn resolved_config_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
 }
 
 fn resolve_network_settings(
@@ -1772,6 +1790,20 @@ fn target_release_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_relative_config_error_shows_resolved_path_rule() {
+        let path = Path::new("definitely-missing/deployment.toml");
+        let error = read_deploy_config(path).expect_err("missing config should fail");
+        assert!(error.message.contains("current working directory"));
+        assert!(error.message.contains("definitely-missing/deployment.toml"));
+        assert!(error.message.contains(
+            &std::env::current_dir()
+                .expect("current directory")
+                .display()
+                .to_string()
+        ));
+    }
 
     #[test]
     fn target_release_requires_a_stack_for_the_deployment_platform() {
