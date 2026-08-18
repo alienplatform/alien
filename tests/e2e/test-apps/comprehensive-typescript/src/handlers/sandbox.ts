@@ -5,40 +5,52 @@ import { toExternalOperationError } from "../helpers.js"
 
 const app = new Hono()
 
+/** How long the whole check may take, teardown included. Held under the 255s idle timeout the
+ *  app's own server sets in `packages/sdk/src/worker-runtime/index.ts`: this handler answers only
+ *  at the end, so a longer run reaches the caller as a proxy error carrying none of the detail. */
+const REQUEST_BUDGET_MS = 150_000
+/** Held back from the budget so teardown still runs after a slow create or exercise. Local frees
+ *  a session only when the sandbox itself is deleted, so skipping teardown strands it. */
+const TEARDOWN_RESERVE_MS = 45_000
+const POLL_INTERVAL_MS = 2_000
+
 app.post("/sandbox-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   const box = sandbox(bindingName)
   const marker = `alien-sandbox-e2e-${Date.now()}`
-
-  // Awaited rather than raced: only the id create returns can end a session — AWS and Azure
-  // allocate their own rather than taking the one asked for — so a bounded wait here would
-  // terminate an id no session answers to while the real one is still being created.
+  // Chosen here so teardown can name a session even when create never reports one. Local honours
+  // a requested id, and Local is the only platform this check runs on.
   const sessionId = `e2e-ts-${Date.now()}`
-  let session: SandboxSession
+
+  const exerciseBy = Date.now() + REQUEST_BUDGET_MS - TEARDOWN_RESERVE_MS
+  const left = () => Math.max(exerciseBy - Date.now(), 1)
+
+  let session: SandboxSession | undefined
+  let failed: string | null = null
+  // `within` gives up on its own timer without cancelling the call, so whether the create settled
+  // is the thing teardown needs to know, not whether this await returned.
+  let createSettled = false
+  const creating = box.create({ sessionId }).finally(() => {
+    createSettled = true
+  })
   try {
-    session = await box.create({ sessionId })
+    session = await within(creating, left())
   } catch (error: unknown) {
-    // The create has settled, so ending the id asked for is not a race: local, Kubernetes and GCP
-    // take that id, so a session provisioned under a lost response answers to it. AWS and Azure
-    // allocate their own; there the 600s maxLifetimeSeconds in alien.ts is what reclaims it.
-    const leaked = await attempt(() => terminateAndConfirm(box, sessionId))
-    const alienError = await toExternalOperationError(error, "sandbox-test")
-    return c.json(
-      { success: false, error: leaked ?? `${alienError.code}: ${alienError.message}` },
-      500,
-    )
+    failed = await describe(error)
+    if (!createSettled) {
+      failed = `${failed}; a session it lands later is reaped when the sandbox is deleted`
+    }
   }
 
-  // Both run before either is reported, and a leaked session is reported first even when the
-  // exercise also failed: an exercise failure is a broken test, a surviving session is a billable
-  // sandbox nobody will look for. The exercise is bounded as a whole so a command or file
-  // operation that never answers still lets terminate run.
-  const outcome = await attempt(() =>
-    within(exercise(box, session.sessionId, marker), EXERCISE_TIMEOUT_MS),
-  )
-  const cleanup = await attempt(() => terminateAndConfirm(box, session.sessionId))
+  if (session) {
+    const id = session.sessionId
+    failed = await attempt(() => within(exercise(box, id, marker), left()))
+  }
 
-  const failure = cleanup ?? outcome
+  // Teardown runs whatever happened above, and both failures are reported: a session left running
+  // is a sandbox nobody will look for, and why the exercise failed is often why it is still there.
+  const leaked = await attempt(() => converge(box, session?.sessionId ?? sessionId, createSettled))
+  const failure = [leaked, failed].filter(Boolean).join("; ")
   if (failure) {
     return c.json({ success: false, error: failure }, 500)
   }
@@ -46,13 +58,18 @@ app.post("/sandbox-test/:bindingName", async c => {
   return c.json({ success: true, bindingName })
 })
 
-/** Runs `step`, returning why it failed rather than throwing, so both steps always run. */
+/** Renders a failure the way the e2e runner reports it. */
+async function describe(error: unknown): Promise<string> {
+  const alienError = await toExternalOperationError(error, "sandbox-test")
+  return `${alienError.code}: ${alienError.message}`
+}
+
+/** Runs `step`, returning why it failed rather than throwing, so teardown always runs. */
 async function attempt(step: () => Promise<string | null>): Promise<string | null> {
   try {
     return await step()
   } catch (error: unknown) {
-    const alienError = await toExternalOperationError(error, "sandbox-test")
-    return `${alienError.code}: ${alienError.message}`
+    return await describe(error)
   }
 }
 
@@ -90,85 +107,69 @@ async function exercise(box: Sandbox, sessionId: string, marker: string): Promis
   return null
 }
 
-/** How long the whole exercise — commands and files — may take before terminate runs anyway. */
-const EXERCISE_TIMEOUT_MS = 180_000
-/** How many times a refused terminate is retried before the session is called leaked. */
-const TERMINATE_ATTEMPTS = 5
-/** How long to wait for an accepted terminate to converge before calling the session leaked. */
-const TERMINATE_POLL_ATTEMPTS = 15
-const TERMINATE_POLL_INTERVAL_MS = 2000
-/** How long one status read may take before it counts as a failed read: a stalled manager must
- *  cost one attempt, not the whole test. */
-const STATUS_READ_TIMEOUT_MS = 10_000
-/** How long one terminate call may take before it counts as refused. Longer than a read: a
- *  backend may confirm deletion inside the call, and that is bounded on its side too. */
-const TERMINATE_CALL_TIMEOUT_MS = 60_000
-
-/** Rejects when the operation gives no answer in time, so a stall costs one attempt. */
-function within<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
-  return Promise.race([
-    operation,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`no answer in ${timeoutMs / 1000}s`)), timeoutMs),
-    ),
-  ])
-}
-
 /**
- * Terminates the session and reads it back to confirm it is gone.
+ * Terminates the session and reads it back until it is gone.
  *
- * A successful terminate is not the same claim: the backends return once deletion is accepted,
- * so a test that stops at the return value passes while the session keeps running.
+ * Terminate is reissued on every pass: it is idempotent, a transient refusal is the one failure
+ * that leaves a session running, and a session visible only on a later pass is ended rather than
+ * reported as a leak.
+ *
+ * `createSettled` is false when create never answered. The session can still be created after an
+ * empty read there, so absence decides nothing and the wait runs its full reserve, ending whatever
+ * appears. A read that fails counts as present: an unreadable session is not a gone one.
  */
-async function terminateAndConfirm(box: Sandbox, sessionId: string): Promise<string | null> {
-  // Polled rather than read once: every backend returns from terminate as soon as the deletion is
-  // accepted, so a single read races normal convergence and would fail a teardown that was simply
-  // still finishing.
-  // The terminate itself is retried, because it is idempotent and a transient refusal is the one
-  // failure that leaves a session running: giving up on it would hand back an error and a
-  // billable sandbox nobody will look for.
-  // A failed read inside the window is retried like a non-terminal state: the session may well be
-  // gone, and giving up on the first blip would fail a teardown that had already converged. A read
-  // that never succeeds still fails, carrying the last error rather than a bare timeout.
-  // The two budgets are separate so a terminate accepted on its last try still gets the whole
-  // convergence window rather than one immediate read.
-  let refused: string | null = null
-  for (let attempt = 0; attempt < TERMINATE_ATTEMPTS; attempt++) {
+async function converge(
+  box: Sandbox,
+  sessionId: string,
+  createSettled: boolean,
+): Promise<string | null> {
+  const deadline = Date.now() + TEARDOWN_RESERVE_MS
+  const left = () => Math.max(deadline - Date.now(), 1)
+
+  for (;;) {
+    let refused: string | null = null
     try {
-      await within(box.terminate(sessionId), TERMINATE_CALL_TIMEOUT_MS)
-      refused = null
-      break
+      await within(box.terminate(sessionId), left())
     } catch (error: unknown) {
       refused = error instanceof Error ? error.message : String(error)
-      if (attempt + 1 < TERMINATE_ATTEMPTS) {
-        await new Promise(resolve => setTimeout(resolve, TERMINATE_POLL_INTERVAL_MS))
-      }
     }
-  }
-  // A refused terminate is not yet a leak: the request may have succeeded with its response
-  // lost, so the confirmation poll below decides, and the refusal is what is reported if the
-  // session turns out to still be there.
-  let last = refused === null ? "unread" : `running (terminate refused: ${refused})`
-  for (let attempt = 0; attempt < TERMINATE_POLL_ATTEMPTS; attempt++) {
+
+    let present: string | null
     try {
-      const remaining = await within(box.get(sessionId), STATUS_READ_TIMEOUT_MS)
-      if (remaining === null || remaining.state === "terminated") {
+      const session = await within(box.get(sessionId), left())
+      present = session === null || session.state === "terminated" ? null : session.state
+    } catch (error: unknown) {
+      present = `unreadable (${error instanceof Error ? error.message : String(error)})`
+    }
+
+    if (present === null && createSettled) {
+      return null
+    }
+
+    if (Date.now() >= deadline) {
+      // Nothing left to end. A create still in flight can land one after this, which is why the
+      // caller reports its own failure and the sandbox's deletion reaps what remains.
+      if (present === null) {
         return null
       }
-      last = remaining.state
-    } catch (error: unknown) {
-      last = `unreadable (${error instanceof Error ? error.message : String(error)})`
+      const why = refused === null ? present : `${present}, terminate refused: ${refused}`
+      const waited = Math.round(TEARDOWN_RESERVE_MS / 1000)
+      return `session '${sessionId}' is still ${why} ${waited}s after terminate`
     }
-    if (attempt + 1 < TERMINATE_POLL_ATTEMPTS) {
-      await new Promise(resolve => setTimeout(resolve, TERMINATE_POLL_INTERVAL_MS))
-    }
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
   }
+}
 
-  if (refused !== null) {
-    return `session '${sessionId}' could not be terminated (${refused}); it may still be billing`
-  }
-  const waited = (TERMINATE_POLL_ATTEMPTS * TERMINATE_POLL_INTERVAL_MS) / 1000
-  return `session '${sessionId}' is still ${last} ${waited}s after terminate; it may still be billing`
+/** Rejects when an operation gives no answer in time, so one stall cannot spend the whole budget. */
+function within<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`no answer in ${Math.round(Math.max(timeoutMs, 0) / 1000)}s`)),
+      timeoutMs,
+    )
+  })
+  return Promise.race([operation, expiry]).finally(() => clearTimeout(timer))
 }
 
 export default app

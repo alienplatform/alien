@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Path, State},
@@ -50,52 +50,67 @@ pub async fn test_sandbox(
             binding_name: binding_name.clone(),
         })?;
 
-    // Awaited rather than raced: only the id create returns can end a session — AWS and Azure
-    // allocate their own rather than taking the one asked for — so a bounded wait here would
-    // terminate an id no session answers to while the real one is still being created.
-    let session_id = format!("e2e-{}", Utc::now().timestamp_millis());
-    let created = sandbox
-        .create(CreateSessionRequest {
+    // Chosen here so teardown can name a session even when create never reports one. Local honours
+    // a requested id, and Local is the only platform this check runs on.
+    let session_id = format!("e2e-rs-{}", Utc::now().timestamp_millis());
+    let exercise_by = Instant::now() + REQUEST_BUDGET - TEARDOWN_RESERVE;
+    let left = || exercise_by.saturating_duration_since(Instant::now());
+
+    let created = tokio::time::timeout(
+        left(),
+        sandbox.create(CreateSessionRequest {
             session_id: Some(session_id.clone()),
             tenant_key: None,
             env: BTreeMap::new(),
-        })
-        .await;
-    let session = match created {
-        Ok(session) => session,
-        Err(error) => {
-            // The create has settled, so ending the id asked for is not a race: local, Kubernetes
-            // and GCP take that id, so a session provisioned under a lost response answers to it.
-            // AWS and Azure allocate their own; there the 600s maxLifetimeSeconds reclaims it.
-            terminate_and_confirm(sandbox.as_ref(), &session_id).await?;
-            return Err(error).context(ErrorData::SandboxOperationFailed {
-                operation: "create".to_string(),
-            });
-        }
-    };
-
-    // Everything after create runs in a helper so a failure still reaches terminate below. A
-    // session left running is a session still billing. The exercise is bounded as a whole so a
-    // command or file operation that never answers still lets terminate run.
-    let outcome = match tokio::time::timeout(
-        EXERCISE_TIMEOUT,
-        exercise(sandbox.as_ref(), &session.session_id),
+        }),
     )
-    .await
-    {
-        Ok(outcome) => outcome,
-        Err(_) => Err(AlienError::new(ErrorData::TestValidationFailed {
-            reason: format!(
-                "the sandbox exercise gave no answer in {}s",
-                EXERCISE_TIMEOUT.as_secs()
-            ),
-        })),
+    .await;
+    let (session, mut outcome, create_settled) = match created {
+        Ok(Ok(session)) => (Some(session), Ok(()), true),
+        Ok(Err(error)) => (
+            None,
+            Err(error).context(ErrorData::SandboxOperationFailed {
+                operation: "create".to_string(),
+            }),
+            true,
+        ),
+        Err(_) => (
+            None,
+            Err(AlienError::new(ErrorData::TestValidationFailed {
+                reason: "create gave no answer within the request budget; a session it lands \
+                         later is reaped when the sandbox is deleted"
+                    .to_string(),
+            })),
+            false,
+        ),
     };
-    let terminated = terminate_and_confirm(sandbox.as_ref(), &session.session_id).await;
 
-    // A leaked session is reported first even when the exercise also failed: an exercise failure
-    // is a broken test, a surviving session is a billable sandbox nobody will look for.
-    terminated?;
+    if let Some(session) = &session {
+        outcome =
+            match tokio::time::timeout(left(), exercise(sandbox.as_ref(), &session.session_id))
+                .await
+            {
+                Ok(outcome) => outcome,
+                Err(_) => Err(AlienError::new(ErrorData::TestValidationFailed {
+                    reason: "the sandbox exercise gave no answer within the request budget"
+                        .to_string(),
+                })),
+            };
+    }
+
+    let target = session
+        .as_ref()
+        .map_or(session_id.as_str(), |session| session.session_id.as_str());
+    if let Err(leaked) = converge(sandbox.as_ref(), target, create_settled).await {
+        // Both are reported: a session left running is a sandbox nobody will look for, and why
+        // the exercise failed is often why it is still there.
+        return Err(match outcome {
+            Err(failure) => AlienError::new(ErrorData::TestValidationFailed {
+                reason: format!("{leaked}; {failure}"),
+            }),
+            Ok(()) => leaked,
+        });
+    }
     outcome?;
 
     info!(%binding_name, "Sandbox test completed successfully");
@@ -106,98 +121,64 @@ pub async fn test_sandbox(
     }))
 }
 
-/// How long the whole exercise — commands and files — may take before terminate runs anyway.
-const EXERCISE_TIMEOUT: Duration = Duration::from_secs(180);
-/// How many times a refused terminate is retried before the session is called leaked.
-const TERMINATE_ATTEMPTS: u32 = 5;
-/// How long to wait for an accepted terminate to converge before calling the session leaked.
-const TERMINATE_POLL_ATTEMPTS: u32 = 15;
-const TERMINATE_POLL_INTERVAL: Duration = Duration::from_secs(2);
-/// How long one status read may take before it counts as a failed read: a stalled manager must
-/// cost one attempt, not the whole test.
-const STATUS_READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long one terminate call may take before it counts as refused. Longer than a read: a
-/// backend may confirm deletion inside the call, and that is bounded on its side too.
-const TERMINATE_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long the whole check may take, teardown included. Held under the 300s read timeout the
+/// worker runtime applies to a proxied response (`alien-worker-runtime/src/transports/shared.rs`):
+/// this handler answers only at the end, so a longer run reaches the caller as a bare proxy error.
+const REQUEST_BUDGET: Duration = Duration::from_secs(150);
+/// Held back from the budget so teardown still runs after a slow create or exercise. Local frees
+/// a session only when the sandbox itself is deleted, so skipping teardown strands it.
+const TEARDOWN_RESERVE: Duration = Duration::from_secs(45);
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Terminates the session and reads it back to confirm it is gone.
+/// Terminates the session and reads it back until it is gone.
 ///
-/// A successful terminate is not the same claim: the backends return once deletion is accepted,
-/// so a test that stops at the return value passes while the session keeps running.
-async fn terminate_and_confirm(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
-    // Polled rather than read once: every backend returns from terminate as soon as the deletion
-    // is accepted, so a single read races normal convergence and would fail a teardown that was
-    // simply still finishing.
-    // The terminate itself is retried, because it is idempotent and a transient refusal is the
-    // one failure that leaves a session running: giving up on it would hand back an error and a
-    // billable sandbox nobody will look for.
-    // A failed read inside the window is retried like a non-terminal state: the session may well
-    // be gone, and giving up on the first blip would fail a teardown that had already converged.
-    // A read that never succeeds still fails, carrying the last error rather than a bare timeout.
-    // The two budgets are separate so a terminate accepted on its last try still gets the whole
-    // convergence window rather than one immediate read.
-    // Carried as the reason text: an answer that never came and an answer that refused are the
-    // same thing to the test — a session it could not end.
-    let mut refused: Option<String> = None;
-    for attempt in 0..TERMINATE_ATTEMPTS {
-        match tokio::time::timeout(TERMINATE_CALL_TIMEOUT, sandbox.terminate(session_id)).await {
-            Ok(Ok(())) => {
-                refused = None;
-                break;
-            }
-            Ok(Err(error)) => refused = Some(error.to_string()),
-            Err(_) => {
-                refused = Some(format!(
-                    "no answer in {}s",
-                    TERMINATE_CALL_TIMEOUT.as_secs()
-                ))
-            }
-        }
-        if attempt + 1 < TERMINATE_ATTEMPTS {
-            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
-        }
-    }
-    // A refused terminate is not yet a leak: the request may have succeeded with its response
-    // lost, so the confirmation poll below decides, and the refusal is what is reported if the
-    // session turns out to still be there.
-    let mut last = match &refused {
-        Some(reason) => format!("running (terminate refused: {reason})"),
-        None => String::from("unread"),
-    };
-    for attempt in 0..TERMINATE_POLL_ATTEMPTS {
-        match tokio::time::timeout(STATUS_READ_TIMEOUT, sandbox.get(session_id)).await {
-            Err(_) => {
-                last = format!(
-                    "unreadable (no answer in {}s)",
-                    STATUS_READ_TIMEOUT.as_secs()
-                )
-            }
-            Ok(Ok(None)) => return Ok(()),
-            Ok(Ok(Some(session))) if session.state == SandboxSessionState::Terminated => {
-                return Ok(())
-            }
-            Ok(Ok(Some(session))) => last = format!("{:?}", session.state),
-            Ok(Err(error)) => last = format!("unreadable ({error})"),
+/// Terminate is reissued on every pass: it is idempotent, a transient refusal is the one failure
+/// that leaves a session running, and a session visible only on a later pass is ended rather than
+/// reported as a leak.
+///
+/// `create_settled` is false when create never answered. The session can still be created after
+/// an empty read there, so absence decides nothing and the wait runs its full reserve, ending
+/// whatever appears. A read that fails counts as present: an unreadable session is not a gone one.
+async fn converge(sandbox: &dyn Sandbox, session_id: &str, create_settled: bool) -> Result<()> {
+    let deadline = Instant::now() + TEARDOWN_RESERVE;
+    let left = || deadline.saturating_duration_since(Instant::now());
+
+    loop {
+        let refused = match tokio::time::timeout(left(), sandbox.terminate(session_id)).await {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error.to_string()),
+            Err(_) => Some("no answer".to_string()),
+        };
+
+        let present = match tokio::time::timeout(left(), sandbox.get(session_id)).await {
+            Ok(Ok(None)) => None,
+            Ok(Ok(Some(session))) if session.state == SandboxSessionState::Terminated => None,
+            Ok(Ok(Some(session))) => Some(format!("{:?}", session.state)),
+            Ok(Err(error)) => Some(format!("unreadable ({error})")),
+            Err(_) => Some("unreadable (no answer)".to_string()),
+        };
+
+        if present.is_none() && create_settled {
+            return Ok(());
         }
 
-        if attempt + 1 < TERMINATE_POLL_ATTEMPTS {
-            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
+        if Instant::now() >= deadline {
+            // Nothing left to end. A create still in flight can land one after this, which is why
+            // the caller reports its own failure and the sandbox's deletion reaps what remains.
+            let Some(seen) = present else { return Ok(()) };
+            let why = match refused {
+                Some(refusal) => format!("{seen}, terminate refused: {refusal}"),
+                None => seen,
+            };
+            return Err(AlienError::new(ErrorData::TestValidationFailed {
+                reason: format!(
+                    "session '{session_id}' is still {why} {}s after terminate",
+                    TEARDOWN_RESERVE.as_secs()
+                ),
+            }));
         }
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
-
-    if let Some(reason) = refused {
-        return Err(AlienError::new(ErrorData::TestValidationFailed {
-            reason: format!(
-                "session '{session_id}' could not be terminated ({reason}); it may still be billing"
-            ),
-        }));
-    }
-    Err(AlienError::new(ErrorData::TestValidationFailed {
-        reason: format!(
-            "session '{session_id}' is still {last} {}s after terminate; it may still be billing",
-            TERMINATE_POLL_ATTEMPTS * TERMINATE_POLL_INTERVAL.as_secs() as u32
-        ),
-    }))
 }
 
 /// The part of the test that can fail without leaking a session.
@@ -220,6 +201,7 @@ async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
         })?;
 
     let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
     let mut exit_code = None;
     while let Some(frame) = frames.next().await {
         match frame.context(ErrorData::SandboxOperationFailed {
@@ -227,13 +209,18 @@ async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
         })? {
             CommandOutput::Stdout { data, .. } => stdout.extend_from_slice(&data),
             CommandOutput::Exit { code, .. } => exit_code = Some(code),
-            CommandOutput::Stderr { .. } => {}
+            CommandOutput::Stderr { data, .. } => stderr.extend_from_slice(&data),
         }
     }
 
     if exit_code != Some(0) {
+        // stderr is kept, not reduced to a boolean: when this fails it is the only thing that
+        // says why, and this harness diagnoses a deployment from the outside.
         return Err(AlienError::new(ErrorData::TestValidationFailed {
-            reason: format!("run_command exited with {exit_code:?}, expected 0"),
+            reason: format!(
+                "run_command exited with {exit_code:?}, expected 0: {}",
+                String::from_utf8_lossy(&stderr)
+            ),
         }));
     }
 

@@ -13,9 +13,10 @@ use tracing::info;
 pub(super) const STORAGE_BINDING: &str = "alien-storage";
 const KV_BINDING: &str = "alien-kv";
 const SANDBOX_BINDING: &str = "alien-sandbox";
-/// The whole sandbox check, end to end: the app bounds create (2 min), the exercise (3 min) and
-/// teardown (5 tries plus a 30 s confirmation window) itself, and this sits above their sum.
-const SANDBOX_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// The whole sandbox check, end to end. The app holds itself to a 150s budget and the runtime
+/// closes the connection before that if it stalls, so this only catches a deployment that never
+/// answers at all.
+const SANDBOX_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60);
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
