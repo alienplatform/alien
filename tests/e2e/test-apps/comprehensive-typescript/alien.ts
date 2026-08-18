@@ -18,15 +18,15 @@ const queue = new alien.Queue("alien-queue").build()
 // race that consumer. This queue has exactly one consumer: the queue trigger.
 const eventsQueue = new alien.Queue("alien-events-queue").build()
 const postgres = isLocal ? new alien.Postgres("alien-postgres").build() : undefined
-// Sandbox is Local-only for the same reason as Postgres: the cloud sandbox controllers do not
-// ship in this repo, so declaring one on a cloud target would ask the executor to provision a
-// backend with no registered controller.
+// Sandbox is Local-only: none of this suite's cloud targets has a sandbox controller registered
+// in this repo, so declaring one there would ask the executor to provision a backend nothing
+// drives.
 const sandbox = isLocal
   ? new alien.Sandbox("alien-sandbox")
       .code({ type: "image", image: "alpine:3.20" })
       .limits({ cpu: "500m", memory: "512Mi", disk: "1Gi", maxProcesses: 64 })
       .egress({ mode: "deny" })
-      .session({ maxLifetimeSeconds: 600 })
+      .session({})
       .build()
   : undefined
 const ai = new alien.AI("test-ai").build()

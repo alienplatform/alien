@@ -315,8 +315,8 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
             // Only the embedded Local controller ships in this repo, so Postgres is
             // exercised on Local only.
             bindings.push(Binding::Postgres);
-            // Same reason for Sandbox: the cloud sandbox controllers are not in this repo, so
-            // the cloud matrix is covered by recorded live runs rather than by this suite.
+            // Same for Sandbox: no sandbox controller is registered here for any of this
+            // suite's cloud targets, so Local is the only platform it can run on.
             bindings.push(Binding::Sandbox);
         }
         _ => {}
