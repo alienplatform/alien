@@ -192,6 +192,13 @@ impl LocalSandboxController {
     async fn deleting(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
+        // The route closes first: it is what accepts session creates, so a sweep that runs while
+        // it still serves can be outlived by a create that lands behind it. Its token file is a
+        // live credential until it is gone.
+        alien_local::SandboxRoute::remove(&config.id).await;
+        self.route_url = None;
+        self.token_path = None;
+
         let manager = sandbox_manager(ctx)?;
         let reaped = manager
             .reap(&config.id)
@@ -200,13 +207,6 @@ impl LocalSandboxController {
                 message: "Failed to remove sandbox sessions".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-
-        // The containers are not the whole of it: a route left serving keeps accepting session
-        // creates for a sandbox that no longer exists, and its token file stays on disk as a
-        // live credential.
-        alien_local::SandboxRoute::remove(&config.id).await;
-        self.route_url = None;
-        self.token_path = None;
 
         info!(sandbox_id = %config.id, reaped, "Removed local sandbox sessions and its route");
 
