@@ -16,11 +16,13 @@ use std::time::Duration;
 use alien_bindings::traits::{
     CommandOutput, CreateSessionRequest, RunCommandRequest, Sandbox, SandboxSession,
 };
+use futures::channel::oneshot;
+use futures::future::{select, Either, FutureExt, Shared};
+use futures::lock::Mutex;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
-use futures::lock::Mutex;
 
 use crate::error::map_alien_error;
 
@@ -104,10 +106,26 @@ fn frame_to_js(frame: CommandOutput) -> CommandFrameJs {
 ///
 /// The stream is held in an `Option` so it can be dropped on demand: a caller that stops reading
 /// half way through leaves a command running, and dropping the stream closes the transport
-/// carrying its output, which is what tells the backend nobody is listening.
+/// carrying its output, which is what tells the backend to kill the command. `close()` is that
+/// signal, and it has to land even while a `next()` is parked on a command that prints nothing —
+/// that `next()` holds the lock, so `close()` cannot wait for it; it fires `closed` and the
+/// parked `next()` drops the stream itself.
 #[napi]
 pub struct CommandStreamHandle {
     frames: Arc<Mutex<Option<BoxStream<'static, alien_bindings::error::Result<CommandOutput>>>>>,
+    closed: Shared<oneshot::Receiver<()>>,
+    close: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+impl CommandStreamHandle {
+    fn new(frames: BoxStream<'static, alien_bindings::error::Result<CommandOutput>>) -> Self {
+        let (close, closed) = oneshot::channel();
+        Self {
+            frames: Arc::new(Mutex::new(Some(frames))),
+            closed: closed.shared(),
+            close: Arc::new(std::sync::Mutex::new(Some(close))),
+        }
+    }
 }
 
 #[napi]
@@ -115,7 +133,7 @@ impl CommandStreamHandle {
     /// Returns the next frame, or `null` once the command has produced its last.
     ///
     /// The terminal frame is delivered like any other, so a caller reads until `null` and finds
-    /// the exit code in the frame before it.
+    /// the exit code in the frame before it. A `close()` while this waits ends it with `null`.
     #[napi]
     pub async fn next(&self) -> napi::Result<Option<CommandFrameJs>> {
         let mut frames = self.frames.lock().await;
@@ -123,20 +141,32 @@ impl CommandStreamHandle {
             return Ok(None);
         };
 
-        match stream.next().await {
-            Some(Ok(frame)) => Ok(Some(frame_to_js(frame))),
-            Some(Err(error)) => Err(map_alien_error(error)),
-            None => {
+        match select(stream.next(), self.closed.clone()).await {
+            Either::Left((Some(Ok(frame)), _)) => Ok(Some(frame_to_js(frame))),
+            Either::Left((Some(Err(error)), _)) => Err(map_alien_error(error)),
+            Either::Left((None, _)) | Either::Right(_) => {
                 *frames = None;
                 Ok(None)
             }
         }
     }
 
-    /// Releases the stream. Idempotent, and `next()` returns `null` afterwards.
+    /// Cancels the command by releasing its stream. Idempotent, and `next()` returns `null`
+    /// afterwards — including a `next()` already waiting when this is called.
     #[napi]
     pub async fn close(&self) {
-        *self.frames.lock().await = None;
+        if let Some(close) = self
+            .close
+            .lock()
+            .expect("close sender lock poisoned")
+            .take()
+        {
+            let _ = close.send(());
+        }
+        // Drop the stream here when nobody holds it; a parked `next()` drops it on the signal.
+        if let Some(mut frames) = self.frames.try_lock() {
+            *frames = None;
+        }
     }
 }
 
@@ -285,9 +315,7 @@ impl SandboxHandle {
             .await
             .map_err(map_alien_error)?;
 
-        Ok(CommandStreamHandle {
-            frames: Arc::new(Mutex::new(Some(frames))),
-        })
+        Ok(CommandStreamHandle::new(frames))
     }
 
     /// Reads a file out of the sandbox.
@@ -314,10 +342,7 @@ impl SandboxHandle {
     ) -> napi::Result<()> {
         let sandbox = self.inner.clone();
         sandbox
-            .write_files(
-                &session_id,
-                BTreeMap::from([(path, contents.to_vec())]),
-            )
+            .write_files(&session_id, BTreeMap::from([(path, contents.to_vec())]))
             .await
             .map_err(map_alien_error)
     }
@@ -354,5 +379,41 @@ impl SandboxHandle {
             .terminate(&session_id)
             .await
             .map_err(map_alien_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A command that never prints parks `next()` on the lock; `close()` must still end it,
+    /// or the caller that gave up cannot cancel a silent command.
+    #[test]
+    fn close_ends_a_next_parked_on_a_silent_command() {
+        let handle = CommandStreamHandle::new(futures::stream::pending().boxed());
+        let (frame, ()) =
+            futures::executor::block_on(futures::future::join(handle.next(), async {
+                handle.close().await;
+            }));
+        assert!(
+            frame.expect("close is not an error").is_none(),
+            "a closed stream reports its end, not a frame"
+        );
+        assert!(
+            futures::executor::block_on(handle.frames.lock()).is_none(),
+            "the stream must be dropped, that is what reaches the backend"
+        );
+    }
+
+    /// Closing before or after the end is a no-op; a caller need not track which came first.
+    #[test]
+    fn close_is_idempotent_and_next_stays_null() {
+        let handle = CommandStreamHandle::new(futures::stream::empty().boxed());
+        futures::executor::block_on(async {
+            handle.close().await;
+            handle.close().await;
+            assert!(handle.next().await.expect("closed").is_none());
+            assert!(handle.next().await.expect("closed").is_none());
+        });
     }
 }
