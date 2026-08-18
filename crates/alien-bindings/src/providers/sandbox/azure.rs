@@ -11,8 +11,7 @@ use futures::stream::{self, BoxStream};
 
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{
-    refuse_unrepresentable_deadline, timeout_prefix, DEADLINE_GRACE, TIMEOUT_EXIT_CODE,
-    TIMEOUT_PROBE,
+    refuse_unrepresentable_deadline, timeout_prefix, wrapper_killed, DEADLINE_GRACE, TIMEOUT_PROBE,
 };
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
@@ -172,7 +171,9 @@ impl Sandbox for AzureSandbox {
         } else {
             request.command.join(" ")
         };
+        let started = std::time::Instant::now();
         let result = self.execute_within(session_id, &shell, &request).await?;
+        let elapsed = started.elapsed();
 
         // The data plane returns a completed result, not a stream, so the frames are
         // reconstructed in order. Streaming is unverified on Azure, and pretending otherwise
@@ -191,7 +192,7 @@ impl Sandbox for AzureSandbox {
             }));
         }
 
-        if result.exit_code == Some(TIMEOUT_EXIT_CODE) {
+        if wrapper_killed(result.exit_code, elapsed, request.deadline) {
             // The output is kept and the terminal item says why it ends, as the agent-backed
             // providers do; the session is untouched.
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -372,6 +373,7 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::sandbox::TIMEOUT_EXIT_CODE;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use futures::StreamExt;
 
@@ -552,6 +554,9 @@ mod tests {
                 .lock()
                 .expect("commands lock")
                 .push(command.to_string());
+            // A real data plane takes time; the deadline classification reads the clock, so a
+            // double that answered instantly would never look like a command that ran.
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             let next = self.results.lock().expect("results lock").pop_front();
             match next {
                 Some(result) => Ok(result),
@@ -582,6 +587,9 @@ mod tests {
     /// The deadline is enforced inside the session: the command is wrapped in `timeout`, and
     /// when it fires the output is kept, the stream ends in `deadlineExceeded`, and the session
     /// is not touched — the caller can keep using it, as on the agent-supervised backends.
+    ///
+    /// The fake answers instantly, so the deadline is one millisecond: `124` counts as the
+    /// wrapper's kill only once the run has reached the deadline.
     #[tokio::test]
     async fn a_command_past_its_deadline_is_killed_in_place_and_the_session_survives() {
         let client = ScriptedExec::new(vec![
@@ -591,11 +599,18 @@ mod tests {
         let sandbox = provider(client.clone());
 
         let frames: Vec<Result<CommandOutput>> = sandbox
-            .run_command("s1", command(30))
+            .run_command(
+                "s1",
+                RunCommandRequest {
+                    deadline: std::time::Duration::from_millis(1),
+                    ..command(30)
+                },
+            )
             .await
             .expect("the call itself succeeds; the deadline is reported in the stream")
             .collect()
             .await;
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
 
         assert!(
             matches!(&frames[0], Ok(CommandOutput::Stdout { data, .. }) if data == b"partial\n"),
@@ -617,9 +632,32 @@ mod tests {
             sent,
             vec![
                 TIMEOUT_PROBE.to_string(),
-                "timeout -s KILL 30 sh -c 'sleep forever'".to_string()
+                "timeout -s KILL 0.001 sh -c 'sleep forever'".to_string()
             ]
         );
+    }
+
+    /// 124 is an ordinary exit status. A command that returns it well inside its deadline
+    /// exited on its own, and saying otherwise would tell the caller its command was killed.
+    #[tokio::test]
+    async fn a_command_exiting_124_of_its_own_accord_is_an_exit_not_a_deadline() {
+        let client = ScriptedExec::new(vec![
+            ScriptedExec::exec_result(0, "", ""),
+            ScriptedExec::exec_result(TIMEOUT_EXIT_CODE, "done\n", ""),
+        ]);
+        let sandbox = provider(client.clone());
+
+        let frames: Vec<Result<CommandOutput>> = sandbox
+            .run_command("s1", command(300))
+            .await
+            .expect("runs")
+            .collect()
+            .await;
+
+        assert!(matches!(
+            &frames[1],
+            Ok(CommandOutput::Exit { code: 124, .. })
+        ));
     }
 
     /// A session image without `timeout` cannot be bounded from inside: the probe says so once,

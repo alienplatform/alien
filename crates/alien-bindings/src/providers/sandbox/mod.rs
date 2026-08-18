@@ -33,6 +33,20 @@ pub(crate) const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from
 #[cfg(any(feature = "azure", feature = "local"))]
 pub(crate) const TIMEOUT_EXIT_CODE: i32 = 124;
 
+/// Whether the wrapper killed the command, rather than the command exiting 124 of its own accord.
+///
+/// The exit code alone cannot say: 124 is an ordinary status a command may return. The clock
+/// settles it — the wrapper cannot fire before the deadline — so a 124 that arrives early is the
+/// command's own, and is reported as an exit like any other.
+#[cfg(any(feature = "azure", feature = "local"))]
+pub(crate) fn wrapper_killed(
+    exit_code: Option<i32>,
+    elapsed: std::time::Duration,
+    deadline: std::time::Duration,
+) -> bool {
+    exit_code == Some(TIMEOUT_EXIT_CODE) && elapsed >= deadline
+}
+
 /// The `timeout` prefix that bounds a command inside the session: `KILL` so a process that traps
 /// `TERM` cannot outlive its deadline. The bound is the deadline itself, to the millisecond —
 /// GNU coreutils and BusyBox both take a fractional duration — so a sub-second deadline is not
@@ -94,6 +108,24 @@ mod tests {
             timeout_prefix(std::time::Duration::from_millis(500))[3],
             "0.500"
         );
+    }
+
+    /// 124 is an ordinary exit status, so the clock is what tells the wrapper's kill from a
+    /// command that returned it itself.
+    #[test]
+    fn a_command_exiting_124_early_is_not_a_deadline() {
+        let deadline = std::time::Duration::from_secs(30);
+        assert!(wrapper_killed(
+            Some(TIMEOUT_EXIT_CODE),
+            std::time::Duration::from_secs(30),
+            deadline
+        ));
+        assert!(!wrapper_killed(
+            Some(TIMEOUT_EXIT_CODE),
+            std::time::Duration::from_secs(2),
+            deadline
+        ));
+        assert!(!wrapper_killed(Some(0), deadline, deadline));
     }
 
     /// A deadline the bound cannot express is refused, not stretched.

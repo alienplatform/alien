@@ -17,8 +17,7 @@ use serde_json::json;
 
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{
-    refuse_unrepresentable_deadline, timeout_prefix, DEADLINE_GRACE, TIMEOUT_EXIT_CODE,
-    TIMEOUT_PROBE,
+    refuse_unrepresentable_deadline, timeout_prefix, wrapper_killed, DEADLINE_GRACE, TIMEOUT_PROBE,
 };
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
@@ -330,7 +329,9 @@ impl Sandbox for LocalSandbox {
         } else {
             request.command.clone()
         };
+        let started = std::time::Instant::now();
         let response = self.exec_within(session_id, &argv, &request).await?;
+        let elapsed = started.elapsed();
 
         let mut frames: Vec<Result<CommandOutput>> = Vec::new();
         for (index, frame) in response.output.into_iter().enumerate() {
@@ -353,7 +354,11 @@ impl Sandbox for LocalSandbox {
             }));
         }
 
-        if response.exit_code == i64::from(TIMEOUT_EXIT_CODE) {
+        if wrapper_killed(
+            i32::try_from(response.exit_code).ok(),
+            elapsed,
+            request.deadline,
+        ) {
             // The output is kept and the terminal item says why it ends, as the agent-backed
             // providers do; the session is untouched.
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -488,6 +493,7 @@ impl Sandbox for LocalSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::sandbox::TIMEOUT_EXIT_CODE;
     use axum::extract::{Path, State};
     use axum::routing::post;
     use axum::{Json, Router};
@@ -523,6 +529,9 @@ mod tests {
             let command: Vec<String> =
                 serde_json::from_value(body["command"].clone()).expect("argv");
             route.commands.lock().expect("commands").push(command);
+            // A real route takes time; the deadline classification reads the clock, so a double
+            // that answered instantly would never look like a command that ran.
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             let next = route.execs.lock().expect("execs").pop_front();
             match next {
                 Some(response) => Json(response),
@@ -569,6 +578,9 @@ mod tests {
     /// The deadline is enforced inside the session: the argv is prefixed with `timeout`, and when
     /// it fires the output is kept, the stream ends in `deadlineExceeded`, and the session is not
     /// touched.
+    ///
+    /// The route double answers instantly, so the deadline is one millisecond: `124` counts as
+    /// the wrapper's kill only once the run has reached the deadline.
     #[tokio::test]
     async fn a_command_past_its_deadline_is_killed_in_place_and_the_session_survives() {
         let route = Arc::new(Route::default());
@@ -580,7 +592,13 @@ mod tests {
         let sandbox = serve(route.clone()).await;
 
         let frames: Vec<Result<CommandOutput>> = sandbox
-            .run_command("s1", command(30))
+            .run_command(
+                "s1",
+                RunCommandRequest {
+                    deadline: std::time::Duration::from_millis(1),
+                    ..command(30)
+                },
+            )
             .await
             .expect("the deadline is reported in the stream")
             .collect()
@@ -606,11 +624,36 @@ mod tests {
         assert_eq!(sent[0], vec!["sh", "-c", TIMEOUT_PROBE]);
         assert_eq!(
             sent[1],
-            vec!["timeout", "-s", "KILL", "30", "sleep", "forever"]
+            vec!["timeout", "-s", "KILL", "0.001", "sleep", "forever"]
                 .into_iter()
                 .map(String::from)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// 124 is an ordinary exit status. A command that returns it well inside its deadline exited
+    /// on its own, and saying otherwise would tell the caller its command was killed.
+    #[tokio::test]
+    async fn a_command_exiting_124_of_its_own_accord_is_an_exit_not_a_deadline() {
+        let route = Arc::new(Route::default());
+        {
+            let mut execs = route.execs.lock().expect("execs");
+            execs.push_back(exec_response(0, "", ""));
+            execs.push_back(exec_response(i64::from(TIMEOUT_EXIT_CODE), "done\n", ""));
+        }
+        let sandbox = serve(route.clone()).await;
+
+        let frames: Vec<Result<CommandOutput>> = sandbox
+            .run_command("s1", command(300))
+            .await
+            .expect("runs")
+            .collect()
+            .await;
+
+        assert!(matches!(
+            &frames[1],
+            Ok(CommandOutput::Exit { code: 124, .. })
+        ));
     }
 
     /// A session image without `timeout` cannot be bounded from inside: the probe says so once,
