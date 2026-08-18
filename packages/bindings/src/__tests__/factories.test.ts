@@ -5,6 +5,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawCommandFrame,
+  RawCommandStreamHandle,
   RawContainerHandle,
   RawKeyHandle,
   RawKvHandle,
@@ -632,9 +633,6 @@ describe("createFactories postgres surface", () => {
 })
 
 describe("sandbox streaming", () => {
-  // Every other binding drains its stream before returning. This one must not: the resource
-  // exists for agent loops that print as they go, and a caller has to see a frame before the
-  // command ends.
   it("yields frames one at a time and ends after the terminal frame", async () => {
     const { addon } = fakeAddon()
     const { sandbox } = createFactories(() => addon)
@@ -651,9 +649,63 @@ describe("sandbox streaming", () => {
     expect(seen).toEqual(["hello", "problem", "exit:3"])
   })
 
-  // A caller that never iterates must never start a command: the handle is opened on the first
-  // pull, which is also what makes the loop apply backpressure.
-  it("does not run the command until the iteration starts", async () => {
+  it("starts one command when two pulls race the setup", async () => {
+    const { addon } = fakeAddon()
+    let opened = 0
+    let finishSetup: () => void = () => {}
+    let setupStarted: () => void = () => {}
+    const setup = new Promise<void>(resolve => {
+      finishSetup = resolve
+    })
+    const started = new Promise<void>(resolve => {
+      setupStarted = resolve
+    })
+
+    class CountingBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async (...args: Parameters<RawSandboxHandle["runCommand"]>) => {
+            opened += 1
+            setupStarted()
+            await setup
+            return await inner.runCommand(...args)
+          },
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: CountingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+    const first = iterator.next()
+    const second = iterator.next()
+
+    await started
+    expect(opened).toBe(1)
+
+    finishSetup()
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      {
+        done: false,
+        value: { kind: "stdout", seq: 0, data: Buffer.from("hello\n") },
+      },
+      {
+        done: false,
+        value: { kind: "stderr", seq: 1, data: Buffer.from("problem\n") },
+      },
+    ])
+
+    expect(opened).toBe(1)
+  })
+
+  it("does not start a command when the caller never pulls", async () => {
     const { addon } = fakeAddon()
     let opened = 0
 
@@ -674,19 +726,535 @@ describe("sandbox streaming", () => {
       ...addon,
       BindingsHandle: CountingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
     }))
-    const iterable = sandbox("sbx").runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
-    expect(opened).toBe(0)
 
-    for await (const _ of iterable) {
-      break
-    }
-    expect(opened).toBe(1)
+    sandbox("sbx").runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(opened).toBe(0)
   })
 
-  // Leaving the loop early is the ordinary way to stop reading — "run until the first match",
-  // an error part way through, a caller that gives up. The command keeps running and keeps
-  // costing until the stream is released, so leaving that to garbage collection is a leak
-  // measured in sandbox minutes.
+  it("closes a parked read before return waits for it", async () => {
+    const { addon } = fakeAddon()
+    let closed = 0
+    let readStarted: () => void = () => {}
+    let finishRead: (frame: RawCommandFrame | null) => void = () => {}
+    const reading = new Promise<void>(resolve => {
+      readStarted = resolve
+    })
+    const parked = new Promise<RawCommandFrame | null>(resolve => {
+      finishRead = resolve
+    })
+
+    class SilentBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => {
+            return {
+              next: () => {
+                readStarted()
+                return parked
+              },
+              close: async () => {
+                closed += 1
+                finishRead(null)
+              },
+            }
+          },
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: SilentBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+    const pull = iterator.next()
+    await reading
+
+    const returned = iterator.return?.()
+    if (!returned) throw new Error("iterator return is missing")
+
+    expect(closed).toBe(1)
+    await expect(returned).resolves.toEqual({ done: true, value: undefined })
+    await expect(pull).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it("closes a command that finishes setup after return", async () => {
+    const { addon } = fakeAddon()
+    let allowSetup: () => void = () => {}
+    let setupStarted: () => void = () => {}
+    const setup = new Promise<void>(resolve => {
+      allowSetup = resolve
+    })
+    const started = new Promise<void>(resolve => {
+      setupStarted = resolve
+    })
+    let closed = 0
+    const next = vi.fn<RawCommandStreamHandle["next"]>(async () => ({
+      kind: "stdout",
+      seq: 0,
+      data: Buffer.from("too late"),
+    }))
+    const runCommand = vi.fn<RawSandboxHandle["runCommand"]>(async () => {
+      setupStarted()
+      await setup
+      return {
+        next,
+        close: async () => {
+          closed += 1
+        },
+      }
+    })
+
+    class SlowStartBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return { ...inner, runCommand }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: SlowStartBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+    const pull = iterator.next()
+    await started
+
+    // return() must not resolve while the command it is cancelling is still being started:
+    // a caller told the cancel is complete would otherwise leave a command about to run.
+    let returned = false
+    const returning = iterator.return?.().then(result => {
+      returned = true
+      return result
+    })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(returned).toBe(false)
+    expect(closed).toBe(0)
+
+    allowSetup()
+
+    await expect(returning).resolves.toEqual({ done: true, value: undefined })
+    expect(closed).toBe(1)
+    await expect(pull).resolves.toEqual({ done: true, value: undefined })
+    expect(next).not.toHaveBeenCalled()
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+    expect(runCommand).toHaveBeenCalledTimes(1)
+    expect(closed).toBe(1)
+  })
+
+  // A pull in flight when the caller cancels only observes the cancel. The close failure belongs
+  // to the throw() that caused it, and must not surface a second time on the pending pull.
+  it("completes a pending pull as done when throw() closes and the close fails", async () => {
+    const { addon } = fakeAddon()
+    let unpark: (frame: RawCommandFrame | null) => void = () => {}
+    const parked = new Promise<RawCommandFrame | null>(resolve => {
+      unpark = resolve
+    })
+
+    class ParkedFailingCloseBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: () => parked,
+            close: async () => {
+              unpark(null)
+              throw new Error("close exploded")
+            },
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: ParkedFailingCloseBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+    const pending = iterator.next()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const original = new Error("caller gave up")
+    await expect(iterator.throw?.(original)).rejects.toBe(original)
+    await expect(pending).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  // Same rule where the stream itself fails: the read error ended iteration, and the close
+  // that follows must not overwrite it even if that close also fails.
+  it("reports the read error, not the close error, when both fail", async () => {
+    const { addon } = fakeAddon()
+    let closeAttempts = 0
+
+    class DoubleFaultBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: async () => {
+              throw new Error("read exploded")
+            },
+            close: async () => {
+              closeAttempts += 1
+              throw new Error("close exploded")
+            },
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: DoubleFaultBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+
+    await expect(iterator.next()).rejects.toThrow("read exploded")
+    expect(closeAttempts).toBe(1)
+  })
+
+  // The caller's error is what iteration failed on; a close that also fails must not replace it.
+  it("rethrows the caller's error from throw() even when the native close fails", async () => {
+    const { addon } = fakeAddon()
+    let closeAttempts = 0
+
+    class FailingCloseBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: async () => ({ kind: "stdout", seq: 0, data: Buffer.from("x") }),
+            close: async () => {
+              closeAttempts += 1
+              throw new Error("close exploded")
+            },
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: FailingCloseBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+    await iterator.next()
+
+    const original = new Error("caller gave up")
+    await expect(iterator.throw?.(original)).rejects.toBe(original)
+    expect(closeAttempts).toBe(1)
+  })
+
+  it("serializes overlapping pulls after the stream opens", async () => {
+    const { addon } = fakeAddon()
+    let active = false
+    let reentered = false
+    let finishSecond: () => void = () => {}
+    let secondStarted: () => void = () => {}
+    const second = new Promise<void>(resolve => {
+      finishSecond = resolve
+    })
+    const started = new Promise<void>(resolve => {
+      secondStarted = resolve
+    })
+    const close = vi.fn<RawCommandStreamHandle["close"]>(async () => {})
+    const next = vi.fn<RawCommandStreamHandle["next"]>(async () => {
+      const call = next.mock.calls.length
+      if (active) reentered = true
+      active = true
+      try {
+        if (call === 1) {
+          return { kind: "stdout", seq: 0, data: Buffer.from("first") }
+        }
+        if (call === 2) {
+          secondStarted()
+          await second
+          return { kind: "stderr", seq: 1, data: Buffer.from("second") }
+        }
+        return { kind: "exit", exitCode: 0, truncated: false }
+      } finally {
+        active = false
+      }
+    })
+
+    class SerializedBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({ next, close }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: SerializedBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      [Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "stdout", seq: 0, data: Buffer.from("first") },
+    })
+
+    const secondPull = iterator.next()
+    await started
+    const thirdPull = iterator.next()
+    await Promise.resolve()
+
+    expect(next).toHaveBeenCalledTimes(2)
+    expect(reentered).toBe(false)
+
+    finishSecond()
+
+    await expect(secondPull).resolves.toEqual({
+      done: false,
+      value: { kind: "stderr", seq: 1, data: Buffer.from("second") },
+    })
+    await expect(thirdPull).resolves.toEqual({
+      done: false,
+      value: { kind: "exit", exitCode: 0, truncated: false },
+    })
+    await iterator.return?.()
+
+    expect(reentered).toBe(false)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it("finishes after setup rejects without retaining the rejection", async () => {
+    const { addon } = fakeAddon()
+    const nativeError = new Error(
+      JSON.stringify({
+        code: "SANDBOX_SETUP_FAILED",
+        message: "sandbox setup failed",
+        retryable: true,
+        internal: false,
+      }),
+    )
+    const runCommand = vi.fn<RawSandboxHandle["runCommand"]>(async () => {
+      throw nativeError
+    })
+
+    class FailingBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return { ...inner, runCommand }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: FailingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      [Symbol.asyncIterator]()
+    const error = await iterator.next().catch((caught: unknown) => caught)
+
+    expect(error).not.toBe(nativeError)
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("SANDBOX_SETUP_FAILED")
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+    await expect(iterator.return?.()).resolves.toEqual({ done: true, value: undefined })
+    expect(runCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it("closes the stream and unwraps a rejected native read", async () => {
+    const { addon } = fakeAddon()
+    const nativeError = new Error(
+      JSON.stringify({
+        code: "SANDBOX_READ_FAILED",
+        message: "sandbox read failed",
+        retryable: false,
+        internal: false,
+      }),
+    )
+    const close = vi.fn<RawCommandStreamHandle["close"]>(async () => {})
+
+    class FailingReadBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: async () => {
+              throw nativeError
+            },
+            close,
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: FailingReadBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      [Symbol.asyncIterator]()
+    const error = await iterator.next().catch((caught: unknown) => caught)
+
+    expect(error).not.toBe(nativeError)
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("SANDBOX_READ_FAILED")
+    expect(close).toHaveBeenCalledTimes(1)
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it("closes the stream when frame conversion rejects", async () => {
+    const { addon } = fakeAddon()
+    const close = vi.fn<RawCommandStreamHandle["close"]>(async () => {})
+
+    class UnknownFrameBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: async () => ({ kind: "future-output", seq: 0, data: Buffer.from("unknown") }),
+            close,
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: UnknownFrameBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      [Symbol.asyncIterator]()
+    const error = await iterator.next().catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("UNKNOWN_SANDBOX_VALUE")
+    expect(close).toHaveBeenCalledTimes(1)
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it("drops a buffered frame returned while a parked read is closing", async () => {
+    const { addon } = fakeAddon()
+    let readStarted: () => void = () => {}
+    let finishRead: (frame: RawCommandFrame | null) => void = () => {}
+    let closed = false
+    const reading = new Promise<void>(resolve => {
+      readStarted = resolve
+    })
+    const parked = new Promise<RawCommandFrame | null>(resolve => {
+      finishRead = resolve
+    })
+    const close = vi.fn<RawCommandStreamHandle["close"]>(async () => {
+      if (closed) return
+      closed = true
+      finishRead({ kind: "stdout", seq: 0, data: Buffer.from("buffered") })
+    })
+
+    class BufferedFrameBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: () => {
+              readStarted()
+              return parked
+            },
+            close,
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: BufferedFrameBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 1000 })
+      [Symbol.asyncIterator]()
+    const pull = iterator.next()
+    await reading
+
+    await expect(iterator.return?.()).resolves.toEqual({ done: true, value: undefined })
+    await expect(pull).resolves.toEqual({ done: true, value: undefined })
+    expect(close).toHaveBeenCalled()
+  })
+
+  it("rejects return when the native close fails", async () => {
+    const { addon } = fakeAddon()
+    const nativeError = new Error(
+      JSON.stringify({
+        code: "SANDBOX_CLOSE_FAILED",
+        message: "sandbox close failed",
+        retryable: false,
+        internal: false,
+      }),
+    )
+    const close = vi.fn<RawCommandStreamHandle["close"]>(async () => {
+      throw nativeError
+    })
+
+    class FailingCloseBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          runCommand: async () => ({
+            next: async () => ({ kind: "stdout", seq: 0, data: Buffer.from("started") }),
+            close,
+          }),
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: FailingCloseBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const iterator = sandbox("sbx")
+      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      [Symbol.asyncIterator]()
+    await iterator.next()
+    const error = await iterator.return?.().catch((caught: unknown) => caught)
+
+    expect(error).not.toBe(nativeError)
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("SANDBOX_CLOSE_FAILED")
+    expect(close).toHaveBeenCalledTimes(1)
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
   it.each([
     [
       "the loop is broken out of",
@@ -739,8 +1307,6 @@ describe("sandbox streaming", () => {
     expect(closed).toBe(1)
   })
 
-  // env is the one option a caller cannot work around: without it reaching the addon there is no
-  // way to configure a session's environment from TypeScript at all.
   it("passes env through to the addon on create and on a command", async () => {
     const { addon } = fakeAddon()
     const seen: Array<Record<string, string> | null | undefined> = []

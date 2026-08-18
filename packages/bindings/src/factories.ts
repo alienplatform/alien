@@ -24,6 +24,7 @@ import type {
   NativeAddon,
   RawBindingsHandle,
   RawCommandFrame,
+  RawCommandStreamHandle,
   RawContainerHandle,
   RawKeyHandle,
   RawKvHandle,
@@ -206,36 +207,113 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         ),
       ),
     list: () => guard(handle, async raw => (await raw.list()).map(session)),
-    // Not `async function*` over a resolved stream: the handle is opened on the first pull, so
-    // a caller that never iterates never starts a command.
     runCommand: (sessionId, command, options) => ({
-      async *[Symbol.asyncIterator]() {
-        const stream = await guard(handle, raw =>
-          raw.runCommand(
-            sessionId,
-            command,
-            options.deadlineMs,
-            options.workingDirectory ?? null,
-            options.env ?? null,
-          ),
-        )
+      [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
+        let stream: RawCommandStreamHandle | null = null
+        let starting: Promise<RawCommandStreamHandle> | null = null
+        let tail: Promise<unknown> = Promise.resolve()
+        let finished = false
 
-        // A caller that breaks out of the loop, returns, or throws still leaves a command
-        // running in the sandbox. `for await` calls the generator's `return()` on every one of
-        // those, so closing here is what stops paying for output nobody is reading.
-        try {
-          while (true) {
-            let next: RawCommandFrame | null
+        // A cancel that lands during setup has no handle yet, so it waits for the one being made:
+        // resolving sooner would report a command stopped that is about to start.
+        let closing: Promise<void> | null = null
+        const close = () => {
+          closing ??= (async () => {
+            const open = stream ?? (await starting?.catch(() => null)) ?? null
+            if (open === null) return
             try {
-              next = await stream.next()
+              await open.close()
             } catch (err) {
               throw unwrapNapiError(err)
             }
-            if (next === null) return
-            yield frame(next)
-          }
-        } finally {
-          await stream.close()
+          })()
+          return closing
+        }
+
+        // Cancellation bypasses the pull queue so it can release a native read waiting for output.
+        const finish = async () => {
+          finished = true
+          await close()
+        }
+
+        // The fault iteration ended on is what the caller must see; a close that also fails is
+        // reported only when it is the sole failure, from `return()`.
+        const fail = async (err: unknown): Promise<never> => {
+          await finish().catch(() => undefined)
+          throw err
+        }
+
+        // A pull that observes a cancel only reports `done`: the `return()` or `throw()` that
+        // cancelled is where a failed close is reported, and it must not be reported twice.
+        const cancelled = async (): Promise<IteratorResult<CommandFrame, undefined>> => {
+          await finish().catch(() => undefined)
+          return { done: true, value: undefined }
+        }
+
+        return {
+          next() {
+            const pull = tail.then(async (): Promise<IteratorResult<CommandFrame, undefined>> => {
+              if (finished) {
+                return { done: true, value: undefined }
+              }
+              let open = stream
+              if (open === null) {
+                starting = guard(handle, raw =>
+                  raw.runCommand(
+                    sessionId,
+                    command,
+                    options.deadlineMs,
+                    options.workingDirectory ?? null,
+                    options.env ?? null,
+                  ),
+                )
+                try {
+                  open = await starting
+                  stream = open
+                } catch (err) {
+                  finished = true
+                  throw err
+                }
+              }
+
+              // A return during setup cannot close a handle until this pull receives it.
+              if (finished) {
+                return cancelled()
+              }
+
+              let next: RawCommandFrame | null
+              try {
+                next = await open.next()
+              } catch (err) {
+                return fail(unwrapNapiError(err))
+              }
+
+              if (finished) {
+                return cancelled()
+              }
+              if (next === null) {
+                await finish()
+                return { done: true, value: undefined }
+              }
+
+              let value: CommandFrame
+              try {
+                value = frame(next)
+              } catch (err) {
+                return fail(unwrapNapiError(err))
+              }
+              return { done: false, value }
+            })
+
+            // A rejected pull must not poison the queue behind it.
+            tail = pull.catch(() => undefined)
+            return pull
+          },
+          async return() {
+            await finish()
+            return { done: true, value: undefined }
+          },
+          throw: (err: unknown) => fail(err),
         }
       },
     }),
