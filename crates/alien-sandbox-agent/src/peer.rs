@@ -104,6 +104,10 @@ pub fn owning_uid(_peer: SocketAddr) -> Option<u32> {
     None
 }
 
+/// The `st` column of a socket that is connected, as `/proc/net/tcp` writes it.
+#[cfg(any(target_os = "linux", test))]
+const TCP_ESTABLISHED: &str = "01";
+
 /// Scans one `/proc/net/tcp`-format table. Split out so the parsing is testable off Linux.
 #[cfg(any(target_os = "linux", test))]
 ///
@@ -124,6 +128,13 @@ fn find_owner(table: &str, peer: SocketAddr) -> Option<u32> {
         // The port alone is not enough: two sockets can share a port across interfaces, and
         // attributing the wrong one would refuse a legitimate caller.
         if !address_matches(address, peer) {
+            continue;
+        }
+
+        // Only a live socket has an owner. A closed one lingers in TIME_WAIT under uid 0 on the
+        // same address and port, and the kernel hands that port to a new connection while the
+        // stale row is still listed — reading it would attribute the caller to root and serve it.
+        if columns[3] != TCP_ESTABLISHED {
             continue;
         }
 
@@ -225,6 +236,29 @@ mod tests {
     #[test]
     fn a_port_with_no_entry_is_not_attributed() {
         assert_eq!(find_owner(TABLE, v4(0x9999)), None);
+    }
+
+    /// A closed socket stays listed in TIME_WAIT under uid 0, and the kernel reuses its port for
+    /// a new connection while that row is still there. The stale row sorts first; attributing
+    /// from it would call the supervised code root and serve it.
+    #[test]
+    fn a_stale_time_wait_row_on_the_same_port_is_skipped() {
+        const REUSED: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C1D4 0100007F:2313 06 00000000:00000000 03:00000A2C 00000000     0        0 0 3
+   1: 0100007F:C1D4 0100007F:2314 01 00000000:00000000 00:00000000 00000000 60000        0 12347 1";
+        assert_eq!(
+            find_owner(REUSED, v4(0xC1D4)),
+            Some(60000),
+            "the live row owns the socket, not the TIME_WAIT one ahead of it"
+        );
+
+        const ONLY_STALE: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:C1D4 0100007F:2313 06 00000000:00000000 03:00000A2C 00000000     0        0 0 3";
+        assert_eq!(
+            find_owner(ONLY_STALE, v4(0xC1D4)),
+            None,
+            "a socket that has closed has no owner to attribute"
+        );
     }
 
     /// The port alone would match both rows here. Attributing by port only would report the
