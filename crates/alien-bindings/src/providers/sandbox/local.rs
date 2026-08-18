@@ -188,7 +188,8 @@ impl LocalSandbox {
     /// The guard is the deadline plus the grace the in-session `timeout` needs to report back.
     /// When it fires the session itself did not end the command, so the session is ended — a
     /// force-remove, so the call returns one kill later — and the caller hears that it was.
-    /// It lands late only on a session that could not run `timeout`.
+    /// `deadlineExceeded` means the command has stopped, never that a stop was requested; the
+    /// path is reached only by a session that could not run `timeout`.
     async fn exec_within(
         &self,
         session_id: &str,

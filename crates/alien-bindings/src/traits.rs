@@ -1034,6 +1034,11 @@ pub struct RunCommandRequest {
     /// its own the command runs under `timeout` inside the session. Either way the session stays
     /// usable. Only a session that cannot run `timeout` is ended instead, and that call returns
     /// once the session is gone.
+    ///
+    /// On every backend `deadlineExceeded` is reported only once the command has verifiably
+    /// stopped — the agent waits for the kill, `timeout` returns after it, and the fallback
+    /// waits for the session to be absent. It is never reported on a stop that was merely
+    /// requested: a deadline that leaves untrusted code running is not a deadline.
     pub deadline: Duration,
 }
 

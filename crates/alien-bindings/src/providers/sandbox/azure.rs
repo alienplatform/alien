@@ -277,10 +277,13 @@ impl AzureSandbox {
     ///
     /// The guard is the deadline plus the grace the in-session `timeout` needs to report back.
     /// When it fires the session itself did not end the command, so the session is ended, and
-    /// the call returns once that is confirmed: this is the one path where untrusted code is
-    /// known to be running past its deadline, and reporting containment before it held would be
-    /// the claim this resource exists to make good on. It lands late only on a session that
-    /// could not run `timeout` — every other overrun is ended in place, at the deadline.
+    /// the call returns once that is confirmed — the same rule the agent-supervised backends
+    /// follow, where the agent waits for its kill before reporting: `deadlineExceeded` means the
+    /// command has stopped, never that a stop was requested. This is the one path where untrusted
+    /// code is known to be running past its deadline, so it is bounded rather than early: the
+    /// deadline, the grace, and the delete's confirmation window, and it is reached only by a
+    /// session that could not run `timeout` — every other overrun is ended in place, at the
+    /// deadline.
     async fn execute_within(
         &self,
         session_id: &str,
