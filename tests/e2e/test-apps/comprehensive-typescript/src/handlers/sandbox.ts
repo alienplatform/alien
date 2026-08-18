@@ -129,7 +129,10 @@ async function converge(
   for (;;) {
     let refused: string | null = null
     try {
-      await within(box.terminate(sessionId), left())
+      // Half of what is left, so the read that decides the verdict always has the other half. A
+      // terminate that spent the whole reserve would leave the read no time to answer, and a read
+      // that cannot answer would be reported as a session still running.
+      await within(box.terminate(sessionId), Math.max(Math.floor(left() / 2), 1))
     } catch (error: unknown) {
       refused = error instanceof Error ? error.message : String(error)
     }

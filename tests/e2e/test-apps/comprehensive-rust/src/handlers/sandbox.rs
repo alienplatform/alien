@@ -144,7 +144,10 @@ async fn converge(sandbox: &dyn Sandbox, session_id: &str, create_settled: bool)
     let left = || deadline.saturating_duration_since(Instant::now());
 
     loop {
-        let refused = match tokio::time::timeout(left(), sandbox.terminate(session_id)).await {
+        // Half of what is left, so the read that decides the verdict always has the other half.
+        // A terminate that spent the whole reserve would leave the read no time to answer, and a
+        // read that cannot answer would be reported as a session still running.
+        let refused = match tokio::time::timeout(left() / 2, sandbox.terminate(session_id)).await {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
             Err(_) => Some("no answer".to_string()),
