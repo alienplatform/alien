@@ -67,18 +67,23 @@ impl DeadlineReport {
     /// contained it, which is the claim this path exists to make good on. An image that cannot do
     /// that runs nothing — a deadline that cannot be enforced is refused, not approximated.
     ///
-    /// The killer repeats the nonce only when a signal was delivered, so a command that finished
-    /// first is never called killed, and it is stopped once the command is reaped so no sleeper
-    /// outlives it.
+    /// The killer repeats the nonce only when its signal was delivered, so a command that finished
+    /// first is never called killed. Once the command is reaped the killer is told to stop and then
+    /// awaited: asleep, it reaps its own sleeper and leaves at once, so a command that ended early —
+    /// or was killed by something other than the deadline — is not held for the rest of the deadline;
+    /// past its sleep it ignores the stop, so its report lands before it leaves rather than being
+    /// cut off mid-write. It stays a subshell so the nonce reaches it as a variable and never through
+    /// argv, which the command could read.
     pub(crate) fn bounded_program(deadline: std::time::Duration) -> String {
         format!(
             "command -v setsid >/dev/null 2>&1 || exit {unboundable}; \
              nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') || exit {unboundable}; \
              printf '%s\\n' \"$nonce\" >&2; \
              setsid \"$@\" & command_pid=$!; \
-             ( sleep {deadline}; kill -KILL -\"$command_pid\" 2>/dev/null && printf %s \"$nonce\" >&2 ) & killer_pid=$!; \
+             ( sleep {deadline} & sleeper=$!; trap 'kill $sleeper 2>/dev/null; exit' TERM; wait $sleeper; \
+               trap '' TERM; kill -KILL -\"$command_pid\" 2>/dev/null && printf %s \"$nonce\" >&2 ) & killer_pid=$!; \
              wait \"$command_pid\"; status=$?; \
-             kill \"$killer_pid\" 2>/dev/null; \
+             kill \"$killer_pid\" 2>/dev/null; wait \"$killer_pid\"; \
              exit \"$status\"",
             unboundable = Self::UNBOUNDABLE_EXIT_CODE,
             deadline = deadline_seconds(deadline)
@@ -260,8 +265,21 @@ mod tests {
             "the repeat follows a signal that was delivered: {program}"
         );
         assert!(
-            program.contains("kill \"$killer_pid\" 2>/dev/null"),
-            "no sleeper outlives the command: {program}"
+            program.contains("kill \"$killer_pid\" 2>/dev/null; wait \"$killer_pid\""),
+            "the killer is stopped and then awaited, whatever the command's exit: {program}"
+        );
+        assert!(
+            program.contains("wait $sleeper; trap '' TERM; kill -KILL"),
+            "past its sleep the killer ignores the stop, so its report is never cut off: {program}"
+        );
+        assert!(
+            program.contains("trap 'kill $sleeper 2>/dev/null; exit' TERM"),
+            "a stopped killer reaps its own sleeper, so none outlives the command: {program}"
+        );
+        assert!(
+            !program.contains("\"$nonce\" &") && program.contains("( sleep"),
+            "the killer is a subshell: the nonce reaches it as a variable, never as an argument \
+             the command could read from /proc: {program}"
         );
     }
 
