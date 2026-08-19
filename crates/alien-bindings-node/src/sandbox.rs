@@ -141,7 +141,18 @@ impl CommandStreamHandle {
             return Ok(None);
         };
 
-        match select(stream.next(), self.closed.clone()).await {
+        let next = select(stream.next(), self.closed.clone()).await;
+
+        // Whatever won the select, a close that has already fired means the caller has cancelled:
+        // the stream is released, not whatever the stream was about to say. Checked once, here,
+        // rather than in the arm that happened to win — a frame and an error race the signal the
+        // same way, and delivering either would keep the command alive until its deadline.
+        if self.closed.clone().now_or_never().is_some() {
+            *frames = None;
+            return Ok(None);
+        }
+
+        match next {
             Either::Left((Some(Ok(frame)), _)) => Ok(Some(frame_to_js(frame))),
             Either::Left((Some(Err(error)), _)) => Err(map_alien_error(error)),
             Either::Left((None, _)) | Either::Right(_) => {
@@ -403,6 +414,100 @@ mod tests {
             futures::executor::block_on(handle.frames.lock()).is_none(),
             "the stream must be dropped, that is what reaches the backend"
         );
+    }
+
+    /// A frame that becomes ready in the same instant as the close signal wins the select. The
+    /// caller has already cancelled, so the frame is not the answer — the stream is, and it must
+    /// be dropped, or the command it feeds runs on until its deadline with nobody left to stop it.
+    ///
+    /// The race is only reachable while `next()` holds the frames lock, so `close()` cannot drop
+    /// the stream itself; that is arranged by parking `next()` on a stream that yields its frame
+    /// only after the close has been sent.
+    #[test]
+    fn close_racing_a_ready_frame_still_releases_the_stream() {
+        let (release, released) = oneshot::channel::<()>();
+        // The frame arrives only once `released` fires — after close() has been called while
+        // next() is parked inside the select holding the lock.
+        let gated = futures::stream::once(async move {
+            let _ = released.await;
+            Ok(CommandOutput::Stdout {
+                seq: 0,
+                data: b"late".to_vec(),
+            })
+        })
+        .chain(futures::stream::pending());
+        let handle = Arc::new(CommandStreamHandle::new(gated.boxed()));
+
+        futures::executor::block_on(async {
+            let reader = {
+                let handle = Arc::clone(&handle);
+                async move { handle.next().await }
+            };
+            let closer = {
+                let handle = Arc::clone(&handle);
+                async move {
+                    // Let next() take the lock and park; then close, then release the frame so
+                    // both the frame and the close signal are ready in the same poll.
+                    futures::future::ready(()).await;
+                    handle.close().await;
+                    let _ = release.send(());
+                }
+            };
+            let (frame, ()) = futures::future::join(reader, closer).await;
+            assert!(
+                frame.expect("close is not an error").is_none(),
+                "a cancelled command's frame is not delivered: the stream is released instead"
+            );
+            assert!(
+                handle.frames.lock().await.is_none(),
+                "the stream must be dropped, that is what reaches the backend"
+            );
+        });
+    }
+
+    /// The same race with an error instead of a frame: a stream failure that lands in the same
+    /// instant as the close must not be delivered either — the caller has cancelled, and what it
+    /// needs is the stream released, not the stream's last word.
+    #[test]
+    fn close_racing_a_ready_error_still_releases_the_stream() {
+        let (release, released) = oneshot::channel::<()>();
+        let gated = futures::stream::once(async move {
+            let _ = released.await;
+            Err(alien_error::AlienError::new(
+                alien_bindings::error::ErrorData::SandboxUnreachable {
+                    operation: "sandbox.runCommand".to_string(),
+                    reason: "late".to_string(),
+                },
+            ))
+        })
+        .chain(futures::stream::pending());
+        let handle = Arc::new(CommandStreamHandle::new(gated.boxed()));
+
+        futures::executor::block_on(async {
+            let reader = {
+                let handle = Arc::clone(&handle);
+                async move { handle.next().await }
+            };
+            let closer = {
+                let handle = Arc::clone(&handle);
+                async move {
+                    futures::future::ready(()).await;
+                    handle.close().await;
+                    let _ = release.send(());
+                }
+            };
+            let (result, ()) = futures::future::join(reader, closer).await;
+            assert!(
+                result
+                    .expect("a cancelled read is the end, not an error")
+                    .is_none(),
+                "a cancelled command's stream error is not delivered: the stream is released"
+            );
+            assert!(
+                handle.frames.lock().await.is_none(),
+                "the stream must be dropped, that is what reaches the backend"
+            );
+        });
     }
 
     /// Closing before or after the end is a no-op; a caller need not track which came first.
