@@ -13,10 +13,15 @@ use tracing::info;
 pub(super) const STORAGE_BINDING: &str = "alien-storage";
 const KV_BINDING: &str = "alien-kv";
 const SANDBOX_BINDING: &str = "alien-sandbox";
-/// The whole sandbox check, end to end. The app holds itself to a 150s budget and the runtime
-/// closes the connection before that if it stalls, so this only catches a deployment that never
-/// answers at all.
+/// The bound on the sandbox exercise. The app deliberately sets none of its own — a bound inside
+/// it could only make it abandon a session — so this is what turns a hung step into a failed
+/// check. Wider than the runtime's 255s idle close so that close, which carries the app's
+/// diagnostics, is what is seen; this is the backstop for a deployment that never answers.
 const SANDBOX_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60);
+/// The bound on asking the backend what survived: one GET that answers at once or not at all.
+/// Separate from the exercise's, so a stalled inspection cannot eat the exercise's budget nor
+/// stand in for a verdict the exercise already gave.
+const SANDBOX_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
@@ -28,6 +33,14 @@ const AI_BINDING: &str = "test-ai";
 struct BindingTestResponse {
     success: bool,
     binding_name: String,
+}
+
+/// What the app reports the sandbox backend still holds after a check.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SandboxSessionsResponse {
+    enumerable: bool,
+    session_ids: Vec<String>,
 }
 
 /// Helper to get the deployment URL, failing if not yet assigned.
@@ -1104,12 +1117,42 @@ pub async fn check_sandbox(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
     info!("Checking sandbox binding");
 
-    // Bounded above the app's own budgets (create, exercise, terminate and its confirmation), so
-    // an app that hangs is a failed check rather than a hung suite.
-    let client = reqwest::Client::builder()
-        .timeout(SANDBOX_CHECK_TIMEOUT)
-        .build()
-        .context("Failed to build the sandbox check client")?;
+    // The exercise and the leak inspection are two claims, each on its own bound, and the second
+    // is most worth making when the first failed — a handler that gave up, or was cut off, is the
+    // one that leaves a session behind. So the inspection runs whatever the exercise said, and
+    // whatever it says is appended to the exercise's verdict, never put in its place: a fault the
+    // exercise found is the reader's diagnosis, and "could not verify" is only ever added to it.
+    let exercised = tokio::time::timeout(SANDBOX_CHECK_TIMEOUT, exercise_sandbox(url))
+        .await
+        .unwrap_or_else(|_| {
+            bail!(
+                "Sandbox exercise gave no verdict within {}s",
+                SANDBOX_CHECK_TIMEOUT.as_secs()
+            )
+        });
+    let inspected = tokio::time::timeout(SANDBOX_INSPECT_TIMEOUT, surviving_sessions(url))
+        .await
+        .unwrap_or_else(|_| {
+            bail!(
+                "could not verify which sessions survived: no answer within {}s",
+                SANDBOX_INSPECT_TIMEOUT.as_secs()
+            )
+        });
+
+    match (exercised, inspected) {
+        (Ok(()), Ok(())) => {
+            info!("Sandbox binding check passed");
+            Ok(())
+        }
+        (Err(exercise), Ok(())) => Err(exercise),
+        (Ok(()), Err(inspect)) => Err(inspect),
+        (Err(exercise), Err(inspect)) => bail!("{exercise:#}; and afterwards: {inspect:#}"),
+    }
+}
+
+/// Drives the app's sandbox exercise and reads its verdict.
+async fn exercise_sandbox(url: &str) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
     let resp = post_empty(&client, format!("{}/sandbox-test/{}", url, SANDBOX_BINDING))
         .send()
         .await
@@ -1135,7 +1178,38 @@ pub async fn check_sandbox(deployment: &TestDeployment) -> anyhow::Result<()> {
             data.binding_name
         );
     }
+    Ok(())
+}
 
-    info!("Sandbox binding check passed");
+/// Asks the backend, not the handler, which sessions still exist; a survivor fails the check.
+///
+/// A session the handler abandoned would not appear in the handler's own answer. This is a
+/// detector, not the guarantee: a create still in flight when the exercise ended can surface
+/// after this reads, and what catches that is the sandbox's own teardown, which reaps every
+/// session on deletion — pinned by `an_abandoned_session_is_reaped_with_its_sandbox`. Where the
+/// backend cannot enumerate, that is reported as such rather than as zero.
+async fn surviving_sessions(url: &str) -> anyhow::Result<()> {
+    let left: SandboxSessionsResponse = reqwest::Client::new()
+        .get(format!("{}/sandbox-sessions/{}", url, SANDBOX_BINDING))
+        .send()
+        .await
+        .context("Sandbox sessions request failed")?
+        .error_for_status()
+        .context("Sandbox sessions request was refused")?
+        .json()
+        .await
+        .context("Failed to parse sandbox sessions response")?;
+
+    if !left.enumerable {
+        info!("Sandbox backend cannot enumerate sessions; leak check not available here");
+        return Ok(());
+    }
+    if !left.session_ids.is_empty() {
+        bail!(
+            "Sandbox check left {} session(s) running: {:?}",
+            left.session_ids.len(),
+            left.session_ids
+        );
+    }
     Ok(())
 }

@@ -411,6 +411,10 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::sandbox::test_sandbox),
         )
         .route(
+            "/sandbox-sessions/{binding_name}",
+            get(handlers::sandbox::sandbox_sessions),
+        )
+        .route(
             "/queue-test/{binding_name}",
             post(handlers::queue::test_queue),
         )
