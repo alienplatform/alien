@@ -147,15 +147,17 @@ pub async fn sandbox_sessions(
     }
 }
 
-/// The part of the test that can fail without leaking a session.
-async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
-    let marker = format!("alien-sandbox-e2e-{}", Utc::now().timestamp_millis());
-
+/// Runs a command to completion and returns its stdout, stderr and exit code.
+async fn run_to_completion(
+    sandbox: &dyn Sandbox,
+    session_id: &str,
+    command: Vec<String>,
+) -> Result<(Vec<u8>, Vec<u8>, Option<i32>)> {
     let mut frames = sandbox
         .run_command(
             session_id,
             RunCommandRequest {
-                command: vec!["/bin/echo".to_string(), marker.clone()],
+                command,
                 working_directory: None,
                 env: BTreeMap::new(),
                 deadline: Duration::from_secs(30),
@@ -178,6 +180,20 @@ async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
             CommandOutput::Stderr { data, .. } => stderr.extend_from_slice(&data),
         }
     }
+
+    Ok((stdout, stderr, exit_code))
+}
+
+/// The part of the test that can fail without leaking a session.
+async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
+    let marker = format!("alien-sandbox-e2e-{}", Utc::now().timestamp_millis());
+
+    let (stdout, stderr, exit_code) = run_to_completion(
+        sandbox,
+        session_id,
+        vec!["/bin/echo".to_string(), marker.clone()],
+    )
+    .await?;
 
     if exit_code != Some(0) {
         // stderr is kept, not reduced to a boolean: when this fails it is the only thing that
@@ -219,6 +235,35 @@ async fn exercise(sandbox: &dyn Sandbox, session_id: &str) -> Result<()> {
     if read_back != marker.as_bytes() {
         return Err(AlienError::new(ErrorData::TestValidationFailed {
             reason: "read_file returned different bytes than write_files sent".to_string(),
+        }));
+    }
+
+    // Read the same file from inside the session, not only back through the agent. `read_file` is
+    // the agent reading what the agent wrote, so it holds even when the command the upload exists
+    // for cannot open it — which is the difference between the backends that run an agent as a
+    // different user than the command and the ones that do not.
+    let (inside, inside_stderr, inside_exit) = run_to_completion(
+        sandbox,
+        session_id,
+        vec!["/bin/cat".to_string(), "e2e/input.txt".to_string()],
+    )
+    .await?;
+
+    if inside_exit != Some(0) {
+        return Err(AlienError::new(ErrorData::TestValidationFailed {
+            reason: format!(
+                "the session could not read the file written into it, exit {inside_exit:?}: {}",
+                String::from_utf8_lossy(&inside_stderr)
+            ),
+        }));
+    }
+
+    if !String::from_utf8_lossy(&inside).contains(&marker) {
+        return Err(AlienError::new(ErrorData::TestValidationFailed {
+            reason: format!(
+                "the session read different bytes than write_files sent: '{}'",
+                String::from_utf8_lossy(&inside)
+            ),
         }));
     }
 

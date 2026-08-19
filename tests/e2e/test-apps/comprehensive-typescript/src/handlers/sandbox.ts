@@ -101,6 +101,27 @@ async function exercise(box: Sandbox, sessionId: string, marker: string): Promis
     return "readFile returned different bytes than writeFiles sent"
   }
 
+  // Read the same file from inside the session, not only back through the agent. `readFile` is
+  // the agent reading what the agent wrote, so it holds even when the command that the upload
+  // exists for cannot open it — which is the difference between the backends that run an agent
+  // as a different user than the command and the ones that do not.
+  let fromInside = ""
+  let insideStderr = ""
+  let insideExit: number | undefined
+  for await (const frame of box.runCommand(sessionId, ["/bin/cat", "e2e/input.txt"], {
+    deadlineMs: 30_000,
+  })) {
+    if (frame.kind === "stdout") fromInside += frame.data.toString("utf8")
+    if (frame.kind === "stderr") insideStderr += frame.data.toString("utf8")
+    if (frame.kind === "exit") insideExit = frame.exitCode
+  }
+  if (insideExit !== 0) {
+    return `the session could not read the file written into it, exit ${insideExit}: ${insideStderr}`
+  }
+  if (!fromInside.includes(marker)) {
+    return `the session read different bytes than writeFiles sent: ${fromInside}`
+  }
+
   return null
 }
 
