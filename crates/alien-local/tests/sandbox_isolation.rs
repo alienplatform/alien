@@ -464,3 +464,35 @@ fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     out
 }
+
+/// A session nobody terminated — a caller that hung, was cut off, or crashed — must not outlive
+/// the sandbox. Deletion reaps every session by label, whether or not its creator ever came back,
+/// which is what lets a caller leave cleanup to the resource rather than race it inside a request.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn an_abandoned_session_is_reaped_with_its_sandbox() {
+    let (manager, _dir) = manager();
+    let sandbox = "isolation-reap";
+    manager.reap(sandbox).await.expect("clean slate");
+
+    manager
+        .create_session(sandbox, "abandoned", &config(SandboxEgressMode::Deny))
+        .await
+        .expect("session starts");
+    // Deliberately no terminate: this is the session a caller walked away from.
+    let before = manager.list_sessions(sandbox).await.expect("lists");
+    assert_eq!(
+        before.len(),
+        1,
+        "the abandoned session is running: {before:?}"
+    );
+
+    let reaped = manager.reap(sandbox).await.expect("reap");
+    assert_eq!(reaped, 1, "reap reports the one session it removed");
+
+    let after = manager.list_sessions(sandbox).await.expect("lists");
+    assert!(
+        after.is_empty(),
+        "nothing survives the sandbox's own teardown: {after:?}"
+    );
+}

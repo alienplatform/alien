@@ -313,3 +313,78 @@ async fn the_token_file_is_not_world_readable() {
         );
     }
 }
+
+/// Removing the route is what makes a sweep final, so it has to mean "no create is in flight" and
+/// not merely "no new create is accepted". A create already inside the route when removal starts
+/// must have committed by the time removal returns — otherwise the reap that follows can run
+/// between the two, and the session it missed lives on with no route left to reach it by.
+///
+/// The create is made genuinely slow by pointing it at an image the daemon has to pull, so it is
+/// parked inside the route for seconds when removal fires; a warm image commits in milliseconds
+/// and would let removal win every race without proving anything.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
+    const SLOW_IMAGE: &str = "busybox:1.36";
+    const SANDBOX_SLOW: &str = "route-slow";
+    // Absent before every run, so the pull — and the in-flight window — is real each time.
+    let _ = tokio::process::Command::new("docker")
+        .args(["image", "rm", "-f", SLOW_IMAGE])
+        .output()
+        .await;
+
+    let dir = TempDir::new().expect("temp dir");
+    let manager = Arc::new(
+        LocalSandboxManager::new(dir.path().to_path_buf()).expect("Docker must be reachable"),
+    );
+    manager.reap(SANDBOX_SLOW).await.expect("clean slate");
+    let template = SandboxSessionConfig {
+        image: SLOW_IMAGE.to_string(),
+        cpu_cores: 0.5,
+        memory_bytes: 268_435_456,
+        pids_limit: Some(64),
+        scratch_bytes: 16_777_216,
+        egress: SandboxEgressMode::Allow,
+        preview_ports: Vec::new(),
+        env: Default::default(),
+    };
+    let route = SandboxRoute::ensure(Arc::clone(&manager), SANDBOX_SLOW, template)
+        .await
+        .expect("route binds on loopback");
+    let token = std::fs::read_to_string(&route.token_path).expect("token file is readable");
+    let client = reqwest::Client::new();
+
+    // Fire the create; it is now pulling inside the route. Give it a moment to be certainly
+    // past the front door, then remove the route underneath it.
+    let create = tokio::spawn({
+        let client = client.clone();
+        let url = format!("{}/v1/sessions", route.base_url);
+        let token = token.clone();
+        async move {
+            client
+                .post(url)
+                .bearer_auth(token)
+                .json(&json!({ "sessionId": "racing" }))
+                .send()
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    SandboxRoute::remove(SANDBOX_SLOW).await;
+
+    // Removal has returned. If it waited for the listener, the create has already committed or
+    // been refused — so the reap sees the whole truth and nothing can appear afterwards.
+    let reaped = manager.reap(SANDBOX_SLOW).await.expect("reap");
+    let created = create.await.expect("create task");
+    let committed = created.map(|r| r.status().is_success()).unwrap_or(false);
+    assert_eq!(
+        reaped,
+        usize::from(committed),
+        "a create that answered success must already be there for the sweep after removal \
+         (committed={committed}, reaped={reaped})"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let after = manager.list_sessions(SANDBOX_SLOW).await.expect("lists");
+    assert!(after.is_empty(), "a session appeared after the route was removed: {after:?}");
+    manager.reap(SANDBOX_SLOW).await.expect("cleanup");
+}

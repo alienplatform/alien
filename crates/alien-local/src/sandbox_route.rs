@@ -151,6 +151,9 @@ struct ServingRoute {
     template: Arc<Mutex<SandboxSessionConfig>>,
     /// Dropped to stop the listener. Taken on removal, so a second removal is a no-op.
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The listener task itself. Awaited on removal, because stopping is a signal and a create
+    /// already inside the route only finishes when the task does.
+    serving: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Routes already serving in this process, keyed by sandbox id.
@@ -183,7 +186,8 @@ impl SandboxRoute {
             }
         }
 
-        let (route, template, shutdown) = Self::serve(manager, sandbox, template).await?;
+        let (route, template, shutdown, serving) =
+            Self::serve(manager, sandbox, template).await?;
 
         routes.lock().expect("no panic holds this lock").insert(
             sandbox.to_string(),
@@ -192,6 +196,7 @@ impl SandboxRoute {
                 token_path: route.token_path.clone(),
                 template,
                 shutdown: Some(shutdown),
+                serving: Some(serving),
             },
         );
 
@@ -217,8 +222,14 @@ impl SandboxRoute {
             return;
         };
 
-        // Dropping the sender is what the listener's graceful shutdown waits on.
+        // Dropping the sender is what the listener's graceful shutdown waits on. It is a signal,
+        // not a fact: a create already inside the route finishes only when the task does, and a
+        // sweep that ran before then could be outlived by that create. So the task is awaited.
         drop(route.shutdown.take());
+        if let Some(serving) = route.serving.take() {
+            // A panicked listener has already stopped serving, which is the state wanted here.
+            let _ = serving.await;
+        }
 
         // Best effort: an already-removed token file is the desired end state.
         let _ = tokio::fs::remove_file(&route.token_path).await;
@@ -236,6 +247,7 @@ impl SandboxRoute {
         Self,
         Arc<Mutex<SandboxSessionConfig>>,
         tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
     )> {
         let token = generate_token();
         let token_path = manager.state_dir().join(token_file_name(sandbox));
@@ -288,7 +300,7 @@ impl SandboxRoute {
         })?;
 
         let (shutdown, stop) = tokio::sync::oneshot::channel::<()>();
-        tokio::spawn(async move {
+        let serving = tokio::spawn(async move {
             let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
                 // Either an explicit stop or the sender being dropped ends the wait.
                 let _ = stop.await;
@@ -305,6 +317,7 @@ impl SandboxRoute {
             },
             template,
             shutdown,
+            serving,
         ))
     }
 }
