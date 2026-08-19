@@ -174,10 +174,10 @@ impl CommandStreamHandle {
         {
             let _ = close.send(());
         }
-        // Drop the stream here when nobody holds it; a parked `next()` drops it on the signal.
-        if let Some(mut frames) = self.frames.try_lock() {
-            *frames = None;
-        }
+        // Acquiring after the signal is what makes this terminate: a parked `next()` wakes on
+        // `closed` and releases, and one arriving later finds the stream already gone. Returning
+        // without the stream released would leave the command running to its deadline.
+        *self.frames.lock().await = None;
     }
 }
 
@@ -506,6 +506,28 @@ mod tests {
             assert!(
                 handle.frames.lock().await.is_none(),
                 "the stream must be dropped, that is what reaches the backend"
+            );
+        });
+    }
+
+    /// A reader that already passed its own close check holds the lock with a frame in hand and
+    /// will not release the stream, so `close()` returning at that moment would report a command
+    /// cancelled that still runs to its deadline. Returning has to mean the stream is gone.
+    #[test]
+    fn close_does_not_return_while_a_reader_holds_the_stream() {
+        let handle = CommandStreamHandle::new(futures::stream::pending().boxed());
+        futures::executor::block_on(async {
+            let held = handle.frames.lock().await;
+            assert!(
+                handle.close().now_or_never().is_none(),
+                "close reported the command cancelled while its stream was still held"
+            );
+            drop(held);
+
+            handle.close().await;
+            assert!(
+                handle.frames.lock().await.is_none(),
+                "close returned without releasing the stream"
             );
         });
     }
