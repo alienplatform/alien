@@ -206,12 +206,12 @@ fn deadline_millis(deadline: Duration) -> u64 {
     u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// What a request that got no answer before its headers becomes, however that happened.
+/// What a request whose outcome is unknown becomes: no answer before its headers, or a body
+/// that failed or ended short of its last frame.
 ///
-/// A dropped connection and a stall are the same fact for retry purposes: nothing says whether the
-/// agent received the request. For a file operation that is safe to repeat. For `run_command`,
-/// the agent may have started the command, and a repeat could run it twice — so the refusal must
-/// not carry the retry signal, and says the outcome is unknown.
+/// For a file operation every one of those is safe to repeat. For `run_command` the agent may
+/// have started the command — and past the headers it certainly did — so a repeat could run it
+/// twice, and the refusal must not carry the retry signal.
 fn unanswered(operation: &str, reason: &str) -> ErrorData {
     if operation == RUN_COMMAND {
         return ErrorData::SandboxCommandFailed {
@@ -326,13 +326,16 @@ fn frame_stream(
 
             match state.bytes.next().await {
                 Some(Ok(chunk)) => state.buffer.extend_from_slice(&chunk),
+                // The command has started — frames were arriving — and its end is now unknown.
+                // That is the strongest case for not inviting a retry, so both a failing body and
+                // one that ends short of its terminal frame refuse the same way a lost answer does.
                 Some(Err(error)) => {
                     state.finished = true;
                     return Some((
-                        Err(AlienError::new(ErrorData::SandboxUnreachable {
-                            operation: RUN_COMMAND.to_string(),
-                            reason: format!("the output stream failed: {error}"),
-                        })),
+                        Err(AlienError::new(unanswered(
+                            RUN_COMMAND,
+                            &format!("the output stream failed: {error}"),
+                        ))),
                         state,
                     ));
                 }
@@ -340,11 +343,10 @@ fn frame_stream(
                     state.finished = true;
                     if !state.saw_terminal {
                         return Some((
-                            Err(AlienError::new(ErrorData::SandboxUnreachable {
-                                operation: RUN_COMMAND.to_string(),
-                                reason: "the output stream ended without a terminal frame"
-                                    .to_string(),
-                            })),
+                            Err(AlienError::new(unanswered(
+                                RUN_COMMAND,
+                                "the output stream ended without a terminal frame",
+                            ))),
                             state,
                         ));
                     }
@@ -692,10 +694,11 @@ mod tests {
         );
     }
 
-    /// A body that stops early looks exactly like a command that produced less
-    /// output — the difference is only visible in the missing terminal frame.
+    /// A body that stops early looks exactly like a command that produced less output — the
+    /// difference is only visible in the missing terminal frame. The command had started, so
+    /// its end is unknown, and a retry could run it twice: the refusal must not invite one.
     #[tokio::test]
-    async fn a_stream_without_a_terminal_frame_is_a_transport_failure() {
+    async fn a_stream_without_a_terminal_frame_is_an_unknown_outcome() {
         let outputs = frames_from(vec!["{\"t\":\"stdout\",\"seq\":0,\"data\":\"aGk=\"}\n"]).await;
 
         assert_eq!(outputs.len(), 2);
@@ -707,10 +710,11 @@ mod tests {
             error.to_string().contains("without a terminal frame"),
             "the failure must name the cause: {error}"
         );
-        // Asserted on the code, not just the message: a dropped connection is retryable, and the
-        // message reads the same whichever variant carries it.
-        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "got: {error}");
-        assert!(error.retryable, "a dropped stream must stay retryable");
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert!(
+            !error.retryable,
+            "a command that started and whose end was lost must not be retried: {error}"
+        );
     }
 
     #[tokio::test]
