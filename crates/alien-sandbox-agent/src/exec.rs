@@ -177,8 +177,35 @@ pub async fn stream(
         compile_error!("the sandbox agent runs untrusted code and requires a unix privilege drop");
     }
 
+    // Not `Command::current_dir`: `std` applies it before `pre_exec`, so the chdir would happen
+    // while still privileged and could enter a directory the command itself cannot. Every relative
+    // path would then fail with nothing to report. Registered after the privilege closure above
+    // because `std` runs them in order, which puts it under the identity the command runs as.
     if let Some(directory) = working_directory {
-        command.current_dir(directory);
+        use std::os::unix::ffi::OsStrExt;
+
+        // Allocated here rather than in the closure: between `fork` and `exec` nothing may
+        // allocate, and the whole path has to be a plain pointer by then.
+        let Ok(directory) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
+            let _ = frames
+                .send(Frame::Error {
+                    code: "requestInvalid".to_string(),
+                    message: "the working directory contains a NUL byte".to_string(),
+                })
+                .await;
+            return;
+        };
+
+        unsafe {
+            command.pre_exec(move || {
+                // SAFETY: a NUL-terminated path owned by the closure; `chdir` is
+                // async-signal-safe.
+                if libc::chdir(directory.as_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
 
     let child = match command.spawn() {
