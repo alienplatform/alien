@@ -93,7 +93,21 @@ fn open_beneath(root: &Path, requested: &str, flags: i32, mode: u32) -> io::Resu
     Ok(unsafe { std::fs::File::from_raw_fd(fd as i32) })
 }
 
+/// Mode for a file this agent creates, and for a directory, below.
+///
+/// The command runs as a different uid than the agent — on a MicroVM the agent is root, because
+/// it needs `setuid` to drop — so an owner-only mode is unreachable by the code it was uploaded
+/// for. Containment is not these bits: the session root is `0700` owned by the exec uid, so
+/// "other" inside it is that uid and root, and nothing else can traverse in. Writable rather than
+/// read-only because uploading a project and building it is the case this API exists for.
+#[cfg(target_os = "linux")]
+const CREATED_FILE: u32 = 0o666;
+/// See [`CREATED_FILE`]. Traversable and writable, or the command cannot use the tree it was given.
+#[cfg(target_os = "linux")]
+const CREATED_DIR: u32 = 0o777;
+
 /// Opens a file for reading, beneath the session root.
+///
 #[cfg(target_os = "linux")]
 pub fn open_read(root: &Path, requested: &str) -> io::Result<std::fs::File> {
     open_beneath(root, requested, libc::O_RDONLY, 0)
@@ -101,16 +115,75 @@ pub fn open_read(root: &Path, requested: &str) -> io::Result<std::fs::File> {
 
 /// Creates or truncates a file for writing, beneath the session root.
 ///
-/// `O_NOFOLLOW` is redundant next to `RESOLVE_NO_SYMLINKS` and harmless; the mode applies only
-/// when the file is created, so an existing file keeps its own.
+/// `O_NOFOLLOW` is redundant next to `RESOLVE_NO_SYMLINKS` and harmless.
 #[cfg(target_os = "linux")]
 pub fn open_write(root: &Path, requested: &str) -> io::Result<std::fs::File> {
-    open_beneath(
+    let common = libc::O_WRONLY | libc::O_NOFOLLOW;
+
+    // `O_EXCL` so "did this call create the file" is answered by the kernel rather than by a stat
+    // that another process can invalidate. Only a file this agent created gets its mode set; one
+    // the command already owns keeps whatever it chose.
+    match open_beneath(
         root,
         requested,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
-        0o600,
-    )
+        common | libc::O_CREAT | libc::O_EXCL,
+        CREATED_FILE,
+    ) {
+        Ok(file) => {
+            if let Err(error) = set_mode(&file, CREATED_FILE) {
+                let _ = remove_beneath(root, requested, 0);
+                return Err(error);
+            }
+            Ok(file)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            open_beneath(root, requested, common | libc::O_TRUNC, 0)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Forces the mode of something just created, ignoring the inherited umask.
+///
+/// The mode passed to `open`/`mkdirat` is masked by the umask the entrypoint happened to inherit,
+/// so a `0666` request can arrive as `0600`, unreachable to the command.
+#[cfg(target_os = "linux")]
+fn set_mode(file: &std::fs::File, mode: u32) -> io::Result<()> {
+    // SAFETY: a valid descriptor this function borrows and a mode word.
+    if unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Removes an entry beneath the session root, for the path that just created it.
+///
+/// Only reached when the mode could not be set: leaving the entry would make every later write
+/// take the branch that preserves an existing entry's mode, so one failure here would be
+/// permanent rather than retryable.
+#[cfg(target_os = "linux")]
+fn remove_beneath(root: &Path, requested: &str, flags: i32) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let root_path = CString::new(root.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+    let target = CString::new(relative(requested))
+        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+
+    // SAFETY: a valid NUL-terminated path and a flags word; the fd is owned below.
+    let fd = unsafe { libc::open(root_path.as_ptr(), libc::O_PATH | libc::O_DIRECTORY) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a fresh, valid descriptor this function owns.
+    let root_fd = unsafe { OwnedFd::from_raw_fd(fd) };
+
+    // SAFETY: a valid dirfd, a NUL-terminated relative path, and a flags word.
+    if unsafe { libc::unlinkat(root_fd.as_raw_fd(), target.as_ptr(), flags) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Creates a directory and its parents, one confined step at a time.
@@ -143,10 +216,28 @@ pub fn create_dir_all(root: &Path, requested: &str) -> io::Result<()> {
         let name = CString::new(component).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
 
         // SAFETY: a valid dirfd and NUL-terminated component name.
-        let made = unsafe { libc::mkdirat(current.as_raw_fd(), name.as_ptr(), 0o700) };
+        let made = unsafe { libc::mkdirat(current.as_raw_fd(), name.as_ptr(), CREATED_DIR) };
         if made != 0 {
             let error = io::Error::last_os_error();
             if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+        } else {
+            // Only on the branch that created it — an existing directory is the command's own.
+            // `mkdirat`'s mode is umask-masked, so it is forced here rather than trusted.
+            // SAFETY: a valid dirfd and NUL-terminated component name, mode word, no flags.
+            if unsafe {
+                libc::fchmodat(
+                    current.as_raw_fd(),
+                    name.as_ptr(),
+                    CREATED_DIR as libc::mode_t,
+                    0,
+                )
+            } != 0
+            {
+                let error = io::Error::last_os_error();
+                // SAFETY: the same valid dirfd and name; removing what this iteration created.
+                unsafe { libc::unlinkat(current.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
                 return Err(error);
             }
         }
@@ -196,6 +287,9 @@ mod fallback {
         std::fs::File::open(resolved(root, requested)?)
     }
 
+    // Not the Linux modes: `File::create` and `create_dir_all` already produce `0644`/`0755` here,
+    // which is reachable across uids. This is the path developers on macOS exercise; the Linux
+    // path is what ships, so a permission regression there won't show up here.
     pub fn open_write(root: &Path, requested: &str) -> io::Result<std::fs::File> {
         std::fs::File::create(resolved(root, requested)?)
     }

@@ -182,6 +182,71 @@ mod tests {
         assert_eq!(read(&root, "/work/blob.bin").await.expect("reads"), bytes);
     }
 
+    /// The agent and the command are different users — on a MicroVM the agent is root — so an
+    /// owner-only mode would be unreachable to the command. A test cannot become another uid, so
+    /// this asserts the mode directly; `tests/privileged.rs` covers actual reachability. Linux
+    /// only, since the off-Linux fallback already creates `0644`/`0755` and would pass without
+    /// exercising it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn what_the_agent_creates_is_reachable_by_another_uid() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, root) = root();
+        write(&root, "/work/main.py", b"print(1)")
+            .await
+            .expect("writes, creating parents");
+
+        let directory = std::fs::metadata(root.join("work")).expect("the directory exists");
+        let file = std::fs::metadata(root.join("work/main.py")).expect("the file exists");
+
+        assert_eq!(
+            directory.permissions().mode() & 0o777,
+            0o777,
+            "a directory the command cannot enter makes everything under it unreachable"
+        );
+        assert_eq!(
+            file.permissions().mode() & 0o777,
+            0o666,
+            "the command has to be able to read what was uploaded for it, and write beside it"
+        );
+    }
+
+    /// A caller can overwrite a file the command made, and the command keeps the mode it chose —
+    /// only what this agent creates is its to set.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn overwriting_a_file_leaves_the_mode_its_owner_chose() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, root) = root();
+        std::fs::write(root.join("theirs.txt"), b"first").expect("the command writes it");
+        std::fs::set_permissions(
+            root.join("theirs.txt"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .expect("the command picks a mode");
+
+        write(&root, "/theirs.txt", b"second")
+            .await
+            .expect("overwrites");
+
+        assert_eq!(
+            std::fs::read(root.join("theirs.txt")).expect("reads"),
+            b"second",
+            "the overwrite has to land"
+        );
+        assert_eq!(
+            std::fs::metadata(root.join("theirs.txt"))
+                .expect("exists")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "a file the agent did not create keeps its own mode"
+        );
+    }
+
     /// Every entry point goes through the path resolver, so the escape rules hold for files as
     /// well as exec. This is the test that would catch someone adding a path that bypasses it.
     #[tokio::test]
