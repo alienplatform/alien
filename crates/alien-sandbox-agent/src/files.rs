@@ -92,6 +92,18 @@ pub async fn write(root: &Path, requested: &str, contents: &[u8]) -> Result<()> 
         let mut file = confine::open_write(&root, &requested)
             .map_err(|error| refused_or_failed(error, &requested, "opening the file for writing"))?;
 
+        // A path the command replaced with a FIFO opens and accepts the bytes, so without this the
+        // upload would go into a pipe it controls and the caller would be told the file landed.
+        let metadata = file
+            .metadata()
+            .into_alien_error()
+            .context(failed("write", &requested, "inspecting the opened file"))?;
+        if !metadata.is_file() {
+            return Err(AlienError::new(ErrorData::RequestInvalid {
+                reason: format!("'{requested}' is not a regular file"),
+            }));
+        }
+
         file.write_all(&contents)
             .into_alien_error()
             .context(failed("write", &requested, "writing the file contents"))
@@ -152,6 +164,7 @@ fn failed(operation: &str, path: &str, purpose: &str) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -244,6 +257,83 @@ mod tests {
                 & 0o777,
             0o600,
             "a file the agent did not create keeps its own mode"
+        );
+    }
+
+    /// The command can create anything in the session root, including a FIFO. Opening one without
+    /// `O_NONBLOCK` blocks until a writer appears and hangs a blocking thread nothing cancels;
+    /// enough of them stall every file operation the agent serves.
+    ///
+    /// Run on its own thread with its own runtime rather than under `#[tokio::test]`: a blocked
+    /// `spawn_blocking` cannot be cancelled, so a regression here would hang the whole suite
+    /// instead of failing this one test.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fifo_is_refused_rather_than_blocking_forever() {
+        let (_dir, root) = root();
+        let path = std::ffi::CString::new(root.join("pipe").as_os_str().as_encoded_bytes())
+            .expect("no NUL");
+        // SAFETY: a valid NUL-terminated path and a mode word.
+        assert_eq!(
+            unsafe { libc::mkfifo(path.as_ptr(), 0o666) },
+            0,
+            "the fifo is created"
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let _ = sender.send(runtime.block_on(read(&root, "/pipe")).is_err());
+        });
+
+        let refused = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the open must not block on a reader that never comes");
+        assert!(refused, "a fifo is not a file a caller can have meant");
+    }
+
+    /// A write to a path the command replaced with a FIFO must be refused. The open succeeds
+    /// whenever the command holds a reader, and the bytes then go into its pipe while the caller
+    /// is told a file landed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn writing_to_a_fifo_is_refused_rather_than_piped_away() {
+        let (_dir, root) = root();
+        let path = std::ffi::CString::new(root.join("planted").as_os_str().as_encoded_bytes())
+            .expect("no NUL");
+        // SAFETY: a valid NUL-terminated path and a mode word.
+        assert_eq!(
+            unsafe { libc::mkfifo(path.as_ptr(), 0o666) },
+            0,
+            "the fifo is created"
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            // A reader the command holds open, which is what makes the write succeed.
+            let held = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&root.join("planted"))
+                .expect("reader opens");
+            let refused = runtime.block_on(write(&root, "/planted", b"payload")).is_err();
+            drop(held);
+            let _ = sender.send(refused);
+        });
+
+        let refused = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the write must not block");
+        assert!(
+            refused,
+            "an upload must not be piped into something the command planted"
         );
     }
 

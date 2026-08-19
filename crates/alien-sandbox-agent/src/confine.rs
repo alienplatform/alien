@@ -108,17 +108,21 @@ const CREATED_DIR: u32 = 0o777;
 
 /// Opens a file for reading, beneath the session root.
 ///
+/// `O_NONBLOCK` because the command can create anything it likes in the session root: opening a
+/// FIFO without it blocks until a writer appears, and the caller's read would hang a blocking
+/// thread that nothing cancels. On a regular file the flag has no effect on reads.
 #[cfg(target_os = "linux")]
 pub fn open_read(root: &Path, requested: &str) -> io::Result<std::fs::File> {
-    open_beneath(root, requested, libc::O_RDONLY, 0)
+    open_beneath(root, requested, libc::O_RDONLY | libc::O_NONBLOCK, 0)
 }
 
 /// Creates or truncates a file for writing, beneath the session root.
 ///
-/// `O_NOFOLLOW` is redundant next to `RESOLVE_NO_SYMLINKS` and harmless.
+/// `O_NOFOLLOW` is redundant next to `RESOLVE_NO_SYMLINKS` and harmless. `O_NONBLOCK` keeps a
+/// FIFO the command planted from blocking the open; the caller checks the type on the descriptor.
 #[cfg(target_os = "linux")]
 pub fn open_write(root: &Path, requested: &str) -> io::Result<std::fs::File> {
-    let common = libc::O_WRONLY | libc::O_NOFOLLOW;
+    let common = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK;
 
     // `O_EXCL` so "did this call create the file" is answered by the kernel rather than by a stat
     // that another process can invalidate. Only a file this agent created gets its mode set; one
@@ -131,6 +135,8 @@ pub fn open_write(root: &Path, requested: &str) -> io::Result<std::fs::File> {
     ) {
         Ok(file) => {
             if let Err(error) = set_mode(&file, CREATED_FILE) {
+                // The mode failure is the one worth reporting; a removal that also fails leaves
+                // an entry the next write would preserve, which is the state this avoids.
                 let _ = remove_beneath(root, requested, 0);
                 return Err(error);
             }
