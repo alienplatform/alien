@@ -18,7 +18,7 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, resource_prefix_template, tags},
     expr,
 };
-use alien_core::{import::EmitContext, ArtifactRegistry, RemoteBindings, Result};
+use alien_core::{import::EmitContext, ArtifactRegistry, Result};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -99,44 +99,6 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
                     ),
                 ],
             ));
-        }
-
-        if alien_core::remote_bindings::remote_binding_for_entry(ctx.resource).is_some() {
-            if let Some(access_label) = ctx.stack.resources().find_map(|(id, entry)| {
-                (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
-                    .then(|| ctx.name_for(id))
-                    .flatten()
-            }) {
-                fragment.resource_blocks.push(resource_block(
-                    "azurerm_role_assignment",
-                    &format!("{label}_remote_access_role"),
-                    [
-                        attr(
-                            "name",
-                            expr::raw(format!(
-                                "uuidv5(\"dns\", \"${{local.resource_prefix}}-{}-remote-access-${{azurerm_user_assigned_identity.{access_label}.principal_id}}\")",
-                                registry.id()
-                            )),
-                        ),
-                        attr(
-                            "scope",
-                            expr::traversal(["azurerm_container_registry", label, "id"]),
-                        ),
-                        attr(
-                            "role_definition_name",
-                            Expression::String("AcrPush".to_string()),
-                        ),
-                        attr(
-                            "principal_id",
-                            expr::traversal([
-                                "azurerm_user_assigned_identity",
-                                access_label,
-                                "principal_id",
-                            ]),
-                        ),
-                    ],
-                ));
-            }
         }
 
         Ok(fragment)

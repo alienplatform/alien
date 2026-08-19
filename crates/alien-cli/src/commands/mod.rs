@@ -9,6 +9,8 @@ pub mod dev_helpers;
 pub mod init;
 pub mod logs;
 pub mod onboard;
+#[cfg(feature = "platform")]
+pub mod packages;
 pub mod release;
 pub mod releases;
 pub mod render;
@@ -47,6 +49,8 @@ pub use dev_helpers::{
 pub use init::{init_task, InitArgs};
 pub use logs::{logs_task, LogsArgs};
 pub use onboard::{onboard_task, OnboardArgs};
+#[cfg(feature = "platform")]
+pub use packages::{packages_task, PackagesArgs};
 pub use release::{release_command, ReleaseArgs};
 pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};

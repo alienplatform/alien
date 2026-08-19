@@ -15,7 +15,7 @@ use crate::commands::{
 };
 use crate::error::Result;
 use alien_core::embedded_config::{load_embedded_config, DeployCliConfig};
-use clap::{Parser, Subcommand};
+use clap::{Command, CommandFactory, FromArgMatches, Parser, Subcommand};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
@@ -52,6 +52,70 @@ pub enum Commands {
     Join(JoinArgs),
     /// Leave a Machines deployment from this host.
     Leave(LeaveArgs),
+}
+
+/// Parse command-line arguments using any branding embedded in this binary.
+pub fn parse_cli() -> Cli {
+    let embedded_config: Option<DeployCliConfig> = load_embedded_config().ok().flatten();
+    let command = command_with_branding(embedded_config.as_ref());
+    let matches = command.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
+fn command_with_branding(embedded_config: Option<&DeployCliConfig>) -> Command {
+    let Some(config) = embedded_config else {
+        return Cli::command();
+    };
+    let command_name = config.name.as_deref().unwrap_or("alien-deploy");
+    let display_name = config.display_name.as_deref().unwrap_or("Alien Deploy");
+    brand_command_help(Cli::command(), command_name, display_name, true)
+}
+
+fn brand_command_help(
+    mut command: Command,
+    command_name: &str,
+    display_name: &str,
+    root: bool,
+) -> Command {
+    if root {
+        command = command.name(leak_string(command_name.to_string()));
+    }
+    if let Some(about) = command.get_about() {
+        let branded = replace_branding(&about.to_string(), command_name, display_name);
+        command = command.about(leak_string(branded));
+    }
+    if let Some(long_about) = command.get_long_about() {
+        let branded = replace_branding(&long_about.to_string(), command_name, display_name);
+        command = command.long_about(leak_string(branded));
+    }
+    if let Some(before_help) = command.get_before_help() {
+        let branded = replace_branding(&before_help.to_string(), command_name, display_name);
+        command = command.before_help(leak_string(branded));
+    }
+    if let Some(after_help) = command.get_after_help() {
+        let branded = replace_branding(&after_help.to_string(), command_name, display_name);
+        command = command.after_help(leak_string(branded));
+    }
+    let subcommands = command
+        .get_subcommands()
+        .map(|subcommand| subcommand.get_name().to_string())
+        .collect::<Vec<_>>();
+    for subcommand in subcommands {
+        command = command.mut_subcommand(subcommand, |child| {
+            brand_command_help(child, command_name, display_name, false)
+        });
+    }
+    command
+}
+
+fn replace_branding(value: &str, command_name: &str, display_name: &str) -> String {
+    value
+        .replace("Alien Deploy", display_name)
+        .replace("alien-deploy", command_name)
+}
+
+fn leak_string(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
 }
 
 pub fn setup_tracing(verbose: bool) {
@@ -107,6 +171,34 @@ mod tests {
 
         assert!(!cli.verbose);
         assert!(matches!(cli.command, Commands::Deploy(_)));
+    }
+
+    #[test]
+    fn embedded_branding_updates_command_name_and_help_examples() {
+        let config = DeployCliConfig {
+            token: None,
+            deployment_group_id: None,
+            default_platform: None,
+            api_base_url: None,
+            agent_binary_url: None,
+            machine_bundle_url: None,
+            install_script_url: None,
+            token_env_var: None,
+            name: Some("acmectl".to_string()),
+            display_name: Some("Acme Deployment CLI".to_string()),
+        };
+        let mut command = command_with_branding(Some(&config));
+        assert_eq!(command.get_name(), "acmectl");
+        let help = command.render_long_help().to_string();
+        assert!(help.contains("Acme Deployment CLI"));
+        assert!(!help.contains("Alien Deploy"));
+
+        let deploy = command
+            .find_subcommand_mut("deploy")
+            .expect("deploy subcommand");
+        let help = deploy.render_long_help().to_string();
+        assert!(help.contains("acmectl deploy"));
+        assert!(!help.contains("alien-deploy deploy"));
     }
 
     #[test]

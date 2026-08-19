@@ -162,27 +162,31 @@ pub struct InstanceTypeSpec {
 }
 
 impl InstanceTypeSpec {
-    /// Whether this instance type supports
-    /// `CpuOptions.NestedVirtualization=enabled` on AWS launch.
+    /// Whether this instance type supports nested virtualization.
     ///
-    /// Per AWS docs (`aws ec2 create-launch-template help`), nested
-    /// virtualization is only supported on 8th-generation Intel instance
-    /// types: c8i, m8i, r8i, and their `-flex` variants. We classify by
-    /// family-name prefix rather than a per-row bool so the existing 70+
-    /// catalog rows don't need an extra field.
+    /// Classify by documented provider families rather than adding a flag to
+    /// every catalog row. GCP still requires the instance template to opt in;
+    /// Azure exposes the capability automatically on supported VM sizes.
     pub fn is_nested_virt_capable(&self) -> bool {
-        if self.platform != Platform::Aws {
-            // GCP/Azure equivalents would need their own family lists.
-            // Today nested virt is wired through only for AWS.
-            return false;
+        match self.platform {
+            Platform::Aws => {
+                let name = self.name;
+                name.starts_with("m8i.")
+                    || name.starts_with("c8i.")
+                    || name.starts_with("r8i.")
+                    || name.starts_with("m8i-flex.")
+                    || name.starts_with("c8i-flex.")
+                    || name.starts_with("r8i-flex.")
+            }
+            Platform::Gcp => self.name.starts_with("n2-standard-"),
+            Platform::Azure => {
+                let name = self.name;
+                (name.starts_with("Standard_D") && name.ends_with("s_v5"))
+                    || (name.starts_with("Standard_E") && name.ends_with("s_v5"))
+                    || (name.starts_with("Standard_F") && name.ends_with("s_v2"))
+            }
+            _ => false,
         }
-        let name = self.name;
-        name.starts_with("m8i.")
-            || name.starts_with("c8i.")
-            || name.starts_with("r8i.")
-            || name.starts_with("m8i-flex.")
-            || name.starts_with("c8i-flex.")
-            || name.starts_with("r8i-flex.")
     }
 
     /// Convert this catalog entry into a `MachineProfile` for use in `CapacityGroup`.
@@ -1255,7 +1259,7 @@ pub fn select_instance_type(
             if requirements.nested_virt {
                 spec.is_nested_virt_capable()
             } else {
-                !spec.is_nested_virt_capable()
+                platform != Platform::Aws || !spec.is_nested_virt_capable()
             }
         })
         .collect();
@@ -1263,8 +1267,7 @@ pub fn select_instance_type(
     if candidates.is_empty() {
         return Err(if requirements.nested_virt {
             format!(
-                "no nested-virt-capable {family:?} instance types in catalog for platform {platform}; \
-                 only 8th-gen Intel families (m8i/c8i/r8i) support nested virtualization on AWS"
+                "no nested-virt-capable {family:?} instance types in catalog for platform {platform}"
             )
         } else {
             format!("no {family:?} instance types in catalog for platform {platform}")
@@ -1862,6 +1865,50 @@ mod tests {
         );
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
         assert!(spec.is_nested_virt_capable());
+    }
+
+    #[test]
+    fn test_select_gcp_picks_n2_when_nested_virt_required() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 4.0,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 4.0,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 0,
+            architecture: Some(Architecture::X86_64),
+            gpu: None,
+            nested_virt: true,
+        };
+
+        let selection = select_instance_type(Platform::Gcp, &req).unwrap();
+        assert_eq!(selection.instance_type, "n2-standard-8");
+        assert!(find_instance_type(Platform::Gcp, selection.instance_type)
+            .unwrap()
+            .is_nested_virt_capable());
+    }
+
+    #[test]
+    fn test_select_azure_picks_dsv5_when_nested_virt_required() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 4.0,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 4.0,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 0,
+            architecture: Some(Architecture::X86_64),
+            gpu: None,
+            nested_virt: true,
+        };
+
+        let selection = select_instance_type(Platform::Azure, &req).unwrap();
+        assert_eq!(selection.instance_type, "Standard_D8s_v5");
+        assert!(find_instance_type(Platform::Azure, selection.instance_type)
+            .unwrap()
+            .is_nested_virt_capable());
     }
 
     #[test]

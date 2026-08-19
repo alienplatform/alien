@@ -28,8 +28,8 @@ use alien_deployment::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
-use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use alien_manager_api::SdkResultExtReadingBody as _;
+use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -765,6 +765,36 @@ machine = "m8i.xlarge"
         assert_eq!(selection.machine(), Some("m8i.xlarge"));
         assert_eq!(selection.min_size(), 2);
         assert_eq!(selection.max_size(), 5);
+        assert_eq!(
+            effective_compute_summary(&settings),
+            "general: 2-5 autoscale, m8i.xlarge"
+        );
+    }
+
+    #[test]
+    fn omitted_compute_selection_is_explicit_in_summary() {
+        assert_eq!(
+            effective_compute_summary(&StackSettings::default()),
+            "provider defaults (no compute pools selected)"
+        );
+    }
+
+    #[test]
+    fn missing_relative_config_error_shows_resolved_path_rule() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            "definitely-missing/deployment.toml",
+        ]);
+        let error = load_deploy_config(&args).expect_err("missing config should fail");
+        assert!(error.message.contains("definitely-missing/deployment.toml"));
+        assert!(error.message.contains("current working directory"));
+        assert!(error.message.contains(
+            &std::env::current_dir()
+                .expect("current directory")
+                .display()
+                .to_string()
+        ));
     }
 
     #[test]
@@ -1095,6 +1125,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             }
         };
 
+    let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
+
     if print_progress {
         let banner_title = embedded_config
             .and_then(|c| c.display_name.as_deref())
@@ -1106,14 +1138,13 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         output::label_value("Manager", &manager_url);
         output::label_value("Name", &name);
+        output::label_value("Compute", &effective_compute_summary(&stack_settings));
         if let Some(public_endpoints) = public_endpoints.as_ref() {
             let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
             output::label_value("Public endpoints", &endpoint_count.to_string());
         }
         eprintln!();
     }
-
-    let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
 
     // Create authenticated manager client
     let client = create_manager_client(&token, &manager_url)?;
@@ -1598,18 +1629,66 @@ fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
         return Ok(None);
     };
 
+    let resolved_path = resolved_config_path(path);
     let text = std::fs::read_to_string(path).into_alien_error().context(
         ErrorData::ConfigurationError {
-            message: format!("Failed to read deployment config {}", path.display()),
+            message: format!(
+                "Failed to read deployment config '{}' (resolved as '{}'; relative paths are resolved from the current working directory)",
+                path.display(),
+                resolved_path.display()
+            ),
         },
     )?;
     let config =
         toml::from_str(&text)
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: format!("Failed to parse deployment config {}", path.display()),
+                message: format!(
+                    "Failed to parse deployment config '{}' (resolved as '{}')",
+                    path.display(),
+                    resolved_path.display()
+                ),
             })?;
     Ok(Some(config))
+}
+
+fn resolved_config_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+fn effective_compute_summary(settings: &StackSettings) -> String {
+    let Some(compute) = settings
+        .compute
+        .as_ref()
+        .filter(|compute| !compute.pools.is_empty())
+    else {
+        return "provider defaults (no compute pools selected)".to_string();
+    };
+    let mut pools = compute.pools.iter().collect::<Vec<_>>();
+    pools.sort_by(|(left, _), (right, _)| left.cmp(right));
+    pools
+        .into_iter()
+        .map(|(name, selection)| {
+            let size = if selection.min_size() == selection.max_size() {
+                format!("{} fixed", selection.min_size())
+            } else {
+                format!(
+                    "{}-{} autoscale",
+                    selection.min_size(),
+                    selection.max_size()
+                )
+            };
+            let machine = selection.machine().unwrap_or("provider default machine");
+            format!("{name}: {size}, {machine}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn load_public_endpoints(
@@ -2714,7 +2793,12 @@ async fn run_local_pull_model(
 
     output::success("alien-operator installed and running as a system service.");
     output::info("The operator will sync with the manager and deploy updates automatically.");
-    output::info("Use 'alien-deploy operator status' to check the service.");
+    let command_name = embedded_config
+        .and_then(|config| config.name.as_deref())
+        .unwrap_or("alien-deploy");
+    output::info(&format!(
+        "Use '{command_name} operator status' to check the service."
+    ));
 
     Ok(())
 }

@@ -1344,7 +1344,7 @@ export type EventStateNone = ClosedEnum<typeof EventStateNone>;
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type EventErrorFailed = {
+export type EventStateError = {
   /**
    * A unique identifier for the type of error.
    *
@@ -1419,13 +1419,13 @@ export type EventErrorFailed = {
   source?: any | null | undefined;
 };
 
-export type EventFailedErrorUnion = EventErrorFailed | any;
+export type EventStateErrorUnion = EventStateError | any;
 
 /**
  * Event failed with an error
  */
 export type EventFailed = {
-  error?: EventErrorFailed | any | null | undefined;
+  error?: EventStateError | any | null | undefined;
 };
 
 export type EventState = {
@@ -3078,8 +3078,8 @@ export const EventStateNone$inboundSchema: z.ZodEnum<typeof EventStateNone> = z
   .enum(EventStateNone);
 
 /** @internal */
-export const EventErrorFailed$inboundSchema: z.ZodType<
-  EventErrorFailed,
+export const EventStateError$inboundSchema: z.ZodType<
+  EventStateError,
   unknown
 > = z.object({
   code: z.string(),
@@ -3092,29 +3092,29 @@ export const EventErrorFailed$inboundSchema: z.ZodType<
   source: z.nullable(z.any()).optional(),
 });
 
-export function eventErrorFailedFromJSON(
+export function eventStateErrorFromJSON(
   jsonString: string,
-): SafeParseResult<EventErrorFailed, SDKValidationError> {
+): SafeParseResult<EventStateError, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventErrorFailed$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventErrorFailed' from JSON`,
+    (x) => EventStateError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventStateError' from JSON`,
   );
 }
 
 /** @internal */
-export const EventFailedErrorUnion$inboundSchema: z.ZodType<
-  EventFailedErrorUnion,
+export const EventStateErrorUnion$inboundSchema: z.ZodType<
+  EventStateErrorUnion,
   unknown
-> = z.union([z.lazy(() => EventErrorFailed$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => EventStateError$inboundSchema), z.any()]);
 
-export function eventFailedErrorUnionFromJSON(
+export function eventStateErrorUnionFromJSON(
   jsonString: string,
-): SafeParseResult<EventFailedErrorUnion, SDKValidationError> {
+): SafeParseResult<EventStateErrorUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => EventFailedErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'EventFailedErrorUnion' from JSON`,
+    (x) => EventStateErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventStateErrorUnion' from JSON`,
   );
 }
 
@@ -3122,7 +3122,7 @@ export function eventFailedErrorUnionFromJSON(
 export const EventFailed$inboundSchema: z.ZodType<EventFailed, unknown> = z
   .object({
     error: z.nullable(
-      z.union([z.lazy(() => EventErrorFailed$inboundSchema), z.any()]),
+      z.union([z.lazy(() => EventStateError$inboundSchema), z.any()]),
     ).optional(),
   });
 

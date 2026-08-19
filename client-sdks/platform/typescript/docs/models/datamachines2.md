@@ -20,15 +20,15 @@ let value: DataMachines2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "error",
         source: "<value>",
       },
     ],
     health: "unhealthy",
-    lifecycle: "failed",
-    partial: false,
-    stale: false,
+    lifecycle: "stopping",
+    partial: true,
+    stale: true,
   },
   backend: "machines",
 };
@@ -45,5 +45,5 @@ let value: DataMachines2 = {
 | `memory`                                                                         | *models.MemoryUnion10*                                                           | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
 | `nodes`                                                                          | [models.Nodes4](../models/nodes4.md)                                             | :heavy_check_mark:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.ResourceHeartbeatStatus22](../models/resourceheartbeatstatus22.md)       | :heavy_check_mark:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.SyncReconcileRequestStatus22](../models/syncreconcilerequeststatus22.md) | :heavy_check_mark:                                                               | N/A                                                                              |
 | `backend`                                                                        | *"machines"*                                                                     | :heavy_check_mark:                                                               | N/A                                                                              |

@@ -10,7 +10,7 @@
 
 use alien_core::{DeploymentModel, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::{Client as ManagerClient, SdkResultExt};
+use alien_manager_api::{Client as ManagerClient, SdkResultExt, SdkResultExtReadingBody as _};
 use async_trait::async_trait;
 use serde::Serialize;
 use tracing::{error, info};
@@ -481,7 +481,18 @@ pub async fn final_reconcile(
         })
         .send()
         .await
+        .into_sdk_error_reading_body()
+        .await
     {
+        if state.status == alien_core::DeploymentStatus::Deleted
+            && is_missing_deployment_response(&e)
+        {
+            info!(
+                deployment_id = %deployment_id,
+                "Deployment was removed before final deletion reconciliation"
+            );
+            return;
+        }
         error!(
             deployment_id = %deployment_id,
             error = %e,
@@ -507,6 +518,18 @@ mod tests {
         ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
     };
     use chrono::TimeZone;
+
+    #[test]
+    fn only_not_found_means_deleted_cleanup_is_already_complete() {
+        let mut error = AlienError::new(alien_error::GenericError {
+            message: "test".to_string(),
+        });
+        error.http_status_code = Some(404);
+        assert!(is_missing_deployment_response(&error));
+
+        error.http_status_code = Some(409);
+        assert!(!is_missing_deployment_response(&error));
+    }
 
     fn sample_heartbeat() -> ResourceHeartbeat {
         ResourceHeartbeat {
@@ -616,11 +639,24 @@ pub async fn release_deployment(client: &ManagerClient, deployment_id: &str, ses
         })
         .send()
         .await
+        .into_sdk_error_reading_body()
+        .await
     {
+        if is_missing_deployment_response(&e) {
+            info!(
+                deployment_id = %deployment_id,
+                "Deployment was already removed; no sync lock remains to release"
+            );
+            return;
+        }
         error!(
             deployment_id = %deployment_id,
             error = %e,
             "Failed to release sync lock"
         );
     }
+}
+
+fn is_missing_deployment_response(error: &AlienError) -> bool {
+    error.http_status_code == Some(404)
 }

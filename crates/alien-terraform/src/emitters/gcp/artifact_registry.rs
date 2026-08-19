@@ -18,7 +18,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ArtifactRegistry, ErrorData, PermissionProfile, PermissionSet,
-    PermissionSetReference, RemoteBindings, RemoteStackManagement, Result, ServiceAccount,
+    PermissionSetReference, RemoteStackManagement, Result, ServiceAccount,
 };
 use alien_error::AlienError;
 use alien_permissions::{
@@ -115,7 +115,6 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
 
         emit_management_repository_bindings(ctx, &mut fragment, label)?;
         emit_service_account_repository_bindings(ctx, &mut fragment, label)?;
-        emit_remote_access_repository_bindings(ctx, &mut fragment, label)?;
 
         Ok(fragment)
     }
@@ -172,38 +171,6 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
             ),
         ])))
     }
-}
-
-fn emit_remote_access_repository_bindings(
-    ctx: &EmitContext<'_>,
-    fragment: &mut TfFragment,
-    registry_label: &str,
-) -> Result<()> {
-    let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(ctx.resource)
-    else {
-        return Ok(());
-    };
-    let Some(access_label) = ctx.stack.resources().find_map(|(id, entry)| {
-        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
-            .then(|| ctx.name_for(id))
-            .flatten()
-    }) else {
-        return Ok(());
-    };
-    let permission = PermissionSetReference::from_name(definition.permission_set);
-    let Some(permission_set) =
-        permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
-    else {
-        return Ok(());
-    };
-    emit_repository_bindings_for_member(
-        fragment,
-        registry_label,
-        access_label,
-        ctx.stack.id(),
-        "remote_access",
-        &permission_set,
-    )
 }
 
 fn emit_management_repository_bindings(

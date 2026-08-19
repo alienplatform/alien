@@ -4509,6 +4509,19 @@ pub struct InstanceProperties {
     /// Confidential instance configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidential_instance_config: Option<ConfidentialInstanceConfig>,
+
+    /// Advanced machine features for the instance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advanced_machine_features: Option<AdvancedMachineFeatures>,
+}
+
+/// Advanced machine features for an instance.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvancedMachineFeatures {
+    /// Whether nested virtualization is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_nested_virtualization: Option<bool>,
 }
 
 /// Attached disk configuration.
@@ -5829,5 +5842,27 @@ mod tests {
             .lines()
             .any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-token")));
         assert!(delete_body.is_empty());
+    }
+
+    #[test]
+    fn instance_properties_serialize_nested_virtualization() {
+        let properties = InstanceProperties::builder()
+            .machine_type("n2-standard-8".to_string())
+            .advanced_machine_features(
+                AdvancedMachineFeatures::builder()
+                    .enable_nested_virtualization(true)
+                    .build(),
+            )
+            .build();
+
+        assert_eq!(
+            serde_json::to_value(properties).expect("instance properties should serialize"),
+            serde_json::json!({
+                "machineType": "n2-standard-8",
+                "advancedMachineFeatures": {
+                    "enableNestedVirtualization": true
+                }
+            })
+        );
     }
 }

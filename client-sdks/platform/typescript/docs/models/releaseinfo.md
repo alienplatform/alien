@@ -20,7 +20,12 @@ let value: ReleaseInfo = {
           id: "<id>",
           type: "<value>",
         },
-        dependencies: [],
+        dependencies: [
+          {
+            id: "<id>",
+            type: "<value>",
+          },
+        ],
         lifecycle: "frozen",
       },
     },
@@ -34,5 +39,5 @@ let value: ReleaseInfo = {
 | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `description`                                                                                                                                       | *string*                                                                                                                                            | :heavy_minus_sign:                                                                                                                                  | Short description of the release                                                                                                                    |
 | `releaseId`                                                                                                                                         | *string*                                                                                                                                            | :heavy_minus_sign:                                                                                                                                  | Release ID (e.g., rel_xyz). `None` for an observe deployment, which has no<br/>Alien-assigned release — the platform resolves a release from `version`. |
-| `stack`                                                                                                                                             | [models.ReleaseInfoStack](../models/releaseinfostack.md)                                                                                            | :heavy_check_mark:                                                                                                                                  | A bag of resources, unaware of any cloud.                                                                                                           |
+| `stack`                                                                                                                                             | [models.TargetDeploymentStack](../models/targetdeploymentstack.md)                                                                                  | :heavy_check_mark:                                                                                                                                  | A bag of resources, unaware of any cloud.                                                                                                           |
 | `version`                                                                                                                                           | *string*                                                                                                                                            | :heavy_minus_sign:                                                                                                                                  | Version string (e.g., 2.1.0)                                                                                                                        |

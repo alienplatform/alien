@@ -12,6 +12,6 @@ let value: EventFailed = {};
 
 ## Fields
 
-| Field                          | Type                           | Required                       | Description                    |
-| ------------------------------ | ------------------------------ | ------------------------------ | ------------------------------ |
-| `error`                        | *models.EventFailedErrorUnion* | :heavy_minus_sign:             | N/A                            |
+| Field                         | Type                          | Required                      | Description                   |
+| ----------------------------- | ----------------------------- | ----------------------------- | ----------------------------- |
+| `error`                       | *models.EventStateErrorUnion* | :heavy_minus_sign:            | N/A                           |

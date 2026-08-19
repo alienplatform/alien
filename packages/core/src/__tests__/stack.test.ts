@@ -20,6 +20,7 @@ describe("Stack builder validation", () => {
           type: "fixed",
           machines: { min: 2, max: 4, default: 2 },
         },
+        failureDomainSpread: 2,
       })
       .build()
 
@@ -42,6 +43,17 @@ describe("Stack builder validation", () => {
         nestedVirtualization: true,
       },
     ])
+    expect(compute.config.failureDomainSpread).toEqual({ nested: 2 })
+  })
+
+  it("rejects invalid compute-pool failure-domain spreads", () => {
+    expect(() =>
+      new alien.ComputeCluster("runtime").pool("servers", {
+        requirements: { cpu: 2, memory: "4Gi" },
+        scale: { type: "fixed", machines: 3 },
+        failureDomainSpread: 0,
+      }),
+    ).toThrow(/failureDomainSpread must be an integer from 1 to 255/)
   })
 
   it("builds stack input definitions for deployment forms", () => {

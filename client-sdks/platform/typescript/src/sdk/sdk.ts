@@ -36,6 +36,7 @@ import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
 import { Domains } from "./domains.js";
 import { Events } from "./events.js";
+import { Gateways } from "./gateways.js";
 import { Machines } from "./machines.js";
 import { Managers } from "./managers.js";
 import { Operations } from "./operations.js";
@@ -197,6 +198,11 @@ export class Alien extends ClientSDK {
   private _billing?: Billing;
   get billing(): Billing {
     return (this._billing ??= new Billing(this._options));
+  }
+
+  private _gateways?: Gateways;
+  get gateways(): Gateways {
+    return (this._gateways ??= new Gateways(this._options));
   }
 
   async getWorkspaceInvitationPreview(

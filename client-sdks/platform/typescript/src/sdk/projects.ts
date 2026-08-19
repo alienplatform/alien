@@ -72,20 +72,6 @@ export class Projects extends ClientSDK {
   }
 
   /**
-   * Delete a project. The project must have no deployments.
-   */
-  async delete(
-    request: operations.DeleteProjectRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(projectsDelete(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update a project.
    */
   async update(
@@ -93,6 +79,20 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Project> {
     return unwrapAsync(projectsUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Delete a project. The project must have no deployments.
+   */
+  async delete(
+    request: operations.DeleteProjectRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(projectsDelete(
       this,
       request,
       options,

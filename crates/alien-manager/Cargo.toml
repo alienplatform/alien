@@ -48,7 +48,7 @@ alien-azure-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 
 # Web framework
-axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros", "original-uri"] }
+axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros"] }
 tower-http = { version = "0.7.0", features = ["cors"] }
 
 # Async runtime
@@ -122,8 +122,6 @@ dockdash = { workspace = true, features = ["test-utils"] }
 sec = { workspace = true }
 oci-client = { workspace = true }
 sha2 = { workspace = true }
-tar = { workspace = true }
-olpc-cjson = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
 bollard = { workspace = true }

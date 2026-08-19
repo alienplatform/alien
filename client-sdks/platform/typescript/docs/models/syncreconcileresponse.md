@@ -11,16 +11,16 @@ let value: SyncReconcileResponse = {
   success: false,
   current: {
     platform: "aws",
-    protocolVersion: 670484,
-    status: "error",
+    protocolVersion: 626709,
+    status: "initial-setup",
   },
 };
 ```
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `success`                                                                        | *boolean*                                                                        | :heavy_check_mark:                                                               | Whether the state was reconciled                                                 |
-| `current`                                                                        | [models.SyncReconcileResponseCurrent](../models/syncreconcileresponsecurrent.md) | :heavy_check_mark:                                                               | Current deployment state after reconciliation                                    |
-| `target`                                                                         | [models.SyncReconcileResponseTarget](../models/syncreconcileresponsetarget.md)   | :heavy_minus_sign:                                                               | Target deployment if update is needed                                            |
+| Field                                                    | Type                                                     | Required                                                 | Description                                              |
+| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `success`                                                | *boolean*                                                | :heavy_check_mark:                                       | Whether the state was reconciled                         |
+| `current`                                                | [models.DeploymentState](../models/deploymentstate.md)   | :heavy_check_mark:                                       | N/A                                                      |
+| `target`                                                 | [models.TargetDeployment](../models/targetdeployment.md) | :heavy_minus_sign:                                       | Target deployment if update is needed                    |

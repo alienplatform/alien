@@ -1,5 +1,7 @@
 # DataFlexibleServer
 
+Azure Flexible Server backend.
+
 ## Example Usage
 
 ```typescript
@@ -20,10 +22,10 @@ let value: DataFlexibleServer = {
 
 ## Fields
 
-| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `serverName`                                                               | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
-| `state`                                                                    | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus35](../models/resourceheartbeatstatus35.md) | :heavy_check_mark:                                                         | N/A                                                                        |
-| `version`                                                                  | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `backend`                                                                  | *"flexibleServer"*                                                         | :heavy_check_mark:                                                         | N/A                                                                        |
+| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `serverName`                                                                     | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| `state`                                                                          | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `status`                                                                         | [models.SyncReconcileRequestStatus35](../models/syncreconcilerequeststatus35.md) | :heavy_check_mark:                                                               | N/A                                                                              |
+| `version`                                                                        | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
+| `backend`                                                                        | *"flexibleServer"*                                                               | :heavy_check_mark:                                                               | N/A                                                                              |

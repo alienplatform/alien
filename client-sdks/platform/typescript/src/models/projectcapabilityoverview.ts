@@ -57,7 +57,7 @@ export type SummaryCapabilities = {
   registry: SummaryRegistry;
 };
 
-export type Summary = {
+export type ProjectCapabilityOverviewSummary = {
   groups: number;
   capabilities: SummaryCapabilities;
 };
@@ -607,7 +607,7 @@ export type Group = {
 export type ProjectCapabilityOverview = {
   generatedAt: Date;
   configurationStatus: ConfigurationStatus;
-  summary: Summary;
+  summary: ProjectCapabilityOverviewSummary;
   groups: Array<Group>;
 };
 
@@ -724,18 +724,21 @@ export function summaryCapabilitiesFromJSON(
 }
 
 /** @internal */
-export const Summary$inboundSchema: z.ZodType<Summary, unknown> = z.object({
+export const ProjectCapabilityOverviewSummary$inboundSchema: z.ZodType<
+  ProjectCapabilityOverviewSummary,
+  unknown
+> = z.object({
   groups: z.int(),
   capabilities: z.lazy(() => SummaryCapabilities$inboundSchema),
 });
 
-export function summaryFromJSON(
+export function projectCapabilityOverviewSummaryFromJSON(
   jsonString: string,
-): SafeParseResult<Summary, SDKValidationError> {
+): SafeParseResult<ProjectCapabilityOverviewSummary, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Summary$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Summary' from JSON`,
+    (x) => ProjectCapabilityOverviewSummary$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectCapabilityOverviewSummary' from JSON`,
   );
 }
 
@@ -1523,7 +1526,7 @@ export const ProjectCapabilityOverview$inboundSchema: z.ZodType<
 > = z.object({
   generatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   configurationStatus: ConfigurationStatus$inboundSchema,
-  summary: z.lazy(() => Summary$inboundSchema),
+  summary: z.lazy(() => ProjectCapabilityOverviewSummary$inboundSchema),
   groups: z.array(z.lazy(() => Group$inboundSchema)),
 });
 

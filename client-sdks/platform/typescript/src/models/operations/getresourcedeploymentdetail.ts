@@ -3207,6 +3207,9 @@ export type DataStatus36 = {
   stale: boolean;
 };
 
+/**
+ * Local embedded Postgres backend.
+ */
 export type DataLocal8 = {
   name: string;
   port?: number | null | undefined;
@@ -3274,6 +3277,9 @@ export type DataStatus35 = {
   stale: boolean;
 };
 
+/**
+ * Azure Flexible Server backend.
+ */
 export type DataFlexibleServer = {
   serverName: string;
   state?: string | null | undefined;
@@ -3340,6 +3346,9 @@ export type DataStatus34 = {
   stale: boolean;
 };
 
+/**
+ * GCP Cloud SQL backend.
+ */
 export type DataCloudSQL = {
   databaseVersion?: string | null | undefined;
   instanceName: string;
@@ -3406,6 +3415,9 @@ export type DataStatus33 = {
   stale: boolean;
 };
 
+/**
+ * AWS Aurora Serverless v2 backend.
+ */
 export type DataAurora = {
   clusterIdentifier: string;
   endpoint?: string | null | undefined;
