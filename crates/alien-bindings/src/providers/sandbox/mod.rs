@@ -67,8 +67,9 @@ impl DeadlineReport {
     /// contained it, which is the claim this path exists to make good on. An image that cannot do
     /// that runs nothing — a deadline that cannot be enforced is refused, not approximated.
     ///
-    /// The killer repeats the nonce only when its signal was delivered, so a command that finished
-    /// first is never called killed. Once the command is reaped the killer is told to stop and then
+    /// The killer repeats the nonce when its signal was delivered, which the status has to confirm:
+    /// a command already exited and awaiting reaping takes the signal too. Once the command is
+    /// reaped the killer is told to stop and then
     /// awaited: asleep, it reaps its own sleeper and leaves at once, so a command that ended early —
     /// or was killed by something other than the deadline — is not held for the rest of the deadline;
     /// past its sleep it ignores the stop, so its report lands before it leaves rather than being
@@ -96,10 +97,14 @@ impl DeadlineReport {
     /// wrapper exits before starting it.
     const UNBOUNDABLE_EXIT_CODE: i32 = 126;
 
+    /// What a shell reports for a command `SIGKILL` ended, which is how the deadline ends one.
+    const KILLED_EXIT_CODE: i32 = 137;
+
     /// What became of a command the wrapper was asked to bound.
     ///
-    /// The announcement is removed either way; a repeat of it after that is the kill, because
-    /// only the session knows the value.
+    /// The announcement is removed either way; a repeat of it after that is the killer's signal,
+    /// because only the session knows the value. Whether that signal ended the command is the
+    /// status's to say.
     pub(crate) fn read(exit_code: Option<i32>, stderr: &str) -> Bounded {
         let announced = stderr
             .split_once('\n')
@@ -124,7 +129,10 @@ impl DeadlineReport {
 
         match rest.find(nonce) {
             Some(at) => Bounded::Ran {
-                killed: true,
+                // The repeat says the killer fired, not that it ended anything: `kill` succeeds on
+                // a command that has exited and is not yet reaped. Only the status separates the
+                // two, so a command that finished at its deadline keeps its own result.
+                killed: exit_code == Some(Self::KILLED_EXIT_CODE),
                 stderr: format!("{}{}", &rest[..at], &rest[at + nonce.len()..]),
             },
             None => Bounded::Ran {
@@ -242,6 +250,22 @@ mod tests {
             panic!("stderr with no announcement is not a command that ran");
         };
         assert!(reason.contains("could not start"), "{reason}");
+    }
+
+    /// A command that finished as the killer fired keeps its own result. `kill` succeeds on a
+    /// process that has exited and is not yet reaped, so the repeat alone would turn a command
+    /// that beat its deadline into a deadline failure and throw away what it returned.
+    #[test]
+    fn a_command_that_finished_as_the_killer_fired_keeps_its_result() {
+        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(0), "abc123\nboom\nabc123")
+        else {
+            panic!("the command ran");
+        };
+        assert!(
+            !killed,
+            "a command that exited 0 was not ended by the deadline, whatever the signal reached"
+        );
+        assert_eq!(stderr, "boom\n", "the announcement is removed either way");
     }
 
     /// The command reaches the shell as arguments, the nonce is drawn in the session, the kill
