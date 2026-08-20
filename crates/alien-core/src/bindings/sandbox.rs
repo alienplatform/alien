@@ -69,6 +69,13 @@ pub struct AwsSandboxBinding {
     /// `maximumDurationInSeconds` and terminates the MicroVM when it elapses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress.
+    ///
+    /// Carried because an empty connector list cannot otherwise be read: a MicroVM started with
+    /// no connector reaches the internet, so a `deny` binding stripped of its connectors would be
+    /// indistinguishable from `allow`. Absent means `deny`, which is the answer that fails closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_egress: bool,
 }
 
 /// Azure sandbox binding configuration.
@@ -151,6 +158,7 @@ impl SandboxBinding {
             preview_ports: Vec::new(),
             idle_suspend_seconds: None,
             max_lifetime_seconds: None,
+            allow_egress: false,
         })
     }
 

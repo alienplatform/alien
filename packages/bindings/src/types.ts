@@ -418,7 +418,14 @@ export interface RunCommandOptions {
 export interface Sandbox {
   /** Which operations this platform supports. */
   capabilities(): Promise<string[]>
-  /** Creates a session. */
+  /**
+   * Creates a session that can already take work.
+   *
+   * Resolves only once the session can serve, so the first command never races its start. On a
+   * backend whose start API returns early — AWS, where a MicroVM restores from a snapshot — that
+   * wait is part of this call and can take seconds; a session that never becomes reachable
+   * rejects rather than resolving into something unusable.
+   */
   create(options?: {
     sessionId?: string
     tenantKey?: string

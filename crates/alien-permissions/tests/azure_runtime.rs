@@ -427,7 +427,11 @@ fn sandbox_execute_grants_nothing_at_stack_scope() {
     let resource_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
         .expect("resource grant plan should generate");
-    assert_eq!(resource_plan.bindings.len(), 1, "the sandbox's own group is still reachable");
+    assert_eq!(
+        resource_plan.bindings.len(),
+        1,
+        "the sandbox's own group is still reachable"
+    );
     assert!(resource_plan.bindings[0].scope.contains("/sandboxGroups/"));
 }
 
@@ -465,7 +469,11 @@ fn sandbox_management_stack_scope_stops_at_the_resource_group() {
     let resource_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
         .expect("resource grant plan should generate");
-    assert_eq!(resource_plan.bindings.len(), 1, "the sandbox's own group is still managed");
+    assert_eq!(
+        resource_plan.bindings.len(),
+        1,
+        "the sandbox's own group is still managed"
+    );
     assert!(
         resource_plan.bindings[0].scope.contains("/sandboxGroups/"),
         "scoped to one sandbox group: {}",

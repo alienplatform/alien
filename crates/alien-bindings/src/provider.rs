@@ -1934,14 +1934,20 @@ impl BindingsProviderApi for BindingsProvider {
                     .region
                     .into_value(binding_name, "region")
                     .map_err(|_| invalid("region"))?;
-                let execution_role_arn = aws_binding
-                    .execution_role_arn
-                    .map(|value| {
-                        value
-                            .into_value(binding_name, "executionRoleArn")
-                            .map_err(|_| invalid("executionRoleArn"))
-                    })
-                    .transpose()?;
+                if aws_binding.execution_role_arn.is_some() {
+                    // A MicroVM started with an execution role serves that role's live
+                    // credentials to the session over link-local instance metadata, which no
+                    // egress connector governs — measured under `deny` and `allow` alike. A
+                    // sandbox runs untrusted code, so the role is refused rather than attached.
+                    return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason: "sandbox binding field 'executionRoleArn' is set; a session can \
+                                 read that role's credentials from instance metadata, which the \
+                                 egress connector does not reach"
+                            .to_string(),
+                    }));
+                }
 
                 // The sandbox lives where its image was built, which is not necessarily where
                 // the workload runs; signing against the workload's region would 404.
@@ -1966,17 +1972,21 @@ impl BindingsProviderApi for BindingsProvider {
                             .map_err(|_| invalid("egressConnectorArns"))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if egress_connector_arns.is_empty() {
-                    // A MicroVM started with no connector reaches the public internet. Setup
-                    // always emits one, so an empty list is a binding that did not come from a
-                    // generated module — and starting sessions from it would quietly undo the
-                    // declared egress policy.
+                // A MicroVM started with no connector reaches the internet, so the two fields have
+                // to agree: under `deny` setup always emits a connector, and an empty list is a
+                // binding that did not come from a generated module rather than an open sandbox.
+                if egress_connector_arns.is_empty() != aws_binding.allow_egress {
+                    let reason = if aws_binding.allow_egress {
+                        "sandbox binding declares open egress and also names egress connectors; \
+                         a session cannot be both open and routed through a denying connector"
+                    } else {
+                        "sandbox binding field 'egressConnectorArns' is empty; a MicroVM started \
+                         with no egress connector reaches the public internet"
+                    };
                     return Err(AlienError::new(ErrorData::BindingConfigInvalid {
                         binding_name: binding_name.to_string(),
                         env_var: alien_core::bindings::binding_env_var_name(binding_name),
-                        reason: "sandbox binding field 'egressConnectorArns' is empty; a MicroVM \
-                                 started with no egress connector reaches the public internet"
-                            .to_string(),
+                        reason: reason.to_string(),
                     }));
                 }
 
@@ -1984,7 +1994,6 @@ impl BindingsProviderApi for BindingsProvider {
                     Arc::new(client),
                     image_arn,
                     image_version,
-                    execution_role_arn,
                     egress_connector_arns,
                     aws_binding.preview_ports,
                     aws_binding.idle_suspend_seconds,
@@ -2204,6 +2213,110 @@ mod tests {
         assert!(
             error.to_string().contains("ALIEN_FILES_BINDING"),
             "message should name the derived env var, got: {error}"
+        );
+    }
+
+    /// A MicroVM with no egress connector reaches the internet, so the binding's two egress
+    /// fields have to agree: an empty list is how `allow` travels, and it is a fail-open default
+    /// unless `allowEgress` says so. Both disagreements are refused, and `deny` still loads.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_sandbox_binding_whose_egress_fields_disagree_is_refused() {
+        const CONNECTOR: &str = "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-1";
+
+        async fn load(connectors: &str, allow_egress: bool) -> Result<()> {
+            let env = HashMap::from([
+                (
+                    ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                    Platform::Aws.as_str().to_string(),
+                ),
+                ("AWS_REGION".to_string(), "us-east-1".to_string()),
+                ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+                ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+                ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+                (
+                    "ALIEN_BOX_BINDING".to_string(),
+                    format!(
+                        r#"{{"service":"sandbox-aws",
+                            "imageArn":"arn:aws:lambda:us-east-1:123456789012:microvm-image:box",
+                            "imageVersion":"1.0",
+                            "region":"us-east-1",
+                            "allowEgress":{allow_egress},
+                            "egressConnectorArns":[{connectors}]}}"#
+                    ),
+                ),
+            ]);
+            BindingsProvider::from_env(env)
+                .await
+                .expect("the binding JSON parses")
+                .load_sandbox("box")
+                .await
+                .map(|_| ())
+        }
+
+        let fail_open = load("", false)
+            .await
+            .expect_err("an empty connector list with allowEgress false is a fail-open default");
+        assert_eq!(fail_open.code, "BINDING_CONFIG_INVALID");
+        assert!(
+            fail_open.to_string().contains("egressConnectorArns"),
+            "the message should name the field that was refused, got: {fail_open}"
+        );
+
+        let contradiction = load(&format!(r#""{CONNECTOR}""#), true)
+            .await
+            .expect_err("open egress and a denying connector cannot both be declared");
+        assert_eq!(contradiction.code, "BINDING_CONFIG_INVALID");
+
+        // The control: without it the two assertions above would pass against a `load_sandbox`
+        // that refused every AWS sandbox binding.
+        load(&format!(r#""{CONNECTOR}""#), false)
+            .await
+            .expect("a deny binding names a connector and must load");
+        load("", true)
+            .await
+            .expect("an allow binding names none and must load");
+    }
+
+    /// A sandbox binding naming an execution role is refused rather than honoured — see the
+    /// `execution_role_arn` check in `load_sandbox` for why. Nothing emits the field today, so
+    /// this is what keeps it that way.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_sandbox_binding_naming_an_execution_role_is_refused() {
+        let env = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            ("AWS_REGION".to_string(), "us-east-1".to_string()),
+            ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+            ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+            (
+                "ALIEN_BOX_BINDING".to_string(),
+                r#"{"service":"sandbox-aws",
+                    "imageArn":"arn:aws:lambda:us-east-1:123456789012:microvm-image:box",
+                    "imageVersion":"1.0",
+                    "region":"us-east-1",
+                    "executionRoleArn":"arn:aws:iam::123456789012:role/box",
+                    "egressConnectorArns":["arn:aws:lambda:us-east-1:123456789012:network-connector:nc-1"]}"#
+                    .to_string(),
+            ),
+        ]);
+        let provider = BindingsProvider::from_env(env)
+            .await
+            .expect("provider construction only validates that the binding JSON parses");
+
+        let error = provider
+            .load_sandbox("box")
+            .await
+            .expect_err("a sandbox binding naming an execution role should be refused");
+
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+        assert!(
+            error.to_string().contains("executionRoleArn"),
+            "the message should name the field that was refused, got: {error}"
         );
     }
 

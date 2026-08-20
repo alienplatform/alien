@@ -123,9 +123,14 @@ const MICROVM_TIERS: &[MicrovmTier] = &[
 #[serde(rename_all = "camelCase", tag = "mode")]
 pub enum SandboxEgress {
     /// No outbound network access.
+    ///
+    /// Routed traffic only. Link-local is not outbound and no backend's egress control reaches
+    /// it, so this is not a boundary against instance metadata.
     Deny,
-    /// Unrestricted outbound access to the public internet, but never to private ranges,
-    /// link-local addresses, or the deployment's own network.
+    /// Unrestricted outbound access to the public internet, and none to private ranges or the
+    /// deployment's own network.
+    ///
+    /// Link-local carries the same exception as `Deny`.
     Allow,
     /// Outbound access only to the listed hostnames. No backend expresses this yet.
     #[serde(rename_all = "camelCase")]
@@ -402,6 +407,31 @@ pub struct Sandbox {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+}
+
+/// Whether the artifact being rendered restricts which network modes it accepts.
+///
+/// A sandbox is not emitted on a Kubernetes target, so nothing there routes egress through a
+/// connector and the default network stays a working answer. Every site that withholds the mode,
+/// explains the restriction, or renders a branch for it has to ask this one question — asking the
+/// stack directly is how they came to disagree.
+pub fn restricts_network_mode(stack: &crate::Stack, targets_kubernetes: bool) -> bool {
+    !targets_kubernetes && stack_needs_named_subnets_at_setup(stack)
+}
+
+/// Whether any sandbox in the stack forces setup to name subnets.
+///
+/// A restricted sandbox routes session egress through a VPC connector, and neither generator can
+/// enumerate the account default VPC's subnets, so that mode leaves the connector without any and
+/// it fails at create. Callers that render an artifact want [`restricts_network_mode`] instead:
+/// this one answers for the declaration, which on a Kubernetes target is not what gets emitted.
+pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
+    stack.resources().any(|(_resource_id, resource)| {
+        resource
+            .config
+            .downcast_ref::<Sandbox>()
+            .is_some_and(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+    })
 }
 
 impl Sandbox {

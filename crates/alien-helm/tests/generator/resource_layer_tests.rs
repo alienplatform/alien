@@ -65,7 +65,12 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
     let policy = chart
         .files
         .get("templates/sandbox-agent-networkpolicy.yaml")
-        .unwrap_or_else(|| panic!("the sandbox NetworkPolicy must render: {:?}", chart.files.keys().collect::<Vec<_>>()));
+        .unwrap_or_else(|| {
+            panic!(
+                "the sandbox NetworkPolicy must render: {:?}",
+                chart.files.keys().collect::<Vec<_>>()
+            )
+        });
     assert!(
         policy.contains("alien.dev/sandbox: agent"),
         "the policy must select the operator's own pod label:\n{policy}"
@@ -117,7 +122,12 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
         .files
         .get("templates/sandbox-agent-networkpolicy.yaml")
         .expect("the sandbox NetworkPolicy must render");
-    for denied in ["169.254.169.254/32", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] {
+    for denied in [
+        "169.254.169.254/32",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ] {
         assert!(
             policy.contains(denied),
             "{denied} must stay closed even under allow:\n{policy}"
@@ -135,7 +145,10 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
     );
     // Inbound is the agent port from this release's own pods. Denying it outright drops every
     // exec and file call on an enforcing CNI, which is what the application drives a session with.
-    assert!(policy.contains("- Ingress"), "ingress stays governed by the policy:\n{policy}");
+    assert!(
+        policy.contains("- Ingress"),
+        "ingress stays governed by the policy:\n{policy}"
+    );
     assert!(
         policy.contains("port: 8971"),
         "the application must reach the agent port:\n{policy}"

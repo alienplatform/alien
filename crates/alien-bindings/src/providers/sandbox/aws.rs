@@ -23,9 +23,29 @@ use crate::traits::{
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, Context};
+use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
 const PROXY_PORT_HEADER: &str = "X-aws-proxy-port";
+
+/// How long `create` waits for a MicroVM to become servable.
+///
+/// AWS answers 502 at the proxy "during the first few seconds after the MicroVM is run while the
+/// snapshot is being restored", so the window is short; this is generous enough that a slow
+/// restore reads as slow rather than broken.
+#[cfg(not(test))]
+const SESSION_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+#[cfg(not(test))]
+const SESSION_READY_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+// A unit test has no reachable agent, so the budget only decides how long it takes to say so.
+#[cfg(test)]
+const SESSION_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(20);
+#[cfg(test)]
+const SESSION_READY_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Side-effect free, which is what makes it safe to repeat while `run_command` is not.
+const HEALTH_PATH: &str = "/v1/health";
 
 /// Life of a token minted to talk to the agent.
 ///
@@ -50,7 +70,6 @@ pub struct AwsSandbox {
     microvms: Arc<dyn LambdaMicrovmsApi>,
     image_identifier: String,
     image_version: String,
-    execution_role_arn: Option<String>,
     /// Connectors every session starts with. Empty means the public internet is reachable, so
     /// `deny` is a connector rather than the absence of one.
     egress_connector_arns: Vec<String>,
@@ -71,7 +90,6 @@ impl AwsSandbox {
         microvms: Arc<dyn LambdaMicrovmsApi>,
         image_identifier: impl Into<String>,
         image_version: impl Into<String>,
-        execution_role_arn: Option<String>,
         egress_connector_arns: Vec<String>,
         preview_ports: Vec<u16>,
         idle_suspend_seconds: Option<u32>,
@@ -81,7 +99,6 @@ impl AwsSandbox {
             microvms,
             image_identifier: image_identifier.into(),
             image_version: image_version.into(),
-            execution_role_arn,
             egress_connector_arns,
             preview_ports,
             idle_suspend_seconds,
@@ -219,6 +236,79 @@ fn session_state(state: Option<&str>) -> SandboxSessionState {
     }
 }
 
+impl AwsSandbox {
+    /// Blocks until the agent answers, so `create` returns a session that can take work.
+    async fn wait_until_servable(&self, session_id: &str) -> Result<()> {
+        let deadline = std::time::Instant::now() + SESSION_READY_TIMEOUT;
+
+        // Only the endpoint's absence is worth waiting on. A refused token mint, a session that is
+        // not ours, an API error — none of those resolve by waiting, and folding them into the
+        // timeout would report a permission problem as a slow boot a minute later.
+        let probe = loop {
+            let published = self
+                .owned_microvm(session_id)
+                .await?
+                .is_some_and(|microvm| microvm.endpoint.is_some());
+
+            if published {
+                break self
+                    .authorized_request(session_id, reqwest::Method::GET, HEALTH_PATH)
+                    .await?;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.create".to_string(),
+                    reason: format!(
+                        "MicroVM '{session_id}' published no endpoint within {}s",
+                        SESSION_READY_TIMEOUT.as_secs()
+                    ),
+                }));
+            }
+            tokio::time::sleep(SESSION_READY_POLL).await;
+        };
+
+        Self::poll_until_healthy(probe, deadline, session_id).await
+    }
+
+    /// Repeats the health probe until it answers or the deadline passes.
+    ///
+    /// Separated from the endpoint wait so the restore window this absorbs — AWS answering 502
+    /// while a snapshot restores — can be exercised without a MicroVM.
+    async fn poll_until_healthy(
+        probe: reqwest::RequestBuilder,
+        deadline: std::time::Instant,
+        session_id: &str,
+    ) -> Result<()> {
+        let mut last_seen;
+        loop {
+            // Cloned rather than rebuilt: the token outlives this wait, so the health poll costs
+            // no further describes or mints.
+            let request = probe.try_clone().ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.create".to_string(),
+                    reason: "the readiness probe could not be repeated".to_string(),
+                })
+            })?;
+
+            match request.send().await {
+                Ok(response) if response.status().is_success() => return Ok(()),
+                Ok(response) => last_seen = format!("the endpoint answered {}", response.status()),
+                Err(error) => last_seen = error.to_string(),
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.create".to_string(),
+                    reason: format!(
+                        "MicroVM '{session_id}' did not become servable in time: {last_seen}"
+                    ),
+                }));
+            }
+            tokio::time::sleep(SESSION_READY_POLL).await;
+        }
+    }
+}
+
 #[async_trait]
 impl AgentTransport for AwsSandbox {
     async fn request(
@@ -260,12 +350,17 @@ impl Sandbox for AwsSandbox {
                 &self.image_identifier,
                 &self.image_version,
                 &client_token,
-                self.execution_role_arn.clone(),
+                // Never a role: a session reads an attached role's credentials from instance
+                // metadata, which the egress connector does not govern.
+                None,
                 self.egress_connector_arns.clone(),
                 self.idle_suspend_seconds,
                 self.max_lifetime_seconds,
             )
             .await
+            // The cloud's own refusal is carried in the message rather than only in the source:
+            // the chain does not survive into the SDK, and "could not start a MicroVM" without a
+            // reason sends a reader to the code instead of to the quota or role that refused.
             .context(ErrorData::SandboxUnreachable {
                 operation: "sandbox.create".to_string(),
                 reason: format!("could not start a MicroVM from '{}'", self.image_identifier),
@@ -280,7 +375,25 @@ impl Sandbox for AwsSandbox {
             })
         })?;
 
-        Ok(self.session(microvm_id, microvm.state))
+        // RunMicrovm returns once the MicroVM is accepted, not once it can serve: AWS restores the
+        // snapshot afterwards and its proxy answers 502 until that finishes. Returning here hands
+        // back a session whose first command races that window, which is invisible to a caller and
+        // fails a fraction of the time. Local, Azure and Kubernetes all return a session that can
+        // already serve, so this is what makes AWS mean the same thing.
+        if let Err(error) = self.wait_until_servable(&microvm_id).await {
+            // The caller never receives this id, so nothing else can terminate it and it bills to
+            // its lifetime ceiling. This error is retryable, so leaving it would leak one MicroVM
+            // per attempt.
+            if let Err(cleanup) = self.microvms.terminate_microvm(&microvm_id).await {
+                warn!(
+                    microvm = %microvm_id,
+                    "could not terminate a MicroVM that never became servable: {cleanup}"
+                );
+            }
+            return Err(error);
+        }
+
+        Ok(self.session(microvm_id, Some("RUNNING".to_string())))
     }
 
     async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
@@ -304,6 +417,13 @@ impl Sandbox for AwsSandbox {
     async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         if let Some(id) = request.session_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
+                // Reaching a session someone else started still has to mean what `create` means,
+                // or the guarantee holds only for whoever won the race. Waited for here rather
+                // than in `get`, which reports a session's state and does not promise one.
+                if matches!(existing.state, SandboxSessionState::Starting) {
+                    self.wait_until_servable(id).await?;
+                    return Ok(self.session(id.to_string(), Some("RUNNING".to_string())));
+                }
                 return Ok(existing);
             }
         }
@@ -490,7 +610,6 @@ mod tests {
             Arc::new(client),
             "sbx-image",
             "3",
-            None,
             Vec::new(),
             preview_ports,
             None,
@@ -634,6 +753,77 @@ mod tests {
 
     /// A bare URL would be unusable: the endpoint refuses anything without the token headers and
     /// the port header, so a caller handed only a string would have to rebuild the auth.
+    /// AWS answers 502 at the proxy while a MicroVM's snapshot restores, so the wait exists to
+    /// outlast that window rather than to hand the first command a session that cannot serve.
+    /// Served over plain HTTP against a local listener: what is under test is the polling, not
+    /// the transport that reaches a real MicroVM.
+    #[tokio::test]
+    async fn the_readiness_poll_outlasts_the_snapshot_restore_window() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let seen = attempts.clone();
+        let handler = move || {
+            let seen = seen.clone();
+            async move {
+                // Two 502s with an empty body — exactly what the proxy returns mid-restore.
+                if seen.fetch_add(1, Ordering::SeqCst) < 2 {
+                    axum::http::StatusCode::BAD_GATEWAY
+                } else {
+                    axum::http::StatusCode::OK
+                }
+            }
+        };
+        let router = axum::Router::new().route(HEALTH_PATH, axum::routing::get(handler));
+        let listener = tokio::net::TcpListener::bind::<std::net::SocketAddr>(
+            "127.0.0.1:0".parse().expect("a loopback address"),
+        )
+        .await
+        .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+
+        let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        AwsSandbox::poll_until_healthy(probe, deadline, "mvm-restoring")
+            .await
+            .expect("the wait must outlast a restore that answers 502 before it answers 200");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            3,
+            "it must keep probing through the restore rather than give up on the first 502"
+        );
+    }
+
+    /// The counterpart: a MicroVM that never answers has to fail, and say which session.
+    #[tokio::test]
+    async fn the_readiness_poll_gives_up_on_a_session_that_never_answers() {
+        let router = axum::Router::new().route(
+            HEALTH_PATH,
+            axum::routing::get(|| async { axum::http::StatusCode::BAD_GATEWAY }),
+        );
+        let listener = tokio::net::TcpListener::bind::<std::net::SocketAddr>(
+            "127.0.0.1:0".parse().expect("a loopback address"),
+        )
+        .await
+        .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+
+        let probe = reqwest::Client::new().get(format!("http://{address}{HEALTH_PATH}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
+
+        let error = AwsSandbox::poll_until_healthy(probe, deadline, "mvm-dead")
+            .await
+            .expect_err("a session that never answers must not be reported as ready");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("mvm-dead") && error.to_string().contains("502"),
+            "the failure has to name the session and what it last saw: {error}"
+        );
+    }
+
     #[tokio::test]
     async fn preview_returns_the_headers_a_caller_cannot_construct() {
         let mut client = MockLambdaMicrovmsApi::new();
@@ -762,12 +952,20 @@ mod tests {
             .expect_run_microvm()
             .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(1800))
             .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
+        // The wait reads the session back; with no endpoint published it stays unreachable,
+        // which is all a unit test can offer. Create then terminates what it started.
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
 
-        AwsSandbox::new(
+        let result = AwsSandbox::new(
             std::sync::Arc::new(client),
             "sbx-image",
             "3",
-            None,
             vec!["connector".to_string()],
             Vec::new(),
             None,
@@ -778,8 +976,16 @@ mod tests {
             tenant_key: None,
             env: BTreeMap::new(),
         })
-        .await
-        .expect("the run carries the declared ceiling");
+        .await;
+
+        // `withf` above is the assertion: a run carrying the wrong ceiling matches no
+        // expectation and panics. Create then waits for an agent no unit test can serve.
+        let error = result.expect_err("no agent answers in a unit test");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("published no endpoint"),
+            "the failure has to name the readiness wait, not any error: {error}"
+        );
     }
 
     /// Observed live: AWS returns the MicroVM a client token previously created **even after it
@@ -802,19 +1008,34 @@ mod tests {
                     image_version: Some("1".to_string()),
                 })
             });
+        // The wait reads the session back; with no endpoint published it stays unreachable,
+        // which is all a unit test can offer. Create then terminates what it started.
+        client
+            .expect_get_microvm()
+            // AWS assigns the id and `create` has to carry that one forward, not the caller's.
+            .withf(|id| id == "mvm-9")
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client
+            .expect_terminate_microvm()
+            .withf(|id| id == "mvm-9")
+            .times(1)
+            .returning(|_| Ok(()));
 
-        let session = sandbox(client)
+        let result = sandbox(client)
             .create(CreateSessionRequest {
                 session_id: Some("caller-chosen".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
             })
-            .await
-            .expect("creates");
+            .await;
 
-        assert_eq!(
-            session.session_id, "mvm-9",
-            "AWS assigns the id, so that is what is returned"
+        // The client token assertion is `withf` above; a run reusing the caller's id matches no
+        // expectation and panics. Create then waits for an agent a unit test cannot serve.
+        let error = result.expect_err("no agent answers in a unit test");
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("published no endpoint"),
+            "the failure has to name the readiness wait, not any error: {error}"
         );
     }
 

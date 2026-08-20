@@ -1106,7 +1106,11 @@ pub trait Sandbox: Binding {
     /// What this platform's backend supports.
     fn capabilities(&self) -> alien_core::SandboxCapabilities;
 
-    /// Creates a session.
+    /// Creates a session that can already take work.
+    ///
+    /// Returning before the session can serve pushes a readiness poll into every caller for a
+    /// condition only the backend can observe, and the resulting race fails a fraction of the
+    /// time rather than every time. A backend whose start API returns early waits here.
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession>;
 
     /// Fetches a session by id, or `None` if it does not exist.

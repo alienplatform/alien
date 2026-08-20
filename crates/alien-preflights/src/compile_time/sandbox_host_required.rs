@@ -31,9 +31,9 @@ impl CompileTimeCheck for SandboxHostRequiredCheck {
     fn should_run(&self, stack: &Stack, platform: Platform) -> bool {
         // GCP alone: every other platform provisions a durable parent of its own.
         platform == Platform::Gcp
-            && stack
-                .resources()
-                .any(|(_, entry)| entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref())
+            && stack.resources().any(|(_, entry)| {
+                entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
+            })
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
@@ -145,7 +145,10 @@ mod tests {
 
         assert!(check.should_run(&stack, Platform::Gcp));
 
-        let result = check.check(&stack, Platform::Gcp).await.expect("check runs");
+        let result = check
+            .check(&stack, Platform::Gcp)
+            .await
+            .expect("check runs");
         assert!(!result.success, "a sandbox with no host must not pass");
 
         let rendered = result.errors.join(" ");

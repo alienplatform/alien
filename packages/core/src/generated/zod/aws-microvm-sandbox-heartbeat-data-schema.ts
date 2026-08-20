@@ -7,16 +7,14 @@ import * as z from "zod";
 import { SandboxHeartbeatStatusSchema } from "./sandbox-heartbeat-status-schema.js";
 
 /**
- * @description AWS: MicroVMs started from one image, counted across every version.
+ * @description AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it.
  */
 export const AwsMicrovmSandboxHeartbeatDataSchema = z.object({
-    "activeSessions": z.int().min(0).describe("Sessions running now. Counted across all image versions, because a rolled version stays a\nscope until its own MicroVMs are gone."),
-"imageIdentifier": z.string().describe("Image the sessions belong to."),
-"imageState": z.string().describe("The image's own lifecycle state, which is where AWS surfaces base-image deprecation.").nullish(),
+    "imageIdentifier": z.string().describe("Image the sessions belong to."),
+"imageState": z.string().describe("The image's own lifecycle state, which is where AWS surfaces base-image deprecation.\n\nNo session count sits beside it: counting means `lambda:ListMicrovms`, which authorizes\nagainst no resource type and so cannot be granted without an account-wide reach the\npermission sets refuse. A field only an over-broad grant could fill is a field whose\nimplementer ships AccessDenied into a customer's account.").nullish(),
 get "status"(){
                 return SandboxHeartbeatStatusSchema
-              },
-"versionsWithSessions": z.int().min(0).describe("Image versions still carrying sessions.")
-    }).describe("AWS: MicroVMs started from one image, counted across every version.")
+              }
+    }).describe("AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it.")
 
 export type AwsMicrovmSandboxHeartbeatData = z.infer<typeof AwsMicrovmSandboxHeartbeatDataSchema>

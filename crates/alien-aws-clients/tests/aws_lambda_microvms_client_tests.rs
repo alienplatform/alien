@@ -36,7 +36,10 @@ fn client() -> LambdaMicrovmsClient {
         service_overrides: None,
     };
 
-    LambdaMicrovmsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(config))
+    LambdaMicrovmsClient::new(
+        Client::new(),
+        AwsCredentialProvider::from_config_sync(config),
+    )
 }
 
 /// Read-only reachability: the paths, the signing name and the response shape.
@@ -84,7 +87,14 @@ async fn a_microvm_runs_serves_the_agent_and_terminates() {
         .run_microvm(
             &image_arn,
             &image_version,
-            &format!("alien-sbx-{}-{}", slot(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()),
+            &format!(
+                "alien-sbx-{}-{}",
+                slot(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            ),
             None,
             Vec::new(),
             None,
@@ -100,11 +110,8 @@ async fn a_microvm_runs_serves_the_agent_and_terminates() {
 
     // Terminate whatever happens next: a panic between here and the end would otherwise leave a
     // MicroVM running and billing.
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(300),
-        exercise(&client, &microvm_id),
-    )
-    .await;
+    let outcome =
+        tokio::time::timeout(Duration::from_secs(300), exercise(&client, &microvm_id)).await;
 
     client
         .terminate_microvm(&microvm_id)
@@ -183,7 +190,10 @@ async fn exercise(client: &LambdaMicrovmsClient, microvm_id: &str) {
     let body = response.text().await.unwrap_or_default();
     println!("GET /v1/health -> {status} {body}");
 
-    assert!(status.is_success(), "the agent should serve health: {status} {body}");
+    assert!(
+        status.is_success(),
+        "the agent should serve health: {status} {body}"
+    );
     assert!(
         body.contains("protocolVersion"),
         "the agent should report its protocol version, got: {body}"
@@ -213,7 +223,13 @@ async fn exercise(client: &LambdaMicrovmsClient, microvm_id: &str) {
     // The other half of the same boundary: the uid drop is only worth having if the workload
     // cannot rewrite the supervisor that performs it. The image owns the agent as root; this is
     // the check that the running guest agrees.
-    let frames = exec_in(client, microvm_id, &endpoint, &["/usr/bin/touch", AGENT_PATH]).await;
+    let frames = exec_in(
+        client,
+        microvm_id,
+        &endpoint,
+        &["/usr/bin/touch", AGENT_PATH],
+    )
+    .await;
     println!("touch {AGENT_PATH} ->\n{frames}");
 
     let exit_code = frames
@@ -238,10 +254,16 @@ async fn delete_the_named_image() {
     };
     let client = client();
 
-    let image = client.get_microvm_image(&arn).await.expect("reads the image");
+    let image = client
+        .get_microvm_image(&arn)
+        .await
+        .expect("reads the image");
     println!("before delete: state={:?}", image.state);
 
-    client.delete_microvm_image(&arn).await.expect("delete should succeed");
+    client
+        .delete_microvm_image(&arn)
+        .await
+        .expect("delete should succeed");
 
     let after = client.get_microvm_image(&arn).await;
     println!("after delete: {after:?}");

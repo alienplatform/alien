@@ -252,8 +252,54 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
 
     let status = response.status();
     // Read the body first: the agent puts the actual cause there, and a bare status turns a
-    // specific refusal into a guess.
-    let body = response.text().await.unwrap_or_default();
+    // specific refusal into a guess. A read that *fails* is not an empty body — collapsing the
+    // two would let a dropped connection claim the request never arrived.
+    let body = match response.text().await {
+        Ok(body) => body,
+        // Unknown, and said so: for `run_command` a repeat could run it twice, so it is marked
+        // non-retryable; the file operations are idempotent and keep the retryable classification
+        // they had before the read failed.
+        Err(error) if operation == RUN_COMMAND => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::SandboxCommandFailed {
+                    failure: "outcomeUnknown".to_string(),
+                    reason: format!(
+                        "{operation} returned {status} and its body could not be read, so whether \
+                         it ran is unknown"
+                    ),
+                })
+        }
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason: format!("{operation} returned {status} and its body could not be read"),
+                })
+        }
+    };
+
+    // A 5xx with no body is the cloud's proxy, not the agent — it answers 502/503/504 that way
+    // when it cannot reach the guest, but can also synthesize one after delivering the request,
+    // so `run_command` reports an unknown outcome rather than never-delivered.
+    if status.is_server_error() && body.trim().is_empty() {
+        if operation == RUN_COMMAND {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "outcomeUnknown".to_string(),
+                reason: format!(
+                    "the sandbox host returned {status} with no response from the agent, so \
+                     whether the command ran is unknown"
+                ),
+            }));
+        }
+        return Err(AlienError::new(ErrorData::SandboxUnreachable {
+            operation: operation.to_string(),
+            reason: format!(
+                "the sandbox host returned {status} before the request reached the agent"
+            ),
+        }));
+    }
 
     // A 5xx is the agent failing to complete a request it accepted, which is worth another
     // attempt — except for `run_command`, where the command may already be running and a retry
@@ -410,6 +456,7 @@ fn malformed(reason: &str, provider: &'static str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use crate::traits::CommandOutput;
+    use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use axum::routing::post;
     use axum::Router;
@@ -453,31 +500,78 @@ mod tests {
             .await
     }
 
-    /// An agent that accepts any request and never sends its headers.
-    async fn stalled_agent() -> String {
-        let handler = || async {
-            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 20).await;
-            "late".into_response()
-        };
-        let router = Router::new().fallback(handler);
+    /// Serves `status` with `body` on /v1/exec and returns what `send` made of it.
+    async fn send_status(status: StatusCode, body: &'static str) -> AlienError<ErrorData> {
+        let handler = move || async move { (status, body).into_response() };
+        let router = Router::new().route("/v1/exec", post(handler));
         let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
             .await
             .expect("bind");
         let address = listener.local_addr().expect("address");
         tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
 
-        format!("http://{address}")
+        send(
+            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect_err("a non-success must be an error")
+    }
+
+    /// AWS answers 502 with an empty body while a MicroVM's snapshot is still restoring, so the
+    /// request never reached the agent and the command never ran. Calling that `agentRefused`
+    /// sends a reader into the agent for a fault that was never there.
+    #[tokio::test]
+    async fn a_bodyless_server_error_is_not_reported_as_the_agent_refusing() {
+        let error = send_status(StatusCode::BAD_GATEWAY, "").await;
+        let rendered = error.to_string();
+
+        assert!(
+            !rendered.contains("agentRefused"),
+            "a proxy 502 is not the agent refusing: {rendered}"
+        );
+        assert!(
+            rendered.contains("outcomeUnknown"),
+            "a proxy can synthesize a 502 after the agent accepted the request, so the caller has \
+             to be told the outcome is unknown rather than that it is safe to repeat: {rendered}"
+        );
+    }
+
+    /// The counterpart: the agent puts its cause in the body, and that is a real refusal which
+    /// must stay distinguishable from the transport failing to deliver the request.
+    #[tokio::test]
+    async fn a_server_error_carrying_the_agents_own_cause_stays_a_refusal() {
+        let error = send_status(StatusCode::INTERNAL_SERVER_ERROR, "spawn failed: ENOMEM").await;
+        let rendered = error.to_string();
+
+        assert!(
+            rendered.contains("spawn failed: ENOMEM"),
+            "the agent's cause has to survive: {rendered}"
+        );
+        assert!(
+            !rendered.contains("outcomeUnknown"),
+            "the agent answered with its own cause, so the outcome is not unknown: {rendered}"
+        );
     }
 
     /// A cancel waits for this request before it can close the stream, so a request that never
     /// answers would leave the cancel unable to complete. Headers that never come are refused.
     #[tokio::test]
     async fn an_agent_that_never_answers_is_refused_within_the_bound() {
-        let base = stalled_agent().await;
+        let handler = || async {
+            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 20).await;
+            "late".into_response()
+        };
+        let router = Router::new().route("/v1/exec", post(handler));
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
 
         let started = std::time::Instant::now();
         let error = send(
-            reqwest::Client::new().post(format!("{base}/v1/exec")),
+            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
             RUN_COMMAND,
         )
         .await
@@ -494,6 +588,78 @@ mod tests {
             error.to_string().contains("did not answer"),
             "the refusal says the agent stalled: {error}"
         );
+    }
+
+    /// The bound is on reaching the agent, not on the command: output that arrives slowly, long
+    /// after the headers, is the ordinary shape of a command that runs for a while.
+    #[tokio::test]
+    async fn a_slow_body_after_prompt_headers_is_not_cut_off() {
+        let handler = || async {
+            let frames = async_stream_frames(vec![
+                "{\"t\":\"stdout\",\"seq\":0,\"data\":\"aGk=\"}\n",
+                "{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n",
+            ]);
+            axum::body::Body::from_stream(frames).into_response()
+        };
+        let router = Router::new().route("/v1/exec", post(handler));
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+
+        let response = send(
+            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect("headers arrive at once");
+        let outputs = frame_stream(response, "test-sandbox")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(outputs.len(), 2, "every frame arrived: {outputs:?}");
+        assert_eq!(
+            outputs[1].as_ref().expect("exit"),
+            &CommandOutput::Exit {
+                code: 0,
+                truncated: false
+            }
+        );
+    }
+
+    /// Frames emitted one at a time, each after a pause longer than the response bound, so the
+    /// body as a whole takes several bounds to finish.
+    fn async_stream_frames(
+        chunks: Vec<&'static str>,
+    ) -> impl futures::Stream<Item = std::result::Result<&'static str, std::io::Error>> {
+        futures::stream::iter(chunks).then(|chunk| async move {
+            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 2).await;
+            Ok(chunk)
+        })
+    }
+
+    /// An agent that accepts any request and never sends its headers.
+    /// The agent may have started the command before its headers stalled, so a retry could run
+    /// A file operation is idempotent, so a stalled one is safe to repeat and says so.
+    /// An agent that accepts any request and never sends its headers.
+    /// A connection that drops before any headers is the same unknown as a stall: the agent may
+    /// The agent may have started the command before its headers stalled, so a retry could run
+    /// A file operation is idempotent, so a stalled one is safe to repeat and says so.
+    /// An agent that accepts any request and never sends its headers.
+    async fn stalled_agent() -> String {
+        let handler = || async {
+            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 20).await;
+            "late".into_response()
+        };
+        let router = Router::new().fallback(handler);
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+
+        format!("http://{address}")
     }
 
     /// A connection that drops before any headers is the same unknown as a stall: the agent may
@@ -577,55 +743,6 @@ mod tests {
             error.to_string().contains("did not answer"),
             "the refusal says the agent stalled: {error}"
         );
-    }
-
-    /// The bound is on reaching the agent, not on the command: output that arrives slowly, long
-    /// after the headers, is the ordinary shape of a command that runs for a while.
-    #[tokio::test]
-    async fn a_slow_body_after_prompt_headers_is_not_cut_off() {
-        let handler = || async {
-            let frames = async_stream_frames(vec![
-                "{\"t\":\"stdout\",\"seq\":0,\"data\":\"aGk=\"}\n",
-                "{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n",
-            ]);
-            axum::body::Body::from_stream(frames).into_response()
-        };
-        let router = Router::new().route("/v1/exec", post(handler));
-        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
-            .await
-            .expect("bind");
-        let address = listener.local_addr().expect("address");
-        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
-
-        let response = send(
-            reqwest::Client::new().post(format!("http://{address}/v1/exec")),
-            RUN_COMMAND,
-        )
-        .await
-        .expect("headers arrive at once");
-        let outputs = frame_stream(response, "test-sandbox")
-            .collect::<Vec<_>>()
-            .await;
-
-        assert_eq!(outputs.len(), 2, "every frame arrived: {outputs:?}");
-        assert_eq!(
-            outputs[1].as_ref().expect("exit"),
-            &CommandOutput::Exit {
-                code: 0,
-                truncated: false
-            }
-        );
-    }
-
-    /// Frames emitted one at a time, each after a pause longer than the response bound, so the
-    /// body as a whole takes several bounds to finish.
-    fn async_stream_frames(
-        chunks: Vec<&'static str>,
-    ) -> impl futures::Stream<Item = std::result::Result<&'static str, std::io::Error>> {
-        futures::stream::iter(chunks).then(|chunk| async move {
-            tokio::time::sleep(AGENT_RESPONSE_TIMEOUT * 2).await;
-            Ok(chunk)
-        })
     }
 
     #[tokio::test]

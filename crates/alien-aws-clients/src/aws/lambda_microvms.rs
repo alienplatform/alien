@@ -33,7 +33,12 @@ pub struct MicrovmImage {
     pub image_identifier: Option<String>,
     /// Image ARN
     pub image_arn: Option<String>,
-    /// Current version, which together with the image scopes session discovery
+    /// Current version, which together with the image scopes session discovery.
+    ///
+    /// `GetMicrovmImage` names it `latestActiveImageVersion` while a version listing names it
+    /// `imageVersion`, so both have to land here — a caller that reads only one gets `None` from
+    /// the other call and publishes a binding scoped to no version.
+    #[serde(alias = "latestActiveImageVersion")]
     pub image_version: Option<String>,
     /// Lifecycle state; an image in CREATING cannot be deleted
     pub state: Option<String>,
@@ -279,13 +284,13 @@ impl LambdaMicrovmsClient {
 
         let mut builder = self.client.request(method, &url);
         if let Some(body) = body {
-            builder = builder
-                .header("content-type", "application/json")
-                .body(serde_json::to_string(&body).map_err(|error| {
+            builder = builder.header("content-type", "application/json").body(
+                serde_json::to_string(&body).map_err(|error| {
                     AlienError::new(ErrorData::SerializationError {
                         message: format!("Failed to serialize {operation} body: {error}"),
                     })
-                })?);
+                })?,
+            );
         }
 
         match sign_send_json(builder, &self.sign_config()).await {
@@ -687,7 +692,10 @@ mod tests {
             message: "ThrottlingException: slow down".to_string(),
         });
 
-        assert_eq!(AlienError::new(classify(&raw, "RunMicrovm")).code, "RATE_LIMIT_EXCEEDED");
+        assert_eq!(
+            AlienError::new(classify(&raw, "RunMicrovm")).code,
+            "RATE_LIMIT_EXCEEDED"
+        );
     }
 
     /// Anything unrecognised stays generic rather than being guessed into a typed error a
@@ -698,7 +706,10 @@ mod tests {
             message: "ValidationException: bad ARN".to_string(),
         });
 
-        assert_eq!(AlienError::new(classify(&raw, "RunMicrovm")).code, "GENERIC_ERROR");
+        assert_eq!(
+            AlienError::new(classify(&raw, "RunMicrovm")).code,
+            "GENERIC_ERROR"
+        );
     }
 
     #[test]
@@ -760,12 +771,17 @@ mod live_image_create {
                     .expect("AWS_TARGET_ACCESS_KEY_ID"),
                 secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY")
                     .expect("AWS_TARGET_SECRET_ACCESS_KEY"),
-                session_token: None,
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN")
+                    .ok()
+                    .filter(|token| !token.is_empty()),
             },
             service_overrides: None,
         };
 
-        LambdaMicrovmsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(config))
+        LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
     }
 
     /// Deletes an image the way the API wants it, versions first.
@@ -776,7 +792,10 @@ mod live_image_create {
     #[ignore]
     async fn delete_images_versions_first() {
         let client = client();
-        for name in std::env::var("PROBE_IMAGES").expect("PROBE_IMAGES").split(',') {
+        for name in std::env::var("PROBE_IMAGES")
+            .expect("PROBE_IMAGES")
+            .split(',')
+        {
             let name = name.trim();
             if name.is_empty() {
                 continue;
@@ -787,12 +806,23 @@ mod live_image_create {
                 Err(error) => println!("{name}: list refused: {error}"),
             }
             for version in versions.unwrap_or_default() {
-                let Some(v) = version.image_version.as_deref() else { continue };
+                let Some(v) = version.image_version.as_deref() else {
+                    continue;
+                };
                 let path = format!("/{API_VERSION}/microvm-images/{name}/versions/{v}");
                 let result: std::result::Result<serde_json::Value, _> = client
-                    .send(Method::DELETE, &path, &[], None, "DeleteMicrovmImageVersion")
+                    .send(
+                        Method::DELETE,
+                        &path,
+                        &[],
+                        None,
+                        "DeleteMicrovmImageVersion",
+                    )
                     .await;
-                println!("  version {v}: {}", if result.is_ok() { "deleted" } else { "refused" });
+                println!(
+                    "  version {v}: {}",
+                    if result.is_ok() { "deleted" } else { "refused" }
+                );
             }
             match client.delete_microvm_image(name).await {
                 Ok(()) => println!("  image deleted"),
@@ -817,25 +847,35 @@ mod live_image_create {
         });
         for extra in std::env::var("PROBE_EXTRA").unwrap_or_default().split(',') {
             match extra.trim() {
-                "hooks" => body["hooks"] = serde_json::json!({
-                    "port": 8971,
-                    "microvmImageHooks": { "ready": "ENABLED", "readyTimeoutInSeconds": 120 },
-                    "microvmHooks": { "run": "ENABLED", "runTimeoutInSeconds": 30,
-                                      "resume": "ENABLED", "resumeTimeoutInSeconds": 30 }
-                }),
-                "env" => body["environmentVariables"] = serde_json::json!({
-                    "ALIEN_SANDBOX_ROOT": "/sandbox",
-                    "ALIEN_SANDBOX_PORT": "8971",
-                    "ALIEN_SANDBOX_AUTHORIZATION": "transport",
-                    "ALIEN_SANDBOX_EXEC_UID": "60000",
-                    "ALIEN_SANDBOX_EXEC_GID": "60000"
-                }),
-                "cpu" => body["cpuConfigurations"] = serde_json::json!([{ "architecture": "ARM_64" }]),
+                "hooks" => {
+                    body["hooks"] = serde_json::json!({
+                        "port": 8971,
+                        "microvmImageHooks": { "ready": "ENABLED", "readyTimeoutInSeconds": 120 },
+                        "microvmHooks": { "run": "ENABLED", "runTimeoutInSeconds": 30,
+                                          "resume": "ENABLED", "resumeTimeoutInSeconds": 30 }
+                    })
+                }
+                "env" => {
+                    body["environmentVariables"] = serde_json::json!({
+                        "ALIEN_SANDBOX_ROOT": "/sandbox",
+                        "ALIEN_SANDBOX_PORT": "8971",
+                        "ALIEN_SANDBOX_AUTHORIZATION": "transport",
+                        "ALIEN_SANDBOX_EXEC_UID": "60000",
+                        "ALIEN_SANDBOX_EXEC_GID": "60000"
+                    })
+                }
+                "cpu" => {
+                    body["cpuConfigurations"] = serde_json::json!([{ "architecture": "ARM_64" }])
+                }
                 "res" => body["resources"] = serde_json::json!([{ "minimumMemoryInMiB": 512 }]),
-                "log" => body["logging"] = serde_json::json!({ "cloudWatch": { "logGroup": std::env::var("PROBE_LOG_GROUP").unwrap_or_else(|_| "/aws/lambda-microvms/alienden".to_string()) } }),
-                "conn" => if let Some(c) = std::env::var("PROBE_CONNECTOR_ARN").ok() {
-                    body["egressNetworkConnectors"] = serde_json::json!([c]);
-                },
+                "log" => {
+                    body["logging"] = serde_json::json!({ "cloudWatch": { "logGroup": std::env::var("PROBE_LOG_GROUP").expect("PROBE_LOG_GROUP") } })
+                }
+                "conn" => {
+                    if let Some(c) = std::env::var("PROBE_CONNECTOR_ARN").ok() {
+                        body["egressNetworkConnectors"] = serde_json::json!([c]);
+                    }
+                }
                 _ => {}
             }
         }
@@ -844,7 +884,11 @@ mod live_image_create {
         // Signed by hand rather than through `send`, which drops the response body — and the
         // body is where AWS puts the reason a 400 happened.
         let client = client();
-        client.credentials.ensure_fresh().await.expect("credentials");
+        client
+            .credentials
+            .ensure_fresh()
+            .await
+            .expect("credentials");
         let url = format!("{}/{API_VERSION}/microvm-images", client.base_url());
         let signed = client
             .client
@@ -859,6 +903,75 @@ mod live_image_create {
         let text = response.text().await.unwrap_or_default();
         println!("STATUS: {status}");
         println!("BODY: {text}");
+    }
+
+    /// Runs the real `run_microvm_body` against a live image and prints what AWS answered.
+    ///
+    /// A workload only ever sees `SANDBOX_UNREACHABLE`, because the cause does not survive the
+    /// hop into the SDK. This asks the same question with the reply left intact.
+    ///
+    /// Starts a billable MicroVM that nothing else reclaims — `terminate_probe_microvms` is its
+    /// pair.
+    #[tokio::test]
+    #[ignore]
+    async fn run_a_microvm_and_report_the_services_own_error() {
+        let body = run_microvm_body(
+            &std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN"),
+            &std::env::var("PROBE_IMAGE_VERSION").unwrap_or_else(|_| "1.0".to_string()),
+            "probe-client-token",
+            std::env::var("PROBE_EXEC_ROLE_ARN").ok(),
+            std::env::var("PROBE_CONNECTOR_ARN")
+                .ok()
+                .into_iter()
+                .collect(),
+            None,
+            None,
+        );
+        println!("request: {}", serde_json::to_string_pretty(&body).unwrap());
+
+        let client = client();
+        client
+            .credentials
+            .ensure_fresh()
+            .await
+            .expect("credentials");
+        let url = format!("{}/{API_VERSION}/microvms", client.base_url());
+        let signed = client
+            .client
+            .request(Method::POST, &url)
+            .header("content-type", "application/json")
+            .body(serde_json::to_string(&body).unwrap())
+            .sign_aws_request(&client.sign_config())
+            .expect("signing");
+
+        let response = signed.send().await.expect("the request should reach AWS");
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        println!("STATUS: {status}");
+        println!("BODY: {text}");
+    }
+
+    /// Terminates the MicroVMs a probe run started.
+    ///
+    /// A probe MicroVM outlives the stack it was launched from and bills for up to eight hours,
+    /// and no teardown owns it — the image delete does not reach it.
+    #[tokio::test]
+    #[ignore]
+    async fn terminate_probe_microvms() {
+        let client = client();
+        for id in std::env::var("PROBE_MICROVM_IDS")
+            .expect("PROBE_MICROVM_IDS")
+            .split(',')
+        {
+            let id = id.trim();
+            if id.is_empty() {
+                continue;
+            }
+            match client.terminate_microvm(id).await {
+                Ok(()) => println!("{id}: terminated"),
+                Err(error) => println!("{id}: refused: {error}"),
+            }
+        }
     }
 }
 
@@ -885,15 +998,25 @@ mod live_deny {
             credentials: AwsCredentials::AccessKeys {
                 access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").expect("key"),
                 secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").expect("secret"),
-                session_token: None,
+                session_token: std::env::var("AWS_TARGET_SESSION_TOKEN")
+                    .ok()
+                    .filter(|token| !token.is_empty()),
             },
             service_overrides: None,
         };
-        LambdaMicrovmsClient::new(Client::new(), AwsCredentialProvider::from_config_sync(config))
+        LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(config),
+        )
     }
 
     /// Runs one command through the agent and returns its raw NDJSON body.
-    async fn exec(client: &LambdaMicrovmsClient, id: &str, endpoint: &str, command: &[&str]) -> String {
+    async fn exec(
+        client: &LambdaMicrovmsClient,
+        id: &str,
+        endpoint: &str,
+        command: &[&str],
+    ) -> String {
         let token = client
             .create_microvm_auth_token(id, vec![8971], 10)
             .await
@@ -930,10 +1053,20 @@ mod live_deny {
         decoded
     }
 
-    async fn start(client: &LambdaMicrovmsClient, image: &str, version: &str, connectors: Vec<String>) -> (String, String) {
+    async fn start(
+        client: &LambdaMicrovmsClient,
+        image: &str,
+        version: &str,
+        connectors: Vec<String>,
+    ) -> (String, String) {
         let token = uuid::Uuid::new_v4().simple().to_string();
+        // The execution role is what a credential probe reaches for, so a session started
+        // without one cannot answer whether it is reachable.
+        let role = std::env::var("PROBE_EXEC_ROLE_ARN")
+            .ok()
+            .filter(|arn| !arn.is_empty());
         let microvm = client
-            .run_microvm(image, version, &token, None, connectors, None, None)
+            .run_microvm(image, version, &token, role, connectors, None, None)
             .await
             .expect("RunMicrovm");
         let id = microvm.microvm_id.expect("a MicroVM id");
@@ -960,10 +1093,14 @@ mod live_deny {
 
         for (label, identifier) in [("name", &name), ("arn", &arn)] {
             let got = client.get_microvm_image(identifier).await;
-            println!("GetMicrovmImage({label}) -> {}", if got.is_ok() { "ok" } else { "REFUSED" });
+            println!(
+                "GetMicrovmImage({label}) -> {}",
+                if got.is_ok() { "ok" } else { "REFUSED" }
+            );
 
             let token = uuid::Uuid::new_v4().simple().to_string();
-            let ran = client.run_microvm(identifier, "1.0", &token, None, Vec::new(), None, None)
+            let ran = client
+                .run_microvm(identifier, "1.0", &token, None, Vec::new(), None, None)
                 .await;
             match ran {
                 Ok(microvm) => {
@@ -972,8 +1109,16 @@ mod live_deny {
                         let _ = client.terminate_microvm(&id).await;
                     }
                 }
-                Err(error) => println!("RunMicrovm({label}) -> REFUSED: {}", format!("{error:?}")
-                    .split("http_response_text").nth(1).unwrap_or("").chars().take(90).collect::<String>()),
+                Err(error) => println!(
+                    "RunMicrovm({label}) -> REFUSED: {}",
+                    format!("{error:?}")
+                        .split("http_response_text")
+                        .nth(1)
+                        .unwrap_or("")
+                        .chars()
+                        .take(90)
+                        .collect::<String>()
+                ),
             }
         }
     }
@@ -986,8 +1131,17 @@ mod live_deny {
         let connector = std::env::var("PROBE_CONNECTOR_ARN").expect("PROBE_CONNECTOR_ARN");
         let client = client();
 
-        let probe = ["/usr/bin/curl", "-sS", "--max-time", "8", "-o", "/dev/null",
-                     "-w", "HTTP:%{http_code}", "https://example.com"];
+        let probe = [
+            "/usr/bin/curl",
+            "-sS",
+            "--max-time",
+            "8",
+            "-o",
+            "/dev/null",
+            "-w",
+            "HTTP:%{http_code}",
+            "https://example.com",
+        ];
 
         let (denied, denied_endpoint) = start(&client, &image, &version, vec![connector]).await;
         println!("DENY microvm={denied}");
@@ -1014,6 +1168,182 @@ mod live_deny {
         assert!(
             denied_output.contains("HTTP:000"),
             "deny should fail to connect rather than get some other status:\n{denied_output}"
+        );
+    }
+
+    /// Records what AWS does today: an egress connector governs routed traffic and not metadata.
+    ///
+    /// This characterizes the platform, it does not guard a boundary — it asserts the execution
+    /// role IS readable, so it fails if AWS ever stops serving the IAM tree. That would be good
+    /// news, and the fix is to delete this test rather than to restore the behaviour. The test
+    /// that guards something is `an_open_sandbox_reaches_the_internet_but_no_credentials`, and
+    /// the control is `a_sandbox_binding_naming_an_execution_role_is_refused` in alien-bindings,
+    /// which is what stops a role reaching a session at all.
+    ///
+    /// Needs a built image, an execution role and a deny connector:
+    ///
+    /// ```text
+    /// PROBE_IMAGE_NAME=arn:aws:lambda:<region>:<account>:microvm-image:<name>  # ARN, not a name
+    /// PROBE_IMAGE_VERSION=1.0
+    /// PROBE_EXEC_ROLE_ARN=arn:aws:iam::<account>:role/<role>
+    /// PROBE_CONNECTOR_ARN=arn:aws:lambda:<region>:<account>:network-connector:<id>
+    /// AWS_TARGET_{ACCOUNT_ID,REGION,ACCESS_KEY_ID,SECRET_ACCESS_KEY,SESSION_TOKEN}
+    /// ```
+    ///
+    /// Prints identifiers only, never the secret — the question is reachability.
+    #[tokio::test]
+    #[ignore]
+    async fn an_egress_connector_governs_routed_traffic_and_not_metadata() {
+        let image = std::env::var("PROBE_IMAGE_NAME").expect("PROBE_IMAGE_NAME");
+        let version = std::env::var("PROBE_IMAGE_VERSION").unwrap_or_else(|_| "1.0".to_string());
+        let connector = std::env::var("PROBE_CONNECTOR_ARN").expect("PROBE_CONNECTOR_ARN");
+        assert!(
+            std::env::var("PROBE_EXEC_ROLE_ARN").is_ok_and(|arn| !arn.is_empty()),
+            "this proves what a session can do with a role attached, so one must be set"
+        );
+        let client = client();
+
+        let script = "\
+code() { curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \"$@\" || true; }; \
+echo \"INTERNET=$(code https://example.com)\"; \
+T=$(curl -sS --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+    http://169.254.169.254/latest/api/token || true); \
+R=$(curl -sS --max-time 5 -H \"X-aws-ec2-metadata-token: $T\" \
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/ || true); \
+echo \"ROLE=$R\"; \
+C=$(curl -sS --max-time 5 -H \"X-aws-ec2-metadata-token: $T\" \
+    \"http://169.254.169.254/latest/meta-data/iam/security-credentials/$R\" || true); \
+echo \"HAS_KEY=$(echo \"$C\" | grep -c AccessKeyId)\"; \
+echo \"HAS_SECRET=$(echo \"$C\" | grep -c SecretAccessKey)\"; \
+echo \"CODE=$(echo \"$C\" | sed -n 's/.*\"Code\" *: *\"\\([A-Za-z]*\\)\".*/\\1/p')\"; \
+echo \"EXPIRES=$(echo \"$C\" | sed -n 's/.*\"Expiration\" *: *\"\\([^\"]*\\)\".*/\\1/p')\"";
+
+        let mut seen = Vec::new();
+        for (mode, connectors) in [("DENY ", vec![connector.clone()]), ("ALLOW", Vec::new())] {
+            let (id, endpoint) = start(&client, &image, &version, connectors).await;
+            let out = exec(&client, &id, &endpoint, &["/bin/sh", "-c", script]).await;
+            let _ = client.terminate_microvm(&id).await;
+            let field = |name: &str| {
+                out.lines()
+                    .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                    .unwrap_or_else(|| panic!("{mode} probe did not report {name}:\n{out}"))
+                    .trim()
+                    .to_string()
+            };
+            let (internet, role, key) = (field("INTERNET"), field("ROLE"), field("HAS_KEY"));
+            println!(
+                "{mode} internet={internet} role={role} has_key={key} code={} expires={}",
+                field("CODE"),
+                field("EXPIRES")
+            );
+            seen.push((mode, internet, role, key));
+        }
+
+        let deny = &seen[0];
+        let allow = &seen[1];
+
+        // The connector does what it claims for routed traffic; without this the comparison
+        // below would be measuring a broken image.
+        assert_ne!(
+            deny.1, "200",
+            "a deny session reached the internet: {deny:?}"
+        );
+        assert_eq!(
+            allow.1, "200",
+            "an allow session could not reach the internet: {allow:?}"
+        );
+
+        // And the point: the same role is readable in both, so the connector never governed it.
+        for (mode, _, role, key) in &seen {
+            assert!(
+                !role.is_empty() && key == "1",
+                "{mode} could not read the execution role, which would mean metadata access \
+                 depends on the connector after all: role={role:?} has_key={key:?}"
+            );
+        }
+    }
+
+    /// What an `allow` sandbox can reach besides the internet.
+    ///
+    /// `allow` is a MicroVM started with no egress connector, which leaves AWS's managed internet
+    /// path in place. Private ranges and the deployment's VPC fall away by construction — neither
+    /// is routable from outside the customer VPC — but link-local never traversed a connector, so
+    /// nothing about removing one speaks to it. The metadata service does answer a session, and
+    /// serves `placement/` and `tags/` only: the credential tree is absent, which is the whole
+    /// reason `allow` is safe for untrusted code. That is a property of the MicroVM runtime, not
+    /// of the declaration, so it is asserted here rather than assumed.
+    #[tokio::test]
+    #[ignore]
+    async fn an_open_sandbox_reaches_the_internet_but_no_credentials() {
+        let image = std::env::var("PROBE_IMAGE_NAME").expect("PROBE_IMAGE_NAME");
+        let version = std::env::var("PROBE_IMAGE_VERSION").unwrap_or_else(|_| "1.0".to_string());
+        let client = client();
+
+        let (id, endpoint) = start(&client, &image, &version, Vec::new()).await;
+        println!("ALLOW microvm={id}");
+
+        // One session, one script: six round trips through the agent would each pay the token
+        // and connection cost, and a partial failure would leave a session running.
+        let script = "\
+code() { curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \"$@\" || true; }; \
+T=$(curl -sS --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+    http://169.254.169.254/latest/api/token || true); \
+echo \"INTERNET=$(code https://example.com)\"; \
+echo \"IMDS_ROOT=$(curl -sS --max-time 5 -H \"X-aws-ec2-metadata-token: $T\" \
+    http://169.254.169.254/latest/meta-data/ | tr '\\n' ' ')\"; \
+echo \"IMDS_CREDS=$(code -H \"X-aws-ec2-metadata-token: $T\" \
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/)\"; \
+echo \"ECS_CREDS=$(code http://169.254.170.2/v2/credentials/)\"; \
+echo \"RFC1918=$(code http://10.0.0.1/)\"; \
+echo \"AWSENV=$(env | grep -c -i '^AWS_\\|SECRET\\|SESSION_TOKEN' || true)\"";
+
+        let out = exec(&client, &id, &endpoint, &["/bin/sh", "-c", script]).await;
+        let _ = client.terminate_microvm(&id).await;
+        println!("{out}");
+
+        let field = |name: &str| {
+            out.lines()
+                .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                .unwrap_or_else(|| panic!("probe did not report {name}:\n{out}"))
+                .trim()
+                .to_string()
+        };
+
+        // The control first: a session that reached nothing would satisfy every check below while
+        // proving only that the probe was broken.
+        assert_eq!(
+            field("INTERNET"),
+            "200",
+            "an allow sandbox must reach the internet, or the rest of this proves nothing:\n{out}"
+        );
+
+        // The token endpoint answering is not the risk and is not asserted against — what would
+        // make `allow` a credential path is the IAM tree behind it existing.
+        let root = field("IMDS_ROOT");
+        assert!(
+            !root.contains("iam"),
+            "the metadata service now offers an iam tree to a session, so an allow sandbox can \
+             reach the execution role: {root}"
+        );
+        assert_ne!(
+            field("IMDS_CREDS"),
+            "200",
+            "instance metadata served credentials to an allow sandbox:\n{out}"
+        );
+        assert_ne!(
+            field("ECS_CREDS"),
+            "200",
+            "the container credential endpoint answered an allow sandbox:\n{out}"
+        );
+        assert_ne!(
+            field("RFC1918"),
+            "200",
+            "an allow sandbox reached a private address:\n{out}"
+        );
+        assert_eq!(
+            field("AWSENV"),
+            "0",
+            "the exec user can see AWS credential variables:\n{out}"
         );
     }
 }

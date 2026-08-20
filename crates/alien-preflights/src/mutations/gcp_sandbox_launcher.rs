@@ -16,9 +16,10 @@ pub struct GcpSandboxLauncherMutation;
 
 impl GcpSandboxLauncherMutation {
     fn stack_has_a_sandbox(stack: &Stack) -> bool {
-        stack.resources.values().any(|entry| {
-            entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
-        })
+        stack
+            .resources
+            .values()
+            .any(|entry| entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref())
     }
 }
 

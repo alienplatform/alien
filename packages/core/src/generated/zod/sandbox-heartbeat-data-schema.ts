@@ -14,7 +14,7 @@ import { LocalSandboxHeartbeatDataSchema } from "./local-sandbox-heartbeat-data-
  */
 export const SandboxHeartbeatDataSchema = z.union([z.lazy(() => AwsMicrovmSandboxHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["awsMicrovm"])
-    })).describe("AWS: MicroVMs started from one image, counted across every version."), z.lazy(() => AzureSandboxGroupHeartbeatDataSchema).and(z.object({
+    })).describe("AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it."), z.lazy(() => AzureSandboxGroupHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["azureSandboxGroup"])
     })).describe("Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count\nis not available here."), z.lazy(() => KubernetesSandboxHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["kubernetesPods"])

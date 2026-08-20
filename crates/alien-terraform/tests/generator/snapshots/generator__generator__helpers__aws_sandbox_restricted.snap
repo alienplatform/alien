@@ -11,6 +11,14 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    awscc = {
+      source  = "hashicorp/awscc"
+      version = ">= 1.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
     random = {
       source  = "hashicorp/random"
       version = ">= 3.6"
@@ -125,8 +133,13 @@ variable "managing_account_id" {
 
 variable "network_mode" {
   type        = string
-  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  description = "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
   default     = "create-new"
+
+  validation {
+    condition     = contains(["create-new", "use-existing"], var.network_mode)
+    error_message = "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+  }
 }
 
 variable "vpc_cidr" {
@@ -186,6 +199,10 @@ data "aws_region" "current" {}
 
 data "aws_partition" "current" {}
 
+provider "awscc" {
+  region = var.aws_region
+}
+
 === resource_prefix.tf ===
 resource "random_id" "resource_prefix" {
   byte_length = 4
@@ -218,6 +235,20 @@ locals {
         securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(var.security_group_ids[0], null) : null
         availabilityZones   = var.network_mode == "use-default" ? [] : slice(data.aws_availability_zones.available.names, 0, 2)
         isByoVpc            = var.network_mode != "create-new"
+      }
+    },
+    {
+      id   = "agents"
+      type = "sandbox"
+      importData = {
+        previewPorts = []
+        egressConnectorArns = [
+          awscc_lambda_network_connector.agents.arn
+        ]
+        allowEgress     = false
+        imageIdentifier = jsondecode(aws_cloudcontrolapi_resource.agents.properties)["ImageArn"]
+        imageArn        = jsondecode(aws_cloudcontrolapi_resource.agents.properties)["ImageArn"]
+        imageVersion    = jsondecode(aws_cloudcontrolapi_resource.agents.properties)["LatestActiveImageVersion"]
       }
     }
   ]
@@ -371,6 +402,121 @@ resource "aws_security_group" "default_network_workload" {
   }
 }
 
+=== agents.tf ===
+resource "aws_iam_role" "agents" {
+  name               = length(format("%s-%s", local.resource_prefix, "agents-build")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-build") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-build"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-build")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+}
+
+resource "aws_iam_role_policy" "agents" {
+  name   = "sandbox-image-build"
+  role   = aws_iam_role.agents.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }, { "Effect" = "Allow", "Action" = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "Resource" = "*" }] })
+}
+
+resource "time_sleep" "agents_iam_propagation" {
+  create_duration = "30s"
+  triggers = {
+    "build_role"    = aws_iam_role.agents.unique_id
+    "operator_role" = aws_iam_role.agents_egress.unique_id
+  }
+  depends_on = [
+    aws_iam_role_policy.agents,
+    aws_iam_role_policy.agents_egress
+  ]
+}
+
+resource "aws_cloudcontrolapi_resource" "agents" {
+  depends_on = [
+    time_sleep.agents_iam_propagation
+  ]
+  type_name     = "AWS::Lambda::MicrovmImage"
+  desired_state = jsonencode({ "Name" = "${local.resource_prefix}-agents", "Description" = "Sandbox agents", "BaseImageArn" = "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:microvm-image:al2023-1", "BaseImageVersion" = "1", "BuildRoleArn" = aws_iam_role.agents.arn, "CodeArtifact" = { "Uri" = "s3://acme-artifacts/agents/bundle.zip" }, "Logging" = { "Disabled" = true }, "EgressNetworkConnectors" = ["arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"], "CpuConfigurations" = [{ "Architecture" = "ARM_64" }], "Resources" = [{ "MinimumMemoryInMiB" = 2048 }], "AdditionalOsCapabilities" = [], "Hooks" = { "Port" = 8971, "MicrovmImageHooks" = { "Ready" = "ENABLED", "ReadyTimeoutInSeconds" = 120 }, "MicrovmHooks" = { "Run" = "ENABLED", "RunTimeoutInSeconds" = 30, "Resume" = "ENABLED", "ResumeTimeoutInSeconds" = 30 } }, "EnvironmentVariables" = [{ "Key" = "ALIEN_SANDBOX_ROOT", "Value" = "/sandbox" }, { "Key" = "ALIEN_SANDBOX_PORT", "Value" = "8971" }, { "Key" = "ALIEN_SANDBOX_AUTHORIZATION", "Value" = "transport" }, { "Key" = "ALIEN_SANDBOX_EXEC_UID", "Value" = "60000" }, { "Key" = "ALIEN_SANDBOX_EXEC_GID", "Value" = "60000" }], "Tags" = [{ "Key" = "managed-by", "Value" = "setup" }, { "Key" = "deployment", "Value" = local.resource_prefix }, { "Key" = "resource", "Value" = "agents" }, { "Key" = "resource-type", "Value" = "sandbox" }] })
+}
+
+resource "aws_iam_role" "agents_egress" {
+  name               = length(format("%s-%s", local.resource_prefix, "agents-egress")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-egress") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-egress"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-egress")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+}
+
+resource "aws_iam_role_policy" "agents_egress" {
+  name   = "sandbox-egress-connector"
+  role   = aws_iam_role.agents_egress.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "CreateENI", "Effect" = "Allow", "Action" = "ec2:CreateNetworkInterface", "Resource" = ["arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"] }, { "Sid" = "TagENI", "Effect" = "Allow", "Action" = "ec2:CreateTags", "Resource" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "Condition" = { "StringEquals" = { "ec2:ManagedResourceOperator" = "network-connectors.lambda.amazonaws.com" } } }] })
+}
+
+resource "aws_security_group" "agents_egress" {
+  name_prefix = "${local.resource_prefix}-agents-egress-"
+  description = "Sandbox agents session egress"
+  vpc_id      = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
+
+  egress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    cidr_blocks = [
+      "127.0.0.1/32"
+    ]
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+}
+
+resource "awscc_lambda_network_connector" "agents" {
+  depends_on = [
+    time_sleep.agents_iam_propagation
+  ]
+  name          = "${local.resource_prefix}-agents"
+  operator_role = aws_iam_role.agents_egress.arn
+  configuration = {
+    "vpc_egress_configuration" = {
+      "associated_compute_resource_types" = [
+        "MicroVm"
+      ]
+      "network_protocol" = "IPv4"
+      "subnet_ids"       = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+      "security_group_ids" = [
+        aws_security_group.agents_egress.id
+      ]
+    }
+  }
+  tags = [
+    {
+      "key"   = "managed-by"
+      "value" = "setup"
+    },
+    {
+      "key"   = "deployment"
+      "value" = local.resource_prefix
+    },
+    {
+      "key"   = "resource"
+      "value" = "agents"
+    },
+    {
+      "key"   = "resource-type"
+      "value" = "sandbox"
+    }
+  ]
+}
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -399,7 +545,15 @@ resource "terraform_data" "deployment_registration" {
     aws_route_table.default_network_private,
     aws_route_table_association.default_network_public,
     aws_route_table_association.default_network_private,
-    aws_security_group.default_network_workload
+    aws_security_group.default_network_workload,
+    aws_iam_role.agents,
+    aws_iam_role_policy.agents,
+    time_sleep.agents_iam_propagation,
+    aws_cloudcontrolapi_resource.agents,
+    aws_iam_role.agents_egress,
+    aws_iam_role_policy.agents_egress,
+    aws_security_group.agents_egress,
+    awscc_lambda_network_connector.agents
   ]
 }
 
@@ -461,7 +615,7 @@ output "deployment_resources" {
 }
 
 === README.md ===
-# Deployment setup - acme-net
+# Deployment setup - acme-sandbox-denied
 
 Target: `aws`.
 
@@ -493,7 +647,7 @@ AWS settings:
 
 Network settings:
 
-- `network_mode`: `create-new`, `use-existing`, or `use-default`.
+- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.
 - `vpc_cidr`, `availability_zones`: used with `create-new`.
 - `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.
 
@@ -502,7 +656,7 @@ Network settings:
 Use your organization's normal backend and approval workflow. A typical local review looks like:
 
 ```bash
-export TF_VAR_name="acme-net"
+export TF_VAR_name="acme-sandbox-denied"
 export TF_VAR_token="..."
 terraform init
 terraform validate

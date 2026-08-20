@@ -59,6 +59,50 @@
         }
       },
       {
+        // An image declaring egress names its connector, and CreateMicrovmImage is authorized
+        // as that pass too. Authorized against no resource type and no condition key, like
+        // CreateMicrovmImage above, so `*` is the only form it can take.
+        "label": "pass-sandbox-egress-connector",
+        "description": "Allow the sandbox image to be built against its egress connector.",
+        "grant": {
+          "actions": ["lambda:PassNetworkConnector"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        // The build runs under a role the create call names, so CreateMicrovmImage is authorized
+        // as a pass of it too. Name-scoped, like the session-time pass in sandbox/management:
+        // PassRole is evaluated against the role being passed, which carries no tag to bound it.
+        "label": "pass-sandbox-build-role",
+        "description": "Allow the sandbox image to be built under its build role.",
+        "grant": {
+          // The image build runs a customer-authored Dockerfile under the role it is passed, so a
+          // stack-wide pass would make provisioning a path to every other role's data.
+          //
+          // Two things keep this narrow, and the name is only the first. `Build` also emits a
+          // `<prefix>-<id>-build` role, so the pattern is not exclusive; what stops that one being
+          // passed here is its trust policy, which names codebuild and not lambda — the image
+          // builder cannot assume a role that does not trust it. `iam:PassedToService` would say
+          // so directly, but this model expresses no AWS policy conditions.
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-build"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-build"]
+          }
+        }
+      },
+      {
         "grant": {
           // The image tag is the boundary every other sandbox statement scopes against, so it
           // has to be settable here and readable for teardown.
