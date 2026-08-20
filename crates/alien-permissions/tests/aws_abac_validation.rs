@@ -363,6 +363,9 @@ fn documented_run_instances_companion_resource(actions: &[String], resource: &st
         || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
 }
 
+/// A MicroVM instance ARN cannot be stack-scoped by name.
+///
+
 fn documented_create_security_group_vpc_resource(actions: &[String], resource: &str) -> bool {
     actions
         .iter()
@@ -651,6 +654,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "ec2:AuthorizeSecurityGroupEgress"
             | "ec2:AuthorizeSecurityGroupIngress"
             | "ec2:CreateInternetGateway"
+            | "lambda:CreateMicrovmImage"
             | "ec2:CreateLaunchTemplate"
             | "ec2:CreateLaunchTemplateVersion"
             | "ec2:CreateNatGateway"
@@ -691,4 +695,122 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "events:PutRule"
             | "lambda:CreateFunction"
     )
+}
+
+/// Actions AWS authorizes against no resource type, so an ARN in the Resource element does not
+/// narrow the grant — it stops the statement matching at all, and the action is silently not
+/// granted. Only the sandbox family is listed. Other resource types grant the same
+/// no-resource-type actions on an ARN; each needs its own check of whether that dead grant is
+/// load-bearing before it is widened.
+const SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE: &[&str] =
+    &["lambda:ListMicrovmImages", "lambda:CreateMicrovmImage"];
+
+/// The inverse of the wildcard check above: that one asks whether a `*` is too wide, this one asks
+/// whether an ARN is too narrow to work.
+///
+/// `lambda:CreateMicrovmImage` is the shape: an ARN there reads in review as the tighter of the
+/// two options while in fact granting nothing, so the build would fail the first time it ran.
+#[test]
+fn sandbox_actions_with_no_resource_type_are_granted_on_every_resource() {
+    let mut failures = Vec::new();
+    let mut granted: Vec<&str> = Vec::new();
+
+    for permission_set_id in list_permission_set_ids() {
+        if !permission_set_id.starts_with("sandbox/") {
+            continue;
+        }
+
+        let permission_set = get_permission_set(&permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+
+        for (statement_index, permission) in aws_permissions.iter().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+
+            for action in actions {
+                let Some(unscopable) = SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE
+                    .iter()
+                    .find(|candidate| **candidate == action.as_str())
+                else {
+                    continue;
+                };
+                granted.push(unscopable);
+
+                for binding in [
+                    permission.binding.stack.as_ref(),
+                    permission.binding.resource.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !binding.resources.iter().any(|resource| resource == "*") {
+                        failures.push(format!(
+                            "{permission_set_id}[{statement_index}] grants {action} on {:?}, but AWS authorizes it against no resource type — the statement would never match",
+                            binding.resources
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    // Without this the test passes when a statement is deleted: nothing else asserts these
+    // actions are granted at all, so "no violations" and "nothing to check" look identical.
+    for action in SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE {
+        assert!(
+            granted.contains(action),
+            "{action} is listed as unscopable but no sandbox set grants it — drop it from the \
+             list or restore the grant"
+        );
+    }
+}
+
+/// `lambda:ListMicrovms` is authorized against no resource type, so it can only be granted on
+/// every resource in the account — and `sandbox/management` sits in the wildcard management
+/// profile of every deployment holding a sandbox. No sandbox operation needs it: a session is
+/// reached by id and proved to be this sandbox's by its own `imageArn`, and Lambda terminates a
+/// MicroVM nobody reaches. Nothing else asserts its absence, so a later edit could restore it
+/// with everything green.
+#[test]
+fn no_sandbox_set_can_enumerate_sessions() {
+    let mut inspected = 0;
+
+    for permission_set_id in list_permission_set_ids() {
+        if !permission_set_id.starts_with("sandbox/") {
+            continue;
+        }
+        let permission_set =
+            get_permission_set(&permission_set_id).expect("missing permission set");
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+        inspected += 1;
+
+        for permission in aws_permissions {
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+            // A wildcard counts: `lambda:*` or `lambda:List*` grants the enumeration just as
+            // surely as naming it, and would read as unrelated breadth rather than as this.
+            assert!(
+                !actions.iter().any(|action| action == "lambda:ListMicrovms"
+                    || action == "lambda:*"
+                    || action == "lambda:List*"),
+                "{permission_set_id} would need an account-wide grant to enumerate: {actions:?}"
+            );
+        }
+    }
+
+    // Without this the test passes if the id prefix ever changes and it inspects nothing.
+    assert!(inspected > 0, "no sandbox permission set was inspected");
 }

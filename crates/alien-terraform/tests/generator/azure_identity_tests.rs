@@ -383,3 +383,46 @@ fn azure_network_byo_vnet_emits_data_lookups() {
     snapshot_module("azure_network_byo_vnet", &module);
     assert_terraform_valid(&module, "azure_network_byo_vnet");
 }
+
+/// The sandbox management grants have to reach the module.
+///
+/// Both are compiled at stack scope, because an Azure sandbox group is created at runtime and
+/// `Microsoft.App/sandboxGroups` has no ARM representation for setup to scope against. A binding
+/// target the platform does not declare refuses package generation outright, which is how this
+/// last failed — so assert the actions render rather than that generation merely succeeded, since
+/// a grant compiled to a scope no emitter renders leaves the module valid and the manager unable
+/// to read the sandbox it owns.
+#[test]
+fn azure_sandbox_management_grants_reach_the_module() {
+    let stack = Stack::new("acme-sbx".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["sandbox/heartbeat", "sandbox/management"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("Microsoft.App/sandboxGroups/read"),
+        "the sandbox heartbeat read never reached the module",
+    );
+    assert!(
+        rendered.contains("Microsoft.App/sandboxGroups/sandboxes/write"),
+        "the sandbox session lifecycle actions never reached the module",
+    );
+    assert!(
+        !rendered.contains("sandboxes/exec"),
+        "session-content access belongs to sandbox/execute, not the management role",
+    );
+    assert_terraform_valid(&module, "azure_sandbox_management_grants");
+}

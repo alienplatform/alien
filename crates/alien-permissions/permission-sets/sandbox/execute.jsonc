@@ -1,0 +1,71 @@
+{
+  "id": "sandbox/execute",
+  "description": "Allows running commands and moving files inside an existing sandbox session",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Minting a MicroVM auth token is the action that grants access to session contents,
+          // so it belongs in this set alone — management, provision and heartbeat must never
+          // reach inside a session. CreateMicrovmShellAuthToken is deliberately excluded: an
+          // interactive shell is not part of the resource's surface.
+          //
+          // Authorized against the image the session was launched from, which is what bounds
+          // it: a workload can only mint tokens for sessions of its own sandbox.
+          "actions": ["lambda:CreateMicrovmAuthToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          // State and endpoint of a session this workload already holds a token for. Metadata:
+          // it reveals nothing of what runs inside.
+          "actions": ["lambda:GetMicrovm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          // Azure gates its whole data plane behind this one role, so exec and session
+          // lifecycle cannot be separated. The merge lands here rather than in
+          // sandbox/management, because a set that reaches inside a session must not be one of
+          // the implicit-management sets. Subscription Owner returns 403 against this plane.
+          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
+        },
+        // Resource-scoped only. This role reaches inside a session, and the sole stack-level
+        // scope Azure RBAC can express is the resource group — where it would reach inside every
+        // sibling sandbox group too. Nothing needs it: a workload is handed this set through a
+        // resource link, which binds to the sandbox's own group.
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

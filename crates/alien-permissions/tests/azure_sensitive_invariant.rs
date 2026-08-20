@@ -7,6 +7,15 @@ const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
 ];
 
 const SENSITIVE_IMPLICIT_DATA_ACTIONS: &[&str] = &[
+    // Reaching inside a live sandbox session: running a command, or moving its files. Session
+    // lifecycle is separate on Azure and is not listed here.
+    "Microsoft.App/sandboxGroups/sandboxes/executeCommand/action",
+    "Microsoft.App/sandboxGroups/sandboxes/executeShellCommand/action",
+    "Microsoft.App/sandboxGroups/sandboxes/exec/stream/action",
+    "Microsoft.App/sandboxGroups/sandboxes/files/read",
+    "Microsoft.App/sandboxGroups/sandboxes/files/write",
+    "Microsoft.App/sandboxGroups/sandboxes/files/delete",
+    "Microsoft.App/sandboxGroups/sandboxes/downloadContentPackage/action",
     "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
     "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
     "Microsoft.KeyVault/vaults/secrets/read",
@@ -19,6 +28,9 @@ const SENSITIVE_IMPLICIT_DATA_ACTIONS: &[&str] = &[
 const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
     "AcrPull",
     "AcrPush",
+    // Carries the whole sandbox data plane, session contents included, so it belongs to
+    // sandbox/execute alone. Lifecycle-only callers use the granular actions instead.
+    "Container Apps SandboxGroup Data Owner",
     "Azure Service Bus Data Receiver",
     "Key Vault Secrets User",
     "Storage Blob Data Contributor",

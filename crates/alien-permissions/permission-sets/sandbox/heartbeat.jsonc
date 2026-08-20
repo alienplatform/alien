@@ -1,0 +1,56 @@
+{
+  "id": "sandbox/heartbeat",
+  "description": "Allows reading sandbox parent state",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Parent state: whether the image exists and which versions are live. A rolled
+          // version stays a cleanup scope until its own MicroVMs are gone, so the heartbeat
+          // reads versions rather than assuming the newest.
+          //
+          // No session count here: counting sessions means `lambda:ListMicrovms`, which AWS
+          // authorizes against no resource type, so granting it would mean an account-wide grant.
+          "actions": ["lambda:GetMicrovmImage", "lambda:ListMicrovmImageVersions"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          // Control-plane read only. Microsoft.App/sandboxGroups/sandboxes/stats/read returns cpu, memory and network counters with no
+          // session contents, and AppEnvSessionConsoleLogs is deliberately absent — it captures
+          // whatever the sandbox writes.
+          "actions": ["Microsoft.App/sandboxGroups/read"]
+        },
+        // Prefer the resource binding. The stack binding is the resource group, which is wider —
+        // it enumerates sibling sandbox groups — and it exists for the same reason `provision`
+        // is resource-group-scoped: the target does not exist yet. `Microsoft.App/sandboxGroups`
+        // has no ARM template representation, so setup cannot create the group and cannot scope
+        // an assignment to one, and Azure expresses no scope between a group and its resource
+        // group. The widening is a read of provisioning state over the deployment's own resource
+        // group, and reaches no session contents.
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

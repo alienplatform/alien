@@ -1272,7 +1272,20 @@ fn generate_stack_management_grant_plan(
                 );
                 continue;
             };
-            if permission_set.platforms.azure.is_none() {
+            // Skipped on the same condition the Terraform emitter uses, so push and runtime agree.
+            // A set can decline the stack target deliberately — the sandbox sets do, because at
+            // the only stack-level scope Azure RBAC can express, the resource group, their grants
+            // would reach every sibling sandbox group. Asking the generator for a target a set
+            // does not declare is a hard error, so without this a stack containing a sandbox fails
+            // management-role generation outright.
+            let declines_stack_scope = permission_set
+                .platforms
+                .azure
+                .as_ref()
+                .is_none_or(|azure| {
+                    azure.is_empty() || azure.iter().all(|entry| entry.binding.stack.is_none())
+                });
+            if declines_stack_scope {
                 continue;
             }
 
