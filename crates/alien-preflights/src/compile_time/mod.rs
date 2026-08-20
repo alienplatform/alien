@@ -12,6 +12,8 @@ pub mod network_required;
 pub mod permission_profiles_exist;
 pub mod public_worker_lifecycle;
 pub mod resource_enabled_valid;
+pub mod sandbox_host_required;
+pub mod sandbox_platform_support;
 pub mod resource_id_pattern;
 pub mod resource_name_length;
 pub mod resource_references_exist;

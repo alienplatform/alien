@@ -233,6 +233,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 hex = "0.4"
+ed25519-compact = { version = "2.3", default-features = false, features = ["std"] }
 httpmock = { version = "0.7" }
 mockall = { version = "0.15.0" }
 hcl-rs = "0.19"
