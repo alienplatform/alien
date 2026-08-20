@@ -230,12 +230,21 @@ enum MachineBundleSystemdNotifyAccess {
 #[serde(rename_all = "camelCase")]
 struct MachineBundleConfig {
     path: String,
+    #[serde(default)]
+    validator: Option<MachineBundleConfigValidator>,
     join_token_file: String,
     #[serde(default)]
     machine_id_file: Option<String>,
     #[serde(default)]
     machine_token_file: Option<String>,
     entries: Vec<MachineBundleConfigEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineBundleConfigValidator {
+    executable: String,
+    args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -772,7 +781,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
             })?;
     }
 
-    let config_path = write_machine_config(&paths, &request, &manifest)?;
+    let config_path = write_machine_config(&paths, &request, &manifest, &extracted_dir)?;
     configure_ip_forwarding(&request.install_root)?;
     let join_token_path = rooted_manifest_path(
         &request.install_root,
@@ -859,7 +868,11 @@ async fn reconcile_existing_join(
             _ => unreachable!(),
         },
     );
-    let config_path = write_machine_config(paths, request, manifest)?;
+    let bundle_root = bundle_root_from_executable(
+        &state.executable_path,
+        Path::new(&manifest.service.executable),
+    )?;
+    let config_path = write_machine_config(paths, request, manifest, &bundle_root)?;
     configure_ip_forwarding(&request.install_root)?;
     state.config_path = config_path.clone();
     state.control_plane_url = Some(request.plan.control_plane_url.clone());
@@ -1111,6 +1124,7 @@ fn write_machine_config(
     paths: &InstallPaths,
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
+    bundle_root: &Path,
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(&paths.state_dir)
         .into_alien_error()
@@ -1162,8 +1176,97 @@ fn write_machine_config(
     write_secret_file(&token_path, &request.token)?;
 
     let config_text = render_machine_config(request, manifest, &token_path)?;
-    write_secret_file(&config_path, &config_text)?;
+    write_validated_machine_config(&config_path, &config_text, bundle_root, &manifest.config)?;
     Ok(config_path)
+}
+
+fn bundle_root_from_executable(executable: &Path, relative_executable: &Path) -> Result<PathBuf> {
+    if !executable.ends_with(relative_executable) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle.service.executable".to_string(),
+            message: format!(
+                "installed executable '{}' does not end with manifest path '{}'",
+                executable.display(),
+                relative_executable.display()
+            ),
+        }));
+    }
+    let mut root = executable.to_path_buf();
+    for _ in relative_executable.components() {
+        root.pop();
+    }
+    Ok(root)
+}
+
+fn write_validated_machine_config(
+    path: &Path,
+    contents: &str,
+    bundle_root: &Path,
+    config: &MachineBundleConfig,
+) -> Result<()> {
+    let candidate_path = write_secret_candidate(path, contents)?;
+    let result = validate_machine_config(&candidate_path, bundle_root, config)
+        .and_then(|()| commit_secret_candidate(&candidate_path, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&candidate_path);
+    }
+    result
+}
+
+fn validate_machine_config(
+    candidate_path: &Path,
+    bundle_root: &Path,
+    config: &MachineBundleConfig,
+) -> Result<()> {
+    let Some(validator) = &config.validator else {
+        return Ok(());
+    };
+    if !validator
+        .args
+        .iter()
+        .any(|argument| argument.contains("{candidate_path}"))
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle.config.validator.args".to_string(),
+            message: "validator arguments must contain {candidate_path}".to_string(),
+        }));
+    }
+    let executable = safe_join(bundle_root, &validator.executable)?;
+    if !executable.is_file() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle.config.validator.executable".to_string(),
+            message: format!(
+                "validator executable '{}' was not found",
+                executable.display()
+            ),
+        }));
+    }
+    let output = Command::new(&executable)
+        .args(validator.args.iter().map(|argument| {
+            argument.replace("{candidate_path}", &candidate_path.display().to_string())
+        }))
+        .output()
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "validate".to_string(),
+            file_path: candidate_path.display().to_string(),
+            reason: "Failed to run the machine configuration validator".to_string(),
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "bundle.config".to_string(),
+        message: format!(
+            "machine configuration validator rejected the candidate{}",
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr.trim())
+            }
+        ),
+    }))
 }
 
 fn render_machine_config(
@@ -1388,6 +1491,11 @@ fn apply_ip_forwarding_now() -> Result<()> {
 }
 
 fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
+    let temporary_path = write_secret_candidate(path, contents)?;
+    commit_secret_candidate(&temporary_path, path)
+}
+
+fn write_secret_candidate(path: &Path, contents: &str) -> Result<PathBuf> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -1443,7 +1551,11 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
             file_path: temporary_path.display().to_string(),
             reason: "Failed to durably write machine configuration".to_string(),
         })?;
-    std::fs::rename(&temporary_path, path)
+    Ok(temporary_path)
+}
+
+fn commit_secret_candidate(temporary_path: &Path, path: &Path) -> Result<()> {
+    std::fs::rename(temporary_path, path)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "replace".to_string(),
@@ -2143,6 +2255,7 @@ mod tests {
             version: "2026-07-05".to_string(),
             config: MachineBundleConfig {
                 path: "etc/machine-service/machine.toml".to_string(),
+                validator: None,
                 join_token_file: "var/lib/machine-service/join-token".to_string(),
                 machine_id_file: Some("var/lib/machine-service/machine-id".to_string()),
                 machine_token_file: Some("var/lib/machine-service/machine-token".to_string()),
@@ -2650,7 +2763,8 @@ mod tests {
         let manifest = test_manifest();
         let paths = install_paths(root.path());
 
-        let config_path = write_machine_config(&paths, &request, &manifest).expect("write config");
+        let config_path =
+            write_machine_config(&paths, &request, &manifest, root.path()).expect("write config");
 
         let config = std::fs::read_to_string(config_path).expect("config");
         let parsed: toml::Table = toml::from_str(&config).expect("config should be valid TOML");
@@ -2692,6 +2806,41 @@ mod tests {
             "reconcileNetwork = true\n"
         );
         assert!(!temporary_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejected_machine_config_does_not_replace_the_active_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("install root");
+        let config_path = root.path().join("horizond.toml");
+        std::fs::write(&config_path, "known-good\n").expect("active config");
+        let validator_path = root.path().join("bin/validator");
+        std::fs::create_dir_all(validator_path.parent().expect("validator parent"))
+            .expect("validator directory");
+        std::fs::write(&validator_path, "#!/bin/sh\nexit 1\n").expect("validator");
+        std::fs::set_permissions(&validator_path, std::fs::Permissions::from_mode(0o755))
+            .expect("validator permissions");
+
+        let mut manifest = test_manifest();
+        manifest.config.validator = Some(MachineBundleConfigValidator {
+            executable: "bin/validator".to_string(),
+            args: vec!["{candidate_path}".to_string()],
+        });
+
+        write_validated_machine_config(
+            &config_path,
+            "reconcileNetwork = true\n",
+            root.path(),
+            &manifest.config,
+        )
+        .expect_err("validator should reject candidate");
+
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("active config"),
+            "known-good\n"
+        );
     }
 
     #[test]
@@ -2750,8 +2899,8 @@ mod tests {
         };
         let request = build_join_request(&args, None, linux_host(root.path())).expect("request");
 
-        let config_path =
-            write_machine_config(&paths, &request, &manifest).expect("rewrite machine config");
+        let config_path = write_machine_config(&paths, &request, &manifest, root.path())
+            .expect("rewrite machine config");
 
         assert_eq!(
             std::fs::read_to_string(root.path().join("var/lib/machine-service/join-token"))
