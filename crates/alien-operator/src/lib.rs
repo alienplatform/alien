@@ -90,7 +90,7 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         None,
         cancel,
     )
-        .await
+    .await
 }
 
 /// Full-control entry point. Binary callers that ship real pluggable-loop
@@ -149,6 +149,7 @@ pub async fn run_operator_with_cancel_and_loops(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
+    let otlp_parse_application_levels = config.parses_application_log_levels();
     let otlp_cancel = cancel.clone();
     tokio::spawn(async move {
         if let Err(e) = otlp_server::start_otlp_server(
@@ -157,6 +158,7 @@ pub async fn run_operator_with_cancel_and_loops(
             otlp_db,
             otlp_namespace,
             otlp_collector_token,
+            otlp_parse_application_levels,
             otlp_cancel,
         )
         .await

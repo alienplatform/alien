@@ -687,6 +687,17 @@ pub struct KubernetesTlsSecretRef {
     pub namespace: Option<String>,
 }
 
+/// Application log handling for a deployment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LogSettings {
+    /// Read a recognized top-level JSON `level` field into the OTLP severity fields.
+    /// The original log body is preserved. Disabled by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parse_application_levels: bool,
+}
+
 /// User-customizable deployment settings specified at deploy time.
 ///
 /// These settings are provided by the customer via CloudFormation parameters,
@@ -723,6 +734,10 @@ pub struct StackSettings {
     /// declare portable requirements instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compute: Option<ComputeSettings>,
+
+    /// Application log handling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logs: Option<LogSettings>,
 
     /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push.
@@ -763,6 +778,15 @@ pub struct StackSettings {
     pub external_bindings: Option<crate::ExternalBindings>,
 }
 
+impl StackSettings {
+    /// Whether runtime log collectors should use explicit application log levels.
+    pub fn parses_application_log_levels(&self) -> bool {
+        self.logs
+            .as_ref()
+            .is_some_and(|logs| logs.parse_application_levels)
+    }
+}
+
 fn is_default_deployment_model(model: &DeploymentModel) -> bool {
     *model == DeploymentModel::default()
 }
@@ -782,6 +806,24 @@ fn is_default_heartbeats_mode(mode: &HeartbeatsMode) -> bool {
 #[cfg(test)]
 mod failure_domain_tests {
     use super::*;
+
+    #[test]
+    fn application_log_level_parsing_is_opt_in() {
+        let default_json = serde_json::to_value(StackSettings::default()).unwrap();
+        assert!(default_json.get("logs").is_none());
+
+        let settings = StackSettings {
+            logs: Some(LogSettings {
+                parse_application_levels: true,
+            }),
+            ..StackSettings::default()
+        };
+        assert!(settings.parses_application_log_levels());
+        assert_eq!(
+            serde_json::to_value(settings).unwrap()["logs"]["parseApplicationLevels"],
+            true
+        );
+    }
 
     #[test]
     fn old_compute_selection_deserializes_without_topology() {

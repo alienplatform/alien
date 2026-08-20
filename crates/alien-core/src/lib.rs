@@ -63,6 +63,9 @@ pub use stack_state::*;
 mod stack_settings;
 pub use stack_settings::*;
 
+mod application_logs;
+pub use application_logs::*;
+
 mod public_urls;
 pub use public_urls::*;
 

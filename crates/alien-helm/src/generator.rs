@@ -10,11 +10,11 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs, Container,
-    ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster, KubernetesClusterOutputs,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
-    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
-    WorkerCode,
+    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs,
+    Container, ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster,
+    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider, Platform,
+    RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -135,6 +135,7 @@ pub struct OperatorManifestOptions<'a> {
 pub struct OperatorLogCollectorOptions<'a> {
     pub image: &'a str,
     pub token: &'a str,
+    pub parse_application_levels: bool,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -299,14 +300,23 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
     // stays a namespaced Role. Both grant read-only + the access-request CRD.
     if cluster_wide {
-        docs.push(operator_clusterrole_doc(&operator_name, &labels, &crd_names));
+        docs.push(operator_clusterrole_doc(
+            &operator_name,
+            &labels,
+            &crd_names,
+        ));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
             &operator_name,
             &labels,
         ));
     } else {
-        docs.push(operator_role_doc(namespace, &operator_name, &labels, &crd_names));
+        docs.push(operator_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+            &crd_names,
+        ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
     docs.push(operator_secret_doc(
@@ -958,6 +968,17 @@ fn operator_deployment_doc(
             &mut yaml,
             "COLLECTOR_TOKEN_FILE",
             "/etc/operator/secrets/collector-token",
+        );
+    }
+    if options
+        .log_collector
+        .as_ref()
+        .is_some_and(|collector| collector.parse_application_levels)
+    {
+        append_env_value(
+            &mut yaml,
+            "STACK_SETTINGS",
+            r#"{"logs":{"parseApplicationLevels":true}}"#,
         );
     }
     append_env_value(
@@ -4050,6 +4071,7 @@ mod tests {
             log_collector: Some(OperatorLogCollectorOptions {
                 image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
+                parse_application_levels: true,
             }),
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
@@ -4302,10 +4324,16 @@ mod tests {
             .any(|r| {
                 r.get("apiGroups")
                     .and_then(YamlValue::as_sequence)
-                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme.dev")))
+                    .map(|g| {
+                        g.iter()
+                            .any(|x| x.as_str() == Some("accessrequests.acme.dev"))
+                    })
                     .unwrap_or(false)
             });
-        assert!(has_branded_rule, "RBAC must grant the branded access-request group");
+        assert!(
+            has_branded_rule,
+            "RBAC must grant the branded access-request group"
+        );
     }
 
     #[test]
@@ -4401,6 +4429,14 @@ mod tests {
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
         assert!(manifest.contains("fluent/fluent-bit:3.2"));
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Deployment");
+        assert_eq!(
+            operator_env_value(&deployment, "STACK_SETTINGS"),
+            Some(r#"{"logs":{"parseApplicationLevels":true}}"#)
+        );
         // The log collector tails pod log FILES on the node, not the API — but
         // the operator's own RBAC does grant `pods/log` for the on-demand `logs`
         // operation, so `pods/log` legitimately appears in the operator Role.

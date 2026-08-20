@@ -17,6 +17,8 @@ use alien_core::{
 };
 use std::collections::HashMap;
 
+const LOG_LEVEL_CONDITION: &str = "ParseApplicationLevelsEnabled";
+
 fn gated_fixture(resource_type: &str) -> Option<Stack> {
     let base = || {
         Stack::new("matrix-stack".to_string()).inputs(vec![gate_input(
@@ -180,7 +182,7 @@ fn assert_gated_render(resource_type: &str, stack: &Stack) {
     let payload = registration_payload(&template);
     let declined = resolve(
         &payload,
-        &HashMap::from([(condition_name, false)]),
+        &HashMap::from([(condition_name, false), (LOG_LEVEL_CONDITION, false)]),
         Declined::Removed,
     )
     .expect("registration payload should survive resolution");
@@ -243,7 +245,10 @@ fn a_gated_vault_renders_conditionally() {
     let payload = registration_payload(&template);
     let accepted = resolve(
         &payload,
-        &HashMap::from([("InputFixtureEnabledIsTrue", true)]),
+        &HashMap::from([
+            ("InputFixtureEnabledIsTrue", true),
+            (LOG_LEVEL_CONDITION, false),
+        ]),
         Declined::Removed,
     )
     .expect("payload resolves");

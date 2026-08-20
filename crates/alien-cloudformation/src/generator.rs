@@ -39,6 +39,7 @@ const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
 const PARAM_TELEMETRY_MODE: &str = "TelemetryMode";
 const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
+const PARAM_PARSE_APPLICATION_LEVELS: &str = "ParseApplicationLevels";
 
 const CONDITION_NETWORK_CREATE_AZ2: &str = "NetworkCreateUseAz2";
 const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
@@ -48,6 +49,7 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
+const CONDITION_PARSE_APPLICATION_LEVELS: &str = "ParseApplicationLevelsEnabled";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
 const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
@@ -1029,6 +1031,15 @@ fn add_standard_parameters(
             false,
         ),
     );
+    template.parameters.insert(
+        PARAM_PARSE_APPLICATION_LEVELS.to_string(),
+        string_parameter(
+            "Use a recognized top-level JSON level field as log severity while preserving the raw body.",
+            Some(settings.parses_application_log_levels().to_string()),
+            Some(vec![CfExpression::from("false"), CfExpression::from("true")]),
+            false,
+        ),
+    );
     Ok(())
 }
 
@@ -1254,6 +1265,10 @@ fn add_standard_conditions(
     settings: &StackSettings,
     supports_custom_domain: bool,
 ) {
+    template.conditions.insert(
+        CONDITION_PARSE_APPLICATION_LEVELS.to_string(),
+        equals_ref(PARAM_PARSE_APPLICATION_LEVELS, "true"),
+    );
     let has_created_network = stack_has_created_network(stack);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -1388,7 +1403,8 @@ fn add_console_interface_metadata(
             "Parameters": [
                 PARAM_UPDATES_MODE,
                 PARAM_TELEMETRY_MODE,
-                PARAM_HEARTBEATS_MODE
+                PARAM_HEARTBEATS_MODE,
+                PARAM_PARSE_APPLICATION_LEVELS
             ]
         }));
     }
@@ -1449,6 +1465,11 @@ fn add_console_interface_metadata(
         insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
         insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
         insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
+        insert_parameter_label(
+            &mut parameter_labels,
+            PARAM_PARSE_APPLICATION_LEVELS,
+            "Parse JSON log levels",
+        );
     }
 
     template.metadata.insert(
@@ -2045,6 +2066,17 @@ fn stack_settings_expression(
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
+        (
+            "logs",
+            CfExpression::object([(
+                "parseApplicationLevels",
+                CfExpression::if_(
+                    CONDITION_PARSE_APPLICATION_LEVELS,
+                    CfExpression::from(true),
+                    CfExpression::from(false),
+                ),
+            )]),
+        ),
         ("network", network_expression(settings.network.as_ref())),
     ];
     if supports_custom_domain {

@@ -9,6 +9,7 @@ import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
+import { LogSettingsSchema } from "./log-settings-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
 import { TelemetryModeSchema } from "./telemetry-mode-schema.js";
 import { UpdatesModeSchema } from "./updates-mode-schema.js";
@@ -34,6 +35,9 @@ get "heartbeats"(){
               },
 get "kubernetes"(){
                 return z.union([KubernetesSettingsSchema, z.null()]).optional()
+              },
+get "logs"(){
+                return z.union([LogSettingsSchema, z.null()]).optional()
               },
 get "network"(){
                 return z.union([NetworkSettingsSchema, z.null()]).optional()

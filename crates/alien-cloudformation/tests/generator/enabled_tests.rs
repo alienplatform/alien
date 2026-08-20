@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 const GATE_PARAMETER: &str = "InputStoreEnabled";
 const GATE_CONDITION: &str = "InputStoreEnabledIsTrue";
+const LOG_LEVEL_CONDITION: &str = "ParseApplicationLevelsEnabled";
 const TABLE_ID: &str = "Store";
 
 fn gate() -> alien_core::StackInputDefinition {
@@ -166,7 +167,7 @@ fn a_declined_resource_leaves_no_registration_entry() {
 
     let accepted = resolve(
         &payload,
-        &HashMap::from([(GATE_CONDITION, true)]),
+        &HashMap::from([(GATE_CONDITION, true), (LOG_LEVEL_CONDITION, false)]),
         Declined::Removed,
     )
     .expect("payload survives when the gate is on");
@@ -186,7 +187,7 @@ fn a_declined_resource_leaves_no_registration_entry() {
 
     let declined = resolve(
         &payload,
-        &HashMap::from([(GATE_CONDITION, false)]),
+        &HashMap::from([(GATE_CONDITION, false), (LOG_LEVEL_CONDITION, false)]),
         Declined::Removed,
     )
     .expect("payload survives when the gate is off");
@@ -223,16 +224,16 @@ fn the_declined_entry_is_removed_rather_than_blanked() {
     );
 }
 
-/// An ungated stack's output must not change, or every existing deployment
-/// would see a template diff on its next re-apply.
+/// An ungated stack has no resource-gating conditions. Standard configuration
+/// conditions may still exist, but they must not be attached to resources.
 #[test]
-fn an_ungated_stack_gains_no_conditions() {
+fn an_ungated_stack_gains_no_resource_conditions() {
     let (template, _) = render(&ungated_kv_stack(), "ungated kv stack");
 
     assert!(
-        template.conditions.is_empty(),
-        "nothing is gated, so no condition belongs in the template: {:?}",
-        template.conditions
+        template.conditions.len() == 1 && template.conditions.contains_key(LOG_LEVEL_CONDITION),
+        "only the standard log setting condition belongs in the template: {:?}",
+        template.conditions,
     );
     assert_eq!(
         template

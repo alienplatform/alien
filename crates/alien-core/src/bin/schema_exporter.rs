@@ -49,6 +49,7 @@ use utoipa::OpenApi;
     StackStatus,
     StackResourceState,
     StackSettings,
+    LogSettings,
     NetworkSettings,
     DomainSettings,
     CustomDomainConfig,

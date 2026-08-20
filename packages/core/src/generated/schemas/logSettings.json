@@ -1,0 +1,1 @@
+{"type":"object","description":"Application log handling for a deployment.","properties":{"parseApplicationLevels":{"type":"boolean","description":"Read a recognized top-level JSON `level` field into the OTLP severity fields.\nThe original log body is preserved. Disabled by default."}},"x-readme-ref-name":"LogSettings"}
