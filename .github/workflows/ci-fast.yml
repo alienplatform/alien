@@ -246,6 +246,19 @@ jobs:
         run: |
           cargo test -p alien-manager --features openapi --lib api::tests::openapi_declares_http_bearer_security_without_dropping_schemas
 
+      - name: Sandbox agent privileged tests
+        # The agent runs as root and drops to a different uid before every spawn.
+        # The sandbox's file and working-directory handling turns on those two
+        # identities differing, which nothing running under a single uid can
+        # observe, so these are `#[ignore]`d and need root. Built as the runner
+        # and only the test binary re-run under sudo: a root `cargo` would leave
+        # root-owned artifacts behind for the cache upload.
+        run: |
+          binary=$(cargo test -p alien-sandbox-agent --test privileged --no-run --message-format=json \
+            | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
+          test -x "$binary"
+          sudo "$binary" --ignored
+
       - name: Remote bindings tests (non-cloud)
         # `platform-sdk` is not a default feature, so `remote::` is cfg'd out of
         # the workspace run. The cloud client crates' unit tests already run

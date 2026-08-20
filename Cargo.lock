@@ -319,6 +319,7 @@ dependencies = [
  "url",
  "which 6.0.3",
  "workspace_root",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -1033,6 +1034,28 @@ dependencies = [
  "tokio-test",
  "tracing",
  "utoipa",
+]
+
+[[package]]
+name = "alien-sandbox-agent"
+version = "3.3.14"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "ed25519-compact",
+ "futures",
+ "libc",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

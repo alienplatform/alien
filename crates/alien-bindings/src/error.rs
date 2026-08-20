@@ -300,6 +300,36 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A command run inside a sandbox did not complete.
+    #[error(
+        code = "SANDBOX_COMMAND_FAILED",
+        message = "Sandbox command failed ({failure}): {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxCommandFailed {
+        /// The agent's own cause, kept as a field so a caller can branch on it
+        failure: String,
+        /// Human-readable detail from the agent
+        reason: String,
+    },
+
+    /// The sandbox agent could not be reached, or the connection dropped mid-response.
+    #[error(
+        code = "SANDBOX_UNREACHABLE",
+        message = "Sandbox operation '{operation}' could not reach the agent: {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    SandboxUnreachable {
+        /// Operation that was in flight
+        operation: String,
+        /// What went wrong on the wire
+        reason: String,
+    },
+
     /// Feature is not enabled in the compiled binary.
     #[error(
         code = "FEATURE_NOT_ENABLED",
