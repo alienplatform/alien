@@ -24,6 +24,7 @@ get "cpu"(){
 "environment": z.optional(z.object({
     
     }).catchall(z.string())),
+"exclusiveMachine": z.optional(z.boolean().default(false).describe("Reserve each eligible machine for this daemon and system workloads.\n\nMachines backends reject conflicting application placement rather than\nevicting it. Other backends may reject or ignore this opt-in contract.")),
 get "healthCheck"(){
                 return z.union([HealthCheckSchema, z.null()]).optional()
               },

@@ -146,6 +146,16 @@ export class Daemon extends ResourceBuilder {
   }
 
   /**
+   * Reserves every eligible Machines host for this daemon and system services.
+   * Existing conflicting application workloads cause the deployment to fail;
+   * they are never evicted automatically.
+   */
+  public exclusiveMachine(enabled = true): this {
+    this._config.exclusiveMachine = enabled
+    return this
+  }
+
+  /**
    * Exposes a named public endpoint for a daemon port.
    */
   public publicEndpoint(

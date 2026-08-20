@@ -108,6 +108,14 @@ pub struct Daemon {
     /// it during provisioning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<DaemonRuntime>,
+    /// Reserve each eligible machine for this daemon and system workloads.
+    ///
+    /// Machines backends reject conflicting application placement rather than
+    /// evicting it. Other backends may reject or ignore this opt-in contract.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[cfg_attr(feature = "openapi", schema(default = false))]
+    pub exclusive_machine: bool,
     #[builder(default)]
     #[serde(default)]
     pub environment: HashMap<String, String>,
@@ -117,6 +125,10 @@ pub struct Daemon {
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
     pub commands_enabled: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Daemon {
@@ -397,10 +409,25 @@ mod tests {
         let resource = crate::Resource::new(daemon);
         let json = serde_json::to_value(&resource).expect("daemon should serialize");
         assert_eq!(json["type"], "daemon");
+        assert!(json.get("exclusiveMachine").is_none());
 
         let roundtrip: crate::Resource =
             serde_json::from_value(json).expect("daemon should deserialize");
         assert_eq!(roundtrip.resource_type().as_ref(), "daemon");
+    }
+
+    #[test]
+    fn daemon_serializes_exclusive_machine_opt_in() {
+        let daemon = Daemon::new("nested-runtime".to_string())
+            .code(DaemonCode::Image {
+                image: "nested-runtime:latest".to_string(),
+            })
+            .permissions("runtime".to_string())
+            .exclusive_machine(true)
+            .build();
+
+        let json = serde_json::to_value(daemon).expect("daemon should serialize");
+        assert_eq!(json["exclusiveMachine"], true);
     }
 
     #[test]
