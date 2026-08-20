@@ -54,6 +54,10 @@ pub struct LogsArgs {
     #[arg(long, value_enum)]
     pub level: Vec<LogLevel>,
 
+    /// Restrict results to a gateway request-diagnostics source.
+    #[arg(long, value_enum)]
+    pub source: Option<LogSource>,
+
     /// Relative time window, such as 30m, 2h, or 7d.
     #[arg(long, default_value = "1h", value_parser = parse_duration_arg)]
     pub since: Duration,
@@ -94,6 +98,21 @@ pub enum LogsCloud {
     Azure,
     Kubernetes,
     Local,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogSource {
+    AiGateway,
+    EncryptionGateway,
+}
+
+impl LogSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AiGateway => "ai-gateway",
+            Self::EncryptionGateway => "encryption-gateway",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
@@ -244,7 +263,8 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         &args.query,
         &args.level,
         target.deployment_id.as_deref(),
-        args.system,
+        args.system || args.source.is_some(),
+        args.source,
     )?;
     let (start_time, end_time) = resolve_time_window(&args);
 
@@ -866,6 +886,7 @@ fn build_logs_query(
     levels: &[LogLevel],
     deployment_id: Option<&str>,
     include_system: bool,
+    source: Option<LogSource>,
 ) -> Result<String> {
     let mut filters = Vec::new();
     let query = user_query.trim();
@@ -888,6 +909,12 @@ fn build_logs_query(
             "{}:\"{}\"",
             deployment_id_resource_attribute_field(),
             escape_query_string(deployment_id)
+        ));
+    }
+    if let Some(source) = source {
+        filters.push(format!(
+            "attributes.alien\\.log\\.source:\"{}\"",
+            source.as_str()
         ));
     }
     if !include_system {
@@ -997,6 +1024,7 @@ mod tests {
             &[LogLevel::Warn, LogLevel::Error],
             Some("dep_123"),
             true,
+            None,
         )
         .unwrap();
 
@@ -1008,7 +1036,7 @@ mod tests {
 
     #[test]
     fn deployment_filter_escapes_resource_attribute_key_dot() {
-        let query = build_logs_query("*", &[], Some("dep_123"), true).unwrap();
+        let query = build_logs_query("*", &[], Some("dep_123"), true, None).unwrap();
 
         assert_eq!(
             query,
@@ -1020,7 +1048,7 @@ mod tests {
     fn hides_system_components_by_default_with_match_all_base() {
         // Default (no query, levels, or deployment) must not produce a
         // pure-negative query — it needs a positive `*` base.
-        let query = build_logs_query("*", &[], None, false).unwrap();
+        let query = build_logs_query("*", &[], None, false, None).unwrap();
 
         assert_eq!(
             query,
@@ -1030,7 +1058,7 @@ mod tests {
 
     #[test]
     fn system_flag_omits_exclusion() {
-        let query = build_logs_query("*", &[], None, true).unwrap();
+        let query = build_logs_query("*", &[], None, true, None).unwrap();
 
         assert_eq!(query, "*");
     }
@@ -1042,6 +1070,7 @@ mod tests {
             &[LogLevel::Error],
             Some("dep_123"),
             false,
+            None,
         )
         .unwrap();
 
@@ -1049,6 +1078,13 @@ mod tests {
             query,
             "(service_name:api) AND ((severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\" AND NOT resource_attributes.alien\\.system:\"true\" AND NOT attributes.alien\\.system:\"true\""
         );
+    }
+
+    #[test]
+    fn gateway_source_filter_uses_the_trusted_record_attribute() {
+        let query = build_logs_query("*", &[], None, true, Some(LogSource::AiGateway)).unwrap();
+
+        assert_eq!(query, "attributes.alien\\.log\\.source:\"ai-gateway\"");
     }
 
     #[test]

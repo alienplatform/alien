@@ -22,7 +22,8 @@ impl TelemetryBackend for NullTelemetryBackend {
     ) -> Result<(), AlienError> {
         debug!(
             signal = ?signal,
-            deployment_id = caller.deployment_id,
+            deployment_id = ?caller.deployment_id,
+            gateway_log_source = ?caller.gateway_log_source,
             bytes = data.len(),
             "NullTelemetryBackend: discarding telemetry signal"
         );
