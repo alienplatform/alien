@@ -568,9 +568,7 @@ impl Sandbox {
                 reason: format!(
                     "AWS allocates one vCPU per 2GB, so a MicroVM sized to a '{}' memory ceiling \
                      reaches {} vCPU; declare cpu '{}' or lower the memory ceiling",
-                    limits.memory,
-                    tier.peak_vcpu,
-                    tier.peak_vcpu
+                    limits.memory, tier.peak_vcpu, tier.peak_vcpu
                 ),
             }));
         }
@@ -826,7 +824,10 @@ mod tests {
     #[test]
     fn capability_sets_are_per_platform() {
         let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
-        assert!(!gcp.reconnect, "a GCP session id is scoped to one instance, so reconnect is absent");
+        assert!(
+            !gcp.reconnect,
+            "a GCP session id is scoped to one instance, so reconnect is absent"
+        );
         assert!(!gcp.preview);
         assert!(!gcp.enforced_limits);
 
@@ -848,8 +849,12 @@ mod tests {
         assert!(!aws.snapshot, "AWS has no user-callable session snapshot");
         assert!(aws.suspend_resume);
 
-        let k8s = SandboxCapabilities::for_platform(Platform::Kubernetes).expect("k8s is supported");
-        assert!(!k8s.preview, "the session-scoped ingress gateway does not exist yet");
+        let k8s =
+            SandboxCapabilities::for_platform(Platform::Kubernetes).expect("k8s is supported");
+        assert!(
+            !k8s.preview,
+            "the session-scoped ingress gateway does not exist yet"
+        );
     }
 
     #[test]
@@ -868,7 +873,10 @@ mod tests {
 
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
         let rendered = error.to_string();
-        assert!(rendered.contains("preview"), "names the capability: {rendered}");
+        assert!(
+            rendered.contains("preview"),
+            "names the capability: {rendered}"
+        );
         assert!(rendered.contains("gcp"), "names the platform: {rendered}");
     }
 
@@ -884,13 +892,20 @@ mod tests {
             vec![],
         );
 
-        for platform in
-            [Platform::Aws, Platform::Azure, Platform::Gcp, Platform::Kubernetes, Platform::Local]
-        {
+        for platform in [
+            Platform::Aws,
+            Platform::Azure,
+            Platform::Gcp,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no backend expresses a hostname allowlist");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED", "on {platform:?}");
+            assert_eq!(
+                error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
+                "on {platform:?}"
+            );
         }
     }
 
@@ -902,10 +917,16 @@ mod tests {
 
         // GCP is asserted at the capability rather than through validation: this sandbox declares
         // ceilings GCP cannot enforce, so it is refused for a reason unrelated to egress.
-        assert!(SandboxCapabilities::for_platform(Platform::Gcp).expect("supported").egress_deny);
+        assert!(
+            SandboxCapabilities::for_platform(Platform::Gcp)
+                .expect("supported")
+                .egress_deny
+        );
 
         for platform in [Platform::Aws, Platform::Kubernetes, Platform::Local] {
-            sandbox.validate_for_platform(platform).expect("deny is enforced here");
+            sandbox
+                .validate_for_platform(platform)
+                .expect("deny is enforced here");
         }
 
         // Declares no ceilings, so the only thing left for Azure to refuse is the egress mode.
@@ -924,7 +945,11 @@ mod tests {
             .validate_for_platform(Platform::Azure)
             .expect_err("the Azure data plane takes no egress policy, so deny cannot be kept");
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(error.message.contains("egressDeny"), "names the capability: {}", error.message);
+        assert!(
+            error.message.contains("egressDeny"),
+            "names the capability: {}",
+            error.message
+        );
     }
 
     /// Ceilings are rejected per-platform where unsupported — rejected when *declared*. With
@@ -982,7 +1007,11 @@ mod tests {
     #[test]
     fn invalid_quantities_are_rejected_with_the_offending_field() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
-        sandbox.limits.as_mut().expect("the fixture declares limits").memory = "2Gb".to_string();
+        sandbox
+            .limits
+            .as_mut()
+            .expect("the fixture declares limits")
+            .memory = "2Gb".to_string();
 
         let error = sandbox
             .validate_for_platform(Platform::Aws)
@@ -990,8 +1019,16 @@ mod tests {
         assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
         assert!(error.to_string().contains("memory"));
 
-        sandbox.limits.as_mut().expect("the fixture declares limits").memory = "2Gi".to_string();
-        sandbox.limits.as_mut().expect("the fixture declares limits").cpu = "0".to_string();
+        sandbox
+            .limits
+            .as_mut()
+            .expect("the fixture declares limits")
+            .memory = "2Gi".to_string();
+        sandbox
+            .limits
+            .as_mut()
+            .expect("the fixture declares limits")
+            .cpu = "0".to_string();
         let error = sandbox
             .validate_for_platform(Platform::Aws)
             .expect_err("zero cpu is not a ceiling");
@@ -1093,9 +1130,14 @@ mod tests {
     #[test]
     fn an_aws_size_is_chosen_so_its_peak_stays_inside_the_declared_ceiling() {
         let sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
-        let tier = sandbox.microvm_tier().expect("2Gi/1cpu/20Gi is satisfiable");
+        let tier = sandbox
+            .microvm_tier()
+            .expect("2Gi/1cpu/20Gi is satisfiable");
 
-        assert_eq!(tier.peak_memory_mib, 2048, "the peak is the declared ceiling");
+        assert_eq!(
+            tier.peak_memory_mib, 2048,
+            "the peak is the declared ceiling"
+        );
         assert_eq!(
             tier.baseline_memory_mib, 512,
             "which is a quarter of it as the baseline"
@@ -1110,7 +1152,10 @@ mod tests {
     fn a_cpu_ceiling_below_what_the_memory_implies_is_refused_not_quietly_downsized() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
         {
-            let limits = sandbox.limits.as_mut().expect("the fixture declares limits");
+            let limits = sandbox
+                .limits
+                .as_mut()
+                .expect("the fixture declares limits");
             limits.cpu = "1".to_string();
             limits.memory = "8Gi".to_string();
         }
@@ -1239,7 +1284,12 @@ mod tests {
             .code(SandboxCode::Image {
                 image: "ubuntu:24.04".to_string(),
             })
-            .limits(original.limits.clone().expect("the fixture declares limits"))
+            .limits(
+                original
+                    .limits
+                    .clone()
+                    .expect("the fixture declares limits"),
+            )
             .egress(SandboxEgress::Deny)
             .session(SandboxSessionPolicy {
                 max_lifetime_seconds: None,

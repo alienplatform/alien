@@ -1029,11 +1029,20 @@ pub struct RunCommandRequest {
     /// How long the command may run. Required — a defaulted deadline is a hang waiting for a slow
     /// day.
     ///
-    /// It bounds the command, not the call. What expiry does to the session differs by backend:
-    /// where the data plane has no timeout of its own the only lever is ending the session, so
-    /// the call returns once that is confirmed and lands somewhat after the deadline. Where the
-    /// agent supervises the process it kills the process group and the session stays usable.
-    /// Either way the command is stopped; only the session's fate differs.
+    /// It bounds the command, not the call, and the call lands just after it. Where the agent
+    /// supervises the process it kills the process group; where the data plane has no timeout of
+    /// its own the command runs under `timeout` inside the session. Either way the session stays
+    /// usable. Only a session that cannot run `timeout` is ended instead, and that call returns
+    /// once the session is gone.
+    ///
+    /// On every backend `deadlineExceeded` is reported only once the command has verifiably
+    /// stopped — the agent waits for its kill, and where there is no agent the session kills the
+    /// command itself and says so. It is never reported on a stop that was merely requested: a
+    /// deadline that leaves untrusted code running is not a deadline.
+    ///
+    /// What stops is the command and its process group. A descendant that detaches itself into a
+    /// session of its own is beyond any signal sent from inside, on every backend; it is bounded
+    /// by the sandbox session, which ends on terminate or at its own lifetime ceiling.
     pub deadline: Duration,
 }
 
@@ -1205,7 +1214,8 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// Given a binding identifier, builds a ServiceAccount implementation.
     async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>>;
 
-
+    /// Given a binding identifier, builds a Sandbox implementation.
+    async fn load_sandbox(&self, binding_name: &str) -> Result<Arc<dyn Sandbox>>;
 
     /// Runtime-only binding env vars (a local Postgres connection with its password, a local
     /// BYO-key AI binding) for the given resource — re-resolved on every (re)start so the secret

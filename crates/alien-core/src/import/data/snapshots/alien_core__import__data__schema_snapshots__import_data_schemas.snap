@@ -318,6 +318,54 @@ expression: schemas
     "title": "AwsKeyImportData",
     "type": "object"
   },
+  "aws_sandbox": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "AWS Sandbox ImportData.\n\nCarries the Frozen parent from the setup emitter to the runtime controller. The image **version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only session identity there is, and a controller holding a stale version would enumerate the wrong set and orphan every session started on the previous one.",
+    "properties": {
+      "egressConnectorArns": {
+        "description": "Egress network connectors. Deleting one while MicroVMs still reference it breaks their networking, so teardown needs them named rather than rediscovered.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "executionRoleArn": {
+        "description": "Execution role attached to each MicroVM, distinct from the workload's own role.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "imageArn": {
+        "description": "MicroVM image ARN.",
+        "type": "string"
+      },
+      "imageIdentifier": {
+        "description": "MicroVM image identifier.",
+        "type": "string"
+      },
+      "imageVersion": {
+        "description": "Image version the sessions are scoped to. Re-imported on every image roll.",
+        "type": "string"
+      },
+      "previewPorts": {
+        "description": "Ports a preview capability may be minted for; empty means preview is not offered.",
+        "items": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "imageArn",
+      "imageIdentifier",
+      "imageVersion"
+    ],
+    "title": "AwsSandboxImportData",
+    "type": "object"
+  },
   "aws_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "definitions": {
@@ -931,6 +979,31 @@ expression: schemas
       "vaultResourceId"
     ],
     "title": "AzureKeyImportData",
+    "type": "object"
+  },
+  "azure_sandbox": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "Azure Sandbox ImportData.\n\nCarries the sandbox group from the setup emitter to the runtime controller. All three fields are required to address it: the ADC data plane endpoint is **per-region**, so a group without its region cannot be reached at all, and the data plane path is scoped by resource group.",
+    "properties": {
+      "region": {
+        "description": "Region the group lives in; selects the ADC endpoint.",
+        "type": "string"
+      },
+      "resourceGroup": {
+        "description": "Resource group containing the sandbox group.",
+        "type": "string"
+      },
+      "sandboxGroup": {
+        "description": "Sandbox group name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "region",
+      "resourceGroup",
+      "sandboxGroup"
+    ],
+    "title": "AzureSandboxImportData",
     "type": "object"
   },
   "azure_network": {

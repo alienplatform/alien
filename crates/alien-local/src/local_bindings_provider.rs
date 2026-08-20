@@ -9,7 +9,8 @@
 use crate::error::Result;
 use crate::{
     LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalPostgresManager,
-    LocalQueueManager, LocalStorageManager, LocalVaultManager, LocalWorkerManager,
+    LocalQueueManager, LocalSandboxManager, LocalStorageManager, LocalVaultManager,
+    LocalWorkerManager,
 };
 use alien_bindings::{
     error::ErrorData as BindingsErrorData,
@@ -60,6 +61,8 @@ pub struct LocalBindingsProvider {
     artifact_registry_manager: Arc<LocalArtifactRegistryManager>,
     /// Container manager for Docker containers (optional - created lazily)
     container_manager: RwLock<Option<Arc<LocalContainerManager>>>,
+    /// Sandbox manager for hardened Docker sessions (optional - created lazily)
+    sandbox_manager: RwLock<Option<Arc<LocalSandboxManager>>>,
     /// Worker manager is set after construction to break circular dependency
     worker_manager: RwLock<Option<Arc<LocalWorkerManager>>>,
     /// Shutdown signal sender
@@ -80,6 +83,7 @@ impl Clone for LocalBindingsProvider {
             vault_manager: self.vault_manager.clone(),
             artifact_registry_manager: self.artifact_registry_manager.clone(),
             container_manager: RwLock::new(self.container_manager.read().unwrap().clone()),
+            sandbox_manager: RwLock::new(self.sandbox_manager.read().unwrap().clone()),
             worker_manager: RwLock::new(self.worker_manager.read().unwrap().clone()),
             shutdown_tx: self.shutdown_tx.clone(),
             background_tasks: Mutex::new(Vec::new()), // Don't clone JoinHandles
@@ -148,6 +152,7 @@ impl LocalBindingsProvider {
             vault_manager: vault_manager.clone(),
             artifact_registry_manager: artifact_registry_manager.clone(),
             container_manager: RwLock::new(None),
+            sandbox_manager: RwLock::new(None),
             worker_manager: RwLock::new(None),
             shutdown_tx: shutdown_tx.clone(),
             background_tasks: Mutex::new(Vec::new()),
@@ -271,6 +276,31 @@ impl LocalBindingsProvider {
             }
             Err(e) => {
                 tracing::warn!("Failed to create LocalContainerManager: {:?}", e);
+                None
+            }
+        }
+    }
+
+    /// Returns the sandbox manager, creating it lazily if needed.
+    ///
+    /// Separate from the container manager on purpose: that one attaches a shared network and
+    /// maps the host gateway in, which is wrong for untrusted code.
+    pub fn sandbox_manager(&self) -> Option<Arc<LocalSandboxManager>> {
+        {
+            let guard = self.sandbox_manager.read().unwrap();
+            if let Some(manager) = guard.as_ref() {
+                return Some(manager.clone());
+            }
+        }
+
+        match LocalSandboxManager::new(self.state_dir.clone()) {
+            Ok(manager) => {
+                let manager = Arc::new(manager);
+                *self.sandbox_manager.write().unwrap() = Some(manager.clone());
+                Some(manager)
+            }
+            Err(error) => {
+                tracing::warn!("Failed to create LocalSandboxManager: {:?}", error);
                 None
             }
         }
@@ -649,6 +679,19 @@ impl BindingsProviderApi for LocalBindingsProvider {
             operation: "load_service_account".to_string(),
             reason: format!(
                 "ServiceAccount '{}' not applicable for local platform (no permissions system)",
+                binding_name
+            ),
+        }))
+    }
+
+    async fn load_sandbox(
+        &self,
+        binding_name: &str,
+    ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Sandbox>> {
+        Err(AlienError::new(BindingsErrorData::OperationNotSupported {
+            operation: "load_sandbox".to_string(),
+            reason: format!(
+                "the local sandbox backend for '{}' is not implemented yet",
                 binding_name
             ),
         }))

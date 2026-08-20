@@ -75,10 +75,7 @@ pub enum ProcessFrame {
         truncated: bool,
     },
     /// The process did not finish. Also terminal.
-    Failed {
-        code: &'static str,
-        message: String,
-    },
+    Failed { code: &'static str, message: String },
 }
 
 /// The only variable [`spawn_sandboxed`] gives a command for free. Without it the program name
@@ -400,7 +397,13 @@ mod tests {
 
         let frames = run(command, Duration::from_millis(400), 1 << 20).await;
         assert!(
-            matches!(terminal(&frames), ProcessFrame::Failed { code: "deadlineExceeded", .. }),
+            matches!(
+                terminal(&frames),
+                ProcessFrame::Failed {
+                    code: "deadlineExceeded",
+                    ..
+                }
+            ),
             "the command must hit its deadline: {frames:?}"
         );
 
@@ -415,7 +418,10 @@ mod tests {
         // a comparison of two absent files would pass while proving nothing.
         let after_kill = after_kill.expect("the forked process must have written before the kill");
         let later = later.expect("the marker must still exist");
-        assert!(after_kill > 0, "the forked process wrote nothing, so this test proves nothing");
+        assert!(
+            after_kill > 0,
+            "the forked process wrote nothing, so this test proves nothing"
+        );
         assert_eq!(
             after_kill, later,
             "a process the command forked outlived the deadline and is still writing"
@@ -458,9 +464,17 @@ mod tests {
 
     #[tokio::test]
     async fn output_is_followed_by_exactly_one_terminal_frame() {
-        let frames = run(child(&["/bin/echo", "hello"]), Duration::from_secs(10), 1 << 20).await;
+        let frames = run(
+            child(&["/bin/echo", "hello"]),
+            Duration::from_secs(10),
+            1 << 20,
+        )
+        .await;
 
-        assert!(matches!(terminal(&frames), ProcessFrame::Exit { code: 0, .. }));
+        assert!(matches!(
+            terminal(&frames),
+            ProcessFrame::Exit { code: 0, .. }
+        ));
         assert_eq!(
             frames
                 .iter()
@@ -497,9 +511,13 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), sequence.len(), "no sequence number is reused");
         assert!(
-            frames
-                .iter()
-                .any(|frame| matches!(frame, ProcessFrame::Output { stream: ProcessStream::Stderr, .. })),
+            frames.iter().any(|frame| matches!(
+                frame,
+                ProcessFrame::Output {
+                    stream: ProcessStream::Stderr,
+                    ..
+                }
+            )),
             "stderr must be framed, not dropped"
         );
     }
@@ -529,7 +547,11 @@ mod tests {
     #[tokio::test]
     async fn output_past_the_cap_is_truncated_and_the_terminal_frame_says_so() {
         let frames = run(
-            child(&["/bin/sh", "-c", "for i in 1 2 3 4 5 6 7 8 9 10; do echo aaaaaaaaaa; done"]),
+            child(&[
+                "/bin/sh",
+                "-c",
+                "for i in 1 2 3 4 5 6 7 8 9 10; do echo aaaaaaaaaa; done",
+            ]),
             Duration::from_secs(10),
             8,
         )

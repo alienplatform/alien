@@ -44,6 +44,10 @@ mod compute_cluster;
 #[cfg(feature = "local")]
 pub use compute_cluster::*;
 
+mod sandbox;
+#[cfg(feature = "local")]
+pub use sandbox::*;
+
 mod kubernetes_cluster;
 
 #[cfg(feature = "kubernetes")]

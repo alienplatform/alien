@@ -752,6 +752,22 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        // Register Local Sandbox controller
+        #[cfg(feature = "local")]
+        registry.register_controller_factory(
+            alien_core::Sandbox::RESOURCE_TYPE,
+            Platform::Local,
+            Box::new(DefaultControllerFactory::<crate::sandbox::LocalSandboxController>::new()),
+        );
+
+        // Register Kubernetes Sandbox controller
+        #[cfg(feature = "kubernetes")]
+        registry.register_controller_factory(
+            alien_core::Sandbox::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            Box::new(DefaultControllerFactory::<crate::sandbox::KubernetesSandboxController>::new()),
+        );
+
         // Register KubernetesCluster controller. The cluster is selected or
         // created during setup; this runtime controller records substrate
         // readiness once the agent is installed and reporting.

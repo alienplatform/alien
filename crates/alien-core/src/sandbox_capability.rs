@@ -198,8 +198,7 @@ mod tests {
     #[test]
     fn claims_round_trip_so_minting_and_verification_cannot_drift() {
         let json = serde_json::to_string(&claims()).expect("serializes");
-        let restored: SandboxCapabilityClaims =
-            serde_json::from_str(&json).expect("deserializes");
+        let restored: SandboxCapabilityClaims = serde_json::from_str(&json).expect("deserializes");
         assert_eq!(claims(), restored);
     }
 }

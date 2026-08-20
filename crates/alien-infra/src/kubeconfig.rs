@@ -753,12 +753,166 @@ fn parse_certificates(data: &[u8]) -> Result<Vec<Vec<u8>>> {
         .collect())
 }
 
+/// Turns a kubeconfig reference into the concrete config the Kubernetes client accepts.
+///
+/// The client refuses `Kubeconfig` outright and says so: resolution belongs here, because
+/// reading the file means reading CA and client-certificate paths off disk and running an
+/// exec-plugin credential command, none of which a cloud client should do. Any other variant
+/// passes through, so this is safe to call unconditionally on whatever config arrives.
+pub async fn resolve_kubeconfig(
+    config: &alien_k8s_clients::KubernetesClientConfig,
+) -> Result<alien_k8s_clients::KubernetesClientConfig> {
+    use alien_k8s_clients::KubernetesClientConfig;
+
+    let KubernetesClientConfig::Kubeconfig {
+        kubeconfig_path,
+        context,
+        cluster,
+        user,
+        namespace,
+        additional_headers,
+    } = config
+    else {
+        return Ok(config.clone());
+    };
+
+    let file = match kubeconfig_path {
+        Some(path) => Kubeconfig::read_from(path.clone())?,
+        None => Kubeconfig::read()?,
+    };
+
+    let loader = ConfigLoader::load(file, context.as_ref(), cluster.as_ref(), user.as_ref())?;
+
+    let server_url = loader.cluster.server.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::KubeconfigError {
+            message: "the selected cluster names no server".to_string(),
+        })
+    })?;
+
+    Ok(KubernetesClientConfig::Manual {
+        server_url,
+        certificate_authority_data: loader
+            .cluster
+            .load_certificate_authority()?
+            .map(|bytes| general_purpose::STANDARD.encode(bytes)),
+        insecure_skip_tls_verify: loader.cluster.insecure_skip_tls_verify,
+        client_certificate_data: loader
+            .user
+            .load_client_certificate()?
+            .map(|bytes| general_purpose::STANDARD.encode(bytes)),
+        client_key_data: loader
+            .user
+            .load_client_key()?
+            .map(|bytes| general_purpose::STANDARD.encode(bytes)),
+        token: loader.user.load_token().await?,
+        username: loader.user.username.clone(),
+        password: loader.user.password.clone(),
+        namespace: namespace
+            .clone()
+            .or_else(|| loader.current_context.namespace.clone()),
+        additional_headers: additional_headers.clone().unwrap_or_default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_k8s_clients::{KubernetesClientConfig, KubernetesClientConfigExt as _};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// The client refuses `Kubeconfig` and names this crate as where resolution belongs, so the
+    /// resolved config has to carry everything the client needs: server, CA, and a credential.
+    #[tokio::test]
+    async fn a_kubeconfig_resolves_into_a_manual_config() {
+        let mut file = NamedTempFile::new().expect("temp file");
+        write!(
+            file,
+            r#"
+apiVersion: v1
+kind: Config
+current-context: ctx
+clusters:
+- cluster:
+    certificate-authority-data: dGVzdA==
+    server: https://cluster.example:6443
+  name: c
+contexts:
+- context:
+    cluster: c
+    user: u
+    namespace: from-context
+  name: ctx
+users:
+- name: u
+  user:
+    token: inline-token
+"#
+        )
+        .expect("write kubeconfig");
+
+        let resolved = resolve_kubeconfig(&KubernetesClientConfig::Kubeconfig {
+            kubeconfig_path: Some(file.path().display().to_string()),
+            context: None,
+            cluster: None,
+            user: None,
+            namespace: None,
+            additional_headers: None,
+        })
+        .await
+        .expect("a kubeconfig with an inline token resolves");
+
+        let KubernetesClientConfig::Manual {
+            server_url,
+            certificate_authority_data,
+            token,
+            namespace,
+            ..
+        } = resolved
+        else {
+            panic!("resolution must produce a Manual config");
+        };
+
+        assert_eq!(server_url, "https://cluster.example:6443");
+        assert_eq!(certificate_authority_data.as_deref(), Some("dGVzdA=="));
+        assert_eq!(token.as_deref(), Some("inline-token"));
+        assert_eq!(
+            namespace.as_deref(),
+            Some("from-context"),
+            "the context's namespace is the default when the caller names none"
+        );
+    }
+
+    /// Safe to call on whatever config arrives, so callers do not have to match first.
+    #[tokio::test]
+    async fn every_other_variant_passes_through_untouched() {
+        let manual = KubernetesClientConfig::Manual {
+            server_url: "https://test:6443".to_string(),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: None,
+            client_certificate_data: None,
+            client_key_data: None,
+            token: Some("t".to_string()),
+            username: None,
+            password: None,
+            namespace: None,
+            additional_headers: HashMap::new(),
+        };
+
+        assert_eq!(
+            resolve_kubeconfig(&manual).await.expect("passes through"),
+            manual
+        );
+
+        let in_cluster = KubernetesClientConfig::InCluster {
+            additional_headers: None,
+            namespace: Some("default".to_string()),
+        };
+        assert_eq!(
+            resolve_kubeconfig(&in_cluster).await.expect("passes through"),
+            in_cluster
+        );
+    }
 
     #[test]
     fn test_exec_config_parsing() {

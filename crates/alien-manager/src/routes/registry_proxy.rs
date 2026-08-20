@@ -1710,6 +1710,12 @@ mod tests {
             Err(route_test_error(binding_name))
         }
 
+        async fn load_sandbox(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Sandbox>> {
+            Err(route_test_error(binding_name))
+        }
     }
 
     #[test]
