@@ -1126,13 +1126,14 @@ pub trait Sandbox: Binding {
         request: RunCommandRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
 
-    /// Reads a file out of the sandbox. Paths are normalised and may not escape the root.
+    /// Reads a file out of the sandbox. Requires `files`. Paths are normalised and may not
+    /// escape the root.
     async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>>;
 
-    /// Writes files into the sandbox.
+    /// Writes files into the sandbox. Requires `files`.
     async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()>;
 
-    /// Creates a directory inside the sandbox.
+    /// Creates a directory inside the sandbox. Requires `files`.
     async fn mkdir(&self, session_id: &str, path: &str) -> Result<()>;
 
     /// Mints a capability to reach a declared port. Requires `preview`.

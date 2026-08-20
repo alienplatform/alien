@@ -157,11 +157,15 @@ pub struct SandboxSessionPolicy {
 ///
 /// Published so portable code can branch before calling rather than discovering a gap through
 /// an error. Every field here corresponds to a capability that at least one platform lacks;
-/// create, exec, files and terminate are the guaranteed floor and are therefore not listed.
+/// create, exec and terminate are the guaranteed floor and are therefore not listed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCapabilities {
+    /// Files can be moved in and out of a session
+    ///
+    /// Every backend but Azure, whose data plane exposes exec and lifecycle and no transfer.
+    pub files: bool,
     /// A later call can reach a session created by an earlier one
     pub reconnect: bool,
     /// An authenticated, port-scoped capability to reach a service inside the sandbox
@@ -197,6 +201,7 @@ impl SandboxCapabilities {
     pub fn for_platform(platform: Platform) -> Result<Self> {
         match platform {
             Platform::Aws => Ok(Self {
+                files: true,
                 reconnect: true,
                 preview: true,
                 suspend_resume: true,
@@ -220,6 +225,7 @@ impl SandboxCapabilities {
             // them. The capability set describes what a caller can reach, not what the cloud
             // could do, so these stay false until the provider catches up.
             Platform::Azure => Ok(Self {
+                files: false,
                 reconnect: true,
                 preview: false,
                 suspend_resume: false,
@@ -236,6 +242,7 @@ impl SandboxCapabilities {
             // hold one across turns. That is the absence of a reconnect guarantee, not a
             // degraded one.
             Platform::Gcp => Ok(Self {
+                files: true,
                 reconnect: false,
                 preview: false,
                 suspend_resume: false,
@@ -251,6 +258,7 @@ impl SandboxCapabilities {
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
             Platform::Kubernetes => Ok(Self {
+                files: true,
                 reconnect: true,
                 preview: false,
                 suspend_resume: false,
@@ -268,6 +276,7 @@ impl SandboxCapabilities {
                 supervisor_pid_namespace: false,
             }),
             Platform::Local => Ok(Self {
+                files: true,
                 reconnect: true,
                 preview: true,
                 suspend_resume: false,
@@ -293,6 +302,7 @@ impl SandboxCapabilities {
     /// Returns a typed error if the named capability is absent on this platform.
     pub fn require(&self, capability: SandboxCapability, platform: Platform) -> Result<()> {
         let available = match capability {
+            SandboxCapability::Files => self.files,
             SandboxCapability::Reconnect => self.reconnect,
             SandboxCapability::Preview => self.preview,
             SandboxCapability::SuspendResume => self.suspend_resume,
@@ -321,6 +331,8 @@ impl SandboxCapabilities {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SandboxCapability {
+    /// Moving files in and out of a session
+    Files,
     /// Reaching a session created by an earlier call
     Reconnect,
     /// An authenticated, port-scoped ingress capability
@@ -347,6 +359,7 @@ impl SandboxCapability {
     /// Returns the stable identifier used in errors and capability queries.
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Files => "files",
             Self::Reconnect => "reconnect",
             Self::Preview => "preview",
             Self::SuspendResume => "suspendResume",
@@ -818,6 +831,8 @@ mod tests {
         assert!(!gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
+        assert!(!azure.files, "the Azure data plane has no file transfer");
+        assert!(gcp.files, "every other backend moves files");
         // The Azure data plane takes neither an egress policy nor a ceiling, so a declaration of
         // either is refused rather than accepted and dropped.
         assert!(!azure.domain_egress_rules);
