@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings-linux-arm64-gnu",
-  "version": "3.3.14",
+  "version": "3.3.15",
   "cpu": [
     "arm64"
   ],
