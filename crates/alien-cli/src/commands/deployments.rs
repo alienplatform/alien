@@ -132,6 +132,15 @@ pub enum DeploymentsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Show the machines connected to a deployment
+    Machines {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print the complete inventory as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete a deployment
     Delete {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
@@ -247,6 +256,27 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             get_deployment_task(&ctx, &manager, &id, json).await
+        }
+        DeploymentsCmd::Machines { id, json } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Machine inventory requires platform mode.".to_string(),
+                }));
+            }
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+            let client = ctx.sdk_client().await?;
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            machines_inventory_task(
+                &client,
+                workspace.as_str(),
+                &String::from(deployment.id),
+                json,
+            )
+            .await
         }
         DeploymentsCmd::Delete { id, yes } => {
             #[cfg(feature = "platform")]
@@ -415,6 +445,136 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
             token_deployment_task(&client, &workspace_name, &id).await
         }
+    }
+}
+
+async fn machines_inventory_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    json: bool,
+) -> Result<()> {
+    let mut response = client
+        .list_machines_inventory()
+        .id(deployment_id)
+        .workspace(workspace)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("listing machines for deployment '{deployment_id}'"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        return print_json(&response);
+    }
+
+    response.machines.sort_by(|left, right| {
+        machine_network_rank(right)
+            .cmp(&machine_network_rank(left))
+            .then_with(|| left.machine_id.cmp(&right.machine_id))
+    });
+    if response.machines.is_empty() {
+        println!("(no machines)");
+        return Ok(());
+    }
+
+    let mut table = make_table(&[
+        "Machine",
+        "Status",
+        "Heartbeat",
+        "Network",
+        "Peers",
+        "Machine agent",
+    ]);
+    for machine in &response.machines {
+        let network = machine
+            .network_health
+            .map(|health| health.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let peers = machine
+            .wireguard_mesh
+            .as_ref()
+            .and_then(|observation| observation.0.as_ref())
+            .map(|observation| {
+                format!(
+                    "{}/{}",
+                    observation.reachable_peer_count, observation.expected_peer_count
+                )
+            })
+            .unwrap_or_else(|| "—".to_string());
+        let version = machine
+            .machine_agent_version
+            .as_ref()
+            .or(machine.horizond_version.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+        table.add_row(vec![
+            machine.machine_id.clone().into(),
+            status_cell(&machine.status),
+            machine.last_heartbeat.clone().into(),
+            network.into(),
+            peers.into(),
+            version.into(),
+        ]);
+    }
+    print_table(table);
+
+    for machine in response
+        .machines
+        .iter()
+        .filter(|machine| machine_network_rank(machine) > 0)
+    {
+        if let Some(observation) = machine
+            .wireguard_mesh
+            .as_ref()
+            .and_then(|observation| observation.0.as_ref())
+        {
+            if !observation.missing_peer_machine_ids.is_empty() {
+                println!(
+                    "{} missing peers: {}",
+                    machine.machine_id,
+                    observation.missing_peer_machine_ids.join(", ")
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn machine_network_rank(machine: &alien_platform_api::types::MachinesInventoryItem) -> u8 {
+    network_health_rank(machine.network_health)
+}
+
+fn network_health_rank(
+    health: Option<alien_platform_api::types::MachinesInventoryItemNetworkHealth>,
+) -> u8 {
+    match health {
+        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded) => 2,
+        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Unknown) | None => 1,
+        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Healthy) => 0,
+    }
+}
+
+#[cfg(test)]
+mod machines_inventory_tests {
+    use super::*;
+    use alien_platform_api::types::MachinesInventoryItemNetworkHealth;
+
+    #[test]
+    fn machine_inventory_sorts_network_divergence_first() {
+        assert_eq!(
+            network_health_rank(Some(MachinesInventoryItemNetworkHealth::Degraded)),
+            2
+        );
+        assert_eq!(network_health_rank(None), 1);
+        assert_eq!(
+            network_health_rank(Some(MachinesInventoryItemNetworkHealth::Healthy)),
+            0
+        );
     }
 }
 
