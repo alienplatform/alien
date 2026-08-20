@@ -14,7 +14,8 @@ use service_manager::*;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -249,7 +250,7 @@ struct MachineBundleConfigEntry {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum MachineBundleConfigSource {
-    Literal(String),
+    Literal(toml::Value),
     ControlPlaneUrl,
     ClusterId,
     JoinTokenFile,
@@ -1185,12 +1186,19 @@ fn render_machine_config(
             }
         }
     }
-    toml::to_string(&config)
+    let rendered = toml::to_string(&config)
         .into_alien_error()
         .context(ErrorData::JsonError {
             operation: "serialize machine config".to_string(),
             reason: "Failed to serialize machine configuration as TOML".to_string(),
-        })
+        })?;
+    toml::from_str::<toml::Table>(&rendered)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "bundle.config".to_string(),
+            message: "serialized machine configuration is not valid TOML".to_string(),
+        })?;
+    Ok(rendered)
 }
 
 fn resolve_config_entry_value(
@@ -1198,14 +1206,16 @@ fn resolve_config_entry_value(
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
     join_token_path: &Path,
-) -> Result<Option<String>> {
+) -> Result<Option<toml::Value>> {
     match &entry.source {
         MachineBundleConfigSource::Literal(value) => Ok(Some(value.clone())),
         MachineBundleConfigSource::ControlPlaneUrl => {
-            Ok(Some(request.plan.control_plane_url.clone()))
+            Ok(Some(request.plan.control_plane_url.clone().into()))
         }
-        MachineBundleConfigSource::ClusterId => Ok(Some(request.plan.cluster_id.clone())),
-        MachineBundleConfigSource::JoinTokenFile => Ok(Some(join_token_path.display().to_string())),
+        MachineBundleConfigSource::ClusterId => Ok(Some(request.plan.cluster_id.clone().into())),
+        MachineBundleConfigSource::JoinTokenFile => {
+            Ok(Some(join_token_path.display().to_string().into()))
+        }
         MachineBundleConfigSource::MachineIdFile => manifest
             .config
             .machine_id_file
@@ -1214,7 +1224,7 @@ fn resolve_config_entry_value(
                 rooted_manifest_path(&request.install_root, "bundle.config.machineIdFile", path)
             })
             .transpose()
-            .map(|path| path.map(|path| path.display().to_string())),
+            .map(|path| path.map(|path| path.display().to_string().into())),
         MachineBundleConfigSource::MachineTokenFile => manifest
             .config
             .machine_token_file
@@ -1227,14 +1237,20 @@ fn resolve_config_entry_value(
                 )
             })
             .transpose()
-            .map(|path| path.map(|path| path.display().to_string())),
-        MachineBundleConfigSource::CapacityGroup => Ok(Some(request.plan.capacity_group.clone())),
-        MachineBundleConfigSource::Zone => Ok(request.plan.zone.clone()),
-        MachineBundleConfigSource::BundleVersion => Ok(Some(manifest.version.clone())),
-        MachineBundleConfigSource::NetworkInterface => Ok(request.plan.network_interface.clone()),
-        MachineBundleConfigSource::WireguardEndpoint => Ok(request.plan.wireguard_endpoint.clone()),
+            .map(|path| path.map(|path| path.display().to_string().into())),
+        MachineBundleConfigSource::CapacityGroup => {
+            Ok(Some(request.plan.capacity_group.clone().into()))
+        }
+        MachineBundleConfigSource::Zone => Ok(request.plan.zone.clone().map(Into::into)),
+        MachineBundleConfigSource::BundleVersion => Ok(Some(manifest.version.clone().into())),
+        MachineBundleConfigSource::NetworkInterface => {
+            Ok(request.plan.network_interface.clone().map(Into::into))
+        }
+        MachineBundleConfigSource::WireguardEndpoint => {
+            Ok(request.plan.wireguard_endpoint.clone().map(Into::into))
+        }
         MachineBundleConfigSource::ReconcileNetwork => {
-            Ok(Some(request.plan.reconcile_network.to_string()))
+            Ok(Some(request.plan.reconcile_network.into()))
         }
     }
 }
@@ -1383,12 +1399,15 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
             })
         })?;
     let temporary_path = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
-    std::fs::write(&temporary_path, contents)
+    let mut temporary_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary_path)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
-            operation: "write".to_string(),
+            operation: "create".to_string(),
             file_path: temporary_path.display().to_string(),
-            reason: "Failed to write machine configuration".to_string(),
+            reason: "Failed to create temporary machine configuration".to_string(),
         })?;
 
     #[cfg(unix)]
@@ -1402,12 +1421,36 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
                 reason: "Failed to restrict machine configuration permissions".to_string(),
             })?;
     }
+    temporary_file
+        .write_all(contents.as_bytes())
+        .and_then(|()| temporary_file.sync_all())
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: temporary_path.display().to_string(),
+            reason: "Failed to durably write machine configuration".to_string(),
+        })?;
     std::fs::rename(&temporary_path, path)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "replace".to_string(),
             file_path: path.display().to_string(),
             reason: "Failed to atomically replace machine configuration".to_string(),
+        })?;
+    let parent = path.parent().ok_or_else(|| {
+        AlienError::new(ErrorData::FileOperationFailed {
+            operation: "resolve".to_string(),
+            file_path: path.display().to_string(),
+            reason: "Failed to resolve machine configuration directory".to_string(),
+        })
+    })?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "sync".to_string(),
+            file_path: parent.display().to_string(),
+            reason: "Failed to sync machine configuration directory".to_string(),
         })
 }
 
@@ -2093,7 +2136,7 @@ mod tests {
                 entries: vec![
                     MachineBundleConfigEntry {
                         key: "mode".to_string(),
-                        source: MachineBundleConfigSource::Literal("external".to_string()),
+                        source: MachineBundleConfigSource::Literal("external".to_string().into()),
                         optional: false,
                     },
                     MachineBundleConfigEntry {
@@ -2455,6 +2498,26 @@ mod tests {
         let artifact = select_bundle_artifact(&manifest, MachineArch::X64).expect("artifact");
 
         assert_eq!(artifact.url, "linux-x64.tar.gz");
+    }
+
+    #[test]
+    fn machine_config_preserves_boolean_types() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let mut args = test_join_args();
+        args.network_interface = Some("ens3".to_string());
+        let request =
+            build_join_request(&args, None, linux_host(temp.path())).expect("join request");
+        let token_path = temp.path().join("join-token");
+
+        let rendered =
+            render_machine_config(&request, &test_manifest(), &token_path).expect("machine config");
+        let parsed: toml::Table = toml::from_str(&rendered).expect("valid TOML");
+
+        assert_eq!(
+            parsed.get("reconcileNetwork"),
+            Some(&toml::Value::Boolean(true))
+        );
+        assert!(!rendered.contains("reconcileNetwork = \"true\""));
     }
 
     #[test]
