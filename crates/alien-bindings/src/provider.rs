@@ -2216,6 +2216,68 @@ mod tests {
         );
     }
 
+    /// A MicroVM with no egress connector reaches the internet, so the binding's two egress
+    /// fields have to agree: an empty list is how `allow` travels, and it is a fail-open default
+    /// unless `allowEgress` says so. Both disagreements are refused, and `deny` still loads.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_sandbox_binding_whose_egress_fields_disagree_is_refused() {
+        const CONNECTOR: &str = "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-1";
+
+        async fn load(connectors: &str, allow_egress: bool) -> Result<()> {
+            let env = HashMap::from([
+                (
+                    ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                    Platform::Aws.as_str().to_string(),
+                ),
+                ("AWS_REGION".to_string(), "us-east-1".to_string()),
+                ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+                ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+                ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+                (
+                    "ALIEN_BOX_BINDING".to_string(),
+                    format!(
+                        r#"{{"service":"sandbox-aws",
+                            "imageArn":"arn:aws:lambda:us-east-1:123456789012:microvm-image:box",
+                            "imageVersion":"1.0",
+                            "region":"us-east-1",
+                            "allowEgress":{allow_egress},
+                            "egressConnectorArns":[{connectors}]}}"#
+                    ),
+                ),
+            ]);
+            BindingsProvider::from_env(env)
+                .await
+                .expect("the binding JSON parses")
+                .load_sandbox("box")
+                .await
+                .map(|_| ())
+        }
+
+        let fail_open = load("", false)
+            .await
+            .expect_err("an empty connector list with allowEgress false is a fail-open default");
+        assert_eq!(fail_open.code, "BINDING_CONFIG_INVALID");
+        assert!(
+            fail_open.to_string().contains("egressConnectorArns"),
+            "the message should name the field that was refused, got: {fail_open}"
+        );
+
+        let contradiction = load(&format!(r#""{CONNECTOR}""#), true)
+            .await
+            .expect_err("open egress and a denying connector cannot both be declared");
+        assert_eq!(contradiction.code, "BINDING_CONFIG_INVALID");
+
+        // The control: without it the two assertions above would pass against a `load_sandbox`
+        // that refused every AWS sandbox binding.
+        load(&format!(r#""{CONNECTOR}""#), false)
+            .await
+            .expect("a deny binding names a connector and must load");
+        load("", true)
+            .await
+            .expect("an allow binding names none and must load");
+    }
+
     /// A sandbox binding naming an execution role is refused rather than honoured — see the
     /// `execution_role_arn` check in `load_sandbox` for why. Nothing emits the field today, so
     /// this is what keeps it that way.
