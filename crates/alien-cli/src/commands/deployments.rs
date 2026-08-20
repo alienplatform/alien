@@ -509,21 +509,28 @@ async fn machines_inventory_task(
             .network_health
             .map(|health| health.to_string())
             .unwrap_or_else(|| "unknown".to_string());
-        let peers = machine
-            .wireguard_mesh
-            .as_ref()
-            .and_then(|observation| observation.0.as_ref())
-            .map(|observation| {
-                format!(
-                    "{}/{}",
-                    observation.reachable_peer_count, observation.expected_peer_count
-                )
-            })
-            .unwrap_or_else(|| "—".to_string());
+        let peers = if matches!(
+            machine.network_health,
+            Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Healthy)
+                | Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded)
+        ) {
+            machine
+                .wireguard_mesh
+                .as_ref()
+                .and_then(|observation| observation.0.as_ref())
+                .map(|observation| {
+                    format!(
+                        "{}/{}",
+                        observation.reachable_peer_count, observation.expected_peer_count
+                    )
+                })
+                .unwrap_or_else(|| "—".to_string())
+        } else {
+            "—".to_string()
+        };
         let version = machine
-            .machine_agent_version
+            .horizond_version
             .as_ref()
-            .or(machine.horizond_version.as_ref())
             .cloned()
             .unwrap_or_else(|| "unknown".to_string());
         table.add_row(vec![
@@ -547,7 +554,11 @@ async fn machines_inventory_task(
             .as_ref()
             .and_then(|observation| observation.0.as_ref())
         {
-            if !observation.missing_peer_machine_ids.is_empty() {
+            if matches!(
+                machine.network_health,
+                Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded)
+            ) && !observation.missing_peer_machine_ids.is_empty()
+            {
                 println!(
                     "{} missing peers: {}",
                     machine.machine_id,
@@ -569,8 +580,9 @@ fn network_health_rank(
 ) -> u8 {
     match health {
         Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded) => 2,
-        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Unknown) | None => 1,
-        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Healthy) => 0,
+        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Unknown)
+        | Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Healthy)
+        | None => 0,
     }
 }
 
@@ -585,7 +597,7 @@ mod machines_inventory_tests {
             network_health_rank(Some(MachinesInventoryItemNetworkHealth::Degraded)),
             2
         );
-        assert_eq!(network_health_rank(None), 1);
+        assert_eq!(network_health_rank(None), 0);
         assert_eq!(
             network_health_rank(Some(MachinesInventoryItemNetworkHealth::Healthy)),
             0
