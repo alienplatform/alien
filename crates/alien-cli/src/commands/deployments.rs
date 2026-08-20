@@ -50,6 +50,21 @@ pub struct DeploymentsArgs {
     pub cmd: DeploymentsCmd,
 }
 
+impl DeploymentsArgs {
+    pub fn wants_json_output(&self) -> bool {
+        matches!(
+            &self.cmd,
+            DeploymentsCmd::Ls { json: true, .. }
+                | DeploymentsCmd::Get { json: true, .. }
+                | DeploymentsCmd::Machines { json: true, .. }
+                | DeploymentsCmd::Retry { json: true, .. }
+                | DeploymentsCmd::Redeploy { json: true, .. }
+                | DeploymentsCmd::Pin { json: true, .. }
+                | DeploymentsCmd::SetChannel { json: true, .. }
+        )
+    }
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub enum DeploymentsCmd {
     /// Create a new deployment
@@ -575,6 +590,17 @@ mod machines_inventory_tests {
             network_health_rank(Some(MachinesInventoryItemNetworkHealth::Healthy)),
             0
         );
+    }
+
+    #[test]
+    fn machine_inventory_json_mode_routes_errors_as_json() {
+        let args = DeploymentsArgs {
+            cmd: DeploymentsCmd::Machines {
+                id: "deployment".to_string(),
+                json: true,
+            },
+        };
+        assert!(args.wants_json_output());
     }
 }
 
