@@ -4,7 +4,7 @@ use crate::commands::up::read_token_file;
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Args;
 use flate2::read::GzDecoder;
@@ -1399,6 +1399,19 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
             })
         })?;
     let temporary_path = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    match std::fs::remove_file(&temporary_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "remove".to_string(),
+                    file_path: temporary_path.display().to_string(),
+                    reason: "Failed to remove stale temporary machine configuration".to_string(),
+                }));
+        }
+    }
     let mut temporary_file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -2661,6 +2674,24 @@ mod tests {
                 .expect("token"),
             "jt_secret"
         );
+    }
+
+    #[test]
+    fn secret_file_write_recovers_from_a_stale_temporary_file() {
+        let root = tempfile::tempdir().expect("install root");
+        let path = root.path().join("horizond.toml");
+        let temporary_path = root
+            .path()
+            .join(format!(".horizond.toml.tmp-{}", std::process::id()));
+        std::fs::write(&temporary_path, "incomplete").expect("stale temporary file");
+
+        write_secret_file(&path, "reconcileNetwork = true\n").expect("write secret file");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("secret file"),
+            "reconcileNetwork = true\n"
+        );
+        assert!(!temporary_path.exists());
     }
 
     #[test]
