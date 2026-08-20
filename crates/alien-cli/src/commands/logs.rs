@@ -55,7 +55,7 @@ pub struct LogsArgs {
     pub level: Vec<LogLevel>,
 
     /// Restrict results to a gateway request-diagnostics source.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, conflicts_with = "deployment")]
     pub source: Option<LogSource>,
 
     /// Relative time window, such as 30m, 2h, or 7d.
@@ -1085,6 +1085,15 @@ mod tests {
         let query = build_logs_query("*", &[], None, true, Some(LogSource::AiGateway)).unwrap();
 
         assert_eq!(query, "attributes.alien\\.log\\.source:\"ai-gateway\"");
+    }
+
+    #[test]
+    fn gateway_source_rejects_a_deployment_filter() {
+        let error =
+            LogsArgs::try_parse_from(["logs", "--source", "ai-gateway", "--deployment", "dep_123"])
+                .expect_err("gateway diagnostics are not deployment-scoped");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
