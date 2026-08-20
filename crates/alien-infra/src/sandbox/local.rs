@@ -292,7 +292,7 @@ fn session_template(sandbox: &Sandbox) -> Result<alien_local::SandboxSessionConf
         SandboxEgress::Allow => alien_local::SandboxEgressMode::Allow,
         SandboxEgress::AllowDomains { .. } => {
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "Local cannot restrict egress to a hostname list; only Azure can"
+                message: "no sandbox backend restricts egress to a hostname list"
                     .to_string(),
                 resource_id: Some(sandbox.id.clone()),
             }))

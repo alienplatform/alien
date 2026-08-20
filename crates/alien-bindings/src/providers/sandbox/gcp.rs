@@ -171,6 +171,14 @@ impl Sandbox for GcpSandbox {
     /// Egress comes from the binding rather than the request: the launcher decides it at create
     /// time and an application must not be able to widen its own.
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+        if !request.env.is_empty() {
+            return Err(self.failed(
+                "sandbox.create",
+                "the Cloud Run sandbox launcher takes no session environment; bake it into the \
+                 image or pass it in each command",
+            ));
+        }
+
         let session_id = request
             .session_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -219,6 +227,24 @@ impl Sandbox for GcpSandbox {
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         if request.command.is_empty() {
             return Err(self.failed("sandbox.runCommand", "command is empty"));
+        }
+
+        if request.deadline.is_zero() {
+            return Err(self.failed(
+                "sandbox.runCommand",
+                "a command must carry a non-zero deadline",
+            ));
+        }
+
+        // The launcher takes no environment, and dropping what a caller asked for is the silent
+        // no-op the capability contract forbids: a command reading a variable it was promised
+        // would see nothing and fail somewhere far from here.
+        if !request.env.is_empty() {
+            return Err(self.failed(
+                "sandbox.runCommand",
+                "the Cloud Run sandbox launcher takes no per-command environment; bake it into \
+                 the image or pass it in the command",
+            ));
         }
 
         let mut arguments = self.exec_arguments(session_id, &request.command);
@@ -520,6 +546,81 @@ mod tests {
             matches!(frames.last(), Some(Ok(CommandOutput::Exit { code: 3, .. }))),
             "the terminal frame must carry the real exit code: {:?}",
             frames.last()
+        );
+    }
+
+    /// The launcher carries no environment, so a caller that asks for one has to hear about it.
+    /// Accepting the request and running the command without those variables is the silent no-op
+    /// the capability contract exists to prevent — the failure would surface inside the sandbox,
+    /// far from the call that caused it.
+    #[tokio::test]
+    async fn an_environment_the_launcher_cannot_carry_is_refused() {
+        let (_dir, sandbox) = launcher("exit 0");
+        let env = BTreeMap::from([("TOKEN".to_string(), "secret".to_string())]);
+
+        let on_create = sandbox
+            .create(CreateSessionRequest {
+                session_id: Some("s1".to_string()),
+                tenant_key: None,
+                env: env.clone(),
+            })
+            .await
+            .expect_err("a session environment cannot be honoured here");
+        assert_eq!(on_create.code, "OPERATION_NOT_SUPPORTED");
+
+        // `let else` rather than `expect_err`: the Ok side is a stream and carries no Debug.
+        let Err(on_command) = sandbox
+            .run_command(
+                "s1",
+                RunCommandRequest {
+                    command: vec!["true".to_string()],
+                    working_directory: None,
+                    env,
+                    deadline: Duration::from_secs(5),
+                },
+            )
+            .await
+        else {
+            panic!("a command environment cannot be honoured here");
+        };
+        assert_eq!(on_command.code, "OPERATION_NOT_SUPPORTED");
+
+        // The control: the same calls without an environment are accepted, so the assertions
+        // above cannot pass against a provider that refuses everything.
+        sandbox
+            .create(CreateSessionRequest {
+                session_id: Some("s2".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect("a session with no environment is fine");
+    }
+
+    /// A command with no deadline is a hang waiting for a slow day, in a sandbox running code the
+    /// caller does not control. Every other backend refuses it; this one did not.
+    #[tokio::test]
+    async fn a_command_without_a_deadline_is_refused() {
+        let (_dir, sandbox) = launcher("exit 0");
+
+        let Err(error) = sandbox
+            .run_command(
+                "s1",
+                RunCommandRequest {
+                    command: vec!["true".to_string()],
+                    working_directory: None,
+                    env: BTreeMap::new(),
+                    deadline: Duration::ZERO,
+                },
+            )
+            .await
+        else {
+            panic!("a zero deadline is not a deadline");
+        };
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+        assert!(
+            error.to_string().contains("non-zero deadline"),
+            "the message should say what was wrong, got: {error}"
         );
     }
 
