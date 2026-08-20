@@ -10,7 +10,9 @@
 
 use std::io::Read;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use alien_commands_client::{CommandsClient, CommandsClientConfig};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, Subcommand};
 use reqwest::Method;
@@ -35,6 +37,11 @@ EXAMPLES:
 
     # List available plugins (builtin + custom)
     alien operations list
+
+    # Invoke an enabled operation without an AI agent
+    alien operations invoke --deployment mycustomer/prod \\
+      --operation kubernetes/get-pods \\
+      --params '{\"namespace\": \"default\", \"maxResults\": 10}'
 "
 )]
 pub struct OperationsArgs {
@@ -59,6 +66,24 @@ pub enum OperationsAction {
     },
     /// List available operations plugins (builtin + custom).
     List,
+    /// Invoke an enabled operation and wait for its result.
+    Invoke {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>.
+        #[arg(long)]
+        deployment: String,
+
+        /// Operation name in <plugin>/<operation> form.
+        #[arg(long)]
+        operation: String,
+
+        /// Operation parameters as JSON.
+        #[arg(long, default_value = "{}")]
+        params: String,
+
+        /// Timeout in seconds.
+        #[arg(long, default_value = "60")]
+        timeout: u64,
+    },
 }
 
 /// The `metadata.json` fields the CLI reads to describe the bundle. The full
@@ -99,6 +124,35 @@ struct PublishRequest {
     metadata: Value,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InvokeRequest {
+    deployment_id: String,
+    plugin: String,
+    operation: String,
+    params: Value,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InvokeResponse {
+    plugin: String,
+    operation: String,
+    tier: String,
+    decision: String,
+    status: String,
+    #[serde(default)]
+    command_id: Option<String>,
+}
+
+struct InvokeTaskOptions<'a> {
+    deployment: &'a str,
+    operation: &'a str,
+    params: &'a str,
+    timeout_secs: u64,
+    json: bool,
+}
+
 pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
     let auth = ctx.auth_http().await?;
     let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
@@ -115,7 +169,158 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
             publish_task(&auth, &workspace, &project, &bundle, args.json).await
         }
         OperationsAction::List => list_task(&auth, &workspace, &project, args.json).await,
+        OperationsAction::Invoke {
+            deployment,
+            operation,
+            params,
+            timeout,
+        } => {
+            invoke_task(
+                &ctx,
+                &auth,
+                &workspace,
+                &project,
+                InvokeTaskOptions {
+                    deployment: &deployment,
+                    operation: &operation,
+                    params: &params,
+                    timeout_secs: timeout,
+                    json: args.json,
+                },
+            )
+            .await
+        }
     }
+}
+
+async fn invoke_task(
+    ctx: &ExecutionMode,
+    auth: &crate::auth::AuthHttp,
+    workspace: &str,
+    project: &str,
+    options: InvokeTaskOptions<'_>,
+) -> Result<()> {
+    let operation_ref = options.operation;
+    let (plugin, operation) = parse_operation_reference(operation_ref).ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "operation".to_string(),
+            message: "Use <plugin>/<operation>, for example kubernetes/get-pods.".to_string(),
+        })
+    })?;
+    let params: Value = serde_json::from_str(options.params)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "params".to_string(),
+            message: "Invalid JSON".to_string(),
+        })?;
+    let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+        ctx,
+        options.deployment,
+        Some(project),
+        !options.json,
+    )
+    .await?;
+    let deployment_id = String::from(resolved.detail.id.clone());
+    let url = api_url(&auth.base_url, "/v1/operations/invoke", workspace, project)?;
+    let response = auth
+        .reqwest_client()
+        .request(Method::POST, url.clone())
+        .json(&InvokeRequest {
+            deployment_id: deployment_id.clone(),
+            plugin: plugin.to_string(),
+            operation: operation.to_string(),
+            params,
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("invoking operation '{operation_ref}'"),
+            url: Some(url.to_string()),
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("operation invocation failed ({status}): {body}"),
+            url: Some(url.to_string()),
+        }));
+    }
+
+    let invocation: InvokeResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "parsing the operation invocation response".to_string(),
+                url: Some(url.to_string()),
+            })?;
+
+    if invocation.status == "pending-approval" {
+        if options.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&invocation).unwrap_or_default()
+            );
+        } else {
+            println!(
+                "Operation '{operation_ref}' requires approval (policy: {}). No command was dispatched.",
+                invocation.decision
+            );
+        }
+        return Ok(());
+    }
+    if invocation.status != "dispatched" {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "operation '{operation_ref}' returned unknown status '{}'",
+                invocation.status
+            ),
+            url: Some(url.to_string()),
+        }));
+    }
+
+    let command_id = invocation.command_id.ok_or_else(|| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "operation '{operation_ref}' reported '{}' without a command ID",
+                invocation.status
+            ),
+            url: Some(url.to_string()),
+        })
+    })?;
+    let commands_url = format!("{}/v1", resolved.manager.manager_url.trim_end_matches('/'));
+    let client = CommandsClient::with_http_client(
+        &commands_url,
+        &deployment_id,
+        resolved.manager.http_client,
+        CommandsClientConfig {
+            timeout: Duration::from_secs(options.timeout_secs),
+            ..Default::default()
+        },
+    );
+    let result: Value = client
+        .wait_for_completion(&command_id)
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("operation '{operation_ref}' failed"),
+            url: Some(commands_url),
+        })?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{result:?}"))
+    );
+    Ok(())
+}
+
+fn parse_operation_reference(reference: &str) -> Option<(&str, &str)> {
+    let (plugin, operation) = reference.split_once('/')?;
+    if plugin.is_empty() || operation.is_empty() || operation.contains('/') {
+        return None;
+    }
+    Some((plugin, operation))
 }
 
 /// Read + validate the bundle, upload the ZIP straight to S3 via a presigned
@@ -402,5 +607,20 @@ mod tests {
         let bytes = bundle_with_metadata(&meta);
         let err = read_bundle_metadata(&bytes, &PathBuf::from("x.zip")).expect_err("must error");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
+    }
+
+    #[test]
+    fn parses_plugin_and_operation_names() {
+        assert_eq!(
+            parse_operation_reference("kubernetes/get-pods").expect("valid operation"),
+            ("kubernetes", "get-pods")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_operation_names() {
+        for reference in ["get-pods", "/get-pods", "kubernetes/", "a/b/c"] {
+            assert_eq!(parse_operation_reference(reference), None);
+        }
     }
 }
