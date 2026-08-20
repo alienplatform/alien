@@ -135,6 +135,19 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// Sandbox operation failed.
+    #[error(
+        code = "SANDBOX_OPERATION_FAILED",
+        message = "Sandbox operation failed: {operation}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 500
+    )]
+    SandboxOperationFailed {
+        /// Description of the sandbox operation that failed
+        operation: String,
+    },
+
     /// KV operation failed.
     #[error(
         code = "KV_OPERATION_FAILED",

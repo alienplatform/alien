@@ -8,6 +8,7 @@ pub mod kv;
 pub mod postgres;
 pub mod queue;
 pub mod queue_message;
+pub mod sandbox;
 pub mod service_account;
 pub mod sse;
 pub mod storage;
