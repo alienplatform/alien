@@ -206,6 +206,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::Queue>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "sandbox" => Box::new(
+                serde_json::from_value::<crate::resources::Sandbox>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "email" => Box::new(
                 serde_json::from_value::<crate::resources::Email>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -283,6 +287,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "storage",
                         "key",
                         "queue",
+                        "sandbox",
                         "email",
                         "kv",
                         "postgres",
@@ -567,6 +572,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::QueueOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "sandbox" => Box::new(
+                serde_json::from_value::<crate::resources::SandboxOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "email" => Box::new(
                 serde_json::from_value::<crate::resources::EmailOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -649,6 +658,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "storage",
                         "key",
                         "queue",
+                        "sandbox",
                         "email",
                         "kv",
                         "postgres",

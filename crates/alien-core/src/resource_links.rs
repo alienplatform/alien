@@ -229,6 +229,7 @@ mod tests {
         ("kubernetes-cluster", false),
         ("storage", false),
         ("queue", false),
+        ("sandbox", false),
         ("email", false),
         ("kv", false),
         ("postgres", false),

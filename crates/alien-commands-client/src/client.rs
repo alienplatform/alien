@@ -203,7 +203,29 @@ impl CommandsClient {
 
         debug!(command_id = %command_id, command = %command, "Command created, polling for result");
 
-        // Step 2: Poll for completion with exponential backoff
+        self.wait_for_completion_with_timeout(&command_id, timeout)
+            .await
+    }
+
+    /// Wait for an already-created command and decode its result.
+    ///
+    /// This is useful when another API creates the command, such as the
+    /// operations API after it applies an approval policy.
+    pub async fn wait_for_completion<R: DeserializeOwned>(
+        &self,
+        command_id: &str,
+    ) -> Result<R, CommandError> {
+        self.wait_for_completion_with_timeout(command_id, self.config.timeout)
+            .await
+    }
+
+    async fn wait_for_completion_with_timeout<R: DeserializeOwned>(
+        &self,
+        command_id: &str,
+        timeout: Duration,
+    ) -> Result<R, CommandError> {
+        let command_id = command_id.to_string();
+
         let start = tokio::time::Instant::now();
         let mut interval = self.config.poll_interval;
 

@@ -41,6 +41,45 @@ fn aws_build_renders_codebuild_project() {
     assert_terraform_valid(&module, "aws_build");
 }
 
+/// A `Build` role must stay unassumable by the sandbox image builder.
+///
+/// `sandbox/provision` passes `role/<prefix>-*-build`, and a `Build` resource emits a role wearing
+/// that same shape. What stops it being passed into `CreateMicrovmImage` is this trust policy:
+/// Lambda cannot assume a role that does not name it. That is the whole reason the grant is safe
+/// for `Build`, and until now it was written down only in a comment — adding lambda here would
+/// open a path from provisioning to whatever this role can read, with nothing failing.
+#[test]
+fn the_build_role_cannot_be_assumed_by_the_sandbox_image_builder() {
+    let stack = Stack::new("acme-build-trust".to_string())
+        .add(
+            Build::new("builder".to_string())
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered: String = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("codebuild.amazonaws.com"),
+        "the build role has to trust the service that actually runs it:\n{rendered}"
+    );
+    let build_role = rendered
+        .split("resource \"aws_iam_role\"")
+        .find(|block| block.contains("codebuild.amazonaws.com"))
+        .expect("the build role must render");
+    assert!(
+        !build_role.contains("lambda.amazonaws.com"),
+        "a build role Lambda can assume is passable into the sandbox image build:\n{build_role}"
+    );
+}
+
 #[test]
 fn aws_function_basic_lambda() {
     let stack = Stack::new("acme-fn".to_string())

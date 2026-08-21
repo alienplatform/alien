@@ -161,8 +161,27 @@ impl AzureRuntimePermissionsGenerator {
         let mut all_data_actions = Vec::new();
         let mut assignable_scopes = Vec::new();
 
+        // A statement that declares no binding for this target is skipped, not fatal — the set is
+        // refused below only when *no* statement declares one. Azure scopes cannot be narrowed
+        // below the resource group at stack level, so a set whose create needs the parent has to
+        // be able to leave its delete behind rather than carry it up.
+        let mut declares_target = false;
+
         for (index, platform_permission) in azure_platform_permissions.iter().enumerate() {
+            let binding_spec = match binding_target {
+                BindingTarget::Stack => platform_permission.binding.stack.as_ref(),
+                BindingTarget::Resource => platform_permission.binding.resource.as_ref(),
+            };
+            // Validated before the skip: a malformed grant is malformed whichever target this
+            // pass is generating, and only running the check on the declaring pass would let one
+            // through whenever the other pass happens not to run.
             self.validate_azure_grant(&platform_permission.grant, permission_set, index)?;
+
+            let Some(binding_spec) = binding_spec else {
+                continue;
+            };
+            declares_target = true;
+
             if let Some(actions) = &platform_permission.grant.actions {
                 all_actions.extend(actions.clone());
             }
@@ -170,34 +189,23 @@ impl AzureRuntimePermissionsGenerator {
                 all_data_actions.extend(data_actions.clone());
             }
 
-            // Generate assignable scopes based on binding target
-            let binding_spec = match binding_target {
-                BindingTarget::Stack => {
-                    platform_permission.binding.stack.as_ref().ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                            platform: "azure".to_string(),
-                            binding_target: "stack".to_string(),
-                            permission_set_id: permission_set.id.clone(),
-                        })
-                    })?
-                }
-                BindingTarget::Resource => platform_permission
-                    .binding
-                    .resource
-                    .as_ref()
-                    .ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                            platform: "azure".to_string(),
-                            binding_target: "resource".to_string(),
-                            permission_set_id: permission_set.id.clone(),
-                        })
-                    })?,
-            };
-
             // Interpolate variables in the scope
             let interpolated_scope =
                 VariableInterpolator::interpolate_variables(&binding_spec.scope, context)?;
             assignable_scopes.push(interpolated_scope);
+        }
+
+        if !declares_target {
+            return Err(alien_error::AlienError::new(
+                ErrorData::BindingTargetNotSupported {
+                    platform: "azure".to_string(),
+                    binding_target: match binding_target {
+                        BindingTarget::Stack => "stack".to_string(),
+                        BindingTarget::Resource => "resource".to_string(),
+                    },
+                    permission_set_id: permission_set.id.clone(),
+                },
+            ));
         }
 
         if all_actions.is_empty() && all_data_actions.is_empty() {
@@ -260,31 +268,25 @@ impl AzureRuntimePermissionsGenerator {
             });
         }
 
+        // A statement declaring no binding for this target is skipped rather than fatal; the set
+        // is refused after the loop only when no statement declares one. Azure has no scope below
+        // the resource group at stack level, so a set whose create needs the parent has to be able
+        // to leave its delete behind instead of carrying it up there.
+        let mut declares_target = false;
+
         for (index, platform_permission) in azure_platform_permissions.iter().enumerate() {
+            let binding_spec = match binding_target {
+                BindingTarget::Stack => platform_permission.binding.stack.as_ref(),
+                BindingTarget::Resource => platform_permission.binding.resource.as_ref(),
+            };
+            // Same reason as above: a malformed grant fails on every pass, not only the one that
+            // declares this target.
             self.validate_azure_grant(&platform_permission.grant, permission_set, index)?;
 
-            let binding_spec = match binding_target {
-                BindingTarget::Stack => {
-                    platform_permission.binding.stack.as_ref().ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                            platform: "azure".to_string(),
-                            binding_target: "stack".to_string(),
-                            permission_set_id: permission_set.id.clone(),
-                        })
-                    })?
-                }
-                BindingTarget::Resource => platform_permission
-                    .binding
-                    .resource
-                    .as_ref()
-                    .ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
-                            platform: "azure".to_string(),
-                            binding_target: "resource".to_string(),
-                            permission_set_id: permission_set.id.clone(),
-                        })
-                    })?,
+            let Some(binding_spec) = binding_spec else {
+                continue;
             };
+            declares_target = true;
 
             let scope = VariableInterpolator::interpolate_variables(&binding_spec.scope, context)?;
             self.validate_azure_scope(&scope, permission_set, index)?;
@@ -326,6 +328,22 @@ impl AzureRuntimePermissionsGenerator {
                     scope,
                 });
             }
+        }
+
+        // A set where no statement declares this target does not support it, which is a different
+        // answer from one that declares it and grants nothing — callers branch on the first to
+        // decide whether to emit anything at all.
+        if !declares_target {
+            return Err(alien_error::AlienError::new(
+                ErrorData::BindingTargetNotSupported {
+                    platform: "azure".to_string(),
+                    binding_target: match binding_target {
+                        BindingTarget::Stack => "stack".to_string(),
+                        BindingTarget::Resource => "resource".to_string(),
+                    },
+                    permission_set_id: permission_set.id.clone(),
+                },
+            ));
         }
 
         if custom_roles.is_empty() && bindings.is_empty() {
@@ -584,6 +602,9 @@ pub fn azure_predefined_role_id(role_name: &str) -> Option<&'static str> {
         "Azure Service Bus Data Sender" => Some("69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"),
         "Cognitive Services OpenAI User" => Some("5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"),
         "Cognitive Services User" => Some("a97b65f3-24c7-4388-baec-2e87135dc908"),
+        // Gates the whole ACA Sandboxes data plane. Subscription Owner is refused against it,
+        // so this assignment is required for any sandbox operation, not merely convenient.
+        "Container Apps SandboxGroup Data Owner" => Some("c24cf47c-5077-412d-a19c-45202126392c"),
         "Key Vault Contributor" => Some("f25e0fa2-a7c8-4377-a976-54943a77a395"),
         "Key Vault Reader" => Some("21090545-7ca7-4776-b22c-e363652d74d2"),
         "Key Vault Secrets User" => Some("4633458b-17de-408a-b874-0445c86b69e6"),

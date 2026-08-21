@@ -12,6 +12,12 @@ openapi = ["dep:utoipa"]
 jsonschema = ["dep:schemars"]
 test-utils = []
 local = ["tokio/fs"]
+# Signing and verifying sandbox capability tokens. Gated because alien-core is also built for
+# targets that have no business carrying a crypto implementation.
+sandbox-capability = ["dep:ed25519-compact"]
+# Framing a child process into sandbox output frames. Gated because most consumers of this
+# crate have no business spawning processes.
+sandbox-process = ["tokio/process", "tokio/io-util", "tokio/time", "tokio/macros", "tokio/sync"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
@@ -31,6 +37,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 reqwest = { workspace = true }
 base64 = { workspace = true }
+ed25519-compact = { workspace = true, optional = true }
 alien-macros = { workspace = true }
 alien-error = { workspace = true, features = ["openapi"] }
 thiserror = { workspace = true }
@@ -47,3 +54,7 @@ futures = { workspace = true }
 name = "schema_exporter"
 path = "src/bin/schema_exporter.rs"
 required-features = ["clap", "openapi"]
+
+# Killing a process group needs `kill(2)` with a negative pid, which std does not expose.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

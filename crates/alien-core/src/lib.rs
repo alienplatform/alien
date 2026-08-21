@@ -28,6 +28,12 @@ mod error;
 pub use error::*;
 
 mod resource;
+pub mod sandbox_capability;
+#[cfg(feature = "sandbox-capability")]
+pub mod sandbox_capability_token;
+
+#[cfg(feature = "sandbox-process")]
+pub mod sandbox_process;
 pub use resource::*;
 
 mod ownership;

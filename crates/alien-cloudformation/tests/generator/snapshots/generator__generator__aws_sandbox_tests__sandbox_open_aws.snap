@@ -1,0 +1,811 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_sandbox_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: sandbox_open_aws
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Network
+      Parameters:
+      - NetworkMode
+      - VpcCidr
+      - AvailabilityZones
+      - VpcId
+      - PublicSubnetIds
+      - PrivateSubnetIds
+      - SecurityGroupIds
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+      - ParseApplicationLevels
+    ParameterLabels:
+      AvailabilityZones:
+        default: Availability zones
+      HeartbeatsMode:
+        default: Heartbeats
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      NetworkMode:
+        default: Network
+      ParseApplicationLevels:
+        default: Parse JSON log levels
+      PrivateSubnetIds:
+        default: Private subnet IDs
+      PublicSubnetIds:
+        default: Public subnet IDs
+      SecurityGroupIds:
+        default: Security group IDs
+      TelemetryMode:
+        default: Telemetry
+      Token:
+        default: Install token
+      UpdatesMode:
+        default: Updates
+      VpcCidr:
+        default: VPC CIDR
+      VpcId:
+        default: VPC ID
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  VpcCidr:
+    Type: String
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
+    Default: ''
+  AvailabilityZones:
+    Type: Number
+    Description: Only used with create-new. Number of availability zones for the new VPC.
+    Default: 2
+    AllowedValues:
+    - 1
+    - 2
+    - 3
+  VpcId:
+    Type: String
+    Description: Only used with use-existing. Existing VPC ID.
+    Default: ''
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing public subnet IDs.
+    Default: ''
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing private subnet IDs.
+    Default: ''
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing security group IDs.
+    Default: ''
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - auto
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+  ParseApplicationLevels:
+    Type: String
+    Description: Use a recognized top-level JSON level field as log severity while preserving the raw body.
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+Conditions:
+  ParseApplicationLevelsEnabled:
+    Fn::Equals:
+    - Ref: ParseApplicationLevels
+    - 'true'
+  NetworkModeCreate:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - create-new
+  NetworkModeUseExisting:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - use-existing
+  NetworkUseAz2:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: AvailabilityZones
+      - 1
+  NetworkUseAz3:
+    Fn::Equals:
+    - Ref: AvailabilityZones
+    - 3
+  NetworkCreateUseAz2:
+    Fn::And:
+    - Fn::Equals:
+      - Ref: NetworkMode
+      - create-new
+    - Condition: NetworkUseAz2
+  NetworkCreateUseAz3:
+    Fn::And:
+    - Fn::Equals:
+      - Ref: NetworkMode
+      - create-new
+    - Condition: NetworkUseAz3
+  HasVpcCidr:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: VpcCidr
+      - ''
+Resources:
+  DefaultNetworkVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Fn::If:
+        - HasVpcCidr
+        - Ref: VpcCidr
+        - 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkVpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      InternetGatewayId:
+        Ref: DefaultNetworkInternetGateway
+    Condition: NetworkModeCreate
+  DefaultNetworkPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 0
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 3
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 1
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 4
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 2
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 2
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      AvailabilityZone:
+        Fn::Select:
+        - 2
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock:
+        Fn::Select:
+        - 5
+        - Fn::Cidr:
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
+          - 6
+          - 8
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkPublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: DefaultNetworkInternetGateway
+    DependsOn:
+    - DefaultNetworkVpcGatewayAttachment
+    Condition: NetworkModeCreate
+  DefaultNetworkPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: DefaultNetworkVpc
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkNatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+    Condition: NetworkModeCreate
+  DefaultNetworkNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - DefaultNetworkNatEip
+        - AllocationId
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet1
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  DefaultNetworkPrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: DefaultNetworkNatGateway
+    DependsOn:
+    - DefaultNetworkNatGateway
+    Condition: NetworkModeCreate
+  DefaultNetworkPublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet1
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkModeCreate
+  DefaultNetworkPrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet1
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkModeCreate
+  DefaultNetworkPublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet2
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet2
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkCreateUseAz2
+  DefaultNetworkPublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPublicSubnet3
+      RouteTableId:
+        Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkPrivateSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: DefaultNetworkPrivateSubnet3
+      RouteTableId:
+        Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkCreateUseAz3
+  DefaultNetworkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private workload security group
+      VpcId:
+        Ref: DefaultNetworkVpc
+      SecurityGroupEgress:
+      - IpProtocol: '-1'
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: default-network
+      - Key: resource-type
+        Value: network
+    Condition: NetworkModeCreate
+  AgentsBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-agents-build
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: sandbox-image-build
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: agents
+      - Key: resource-type
+        Value: sandbox
+  Agents:
+    Type: AWS::Lambda::MicrovmImage
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-agents
+      Description: Sandbox agents
+      BaseImageArn:
+        Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:microvm-image:al2023-1
+      BaseImageVersion: '1'
+      BuildRoleArn:
+        Fn::GetAtt:
+        - AgentsBuildRole
+        - Arn
+      CodeArtifact:
+        Uri: s3://acme-artifacts/agents/bundle.zip
+      Logging:
+        Disabled: true
+      EgressNetworkConnectors:
+      - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS
+      CpuConfigurations:
+      - Architecture: ARM_64
+      Resources:
+      - MinimumMemoryInMiB: 2048
+      AdditionalOsCapabilities: []
+      Hooks:
+        Port: 8971
+        MicrovmImageHooks:
+          Ready: ENABLED
+          ReadyTimeoutInSeconds: 120
+        MicrovmHooks:
+          Run: ENABLED
+          RunTimeoutInSeconds: 30
+          Resume: ENABLED
+          ResumeTimeoutInSeconds: 30
+      EnvironmentVariables:
+      - Key: ALIEN_SANDBOX_ROOT
+        Value: /sandbox
+      - Key: ALIEN_SANDBOX_PORT
+        Value: '8971'
+      - Key: ALIEN_SANDBOX_AUTHORIZATION
+        Value: transport
+      - Key: ALIEN_SANDBOX_EXEC_UID
+        Value: '60000'
+      - Key: ALIEN_SANDBOX_EXEC_GID
+        Value: '60000'
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: agents
+      - Key: resource-type
+        Value: sandbox
+  DeploymentRegistration:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:register
+      Token:
+        Ref: Token
+      DeploymentName:
+        Ref: AWS::StackName
+      ResourcePrefix:
+        Ref: AWS::StackName
+      SourceKind: cloudformation
+      Platform: aws
+      Region:
+        Ref: AWS::Region
+      SetupTarget: aws
+      SetupImportFormatVersion: 1
+      SetupFingerprint: test
+      SetupFingerprintVersion: 1
+      ManagementConfig:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+      StackSettings:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        logs:
+          parseApplicationLevels:
+            Fn::If:
+            - ParseApplicationLevelsEnabled
+            - true
+            - false
+        network:
+          Fn::If:
+          - NetworkModeCreate
+          - type: create
+            cidr:
+              Fn::If:
+              - HasVpcCidr
+              - Ref: VpcCidr
+              - Ref: AWS::NoValue
+            availability_zones:
+              Ref: AvailabilityZones
+          - Fn::If:
+            - NetworkModeUseExisting
+            - type: byo-vpc-aws
+              vpc_id:
+                Ref: VpcId
+              public_subnet_ids:
+                Ref: PublicSubnetIds
+              private_subnet_ids:
+                Ref: PrivateSubnetIds
+              security_group_ids:
+                Ref: SecurityGroupIds
+            - type: use-default
+      Resources:
+      - id: default-network
+        type: network
+        importData:
+          Fn::If:
+          - NetworkModeCreate
+          - vpcId:
+              Ref: DefaultNetworkVpc
+            cidrBlock:
+              Fn::GetAtt:
+              - DefaultNetworkVpc
+              - CidrBlock
+            internetGatewayId:
+              Ref: DefaultNetworkInternetGateway
+            natGatewayId:
+              Ref: DefaultNetworkNatGateway
+            eipAllocationId:
+              Fn::GetAtt:
+              - DefaultNetworkNatEip
+              - AllocationId
+            publicSubnetIds:
+            - Ref: DefaultNetworkPublicSubnet1
+            - Fn::If:
+              - NetworkCreateUseAz2
+              - Ref: DefaultNetworkPublicSubnet2
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkCreateUseAz3
+              - Ref: DefaultNetworkPublicSubnet3
+              - Ref: AWS::NoValue
+            privateSubnetIds:
+            - Ref: DefaultNetworkPrivateSubnet1
+            - Fn::If:
+              - NetworkCreateUseAz2
+              - Ref: DefaultNetworkPrivateSubnet2
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkCreateUseAz3
+              - Ref: DefaultNetworkPrivateSubnet3
+              - Ref: AWS::NoValue
+            publicRouteTableId:
+              Ref: DefaultNetworkPublicRouteTable
+            privateRouteTableId:
+              Ref: DefaultNetworkPrivateRouteTable
+            securityGroupId:
+              Fn::GetAtt:
+              - DefaultNetworkSecurityGroup
+              - GroupId
+            availabilityZones:
+            - Fn::Select:
+              - 0
+              - Fn::GetAZs:
+                  Ref: AWS::Region
+            - Fn::If:
+              - NetworkUseAz2
+              - Fn::Select:
+                - 1
+                - Fn::GetAZs:
+                    Ref: AWS::Region
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkUseAz3
+              - Fn::Select:
+                - 2
+                - Fn::GetAZs:
+                    Ref: AWS::Region
+              - Ref: AWS::NoValue
+            isByoVpc: false
+          - Fn::If:
+            - NetworkModeUseExisting
+            - vpcId:
+                Ref: VpcId
+              publicSubnetIds:
+                Ref: PublicSubnetIds
+              privateSubnetIds:
+                Ref: PrivateSubnetIds
+              securityGroupId:
+                Fn::Select:
+                - 0
+                - Ref: SecurityGroupIds
+              availabilityZones: []
+              isByoVpc: true
+            - publicSubnetIds: []
+              privateSubnetIds: []
+              availabilityZones: []
+              isByoVpc: true
+      - id: agents
+        type: sandbox
+        importData:
+          previewPorts: []
+          egressConnectorArns: []
+          allowEgress: true
+          imageIdentifier:
+            Fn::GetAtt:
+            - Agents
+            - ImageArn
+          imageArn:
+            Fn::GetAtt:
+            - Agents
+            - ImageArn
+          imageVersion:
+            Fn::GetAtt:
+            - Agents
+            - LatestActiveImageVersion
+    DependsOn:
+    - AgentsBuildRole
+    - Agents

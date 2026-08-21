@@ -1382,6 +1382,7 @@ impl ChartAnalysis {
                 resource: entry,
                 resource_id,
                 platform: Platform::Kubernetes,
+                targets_kubernetes: true,
                 stack_settings: &stack_settings,
                 names: &names,
             };

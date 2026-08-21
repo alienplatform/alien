@@ -9,8 +9,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::PermissionSetReference;
 use alien_core::{
-    Build, Container, Daemon, DeploymentConfig, Kv, Queue, ResourceRef, Stack, StackState, Storage,
-    Vault, Worker, WorkerTrigger,
+    Build, Container, Daemon, DeploymentConfig, Kv, Queue, ResourceRef, Sandbox, Stack, StackState,
+    Storage, Vault, Worker, WorkerTrigger,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -160,6 +160,11 @@ fn permission_sets_for_link(link: &ResourceRef) -> Option<&'static [&'static str
         Some(&["kv/data-write"])
     } else if link.resource_type().as_ref() == Vault::RESOURCE_TYPE.as_ref() {
         Some(&["vault/data-read", "vault/data-write"])
+    } else if link.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref() {
+        // Execute only. Creating and terminating sessions is `sandbox/management`, which an app
+        // grants explicitly — a link should not hand out session lifecycle control over a
+        // resource that runs untrusted code.
+        Some(&["sandbox/execute"])
     } else {
         None
     }

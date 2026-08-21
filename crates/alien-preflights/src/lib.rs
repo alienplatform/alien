@@ -338,6 +338,15 @@ impl PreflightRegistry {
         ));
         registry.add_compile_time_check(Box::new(compile_time::NetworkSettingsPlatformCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicSubnetsRequiredCheck));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_build_role_name::SandboxBuildRoleNameCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_host_required::SandboxHostRequiredCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
+        ));
         registry.add_compile_time_check(Box::new(compile_time::PermissionProfilesExistCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleExposedPortCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
@@ -434,6 +443,7 @@ impl PreflightRegistry {
         // These scan resource types to decide what to create, so they must see all
         // resources from Phase 2 (vault, etc.)
         registry.add_mutation(Box::new(mutations::AzureServiceActivationMutation));
+        registry.add_mutation(Box::new(mutations::GcpSandboxLauncherMutation));
         registry.add_mutation(Box::new(mutations::GcpServiceActivationMutation));
         registry.add_mutation(Box::new(mutations::AzureContainerAppsEnvironmentMutation));
         registry.add_mutation(Box::new(mutations::AzureServiceBusNamespaceMutation));

@@ -374,3 +374,99 @@ export interface Vault {
   /** List the names of all secrets in this vault. */
   list(): Promise<string[]>
 }
+
+/** A live sandbox session. */
+export interface SandboxSession {
+  /** Session id, which is what every later call addresses. */
+  sessionId: string
+  /** Lifecycle state. */
+  state: "starting" | "running" | "suspended" | "terminated"
+  /** Increments when a session is replaced, so a stale handle is detectable. */
+  generation: number
+}
+
+/** One frame of a running command's output. */
+export type CommandFrame =
+  | { kind: "stdout" | "stderr"; seq: number; data: Buffer }
+  | { kind: "exit"; exitCode: number; truncated: boolean }
+
+/** What a command needs to run. */
+export interface RunCommandOptions {
+  /**
+   * How long the command may run, in milliseconds. Required rather than defaulted: a defaulted
+   * deadline is a hang waiting for a slow day, in a sandbox running code you do not control.
+   *
+   * It bounds the command, not the call. What expiry does to the session differs by backend:
+   * where the backend has no timeout of its own the only lever is ending the session, so the
+   * iterator raises once that is confirmed, somewhat after the deadline. Where the agent
+   * supervises the process it kills the process group and the session stays usable. Either way
+   * the command is stopped; only the session's fate differs.
+   */
+  deadlineMs: number
+  /** Working directory inside the sandbox. */
+  workingDirectory?: string
+  /** Environment for this command, on top of whatever the session was created with. */
+  env?: Record<string, string>
+}
+
+/**
+ * An isolated environment for running untrusted code.
+ *
+ * Capabilities differ per platform. Call `capabilities()` and branch, or call and handle the
+ * error: an unsupported operation raises rather than silently doing nothing.
+ */
+export interface Sandbox {
+  /** Which operations this platform supports. */
+  capabilities(): Promise<string[]>
+  /**
+   * Creates a session that can already take work.
+   *
+   * Resolves only once the session can serve, so the first command never races its start. On a
+   * backend whose start API returns early — AWS, where a MicroVM restores from a snapshot — that
+   * wait is part of this call and can take seconds; a session that never becomes reachable
+   * rejects rather than resolving into something unusable.
+   */
+  create(options?: {
+    sessionId?: string
+    tenantKey?: string
+    /** Environment every command in the session starts with. */
+    env?: Record<string, string>
+  }): Promise<SandboxSession>
+  /** Fetches a session, or `null` if it does not exist. Requires `reconnect`. */
+  get(sessionId: string): Promise<SandboxSession | null>
+  /** Fetches a session, creating it if absent. */
+  getOrCreate(options?: {
+    sessionId?: string
+    tenantKey?: string
+    /** Environment every command in the session starts with. */
+    env?: Record<string, string>
+  }): Promise<SandboxSession>
+  /**
+   * Lists this sandbox's sessions. Not offered on AWS, Azure or GCP — those raise rather than
+   * enumerate. Reach a session whose id you hold with `get`.
+   */
+  list(): Promise<SandboxSession[]>
+  /**
+   * Runs a command, yielding frames as the command produces them.
+   *
+   * The iterator is pull-based all the way down: nothing is read from the sandbox until the
+   * loop asks for the next frame, so a slow consumer slows the producer instead of buffering.
+   */
+  runCommand(
+    sessionId: string,
+    command: string[],
+    options: RunCommandOptions,
+  ): AsyncIterable<CommandFrame>
+  /** Reads a file out of the sandbox. Requires `files`. */
+  readFile(sessionId: string, path: string): Promise<Buffer>
+  /** Writes files into the sandbox. Requires `files`. */
+  writeFiles(sessionId: string, files: Record<string, Buffer | string>): Promise<void>
+  /** Creates a directory inside the sandbox. Requires `files`. */
+  mkdir(sessionId: string, path: string): Promise<void>
+  /** Suspends a session, preserving state. Requires `suspendResume`. */
+  suspend(sessionId: string): Promise<void>
+  /** Resumes a suspended session. Requires `suspendResume`. */
+  resume(sessionId: string): Promise<void>
+  /** Destroys a session. Idempotent. */
+  terminate(sessionId: string): Promise<void>
+}

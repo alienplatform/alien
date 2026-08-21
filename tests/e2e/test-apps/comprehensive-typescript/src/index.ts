@@ -16,6 +16,7 @@ import inspectRoutes from "./handlers/inspect.js"
 import kvRoutes from "./handlers/kv.js"
 import postgresRoutes from "./handlers/postgres.js"
 import queueRoutes from "./handlers/queue.js"
+import sandboxRoutes from "./handlers/sandbox.js"
 import sseRoutes from "./handlers/sse.js"
 import storageRoutes from "./handlers/storage.js"
 import vaultRoutes from "./handlers/vault.js"
@@ -32,6 +33,7 @@ app.route("/", inspectRoutes)
 app.route("/", sseRoutes)
 app.route("/", storageRoutes)
 app.route("/", kvRoutes)
+app.route("/", sandboxRoutes)
 app.route("/", vaultRoutes)
 app.route("/", postgresRoutes)
 app.route("/", queueRoutes)

@@ -739,6 +739,18 @@ pub struct StackSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logs: Option<LogSettings>,
 
+    /// Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+    ///
+    /// This is intended for adopted Machines deployments whose DNS and certificates remain
+    /// customer-owned. The platform passes these URLs to the runtime without creating or
+    /// replacing DNS records or certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = Option<HashMap<String, HashMap<String, String>>>)
+    )]
+    pub public_endpoints: Option<crate::PublicEndpointUrls>,
+
     /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push.
     /// - Push: Manager drives updates. For cloud platforms, requires cross-account
@@ -927,5 +939,25 @@ mod failure_domain_tests {
             }),
         };
         assert_eq!(valid.validate(), Ok(()));
+    }
+
+    #[test]
+    fn machine_public_endpoints_round_trip_without_rewriting_urls() {
+        let settings: StackSettings = serde_json::from_value(serde_json::json!({
+            "publicEndpoints": {
+                "loader": {
+                    "api": "https://10m5el.compute.islo.ai",
+                    "shares": "https://shares.10m5el.compute.islo.ai",
+                    "webhooks": "https://webhooks.10m5el.compute.islo.ai"
+                }
+            }
+        }))
+        .expect("stack settings should deserialize");
+
+        assert_eq!(
+            serde_json::to_value(settings).expect("stack settings should serialize")
+                ["publicEndpoints"]["loader"]["shares"],
+            "https://shares.10m5el.compute.islo.ai"
+        );
     }
 }

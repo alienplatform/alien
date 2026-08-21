@@ -964,6 +964,210 @@ pub trait Container: Binding {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
+/// A request to create a sandbox session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionRequest {
+    /// Caller-chosen session id. Omitted means the provider allocates one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Opaque tenant key. Never sent to a provider verbatim — the binding derives a
+    /// fixed-length identifier from it with a deployment-scoped HMAC.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_key: Option<String>,
+    /// Environment variables to place in the session.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+/// A live sandbox session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxSession {
+    /// Provider-scoped session identifier
+    pub session_id: String,
+    /// Current lifecycle state
+    pub state: SandboxSessionState,
+    /// Lifecycle generation. A capability from another generation is rejected, which is how
+    /// terminate revokes without distributing a revocation list.
+    pub generation: u64,
+}
+
+/// Lifecycle state of a sandbox session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxSessionState {
+    /// Created but not yet able to run a command.
+    ///
+    /// A real state, not a placeholder: a MicroVM takes seconds to reach `RUNNING`, and calling
+    /// that Running would tell a caller to send commands to something that cannot answer.
+    Starting,
+    /// Executing, consuming CPU and memory
+    Running,
+    /// Suspended with state preserved
+    Suspended,
+    /// Terminated; the id will not run again
+    Terminated,
+}
+
+/// A command to run inside a sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RunCommandRequest {
+    /// Command and arguments
+    pub command: Vec<String>,
+    /// Working directory inside the sandbox
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+    /// Environment overlaid on the session's own
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// How long the command may run. Required — a defaulted deadline is a hang waiting for a slow
+    /// day.
+    ///
+    /// It bounds the command, not the call, and the call lands just after it. Where the agent
+    /// supervises the process it kills the process group; where the data plane has no timeout of
+    /// its own the command runs under `timeout` inside the session. Either way the session stays
+    /// usable. Only a session that cannot run `timeout` is ended instead, and that call returns
+    /// once the session is gone.
+    ///
+    /// On every backend `deadlineExceeded` is reported only once the command has verifiably
+    /// stopped — the agent waits for its kill, and where there is no agent the session kills the
+    /// command itself and says so. It is never reported on a stop that was merely requested: a
+    /// deadline that leaves untrusted code running is not a deadline.
+    ///
+    /// What stops is the command and its process group. A descendant that detaches itself into a
+    /// session of its own is beyond any signal sent from inside, on every backend; it is bounded
+    /// by the sandbox session, which ends on terminate or at its own lifetime ceiling.
+    pub deadline: Duration,
+}
+
+/// One frame of a running command's output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum CommandOutput {
+    /// Bytes written to stdout
+    #[serde(rename_all = "camelCase")]
+    Stdout {
+        /// Monotonic across both streams, so a caller can interleave them in production order
+        seq: u64,
+        /// Raw bytes; command output is not necessarily UTF-8
+        data: Vec<u8>,
+    },
+    /// Bytes written to stderr
+    #[serde(rename_all = "camelCase")]
+    Stderr {
+        /// Monotonic across both streams
+        seq: u64,
+        /// Raw bytes
+        data: Vec<u8>,
+    },
+    /// The command finished. Exactly one terminal frame is emitted, always last.
+    #[serde(rename_all = "camelCase")]
+    Exit {
+        /// Process exit code
+        code: i32,
+        /// Set when output was cut short by a bound rather than by the command finishing
+        #[serde(default)]
+        truncated: bool,
+    },
+}
+
+/// An authenticated, port-scoped capability to reach a service inside a sandbox.
+///
+/// Not a URL string: AWS needs a JWE and a port header, Azure an Entra token, and a bare
+/// string cannot carry either. Returning one would push callers into building the request
+/// themselves and getting the auth wrong.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewCapability {
+    /// Endpoint the request must be sent to
+    pub endpoint: String,
+    /// Headers that must accompany every request
+    pub headers: BTreeMap<String, String>,
+    /// Ports this capability admits. A request to any other port is refused upstream.
+    pub allowed_ports: Vec<u16>,
+    /// Seconds until the capability expires
+    pub expires_in_seconds: u64,
+}
+
+/// A sandbox binding: create sessions, run untrusted code in them, and tear them down.
+///
+/// Capabilities differ per platform. Call `capabilities()` and branch, or call and handle the
+/// typed error — an unsupported capability is never a silent no-op.
+#[async_trait]
+pub trait Sandbox: Binding {
+    /// What this platform's backend supports.
+    fn capabilities(&self) -> alien_core::SandboxCapabilities;
+
+    /// Creates a session that can already take work.
+    ///
+    /// Returning before the session can serve pushes a readiness poll into every caller for a
+    /// condition only the backend can observe, and the resulting race fails a fraction of the
+    /// time rather than every time. A backend whose start API returns early waits here.
+    async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession>;
+
+    /// Fetches a session by id, or `None` if it does not exist.
+    ///
+    /// Requires `reconnect`. A GCP session id is scoped to one Cloud Run instance, so GCP
+    /// returns the typed error rather than a `None` a caller would read as "expired".
+    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>>;
+
+    /// Fetches a session, creating it if absent.
+    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession>;
+
+    /// Lists sessions belonging to this sandbox's parent.
+    ///
+    /// Not offered on AWS, Azure or GCP, where enumerating would cost an account-wide grant or
+    /// the API has no verb for it; those raise `OperationNotSupported`. Reaching a session whose
+    /// id is known is `get`..
+    async fn list(&self) -> Result<Vec<SandboxSession>>;
+
+    /// Runs a command, streaming output frames until exactly one terminal frame.
+    ///
+    /// The stream carries backpressure: a consumer that stops reading stops the sandbox's
+    /// writer, rather than buffering without bound.
+    async fn run_command(
+        &self,
+        session_id: &str,
+        request: RunCommandRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
+
+    /// Reads a file out of the sandbox. Requires `files`. Paths are normalised and may not
+    /// escape the root.
+    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>>;
+
+    /// Writes files into the sandbox. Requires `files`.
+    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()>;
+
+    /// Creates a directory inside the sandbox. Requires `files`.
+    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()>;
+
+    /// Mints a capability to reach a declared port. Requires `preview`.
+    async fn preview(&self, session_id: &str, port: u16) -> Result<PreviewCapability>;
+
+    /// Suspends a session, preserving state. Requires `suspendResume`.
+    async fn suspend(&self, session_id: &str) -> Result<()>;
+
+    /// Resumes a suspended session. Requires `suspendResume`.
+    async fn resume(&self, session_id: &str) -> Result<()>;
+
+    /// Captures full session state and returns its identifier. Requires `snapshot`.
+    async fn snapshot(&self, session_id: &str) -> Result<String>;
+
+    /// Terminates a session. Idempotent: terminating an absent session succeeds.
+    async fn terminate(&self, session_id: &str) -> Result<()>;
+
+    /// Get a reference to this object as `Any` for dynamic casting
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
 /// A provider must implement methods to load the various types of bindings
 /// based on environment variables or other configuration sources.
 #[async_trait]
@@ -1013,6 +1217,9 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
     /// Given a binding identifier, builds a ServiceAccount implementation.
     async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>>;
+
+    /// Given a binding identifier, builds a Sandbox implementation.
+    async fn load_sandbox(&self, binding_name: &str) -> Result<Arc<dyn Sandbox>>;
 
     /// Runtime-only binding env vars (a local Postgres connection with its password, a local
     /// BYO-key AI binding) for the given resource — re-resolved on every (re)start so the secret

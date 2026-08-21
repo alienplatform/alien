@@ -8,7 +8,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{NetworkSettings, Platform, Stack};
+use alien_core::{NetworkSettings, Platform, ResourceEntry, Sandbox, SandboxEgress, Stack};
 
 /// Resource types that require VPC networking on cloud platforms.
 ///
@@ -28,7 +28,20 @@ const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
 pub fn stack_requires_network(stack: &Stack) -> bool {
     stack.resources().any(|(_, entry)| {
         RESOURCE_TYPES_REQUIRING_NETWORK.contains(&entry.config.resource_type().as_ref())
+            || sandbox_denies_egress(entry)
     })
+}
+
+/// A sandbox needs a VPC only to deny with.
+///
+/// Denying runs sessions through a VPC egress connector, and that connector needs subnets. An
+/// open sandbox attaches no connector and so needs no network at all — listing the resource type
+/// outright would demand a VPC from a stack that never touches one.
+fn sandbox_denies_egress(entry: &ResourceEntry) -> bool {
+    entry
+        .config
+        .downcast_ref::<Sandbox>()
+        .is_some_and(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
 }
 
 /// Ensures public subnets are configured when resources need public ingress.
@@ -245,8 +258,8 @@ mod tests {
     use super::*;
     use alien_core::{
         permissions::PermissionsConfig, CapacityGroup, ComputeCluster, Container, ContainerCode,
-        Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Worker,
-        WorkerCode, WorkerPublicEndpoint,
+        Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, SandboxCode,
+        SandboxSessionPolicy, Worker, WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
 
@@ -396,6 +409,55 @@ mod tests {
     fn test_stack_does_not_require_network_when_empty() {
         let stack = create_stack(IndexMap::new());
         assert!(!stack_requires_network(&stack));
+    }
+
+    fn create_sandbox_entry(egress: SandboxEgress) -> ResourceEntry {
+        ResourceEntry {
+            config: alien_core::Resource::new(
+                Sandbox::new("runner".to_string())
+                    .code(SandboxCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .egress(egress)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        }
+    }
+
+    /// A sandbox's egress mode, not its presence, decides whether the stack needs a VPC: only a
+    /// restricted mode is enforced by a connector, and a connector needs one. Getting this
+    /// backwards is silent either way — a needless VPC, or a restriction with nothing to enforce it.
+    #[test]
+    fn a_sandbox_requires_a_network_only_when_its_egress_is_restricted() {
+        for (egress, expected) in [
+            (SandboxEgress::Deny, true),
+            (
+                SandboxEgress::AllowDomains {
+                    domains: vec!["example.com".to_string()],
+                },
+                true,
+            ),
+            (SandboxEgress::Allow, false),
+        ] {
+            let mut resources = IndexMap::new();
+            resources.insert("runner".to_string(), create_sandbox_entry(egress.clone()));
+            let stack = create_stack(resources);
+
+            assert_eq!(
+                stack_requires_network(&stack),
+                expected,
+                "egress {egress:?} should {} a network",
+                if expected { "require" } else { "not require" }
+            );
+        }
     }
 
     // PublicSubnetsRequiredCheck tests

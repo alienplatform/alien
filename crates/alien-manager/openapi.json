@@ -1566,6 +1566,65 @@
           "target": {}
         }
       },
+      "AiAccessTest": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "failed",
+          "not-checked"
+        ]
+      },
+      "AiAvailabilityBlocker": {
+        "type": "string",
+        "enum": [
+          "agreement-required",
+          "entitlement-required",
+          "model-activation-required",
+          "deployment-required",
+          "quota-configuration-required",
+          "region-unavailable",
+          "access-denied",
+          "observation-failed"
+        ]
+      },
+      "AiAvailabilityObservation": {
+        "type": "object",
+        "required": [
+          "source",
+          "catalogRevision",
+          "models"
+        ],
+        "properties": {
+          "catalogRevision": {
+            "type": "string"
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiModelAvailabilityObservation"
+            }
+          },
+          "source": {
+            "$ref": "#/components/schemas/AiAvailabilitySource"
+          }
+        }
+      },
+      "AiAvailabilitySource": {
+        "type": "string",
+        "description": "Provider control plane used to observe model availability without invoking\na model, spending customer quota, or accepting provider terms.",
+        "enum": [
+          "aws-bedrock",
+          "gcp-vertex",
+          "azure-foundry",
+          "anthropic"
+        ]
+      },
       "AiHeartbeatData": {
         "oneOf": [
           {
@@ -1687,6 +1746,60 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "AiModelAvailability": {
+        "type": "string",
+        "enum": [
+          "available",
+          "blocked",
+          "unknown"
+        ]
+      },
+      "AiModelAvailabilityObservation": {
+        "type": "object",
+        "required": [
+          "publicModelId",
+          "clientApis",
+          "availability",
+          "blockers",
+          "accessTest"
+        ],
+        "properties": {
+          "accessTest": {
+            "$ref": "#/components/schemas/AiAccessTest"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/AiModelAvailability"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiAvailabilityBlocker"
+            }
+          },
+          "clientApis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientApi"
+            }
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publicModelId": {
+            "type": "string"
+          },
+          "testedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -1914,9 +2027,13 @@
         "type": "object",
         "required": [
           "status",
-          "region"
+          "region",
+          "availability"
         ],
         "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation"
+          },
           "region": {
             "type": "string"
           },
@@ -2928,6 +3045,30 @@
           "managingRoleArn": {
             "type": "string",
             "description": "The managing AWS IAM role ARN that can assume cross-account roles"
+          }
+        }
+      },
+      "AwsMicrovmSandboxHeartbeatData": {
+        "type": "object",
+        "description": "AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it.",
+        "required": [
+          "status",
+          "imageIdentifier"
+        ],
+        "properties": {
+          "imageIdentifier": {
+            "type": "string",
+            "description": "Image the sessions belong to."
+          },
+          "imageState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image's own lifecycle state, which is where AWS surfaces base-image deprecation.\n\nNo session count sits beside it: counting means `lambda:ListMicrovms`, which authorizes\nagainst no resource type and so cannot be granted without an account-wide reach the\npermission sets refuse. A field only an over-broad grant could fill is a field whose\nimplementer ships AccessDenied into a customer's account."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SandboxHeartbeatStatus"
           }
         }
       },
@@ -4450,11 +4591,15 @@
         "type": "object",
         "required": [
           "status",
-          "accountName"
+          "accountName",
+          "availability"
         ],
         "properties": {
           "accountName": {
             "type": "string"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation"
           },
           "endpoint": {
             "type": [
@@ -4902,6 +5047,28 @@
           },
           "status": {
             "$ref": "#/components/schemas/ServiceActivationHeartbeatStatus"
+          }
+        }
+      },
+      "AzureSandboxGroupHeartbeatData": {
+        "type": "object",
+        "description": "Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count\nis not available here.",
+        "required": [
+          "status",
+          "sandboxGroup"
+        ],
+        "properties": {
+          "provisioningState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sandboxGroup": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SandboxHeartbeatStatus"
           }
         }
       },
@@ -5833,6 +6000,15 @@
             "type": "boolean"
           }
         }
+      },
+      "ClientApi": {
+        "type": "string",
+        "description": "A public API accepted from an application client.",
+        "enum": [
+          "open-ai-chat-completions",
+          "open-ai-responses",
+          "anthropic-messages"
+        ]
       },
       "ClientConfig": {
         "oneOf": [
@@ -7499,6 +7675,16 @@
           "provider"
         ],
         "properties": {
+          "availability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiAvailabilityObservation"
+              }
+            ]
+          },
           "provider": {
             "type": "string",
             "description": "The BYO-key provider serving this binding (e.g. \"openai\"). Used on the Local\nplatform, where the app brings its own provider key instead of an ambient cloud."
@@ -8968,9 +9154,13 @@
         "required": [
           "status",
           "project",
-          "location"
+          "location",
+          "availability"
         ],
         "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation"
+          },
           "location": {
             "type": "string"
           },
@@ -10929,6 +11119,35 @@
         ],
         "description": "Provider-specific route options required by supported managed profiles."
       },
+      "KubernetesSandboxHeartbeatData": {
+        "type": "object",
+        "description": "Kubernetes: pods carrying the sandbox label, in the deployment's namespace.",
+        "required": [
+          "status",
+          "namespace",
+          "activeSessions",
+          "idlePods"
+        ],
+        "properties": {
+          "activeSessions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "idlePods": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Claimed but unused pods waiting in the pool.",
+            "minimum": 0
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SandboxHeartbeatStatus"
+          }
+        }
+      },
       "KubernetesSecretVaultHeartbeatData": {
         "type": "object",
         "required": [
@@ -11977,6 +12196,29 @@
           },
           "unitId": {
             "type": "string"
+          }
+        }
+      },
+      "LocalSandboxHeartbeatData": {
+        "type": "object",
+        "description": "Local: containers Docker still holds for this sandbox.",
+        "required": [
+          "status",
+          "activeSessions",
+          "routeServing"
+        ],
+        "properties": {
+          "activeSessions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "routeServing": {
+            "type": "boolean",
+            "description": "Whether the loopback route is serving in this process. False after a manager restart until\nthe next tick rebinds it."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SandboxHeartbeatStatus"
           }
         }
       },
@@ -15224,6 +15466,24 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/SandboxHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "sandbox"
+                ]
+              }
+            }
           }
         ]
       },
@@ -15301,6 +15561,131 @@
           "submitResponseUrl": {
             "type": "string",
             "description": "URL where deployments submit responses"
+          }
+        }
+      },
+      "SandboxHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsMicrovmSandboxHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "awsMicrovm"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureSandboxGroupHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "azureSandboxGroup"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesSandboxHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "kubernetesPods"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalSandboxHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Content-free telemetry about a sandbox's sessions.\n\nNever anything from inside a session. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it."
+      },
+      "SandboxHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
           }
         }
       },
@@ -15865,6 +16250,25 @@
                 "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC."
               }
             ]
+          },
+          "publicEndpoints": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.\n\nThis is intended for adopted Machines deployments whose DNS and certificates remain\ncustomer-owned. The platform passes these URLs to the runtime without creating or\nreplacing DNS records or certificates.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",

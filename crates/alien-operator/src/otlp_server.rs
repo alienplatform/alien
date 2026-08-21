@@ -48,6 +48,7 @@ pub async fn start_otlp_server(
     namespace: Option<String>,
     collector_token: Option<String>,
     parse_application_levels: bool,
+    sandbox_broker: Option<axum::Router>,
     cancel: CancellationToken,
 ) -> crate::error::Result<()> {
     let addr = SocketAddr::new(host, port);
@@ -67,6 +68,14 @@ pub async fn start_otlp_server(
             collector_token,
             parse_application_levels,
         });
+
+    // The sandbox broker shares this server because the chart already exposes this port through
+    // the operator's Service. A second listener would need a second port and a chart change to
+    // reach the same pods.
+    let app = match sandbox_broker {
+        Some(broker) => app.merge(broker),
+        None => app,
+    };
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -213,6 +222,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
                 server_cancel,
             )
             .await

@@ -1,0 +1,61 @@
+{
+  "id": "sandbox/heartbeat",
+  "description": "Allows reading sandbox parent state",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Parent state: whether the image exists and what state it is in. The version comes
+          // back with the image itself, and enumerating versions without a session count says
+          // nothing more, so that grant stays in `sandbox/provision` where the build needs it.
+          //
+          // No session count here: counting sessions means `lambda:ListMicrovms`, which AWS
+          // authorizes against no resource type, so granting it would mean an account-wide grant.
+          "actions": ["lambda:GetMicrovmImage"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          // Control-plane read only. Microsoft.App/sandboxGroups/sandboxes/stats/read returns cpu, memory and network counters with no
+          // session contents, and AppEnvSessionConsoleLogs is deliberately absent — it captures
+          // whatever the sandbox writes.
+          "actions": ["Microsoft.App/sandboxGroups/read"]
+        },
+        // The stack binding is the resource group, wider than the one group this heartbeat reports
+        // on: it can read the state of every sandbox group there, including one the deployment
+        // did not create — a deployment can be pointed at a resource group its owner already uses,
+        // as `provision` notes. It exists for the same reason `provision` is resource-group-scoped:
+        // the target does not exist yet. `Microsoft.App/sandboxGroups` has no ARM template
+        // representation, so setup cannot create the group and cannot scope an assignment to one,
+        // and Azure expresses no scope between a group and its resource group. The resource
+        // binding is the narrower grant, but on Azure it is not deliverable for a sandbox today:
+        // the setup path compiles resource-scoped management only for `worker/dispatch-command`,
+        // and the runtime path only for a Kubernetes cluster, so a per-sandbox entry reaches
+        // nobody. It stays declared for the day one of those paths learns to deliver it. What the
+        // stack grant reaches is provisioning state, and no session contents.
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

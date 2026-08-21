@@ -260,6 +260,7 @@ fn aws_open_search_import_ref_matches_import_data_contract() {
         resource: entry,
         resource_id: "articles",
         platform: Platform::Aws,
+        targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
     };

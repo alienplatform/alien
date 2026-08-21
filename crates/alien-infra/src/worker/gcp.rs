@@ -6,7 +6,7 @@ use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::worker::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
+use crate::worker::run_readiness_probe;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_gcp_clients::cloudrun::{
     Ingress as CloudRunIngress, NetworkInterface, RevisionTemplate, Service, TrafficTarget,
@@ -34,6 +34,19 @@ use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienErro
 use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+
+/// Readiness probe attempts before a GCP worker is declared failed.
+///
+/// A public Cloud Run worker is reached through a global HTTPS load balancer, and a new
+/// frontend keeps returning 404 or refusing connections until its URL map has propagated to
+/// the edge — routinely a few minutes for a fresh forwarding rule. The shared budget of ten
+/// attempts at five seconds gives that fifty seconds, which a first deploy misses as often as
+/// it makes. Sixty attempts is five minutes when the probe fails fast, which a 404 or a refused
+/// connection does; a probe that hangs to its 30-second request timeout stretches the ceiling to
+/// about thirty-five minutes in Provisioning, so this is a bound on attempts, not wall clock.
+/// GCP-local on purpose, and named so: AWS and Azure front their workers differently and their
+/// shared budget is not the thing that fails here.
+const GCP_READINESS_PROBE_MAX_ATTEMPTS: u32 = 60;
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
@@ -2009,10 +2022,17 @@ impl GcpWorkerController {
                     Ok(()) => {
                         // Probe succeeded, proceed to Ready
                     }
-                    Err(_) => {
-                        // Probe failed, let the framework handle retries
+                    Err(error) => {
+                        // Recorded, not discarded: when the budget runs out the caller is told
+                        // only "timed out after N attempts", which cannot tell a container that
+                        // never started from one still warming up.
+                        warn!(
+                            name=%ctx.desired_config.id(),
+                            %url,
+                            "readiness probe attempt failed: {error}"
+                        );
                         return Ok(HandlerAction::Stay {
-                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
+                            max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -3320,10 +3340,17 @@ impl GcpWorkerController {
                     Ok(()) => {
                         // Probe succeeded, proceed to Ready
                     }
-                    Err(_) => {
-                        // Probe failed, let the framework handle retries
+                    Err(error) => {
+                        // Recorded, not discarded: when the budget runs out the caller is told
+                        // only "timed out after N attempts", which cannot tell a container that
+                        // never started from one still warming up.
+                        warn!(
+                            name=%ctx.desired_config.id(),
+                            %url,
+                            "readiness probe attempt failed: {error}"
+                        );
                         return Ok(HandlerAction::Stay {
-                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
+                            max_times: Some(GCP_READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -4545,6 +4572,7 @@ impl GcpWorkerController {
             .env(env)
             .resources(resources)
             .ports(ports)
+            .maybe_sandbox_launcher(cfg.sandbox_launcher.then_some(true))
             .build();
 
         let ingress = if cfg.public_endpoints.is_empty() {
@@ -4608,6 +4636,13 @@ impl GcpWorkerController {
             .template(template)
             .traffic(traffic)
             .invoker_iam_disabled(is_public)
+            // Cloud Run refuses `sandboxLauncher` outside Beta or later with
+            // `FAILED_PRECONDITION: The feature 'Instant sandboxes' is not supported in the
+            // declared launch stage`, so the two are set together or not at all.
+            .maybe_launch_stage(
+                cfg.sandbox_launcher
+                    .then_some(alien_gcp_clients::cloudrun::LaunchStage::Beta),
+            )
             .build();
 
         Ok(service)
@@ -6365,6 +6400,60 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    /// A GCP sandbox session is a subprocess of the Cloud Run instance running the app, so an
+    /// instance that does not declare `sandboxLauncher` cannot start one — the deploy succeeds
+    /// and the first `create()` fails. Cloud Run also refuses the field outside Beta with
+    /// `FAILED_PRECONDITION: The feature 'Instant sandboxes' is not supported in the declared
+    /// launch stage`, so the two have to travel together.
+    #[tokio::test]
+    async fn a_sandbox_hosting_worker_declares_the_launcher_and_its_launch_stage() {
+        let mut worker = basic_function();
+        worker.sandbox_launcher = true;
+        let function_name = format!("test-{}", worker.id);
+
+        let mut mock_cloudrun = MockCloudRunApi::new();
+        mock_cloudrun
+            .expect_create_service()
+            .times(1)
+            .withf(|_, _, service: &Service, _| {
+                let container = &service
+                    .template
+                    .as_ref()
+                    .expect("a revision template")
+                    .containers[0];
+                container.sandbox_launcher == Some(true)
+                    && service.launch_stage == Some(alien_gcp_clients::cloudrun::LaunchStage::Beta)
+            })
+            .returning(|_, _, _, _| Ok(create_successful_operation_response("create-worker")));
+        mock_cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("create-worker")));
+        let name_for_get = function_name.clone();
+        mock_cloudrun
+            .expect_get_service()
+            .returning(move |_, _| Ok(create_successful_service_response(&name_for_get)));
+        mock_cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        mock_cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
     #[tokio::test]

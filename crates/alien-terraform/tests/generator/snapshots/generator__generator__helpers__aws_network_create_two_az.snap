@@ -184,6 +184,8 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
+data "aws_partition" "current" {}
+
 === resource_prefix.tf ===
 resource "random_id" "resource_prefix" {
   byte_length = 4

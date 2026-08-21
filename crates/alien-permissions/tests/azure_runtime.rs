@@ -373,3 +373,184 @@ fn test_azure_wildcard_scope_error() {
         .to_string()
         .contains("uses wildcard scope"));
 }
+
+/// The heartbeat's stack binding stops at the resource group, and reads only.
+///
+/// A resource-group scope enumerates sibling sandbox groups, which the resource binding does not,
+/// so the resource binding is the one to prefer. The stack binding exists for the reason
+/// `provision` is resource-group-scoped: `Microsoft.App/sandboxGroups` has no ARM template
+/// representation, so setup can neither create the group nor scope an assignment to one. What
+/// this pins is how far that concession goes — the resource group and no further, and a read
+/// rather than anything that reaches a session.
+#[test]
+fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/heartbeat").expect("permission set exists");
+    let context = create_test_context();
+
+    let stack_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("the heartbeat has to reach the manager before the group exists");
+    assert_eq!(stack_plan.bindings.len(), 1);
+    let scope = &stack_plan.bindings[0].scope;
+    assert!(
+        scope.ends_with("/resourceGroups/rg-observability-prod"),
+        "the stack scope must stop at the resource group: {scope}"
+    );
+    // Pinned by equality, not by absence: "no data actions" would still pass if a control-plane
+    // write crept in beside the read, and nothing else in the suite guards this set's actions.
+    assert_eq!(
+        stack_plan.custom_roles.len(),
+        1,
+        "one role carries the read"
+    );
+    let role = &stack_plan.custom_roles[0].role_definition;
+    assert_eq!(
+        role.actions,
+        vec!["Microsoft.App/sandboxGroups/read".to_string()],
+        "the resource-group-wide heartbeat is a read of the group and nothing else"
+    );
+    assert!(
+        role.data_actions.is_empty(),
+        "a resource-group-wide grant must not carry data actions: {:?}",
+        role.data_actions
+    );
+
+    let resource_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("resource grant plan should generate");
+    assert!(resource_plan.bindings[0].scope.contains("/sandboxGroups/"));
+}
+
+/// The Data Owner role reaches inside a session. At the only stack-level scope Azure RBAC can
+/// express — the resource group — a holder would reach inside every sibling sandbox group.
+#[test]
+fn sandbox_execute_grants_nothing_at_stack_scope() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/execute").expect("permission set exists");
+    let context = create_test_context();
+
+    let error = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect_err("session-content access must not span sibling sandbox groups");
+    assert_eq!(error.code, "BINDING_TARGET_NOT_SUPPORTED");
+
+    let resource_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("resource grant plan should generate");
+    assert_eq!(
+        resource_plan.bindings.len(),
+        1,
+        "the sandbox's own group is still reachable"
+    );
+    assert!(resource_plan.bindings[0].scope.contains("/sandboxGroups/"));
+}
+
+/// Management's stack binding stops at the resource group, and never reaches session contents.
+///
+/// At that scope a holder can terminate sessions in a sibling sandbox group, so the resource
+/// binding is the one to prefer; the stack binding exists only because setup cannot scope an
+/// assignment to a group that `Microsoft.App/sandboxGroups` gives it no way to create. The
+/// boundary this pins is the one `sandbox/execute` exists to hold: session lifecycle here,
+/// never a read or exec that reaches inside a session.
+#[test]
+fn sandbox_management_stack_scope_stops_at_the_resource_group() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/management").expect("permission set exists");
+    let context = create_test_context();
+
+    let stack_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("management has to reach the manager before the group exists");
+    assert_eq!(stack_plan.bindings.len(), 1);
+    let scope = &stack_plan.bindings[0].scope;
+    assert!(
+        scope.ends_with("/resourceGroups/rg-observability-prod"),
+        "the stack scope must stop at the resource group: {scope}"
+    );
+    // Pinned by equality, not by a denylist: `executeShellCommand/action` and
+    // `downloadContentPackage/action` both reach inside a session and neither contains the
+    // substrings a denylist would look for. Any action added here has to be added deliberately.
+    assert_eq!(
+        stack_plan.custom_roles.len(),
+        1,
+        "one role carries the lifecycle grant"
+    );
+    let role = &stack_plan.custom_roles[0].role_definition;
+    let mut data_actions = role.data_actions.clone();
+    data_actions.sort();
+    assert_eq!(
+        data_actions,
+        vec![
+            "Microsoft.App/sandboxGroups/sandboxes/count/read".to_string(),
+            "Microsoft.App/sandboxGroups/sandboxes/delete".to_string(),
+            "Microsoft.App/sandboxGroups/sandboxes/read".to_string(),
+            "Microsoft.App/sandboxGroups/sandboxes/write".to_string(),
+        ],
+        "resource-group-wide management is session lifecycle only; contents belong to sandbox/execute"
+    );
+    assert!(
+        role.actions.is_empty(),
+        "management carries no control-plane actions at stack scope: {:?}",
+        role.actions
+    );
+
+    let resource_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("resource grant plan should generate");
+    assert_eq!(
+        resource_plan.bindings.len(),
+        1,
+        "the sandbox's own group is still managed"
+    );
+    assert!(
+        resource_plan.bindings[0].scope.contains("/sandboxGroups/"),
+        "scoped to one sandbox group: {}",
+        resource_plan.bindings[0].scope
+    );
+}
+
+/// The one sandbox set that keeps a resource-group stack binding, because Azure authorizes a
+/// create against the parent and there is no scope between a group and its resource group.
+///
+/// Its siblings — management, execute and heartbeat — all refuse the stack target outright. This
+/// one cannot: a provision set is only ever compiled at stack scope, so a resource-only grant
+/// would reach nobody and leave the identity that created the group unable to destroy it. The
+/// test pins that the whole lifecycle is deliverable there, which is what the narrower shape
+/// silently broke.
+#[test]
+fn sandbox_provision_can_manage_its_group_at_stack_scope() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("sandbox/provision").expect("permission set exists");
+    let context = create_test_context();
+
+    let stack_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("creating the group needs its parent");
+
+    let stack_actions: Vec<&str> = stack_plan
+        .custom_roles
+        .iter()
+        .flat_map(|role| role.role_definition.actions.iter().map(String::as_str))
+        .collect();
+
+    for required in [
+        "Microsoft.App/sandboxGroups/write",
+        "Microsoft.App/sandboxGroups/delete",
+        "Microsoft.App/sandboxGroups/read",
+    ] {
+        assert!(
+            stack_actions.contains(&required),
+            "the setup identity is the only holder of this set, so {required} must be \
+             deliverable at stack scope: {stack_actions:?}"
+        );
+    }
+
+    // The data-plane role stays out: this set could otherwise grant itself session access.
+    assert!(
+        !stack_actions
+            .iter()
+            .any(|action| action.contains("roleAssignments")),
+        "provision must not be able to assign roles: {stack_actions:?}"
+    );
+}

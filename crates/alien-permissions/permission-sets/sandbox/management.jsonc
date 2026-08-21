@@ -1,0 +1,109 @@
+{
+  "id": "sandbox/management",
+  "description": "Allows creating and terminating sandbox sessions (no access to session contents)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          // Creating a session acts on the image it is launched from, so this statement carries
+          // the real ${stackPrefix} scope: a workload can only start MicroVMs from its own
+          // sandbox's image.
+          "actions": ["lambda:RunMicrovm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        // The third action a RunMicrovm carrying an egress connector is authorized as; without
+        // it a sandbox that declares egress cannot start a session at all. AWS authorizes it
+        // against no resource type and defines no condition key, so it cannot be narrowed.
+        "label": "pass-sandbox-egress-connector",
+        "description": "Allow a session to start on the sandbox's egress connector.",
+        "grant": {
+          "actions": ["lambda:PassNetworkConnector"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      // No `iam:PassRole` here, deliberately. A session reads whatever role its MicroVM runs under
+      // from instance metadata, which no egress control reaches, so passing a role would hand
+      // untrusted code that role's credentials. The binding refuses to name one and
+      // `no_sandbox_set_can_pass_a_role_into_a_session` pins the absence; restoring the action
+      // would need a session-scoped role, not a stack-wide pattern.
+      {
+        "grant": {
+          // Addressing an already-running MicroVM. Suspending or terminating does not grant
+          // access to what runs inside — that needs CreateMicrovmAuthToken, which is
+          // sandbox/execute.
+          "actions": ["lambda:TerminateMicrovm", "lambda:SuspendMicrovm", "lambda:ResumeMicrovm"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    // Azure publishes session lifecycle and the actions that reach inside a session as separate
+    // `dataActions` (`sandboxes/write` beside `sandboxes/executeShellCommand/action`), so a custom
+    // role can grant the first without the second. This set does; `sandbox/execute` grants the
+    // predefined Data Owner role instead, which carries both, and is why exec lives there. Whether
+    // the data plane honours a granular custom role has been verified from the published action
+    // list, not measured against a live session — see the note on `execute`.
+    "azure": [
+      {
+        "grant": {
+          "dataActions": [
+            "Microsoft.App/sandboxGroups/sandboxes/write",
+            "Microsoft.App/sandboxGroups/sandboxes/delete",
+            "Microsoft.App/sandboxGroups/sandboxes/read",
+            "Microsoft.App/sandboxGroups/sandboxes/count/read"
+          ]
+        },
+        // The stack binding is the resource group, and at that scope a holder can terminate
+        // sessions in every sandbox group there — including one the deployment did not create,
+        // since a deployment can be pointed at a resource group its owner already uses, as
+        // `provision` notes. It exists for the same reason `provision` is resource-group-scoped:
+        // the target does not exist yet. `Microsoft.App/sandboxGroups` has no ARM template
+        // representation, so setup can neither create the group nor scope an assignment to one,
+        // and Azure has no scope between a group and its resource group. The resource binding is
+        // the narrower grant, but on Azure it is not deliverable for a sandbox today — the setup
+        // path compiles resource-scoped management only for `worker/dispatch-command`, the runtime
+        // path only for a Kubernetes cluster — so it stays declared for when one of them can.
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+          }
+        }
+      }
+    ]
+    // No GCP entry, and nothing to add: a GCP sandbox is a launcher subprocess inside the app's
+    // own Cloud Run instance, so it creates no GCP resource and makes no GCP API call.
+  }
+}

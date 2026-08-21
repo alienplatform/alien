@@ -210,6 +210,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 logs: None,
+                public_endpoints: None,
             }))
             .api_server_port(8080)
             .build();
@@ -267,6 +268,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 logs: None,
+                public_endpoints: None,
             }))
             .build();
 
@@ -291,6 +293,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 logs: None,
+                public_endpoints: None,
             }))
             .build();
 
@@ -315,6 +318,7 @@ mod tests {
                 external_bindings: None,
                 compute: None,
                 logs: None,
+                public_endpoints: None,
             }))
             .build();
 

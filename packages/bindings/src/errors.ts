@@ -80,6 +80,27 @@ export const InvalidPostgresTlsConfigError = defineError({
   internal: false,
 })
 
+/**
+ * Thrown when the native addon reports a sandbox session state or output frame kind this wrapper
+ * does not know.
+ *
+ * Casting instead would put a value outside the declared union behind a type that says otherwise,
+ * so a `switch` a caller wrote against the union would fall through silently. Version skew has to
+ * fail loudly, and retrying cannot repair it.
+ */
+export const UnknownSandboxValueError = defineError({
+  code: "UNKNOWN_SANDBOX_VALUE",
+  context: z.object({
+    field: z.string(),
+    value: z.string(),
+    expected: z.array(z.string()),
+  }),
+  message: ({ field, value, expected }) =>
+    `@alienplatform/bindings received an unknown sandbox ${field} '${value}' from the native addon; expected one of ${expected.join(", ")}.`,
+  retryable: false,
+  internal: false,
+})
+
 /** Fallback code for napi-internal errors whose message is not an envelope. */
 const GENERIC_BINDINGS_CODE = "BINDINGS_ERROR"
 

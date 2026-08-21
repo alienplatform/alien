@@ -109,6 +109,16 @@ pub struct PostgresTestResponse {
 // KV test models
 
 /// Response from KV test endpoint
+/// What a sandbox check left behind, read from the backend after the check.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxSessionsResponse {
+    /// Whether the backend can enumerate sessions at all; false is a shrug, not a zero.
+    pub enumerable: bool,
+    /// Ids of the sessions still present, when enumerable.
+    pub session_ids: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KvTestResponse {

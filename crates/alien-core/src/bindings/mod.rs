@@ -23,6 +23,7 @@ mod key;
 mod kv;
 mod postgres;
 mod queue;
+mod sandbox;
 mod service_account;
 mod storage;
 mod vault;
@@ -51,6 +52,10 @@ pub use postgres::{
 };
 pub use queue::{
     LocalQueueBinding, PubSubQueueBinding, QueueBinding, ServiceBusQueueBinding, SqsQueueBinding,
+};
+pub use sandbox::{
+    AwsSandboxBinding, AzureSandboxBinding, GcpSandboxBinding, KubernetesSandboxBinding,
+    LocalSandboxBinding, SandboxBinding,
 };
 pub use service_account::{
     AwsServiceAccountBinding, AzureServiceAccountBinding, GcpServiceAccountBinding,

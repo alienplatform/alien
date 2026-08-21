@@ -300,6 +300,41 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A command run inside a sandbox did not complete.
+    #[error(
+        code = "SANDBOX_COMMAND_FAILED",
+        message = "Sandbox command failed ({failure}): {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxCommandFailed {
+        /// The agent's own cause, kept as a field so a caller can branch on it
+        failure: String,
+        /// Human-readable detail from the agent
+        reason: String,
+    },
+
+    /// The sandbox agent could not be reached, or the connection dropped mid-response.
+    ///
+    /// Visibility is inherited rather than declared public: what this wraps is often the cloud
+    /// client's catch-all, which carries the raw request and response text of the call that
+    /// failed. Marking the wrapper external does not redact a source, so a fixed `false` here
+    /// would carry that text out to a caller.
+    #[error(
+        code = "SANDBOX_UNREACHABLE",
+        message = "Sandbox operation '{operation}' could not reach the agent: {reason}",
+        retryable = "true",
+        internal = "inherit",
+        http_status_code = 503
+    )]
+    SandboxUnreachable {
+        /// Operation that was in flight
+        operation: String,
+        /// What went wrong on the wire
+        reason: String,
+    },
+
     /// Feature is not enabled in the compiled binary.
     #[error(
         code = "FEATURE_NOT_ENABLED",
