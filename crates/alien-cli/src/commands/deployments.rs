@@ -54,6 +54,9 @@ impl DeploymentsArgs {
     pub fn wants_json_output(&self) -> bool {
         matches!(
             &self.cmd,
+            DeploymentsCmd::Create { format, .. } if format == "json"
+        ) || matches!(
+            &self.cmd,
             DeploymentsCmd::Ls { json: true, .. }
                 | DeploymentsCmd::Get { json: true, .. }
                 | DeploymentsCmd::Machines { json: true, .. }
@@ -612,6 +615,27 @@ mod machines_inventory_tests {
                 json: true,
             },
         };
+        assert!(args.wants_json_output());
+    }
+
+    #[test]
+    fn create_json_format_routes_errors_as_json() {
+        let args = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "create",
+            "--name",
+            "example",
+            "--project",
+            "project",
+            "--deployment-group",
+            "group",
+            "--platform",
+            "aws",
+            "--format",
+            "json",
+        ])
+        .expect("create arguments should parse");
+
         assert!(args.wants_json_output());
     }
 }
