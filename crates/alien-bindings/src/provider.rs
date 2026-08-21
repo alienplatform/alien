@@ -1909,6 +1909,7 @@ impl BindingsProviderApi for BindingsProvider {
                     group,
                     disk_image,
                     azure_binding.egress,
+                    azure_binding.idle_suspend_seconds,
                     DEFAULT_AZURE_CPU.to_string(),
                     DEFAULT_AZURE_MEMORY.to_string(),
                 ));

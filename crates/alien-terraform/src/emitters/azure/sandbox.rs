@@ -1,10 +1,13 @@
 //! Azure Sandbox — a named group, and nothing built at setup.
 //!
-//! The ACA sandbox group is created by the runtime controller, idempotently by name, because a
-//! group is cheap to create and pointless to hold open while no session wants one. So setup emits
-//! no Azure resource here; what it owes the runtime is the three names the data plane is addressed
-//! by, which the Azure client config does not carry: the group, the region that selects the
-//! per-region endpoint, and the resource group the data-plane path is scoped by.
+//! The ACA sandbox group is created at runtime, idempotently by name, because a group is cheap to
+//! create and pointless to hold open while no session wants one. So setup emits no Azure resource
+//! here; what it owes the runtime is the three names the data plane is addressed by, which the
+//! Azure client config does not carry: the group, the region that selects the per-region endpoint,
+//! and the resource group the data-plane path is scoped by.
+//!
+//! Nothing in this repository creates that group: `create_or_update_sandbox_group` has no caller,
+//! and the controller registry holds only the Local and Kubernetes sandbox controllers.
 
 use crate::{
     emitter::{TfEmitter, TfFragment},
@@ -102,7 +105,7 @@ impl TfEmitter for AzureSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
         let disk_image = catalog_disk_image(sandbox)?;
-        Ok(Some(expr::object([
+        let mut fields = vec![
             ("service", Expression::String("sandbox-azure".to_string())),
             ("sandboxGroup", sandbox_group(ctx)),
             // The data plane is a per-region host, so the region is what selects it rather than a
@@ -115,7 +118,16 @@ impl TfEmitter for AzureSandboxEmitter {
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             ("diskImage", Expression::String(disk_image)),
             ("egress", egress(sandbox)),
-        ])))
+        ];
+
+        if let Some(seconds) = sandbox.session.idle_suspend_seconds {
+            fields.push((
+                "idleSuspendSeconds",
+                Expression::Number(i64::from(seconds).into()),
+            ));
+        }
+
+        Ok(Some(expr::object(fields)))
     }
 }
 
@@ -126,6 +138,10 @@ mod tests {
     use indexmap::IndexMap;
 
     fn binding_for(egress: SandboxEgress) -> String {
+        binding_with(egress, None)
+    }
+
+    fn binding_with(egress: SandboxEgress, idle_suspend_seconds: Option<u32>) -> String {
         let stack = Stack::new("acme".to_string())
             .add(
                 Sandbox::new("agents".to_string())
@@ -135,7 +151,7 @@ mod tests {
                     .egress(egress)
                     .session(SandboxSessionPolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_suspend_seconds,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,
@@ -180,5 +196,21 @@ mod tests {
 
         let open = binding_for(SandboxEgress::Allow);
         assert!(open.contains(r#""allow""#), "{open}");
+    }
+
+    /// The idle-suspend policy travels the same way, and only when it was declared.
+    ///
+    /// Azure takes it at create, so a number that stops at the emitter leaves the session on the
+    /// service default — and an emitted zero would be a policy nobody asked for.
+    #[test]
+    fn the_binding_carries_a_declared_idle_suspend_and_nothing_otherwise() {
+        let declared = binding_with(SandboxEgress::Allow, Some(900));
+        assert!(declared.contains("900"), "{declared}");
+
+        let undeclared = binding_with(SandboxEgress::Allow, None);
+        assert!(
+            !undeclared.contains("idleSuspendSeconds"),
+            "{undeclared}"
+        );
     }
 }

@@ -32,6 +32,8 @@ pub struct AzureSandbox {
     disk_image: String,
     /// Outbound policy every session is created with, from the declaration.
     egress: SandboxEgress,
+    /// Idle seconds after which a session suspends itself, if the declaration asked for one.
+    idle_suspend_seconds: Option<u32>,
     /// Session ceilings, in the data plane's own units.
     cpu: String,
     memory: String,
@@ -44,6 +46,7 @@ impl AzureSandbox {
         sandbox_group: String,
         disk_image: String,
         egress: SandboxEgress,
+        idle_suspend_seconds: Option<u32>,
         cpu: String,
         memory: String,
     ) -> Self {
@@ -52,6 +55,7 @@ impl AzureSandbox {
             sandbox_group,
             disk_image,
             egress,
+            idle_suspend_seconds,
             cpu,
             memory,
         }
@@ -123,6 +127,7 @@ impl Sandbox for AzureSandbox {
                     memory: self.memory.clone(),
                     environment: request.env,
                     egress: asked.clone(),
+                    idle_suspend_seconds: self.idle_suspend_seconds,
                 },
             )
             .await
@@ -314,12 +319,20 @@ impl Sandbox for AzureSandbox {
         Err(self.unsupported("preview"))
     }
 
-    async fn suspend(&self, _session_id: &str) -> Result<()> {
-        Err(self.unsupported("suspendResume"))
+    async fn suspend(&self, session_id: &str) -> Result<()> {
+        // Accepted, not completed — the same contract the AWS backend follows. A caller that
+        // needs the session to have stopped polls `get` for `Suspended`.
+        self.client
+            .stop_sandbox(&self.sandbox_group, session_id)
+            .await
+            .map_err(|error| Self::failed("sandbox.suspend", error))
     }
 
-    async fn resume(&self, _session_id: &str) -> Result<()> {
-        Err(self.unsupported("suspendResume"))
+    async fn resume(&self, session_id: &str) -> Result<()> {
+        self.client
+            .resume_sandbox(&self.sandbox_group, session_id)
+            .await
+            .map_err(|error| Self::failed("sandbox.resume", error))
     }
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
@@ -667,6 +680,7 @@ mod tests {
             "grp".to_string(),
             "ubuntu".to_string(),
             SandboxEgress::Allow,
+            None,
             "1000m".to_string(),
             "2048Mi".to_string(),
         )
@@ -697,6 +711,7 @@ mod tests {
             "grp".to_string(),
             "my-toolchain".to_string(),
             SandboxEgress::Allow,
+            None,
             "1000m".to_string(),
             "2048Mi".to_string(),
         );
@@ -817,6 +832,18 @@ mod tests {
 
     #[async_trait]
     impl SandboxDataPlaneApi for ScriptedExec {
+        async fn stop_sandbox(&self, _group: &str, _sandbox_id: &str) -> alien_client_core::Result<()> {
+            unreachable!("the command paths never suspend")
+        }
+
+        async fn resume_sandbox(
+            &self,
+            _group: &str,
+            _sandbox_id: &str,
+        ) -> alien_client_core::Result<()> {
+            unreachable!("the command paths never resume")
+        }
+
         async fn read_file(
             &self,
             _group: &str,
@@ -926,6 +953,7 @@ mod tests {
             "grp".to_string(),
             "ubuntu".to_string(),
             SandboxEgress::Allow,
+            None,
             "1000m".to_string(),
             "2048Mi".to_string(),
         )
@@ -1309,6 +1337,7 @@ mod tests {
             "grp".to_string(),
             "ubuntu".to_string(),
             egress,
+            None,
             "1000m".to_string(),
             "2048Mi".to_string(),
         )
@@ -1583,5 +1612,65 @@ mod tests {
             .create(CreateSessionRequest::default())
             .await
             .expect("the policy that was asked for should create");
+    }
+
+    /// Suspend and resume are one call each, and each has to reach the verb it names.
+    ///
+    /// Returning on acceptance rather than on the state change is the same contract AWS follows,
+    /// so a caller that needs the session stopped polls `get` — the alternative is a call that
+    /// blocks for a resume Microsoft describes as sub-second and a stop that is not.
+    #[tokio::test]
+    async fn suspend_and_resume_reach_their_own_verbs() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_stop_sandbox()
+            .withf(|group, id| group == "grp" && id == "s1")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        client.expect_resume_sandbox().never();
+        sandbox_with(client)
+            .suspend("s1")
+            .await
+            .expect("suspend should be accepted");
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_resume_sandbox()
+            .withf(|group, id| group == "grp" && id == "s1")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        client.expect_stop_sandbox().never();
+        sandbox_with(client)
+            .resume("s1")
+            .await
+            .expect("resume should be accepted");
+    }
+
+    /// A declared idle-suspend policy has to reach the create body.
+    ///
+    /// The data plane takes it at create and nowhere else, and accepts a body without it — so a
+    /// declaration that stops at the binding leaves the sandbox on whatever the service defaults
+    /// to, with nothing anywhere saying the number was ignored.
+    #[tokio::test]
+    async fn a_declared_idle_suspend_reaches_the_create_call() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.idle_suspend_seconds == Some(900))
+            .times(1)
+            .returning(|_, _| Ok(running("s1", None)));
+
+        AzureSandbox::new(
+            std::sync::Arc::new(client),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            Some(900),
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+        )
+        .create(CreateSessionRequest::default())
+        .await
+        .expect("the create should succeed");
     }
 }

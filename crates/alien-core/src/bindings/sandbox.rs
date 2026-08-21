@@ -98,6 +98,12 @@ pub struct AzureSandboxBinding {
     /// session created without a policy is an open one, and a hostname list has no boolean to
     /// travel in.
     pub egress: SandboxEgress,
+    /// Idle seconds after which a session suspends, if the declaration asked for one.
+    ///
+    /// Carried because the data plane takes it at create and nowhere else: a policy that does not
+    /// travel with the create body is a declaration the sandbox never hears about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_suspend_seconds: Option<u32>,
     /// Catalog disk image every session is created from, taken from the declaration's `code`.
     ///
     /// Carried rather than hardcoded in the provider because the declaration is the only place
@@ -183,6 +189,7 @@ impl SandboxBinding {
         resource_group: impl Into<BindingValue<String>>,
         disk_image: impl Into<BindingValue<String>>,
         egress: SandboxEgress,
+        idle_suspend_seconds: Option<u32>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
             sandbox_group: sandbox_group.into(),
@@ -190,6 +197,7 @@ impl SandboxBinding {
             region: region.into(),
             resource_group: resource_group.into(),
             egress,
+            idle_suspend_seconds,
             disk_image: disk_image.into(),
         })
     }
@@ -258,6 +266,7 @@ mod tests {
                 "rg",
                 "ubuntu",
                 SandboxEgress::Deny,
+                None,
             ),
             SandboxBinding::gcp("/usr/local/gcp/bin/sandbox", false),
             SandboxBinding::kubernetes(
@@ -286,7 +295,7 @@ mod tests {
     fn service_tags_are_prefixed_and_distinct() {
         let tags: Vec<String> = vec![
             SandboxBinding::aws("a", "1", "r"),
-            SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::Deny),
+            SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::Deny, None),
             SandboxBinding::gcp("p", true),
             SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
             SandboxBinding::local("u", "k", "t"),

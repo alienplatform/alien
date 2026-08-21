@@ -128,6 +128,9 @@ pub struct CreateSandbox {
     /// Outbound policy, applied from the moment the sandbox starts. Absent leaves the data
     /// plane's own default, which is open.
     pub egress: Option<EgressPolicy>,
+    /// Idle seconds after which the sandbox suspends itself. Absent leaves the data plane's own
+    /// policy rather than asserting one.
+    pub idle_suspend_seconds: Option<u32>,
 }
 
 /// The create body.
@@ -147,6 +150,14 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
 
     if let Some(egress) = &request.egress {
         body["egressPolicy"] = serde_json::json!(egress);
+    }
+
+    // `Memory` rather than `Disk`: a memory suspend is what makes resume fast, and a sandbox that
+    // suspended to disk loses the process state a session exists to keep.
+    if let Some(seconds) = request.idle_suspend_seconds {
+        body["lifecycle"] = serde_json::json!({
+            "autoSuspendPolicy": { "enabled": true, "interval": seconds, "mode": "Memory" }
+        });
     }
 
     body
@@ -224,6 +235,12 @@ pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
 
     /// Creates a directory inside a sandbox. Idempotent, like `mkdir -p`.
     async fn mkdir(&self, group: &str, sandbox_id: &str, path: &str) -> Result<()>;
+
+    /// Stops a sandbox, saving its state. Returns once accepted, not once stopped.
+    async fn stop_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()>;
+
+    /// Resumes a stopped sandbox. Returns once accepted, not once running.
+    async fn resume_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()>;
 }
 
 /// The `executeShellCommand` body, which is `command` plus an optional `workingDirectory` and
@@ -281,6 +298,28 @@ impl AzureSandboxDataPlaneClient {
 
     fn sandbox_path(&self, group: &str, sandbox_id: &str) -> String {
         format!("{}/sandboxes/{sandbox_id}", self.group_path(group))
+    }
+
+    /// A bodyless POST that moves a sandbox between states.
+    async fn lifecycle_action(
+        &self,
+        group: &str,
+        sandbox_id: &str,
+        verb: &str,
+        operation: &str,
+    ) -> Result<()> {
+        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let url = self.base.build_url(
+            &format!("{}/{verb}", self.sandbox_path(group, sandbox_id)),
+            Some(vec![("api-version", API_VERSION.into())]),
+        );
+
+        let request = AzureRequestBuilder::new(Method::POST, url).build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        self.base
+            .execute_request(signed, operation, sandbox_id)
+            .await?;
+        Ok(())
     }
 
     async fn parse<T: serde::de::DeserializeOwned>(
@@ -487,6 +526,16 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         let signed = self.base.sign_request(request, &token).await?;
         self.base.execute_request(signed, "WriteFile", sandbox_id).await?;
         Ok(())
+    }
+
+    async fn stop_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()> {
+        self.lifecycle_action(group, sandbox_id, "stop", "StopSandbox")
+            .await
+    }
+
+    async fn resume_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()> {
+        self.lifecycle_action(group, sandbox_id, "resume", "ResumeSandbox")
+            .await
     }
 
     async fn mkdir(&self, group: &str, sandbox_id: &str, path: &str) -> Result<()> {
@@ -739,6 +788,7 @@ mod tests {
                 rules: Vec::new(),
                 traffic_inspection: Some("Full".to_string()),
             }),
+            idle_suspend_seconds: None,
         });
 
         assert_eq!(body["environment"]["TOKEN"], "t");
@@ -755,6 +805,24 @@ mod tests {
             bare.get("environment").is_none(),
             "an empty map is no variables, not an empty object: {bare}"
         );
+        assert!(
+            bare.get("lifecycle").is_none(),
+            "an undeclared idle policy leaves the service's own rather than asserting one: {bare}"
+        );
+    }
+
+    /// A declared idle suspend has to arrive as the nested policy the data plane reads, under
+    /// the mode that keeps the process state a session exists for.
+    #[test]
+    fn the_create_body_nests_the_idle_suspend_policy() {
+        let body = create_body(&CreateSandbox {
+            idle_suspend_seconds: Some(900),
+            ..CreateSandbox::default()
+        });
+
+        assert_eq!(body["lifecycle"]["autoSuspendPolicy"]["interval"], 900);
+        assert_eq!(body["lifecycle"]["autoSuspendPolicy"]["enabled"], true);
+        assert_eq!(body["lifecycle"]["autoSuspendPolicy"]["mode"], "Memory");
     }
 
     /// The response field is `state`. Reading `status` leaves every sandbox deserializing to
@@ -782,5 +850,40 @@ mod tests {
             policy.rules[0].action.as_ref().map(|action| action.action_type.as_str()),
             Some("Allow")
         );
+    }
+
+    /// The two lifecycle verbs, on the paths the SDK documents.
+    ///
+    /// Both are bodyless POSTs to sibling paths, so a swapped verb is a call that succeeds and
+    /// does the opposite of what was asked.
+    #[tokio::test]
+    async fn the_lifecycle_verbs_post_to_their_own_paths() {
+        let server = MockServer::start_async().await;
+        let client = client_against(&server);
+        let sandbox = format!(
+            "/subscriptions/{}/resourceGroups/rg/sandboxGroups/grp/sandboxes/s1",
+            AzureClientConfig::mock().subscription_id
+        );
+
+        let stop = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path(format!("{sandbox}/stop"))
+                    .query_param("api-version", API_VERSION);
+                then.status(202);
+            })
+            .await;
+        client.stop_sandbox("grp", "s1").await.expect("stop is accepted");
+        stop.assert_async().await;
+
+        let resume = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path(format!("{sandbox}/resume"));
+                then.status(202);
+            })
+            .await;
+        client.resume_sandbox("grp", "s1").await.expect("resume is accepted");
+        resume.assert_async().await;
     }
 }

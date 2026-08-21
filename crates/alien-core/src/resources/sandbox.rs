@@ -226,20 +226,28 @@ impl SandboxCapabilities {
                 // it cannot create a namespace. No backend offers this today.
                 supervisor_pid_namespace: false,
             }),
-            // Azure the platform has all three — a per-port URL closed to anonymous traffic, a
-            // 0.54s resume, and a full-VM snapshot — and the binding provider implements none of
-            // them. The capability set describes what a caller can reach, not what the cloud
-            // could do, so these stay false until the provider catches up.
             Platform::Azure => Ok(Self {
                 files: true,
                 reconnect: true,
+                // A sandbox port carries a URL and an auth config, and the auth config offers two
+                // things: anonymous, or Entra ID with an allowlist of human email addresses.
+                // Neither is a credential scoped to a port for a fixed time, which is what a
+                // preview capability is. Returning the anonymous URL would publish the port.
                 preview: false,
-                suspend_resume: false,
+                suspend_resume: true,
+                // The one cloud of the five that could offer this, and the blocker is ours:
+                // `snapshot()` returns an id and `CreateSessionRequest` has no field to consume
+                // one, so no backend can complete the round trip. Nothing in the resource model
+                // owns such an artifact either, and Microsoft states snapshots are not garbage
+                // collected — an id with no owner is a bill that grows.
                 snapshot: false,
                 domain_egress_rules: true,
                 egress_deny: true,
                 enforced_limits: false,
                 process_limit: false,
+                // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
+                // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
+                // to prevent, so this is a decision rather than a gap.
                 session_lifetime: false,
                 // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
                 supervisor_pid_namespace: false,
@@ -872,11 +880,12 @@ mod tests {
         // The data plane takes no ceiling, so a declaration of one is refused rather than
         // accepted and dropped.
         assert!(!azure.enforced_limits);
-        // Azure the cloud has snapshot, preview and resume; the binding provider returns
-        // unsupported for all three. What a caller can reach is what the set describes.
+        assert!(azure.suspend_resume);
+        // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
+        // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
+        // neither of which is a port-scoped credential.
         assert!(!azure.snapshot);
         assert!(!azure.preview);
-        assert!(!azure.suspend_resume);
 
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
         assert!(!aws.snapshot, "AWS has no user-callable session snapshot");
@@ -1336,5 +1345,42 @@ mod tests {
         original
             .validate_update(&renamed)
             .expect_err("renaming a sandbox is not an update");
+    }
+
+    /// An idle-suspend policy is now declarable on Azure, and a wall-clock ceiling still is not.
+    ///
+    /// The two travel together in `SandboxSessionPolicy` and are gated separately on purpose:
+    /// Azure suspends on idle and has no maximum lifetime, so accepting one and refusing the
+    /// other is the honest split rather than an inconsistency.
+    #[test]
+    fn azure_takes_an_idle_policy_and_still_refuses_a_lifetime_ceiling() {
+        let with_policy = |session: SandboxSessionPolicy| {
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .session(session)
+                .build()
+                .validate_for_platform(Platform::Azure)
+        };
+
+        with_policy(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: Some(900),
+        })
+        .expect("Azure suspends a session on idle");
+
+        let error = with_policy(SandboxSessionPolicy {
+            max_lifetime_seconds: Some(3600),
+            idle_suspend_seconds: None,
+        })
+        .expect_err("Azure has no wall-clock ceiling to enforce one with");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(
+            error.message.contains("sessionLifetime"),
+            "names the capability: {}",
+            error.message
+        );
     }
 }
