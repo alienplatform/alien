@@ -518,6 +518,30 @@ mod tests {
     }
 
     #[test]
+    fn sdk_stack_settings_preserves_public_endpoints() {
+        let settings = StackSettings {
+            public_endpoints: Some(std::collections::HashMap::from([(
+                "loader".to_string(),
+                std::collections::HashMap::from([(
+                    "api".to_string(),
+                    "https://10m5el.compute.islo.ai".to_string(),
+                )]),
+            )])),
+            ..StackSettings::default()
+        };
+
+        let wire = serde_json::to_value(
+            sdk_stack_settings(&settings).expect("settings should convert to SDK type"),
+        )
+        .expect("settings should serialize");
+
+        assert_eq!(
+            wire["publicEndpoints"]["loader"]["api"],
+            "https://10m5el.compute.islo.ai"
+        );
+    }
+
+    #[test]
     fn local_tracking_uses_service_data_dir_by_default() {
         let args = UpArgs::parse_from(["alien-deploy", "--platform", "local"]);
         let local = local_tracking_metadata(&args, Platform::Local)

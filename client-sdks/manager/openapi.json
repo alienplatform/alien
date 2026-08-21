@@ -16251,6 +16251,25 @@
               }
             ]
           },
+          "publicEndpoints": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.\n\nThis is intended for adopted Machines deployments whose DNS and certificates remain\ncustomer-owned. The platform passes these URLs to the runtime without creating or\nreplacing DNS records or certificates.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
             "description": "How telemetry (logs, metrics, traces) is handled.\n- off: No telemetry permissions\n- auto: Telemetry flows automatically (default)\n- approval-required: Telemetry waits for explicit approval"
