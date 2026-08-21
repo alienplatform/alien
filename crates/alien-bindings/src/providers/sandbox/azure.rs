@@ -18,7 +18,7 @@ use crate::traits::{
 use alien_azure_clients::azure::sandbox_data_plane::SandboxDataPlaneApi;
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{Platform, SandboxCapabilities};
-use alien_error::AlienError;
+use alien_error::{AlienError, ContextError};
 
 /// A Sandbox backed by the Azure ADC data plane.
 #[derive(Debug)]
@@ -52,6 +52,7 @@ impl AzureSandbox {
 
     /// The catalog image sessions are created from. Exists so a test can prove the declaration
     /// reached the provider — the failure it guards is silent, so nothing else would show it.
+    #[cfg(test)]
     pub(crate) fn disk_image(&self) -> &str {
         &self.disk_image
     }
@@ -63,10 +64,34 @@ impl AzureSandbox {
         })
     }
 
-    fn failed(operation: &str, error: impl std::fmt::Display) -> AlienError<ErrorData> {
-        AlienError::new(ErrorData::OperationNotSupported {
+    /// Sorts a data-plane failure into the two buckets every other backend uses.
+    ///
+    /// A refusal is a request the data plane understood and rejected, so repeating it repeats the
+    /// refusal. Anything else left the outcome unknown: for the idempotent file operations that is
+    /// worth another attempt, but `run_command` may already have started the command and must not
+    /// carry the retry signal. The cause stays on the source chain rather than in `reason`, which
+    /// is what keeps a raw response body out of an externally visible message.
+    fn failed(operation: &str, error: AlienError<ClientErrorData>) -> AlienError<ErrorData> {
+        if is_refusal(&error) {
+            return error.context(ErrorData::SandboxCommandFailed {
+                failure: "dataPlaneRefused".to_string(),
+                reason: format!("{operation} was refused; the cause carries which side refused"),
+            });
+        }
+
+        if operation == RUN_COMMAND {
+            return error.context(ErrorData::SandboxCommandFailed {
+                failure: "outcomeUnknown".to_string(),
+                reason: format!(
+                    "{operation} did not complete against the Azure sandbox data plane, so \
+                     whether the command ran is unknown"
+                ),
+            });
+        }
+
+        error.context(ErrorData::SandboxUnreachable {
             operation: operation.to_string(),
-            reason: format!("the Azure sandbox data plane refused the call: {error}"),
+            reason: "the Azure sandbox data plane did not complete the call".to_string(),
         })
     }
 }
@@ -206,20 +231,37 @@ impl Sandbox for AzureSandbox {
         Ok(Box::pin(stream::iter(frames)))
     }
 
-    async fn read_file(&self, _session_id: &str, _path: &str) -> Result<Vec<u8>> {
-        Err(self.unsupported("readFile"))
+    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
+        checked_path("sandbox.readFile", path)?;
+
+        self.client
+            .read_file(&self.sandbox_group, session_id, path)
+            .await
+            .map_err(|error| Self::failed("sandbox.readFile", error))
     }
 
-    async fn write_files(
-        &self,
-        _session_id: &str,
-        _files: BTreeMap<String, Vec<u8>>,
-    ) -> Result<()> {
-        Err(self.unsupported("writeFiles"))
+    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+        // One request per path, stopping at the first failure: the same partial application every
+        // other backend performs, so a caller sees one contract rather than five.
+        for (path, contents) in files {
+            checked_path("sandbox.writeFiles", &path)?;
+
+            self.client
+                .write_file(&self.sandbox_group, session_id, &path, contents)
+                .await
+                .map_err(|error| Self::failed("sandbox.writeFiles", error))?;
+        }
+
+        Ok(())
     }
 
-    async fn mkdir(&self, _session_id: &str, _path: &str) -> Result<()> {
-        Err(self.unsupported("mkdir"))
+    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
+        checked_path("sandbox.mkdir", path)?;
+
+        self.client
+            .mkdir(&self.sandbox_group, session_id, path)
+            .await
+            .map_err(|error| Self::failed("sandbox.mkdir", error))
     }
 
     async fn preview(&self, _session_id: &str, _port: u16) -> Result<PreviewCapability> {
@@ -294,7 +336,7 @@ impl AzureSandbox {
         )
         .await
         {
-            Ok(inner) => inner.map_err(|error| Self::failed("sandbox.runCommand", error)),
+            Ok(inner) => inner.map_err(|error| Self::failed(RUN_COMMAND, error)),
             Err(_) => {
                 self.terminate(session_id).await?;
                 Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -348,6 +390,67 @@ fn bounded_shell(command: &[String], deadline: std::time::Duration) -> String {
     format!(
         "sh -c '{}' sh{arguments}",
         escape(&DeadlineReport::bounded_program(deadline))
+    )
+}
+
+/// Refuses a caller's path before it reaches the data plane.
+///
+/// Whether the server bounds a path to a root is undocumented and unmeasured, so this is the only
+/// confinement there is, and it is a client-side rule rather than a guarantee. Relative only:
+/// Azure exposes no session root to rewrite an absolute path against, so accepting one would hand
+/// the caller the sandbox's whole filesystem instead of its own directory.
+fn checked_path(operation: &str, path: &str) -> Result<()> {
+    let refused = |details: &str| {
+        Err(AlienError::new(ErrorData::InvalidInput {
+            operation_context: operation.to_string(),
+            details: format!("path '{path}' {details}"),
+            field_name: Some("path".to_string()),
+        }))
+    };
+
+    // Checked before anything is trimmed, which would make "a/b/" and the file "a/b" the same
+    // request.
+    if path.ends_with('/') {
+        return refused("must not end in '/'");
+    }
+    if path.is_empty() {
+        return refused("is empty");
+    }
+    if path.starts_with('/') {
+        return refused("must be relative to the sandbox's own directory");
+    }
+    if path.contains('\0') {
+        return refused("contains a null byte");
+    }
+    if path.split('/').any(|part| part == ".." || part.is_empty()) {
+        return refused("must not traverse");
+    }
+
+    Ok(())
+}
+
+/// The one operation a repeat could run twice.
+const RUN_COMMAND: &str = "sandbox.runCommand";
+
+/// Whether the data plane understood the request and rejected it.
+///
+/// Reads the classified variant the client attaches rather than the status on its source: the
+/// wrapper is what survives `create_azure_http_error_with_context`, and it already carries the
+/// 4xx-versus-everything-else split this needs.
+fn is_refusal(error: &AlienError<ClientErrorData>) -> bool {
+    // `RemoteResourceConflict` is deliberately absent: the client also uses it for the 400s Azure
+    // marks as propagation delays, and calling those refusals would tell a caller never to retry
+    // the one failure Azure says to retry.
+    matches!(
+        &error.error,
+        Some(
+            ClientErrorData::RemoteResourceNotFound { .. }
+                | ClientErrorData::RemoteAccessDenied { .. }
+                | ClientErrorData::InvalidInput { .. }
+        )
+    ) || matches!(
+        &error.error,
+        Some(ClientErrorData::HttpResponseError { http_status, .. }) if (400..500).contains(http_status)
     )
 }
 
@@ -539,6 +642,34 @@ mod tests {
 
     #[async_trait]
     impl SandboxDataPlaneApi for ScriptedExec {
+        async fn read_file(
+            &self,
+            _group: &str,
+            _sandbox_id: &str,
+            _path: &str,
+        ) -> alien_client_core::Result<Vec<u8>> {
+            unreachable!("the command paths never read files")
+        }
+
+        async fn write_file(
+            &self,
+            _group: &str,
+            _sandbox_id: &str,
+            _path: &str,
+            _contents: Vec<u8>,
+        ) -> alien_client_core::Result<()> {
+            unreachable!("the command paths never write files")
+        }
+
+        async fn mkdir(
+            &self,
+            _group: &str,
+            _sandbox_id: &str,
+            _path: &str,
+        ) -> alien_client_core::Result<()> {
+            unreachable!("the command paths never create directories")
+        }
+
         async fn create_sandbox(
             &self,
             _group: &str,
@@ -745,6 +876,155 @@ mod tests {
         assert!(
             wrapped.ends_with("' sh 'echo' 'it'\\''s' '&&' 'sleep 5'"),
             "{wrapped}"
+        );
+    }
+
+    /// A path that could leave the caller's own directory is refused before anything is sent.
+    ///
+    /// Asserted on the client never being called, not on the error: the data plane's own path
+    /// handling is undocumented, so a request that leaves this process is already outside what
+    /// this backend can promise.
+    #[tokio::test]
+    async fn a_path_that_could_escape_never_reaches_the_data_plane() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_read_file().never();
+        client.expect_write_file().never();
+        client.expect_mkdir().never();
+        let sandbox = sandbox_with(client);
+
+        for path in ["../etc/shadow", "/etc/shadow", "", "work/", "a//b", "a/../../b"] {
+            let error = sandbox
+                .read_file("s1", path)
+                .await
+                .expect_err("'{path}' must be refused");
+            assert_eq!(error.code, "INVALID_INPUT", "{path}: {error}");
+
+            sandbox
+                .write_files("s1", BTreeMap::from([(path.to_string(), vec![1u8])]))
+                .await
+                .expect_err("'{path}' must be refused on write too");
+            sandbox
+                .mkdir("s1", path)
+                .await
+                .expect_err("'{path}' must be refused on mkdir too");
+        }
+
+        // The same shapes, accepted: a rule that refuses everything would pass the loop above.
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_read_file()
+            .times(2)
+            .returning(|_, _, _| Ok(Vec::new()));
+        let sandbox = sandbox_with(client);
+        for path in ["app.py", "src/app.py"] {
+            sandbox
+                .read_file("s1", path)
+                .await
+                .unwrap_or_else(|error| panic!("'{path}' is a normal path: {error}"));
+        }
+    }
+
+    /// The group, the session and the path each reach the call they belong to, and the bytes come
+    /// back unchanged.
+    #[tokio::test]
+    async fn a_read_carries_the_session_and_path_to_the_data_plane() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_read_file()
+            .withf(|group, session_id, path| {
+                group == "grp" && session_id == "s1" && path == "src/app.py"
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(b"print(1)\n".to_vec()));
+
+        let contents = sandbox_with(client)
+            .read_file("s1", "src/app.py")
+            .await
+            .expect("the read should succeed");
+
+        assert_eq!(contents, b"print(1)\n");
+    }
+
+    /// Writing stops at the first failure rather than pressing on, which is what makes a partial
+    /// write observable to the caller instead of a success with a hole in it.
+    #[tokio::test]
+    async fn a_failed_write_stops_the_ones_behind_it() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_write_file()
+            .times(1)
+            .returning(|_, _, path, _| {
+                assert_eq!(path, "a.txt", "the first path in order is the one attempted");
+                Err(AlienError::new(ClientErrorData::RemoteAccessDenied {
+                    resource_type: "sandbox".to_string(),
+                    resource_name: "s1".to_string(),
+                }))
+            });
+
+        let error = sandbox_with(client)
+            .write_files(
+                "s1",
+                BTreeMap::from([
+                    ("a.txt".to_string(), vec![1u8]),
+                    ("b.txt".to_string(), vec![2u8]),
+                ]),
+            )
+            .await
+            .expect_err("a refused write must fail the call");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    }
+
+    /// The two buckets a caller retries on, and the one it must not.
+    ///
+    /// A refusal repeated is refused again, and a file operation whose outcome is unknown is safe
+    /// to repeat — but a command may already be running, and a retry there runs it twice.
+    #[tokio::test]
+    async fn only_the_operations_that_are_safe_to_repeat_are_marked_retryable() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_read_file().times(1).returning(|_, _, _| {
+            Err(AlienError::new(ClientErrorData::RemoteResourceNotFound {
+                resource_type: "file".to_string(),
+                resource_name: "missing.txt".to_string(),
+            }))
+        });
+        let refused = sandbox_with(client)
+            .read_file("s1", "missing.txt")
+            .await
+            .expect_err("a missing file is an error");
+        assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
+        assert!(!refused.retryable, "repeating a refusal repeats it: {refused}");
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_read_file().times(1).returning(|_, _, _| {
+            Err(AlienError::new(ClientErrorData::RemoteServiceUnavailable {
+                message: "the data plane is unavailable".to_string(),
+            }))
+        });
+        let unreachable = sandbox_with(client)
+            .read_file("s1", "app.py")
+            .await
+            .expect_err("an unavailable data plane is an error");
+        assert_eq!(unreachable.code, "SANDBOX_UNREACHABLE", "{unreachable}");
+        assert!(unreachable.retryable, "a read is safe to repeat: {unreachable}");
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_execute_shell_command()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Err(AlienError::new(ClientErrorData::RemoteServiceUnavailable {
+                    message: "the data plane is unavailable".to_string(),
+                }))
+            });
+        let command = match sandbox_with(client).run_command("s1", command(5)).await {
+            Ok(_) => panic!("an unavailable data plane is an error"),
+            Err(error) => error,
+        };
+        assert_eq!(command.code, "SANDBOX_COMMAND_FAILED", "{command}");
+        assert!(
+            !command.retryable,
+            "the command may already be running, so a retry would run it twice: {command}"
         );
     }
 }

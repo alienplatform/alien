@@ -168,8 +168,6 @@ pub struct SandboxSessionPolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCapabilities {
     /// Files can be moved in and out of a session
-    ///
-    /// Every backend but Azure, whose binding implements no transfer.
     pub files: bool,
     /// A later call can reach a session created by an earlier one
     pub reconnect: bool,
@@ -230,7 +228,7 @@ impl SandboxCapabilities {
             // them. The capability set describes what a caller can reach, not what the cloud
             // could do, so these stay false until the provider catches up.
             Platform::Azure => Ok(Self {
-                files: false,
+                files: true,
                 reconnect: true,
                 preview: false,
                 suspend_resume: false,
@@ -862,8 +860,8 @@ mod tests {
         assert!(!gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
-        assert!(!azure.files, "the Azure binding implements no file transfer");
-        assert!(gcp.files, "every other backend moves files");
+        assert!(azure.files, "every backend moves files");
+        assert!(gcp.files);
         // The Azure binding renders neither an egress policy nor a ceiling, so a declaration of
         // either is refused rather than accepted and dropped.
         assert!(!azure.domain_egress_rules);
