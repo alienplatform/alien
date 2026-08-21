@@ -692,8 +692,9 @@ pub struct KubernetesTlsSecretRef {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LogSettings {
-    /// Read a recognized top-level JSON `level` field into the OTLP severity fields.
-    /// The original log body is preserved. Disabled by default.
+    /// Normalize severity fields from supported structured application logs into
+    /// the OTLP severity fields. The original log body is preserved. Disabled by
+    /// default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub parse_application_levels: bool,
 }
