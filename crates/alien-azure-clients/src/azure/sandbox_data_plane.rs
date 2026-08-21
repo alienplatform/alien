@@ -12,6 +12,7 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
+use std::collections::BTreeMap;
 use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::Method;
@@ -41,15 +42,55 @@ const SERVICE_NAME: &str = "sandboxDataPlane";
 /// callers can rely on everywhere, and a body that never grows past it here.
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 
+/// What a sandbox is created from.
+///
+/// A struct rather than a parameter list because the data plane keeps adding create-time fields
+/// that decide what the sandbox can do, and each one added positionally is one a caller can pass
+/// in the wrong slot.
+#[derive(Debug, Clone, Default)]
+pub struct CreateSandbox {
+    /// Public catalog disk image name, such as `ubuntu`.
+    pub disk_image: String,
+    /// CPU in the data plane's units, such as `1000m`.
+    pub cpu: String,
+    /// Memory in the data plane's units, such as `2048Mi`.
+    pub memory: String,
+    /// Variables placed in the sandbox. It inherits nothing, so a variable exists only if it is
+    /// sent here.
+    pub environment: BTreeMap<String, String>,
+}
+
+/// The create body.
+///
+/// `sourcesRef` is required unless a preset sandbox type is named, and resources are nested rather
+/// than top level. A flat {disk, cpu, memory} is rejected with "'sourcesRef' is required when not
+/// using a preset sandbox type".
+fn create_body(request: &CreateSandbox) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "sourcesRef": { "diskImage": { "name": request.disk_image, "isPublic": true } },
+        "resources": { "cpu": request.cpu, "memory": request.memory },
+    });
+
+    if !request.environment.is_empty() {
+        body["environment"] = serde_json::json!(request.environment);
+    }
+
+    body
+}
+
 /// A sandbox as the data plane reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sandbox {
     /// Sandbox id within its group
     pub id: String,
-    /// `Running` or `Stopped`
+    /// `Creating`, `Running`, `Stopping`, `Stopped`, `Suspended`, `Resuming` or `Deleting`.
+    ///
+    /// Optional because the name is only as good as the SDK it was read from: a field name that
+    /// does not match the wire deserializes to `None`, and the provider turns that into an error
+    /// rather than into a sandbox it assumes is healthy.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    pub state: Option<String>,
 }
 
 /// Result of a shell command.
@@ -71,8 +112,7 @@ pub struct ExecResult {
 #[async_trait]
 pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     /// Creates a sandbox from a disk image.
-    async fn create_sandbox(&self, group: &str, disk: &str, cpu: &str, memory: &str)
-        -> Result<Sandbox>;
+    async fn create_sandbox(&self, group: &str, request: CreateSandbox) -> Result<Sandbox>;
 
     /// Reads a sandbox. A 404 is how deletion is confirmed.
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox>;
@@ -203,27 +243,14 @@ impl AzureSandboxDataPlaneClient {
 
 #[async_trait]
 impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
-    async fn create_sandbox(
-        &self,
-        group: &str,
-        disk: &str,
-        cpu: &str,
-        memory: &str,
-    ) -> Result<Sandbox> {
+    async fn create_sandbox(&self, group: &str, request: CreateSandbox) -> Result<Sandbox> {
         let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
         let url = self.base.build_url(
             &format!("{}/sandboxes", self.group_path(group)),
             Some(vec![("api-version", API_VERSION.into())]),
         );
 
-        // `sourcesRef` is required unless a preset sandbox type is named, and resources are
-        // nested rather than top level. A flat {disk, cpu, memory} is rejected with
-        // "'sourcesRef' is required when not using a preset sandbox type".
-        let body = serde_json::json!({
-            "sourcesRef": { "diskImage": { "name": disk, "isPublic": true } },
-            "resources": { "cpu": cpu, "memory": memory },
-        })
-        .to_string();
+        let body = create_body(&request).to_string();
         let request = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
@@ -614,5 +641,37 @@ mod tests {
             .expect_err("a body over the ceiling must be refused");
 
         assert_eq!(error.code, "INVALID_INPUT", "{error}");
+    }
+
+    /// A sandbox inherits nothing, so a variable the caller asked for exists only if the create
+    /// body carries it — and the data plane accepts a body without it, so nothing else would say.
+    #[test]
+    fn the_create_body_carries_the_variables_the_caller_asked_for() {
+        let body = create_body(&CreateSandbox {
+            disk_image: "ubuntu".to_string(),
+            cpu: "1000m".to_string(),
+            memory: "2048Mi".to_string(),
+            environment: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
+        });
+
+        assert_eq!(body["environment"]["TOKEN"], "t");
+        assert_eq!(body["sourcesRef"]["diskImage"]["name"], "ubuntu");
+        assert_eq!(body["resources"]["cpu"], "1000m");
+
+        let bare = create_body(&CreateSandbox::default());
+        assert!(
+            bare.get("environment").is_none(),
+            "an empty map is no variables, not an empty object: {bare}"
+        );
+    }
+
+    /// The response field is `state`. Reading `status` leaves every sandbox deserializing to
+    /// `None`, which the provider cannot tell apart from a healthy one.
+    #[test]
+    fn a_sandbox_deserializes_its_state() {
+        let sandbox: Sandbox =
+            serde_json::from_str(r#"{"id":"s1","state":"Stopped"}"#).expect("deserializes");
+
+        assert_eq!(sandbox.state.as_deref(), Some("Stopped"));
     }
 }

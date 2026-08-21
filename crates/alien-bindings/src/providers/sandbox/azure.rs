@@ -15,7 +15,7 @@ use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxSession, SandboxSessionState,
 };
-use alien_azure_clients::azure::sandbox_data_plane::SandboxDataPlaneApi;
+use alien_azure_clients::azure::sandbox_data_plane::{CreateSandbox, SandboxDataPlaneApi};
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, ContextError};
@@ -107,7 +107,15 @@ impl Sandbox for AzureSandbox {
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         let sandbox = self
             .client
-            .create_sandbox(&self.sandbox_group, &self.disk_image, &self.cpu, &self.memory)
+            .create_sandbox(
+                &self.sandbox_group,
+                CreateSandbox {
+                    disk_image: self.disk_image.clone(),
+                    cpu: self.cpu.clone(),
+                    memory: self.memory.clone(),
+                    environment: request.env,
+                },
+            )
             .await
             .map_err(|error| Self::failed("sandbox.create", error))?;
 
@@ -117,7 +125,7 @@ impl Sandbox for AzureSandbox {
 
         Ok(SandboxSession {
             session_id: sandbox.id,
-            state: SandboxSessionState::Running,
+            state: session_state("sandbox.create", sandbox.state.as_deref())?,
             generation: 1,
         })
     }
@@ -130,10 +138,7 @@ impl Sandbox for AzureSandbox {
         {
             Ok(sandbox) => Ok(Some(SandboxSession {
                 session_id: sandbox.id,
-                state: match sandbox.status.as_deref() {
-                    Some("Stopped") => SandboxSessionState::Suspended,
-                    _ => SandboxSessionState::Running,
-                },
+                state: session_state("sandbox.get", sandbox.state.as_deref())?,
                 generation: 1,
             })),
             // A 404 is "gone", which is a valid answer. Anything else is a real failure and must
@@ -429,6 +434,27 @@ fn checked_path(operation: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// The data plane's own lifecycle vocabulary, in ours.
+///
+/// An unrecognised state is an error rather than a default, because every default here is a lie
+/// a caller acts on: `Running` sends commands to a sandbox that cannot answer them, and anything
+/// else hides one that can.
+fn session_state(operation: &str, state: Option<&str>) -> Result<SandboxSessionState> {
+    match state {
+        Some("Running") => Ok(SandboxSessionState::Running),
+        Some("Creating" | "Resuming") => Ok(SandboxSessionState::Starting),
+        Some("Stopping" | "Stopped" | "Suspended") => Ok(SandboxSessionState::Suspended),
+        Some("Deleting") => Ok(SandboxSessionState::Terminated),
+        other => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
+            provider: "azure".to_string(),
+            binding_name: operation.to_string(),
+            field: "state".to_string(),
+            response_json: other
+                .map_or_else(|| "absent".to_string(), |state| format!("\"{state}\"")),
+        })),
+    }
+}
+
 /// The one operation a repeat could run twice.
 const RUN_COMMAND: &str = "sandbox.runCommand";
 
@@ -510,12 +536,12 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client
             .expect_create_sandbox()
-            .withf(|_, disk_image, _, _| disk_image == "my-toolchain")
+            .withf(|_, request| request.disk_image == "my-toolchain")
             .times(1)
-            .returning(|_, _, _, _| {
+            .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
-                    status: Some("Running".to_string()),
+                    state: Some("Running".to_string()),
                 })
             });
 
@@ -543,7 +569,7 @@ mod tests {
         client.expect_get_sandbox().returning(|_, id| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: id.to_string(),
-                status: Some("Running".to_string()),
+                state: Some("Running".to_string()),
             })
         });
 
@@ -673,9 +699,7 @@ mod tests {
         async fn create_sandbox(
             &self,
             _group: &str,
-            _disk: &str,
-            _cpu: &str,
-            _memory: &str,
+            _request: CreateSandbox,
         ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
         {
             unreachable!("the command paths never create")
@@ -692,7 +716,7 @@ mod tests {
             }
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: sandbox_id.to_string(),
-                status: Some("Running".to_string()),
+                state: Some("Running".to_string()),
             })
         }
 
@@ -1025,6 +1049,95 @@ mod tests {
         assert!(
             !command.retryable,
             "the command may already be running, so a retry would run it twice: {command}"
+        );
+    }
+
+    /// A session's state is the data plane's, not a default.
+    ///
+    /// The four states that are not `Running` each mean a command sent now does not run, so
+    /// reporting `Running` for any of them tells a caller to use a session that cannot answer.
+    #[tokio::test]
+    async fn a_session_reports_the_state_the_data_plane_gave_it() {
+        for (reported, expected) in [
+            ("Running", SandboxSessionState::Running),
+            ("Creating", SandboxSessionState::Starting),
+            ("Resuming", SandboxSessionState::Starting),
+            ("Stopping", SandboxSessionState::Suspended),
+            ("Stopped", SandboxSessionState::Suspended),
+            ("Suspended", SandboxSessionState::Suspended),
+            ("Deleting", SandboxSessionState::Terminated),
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let state = reported.to_string();
+            client.expect_get_sandbox().times(1).returning(move |_, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    state: Some(state.clone()),
+                })
+            });
+
+            let session = sandbox_with(client)
+                .get("s1")
+                .await
+                .unwrap_or_else(|error| panic!("{reported}: {error}"))
+                .unwrap_or_else(|| panic!("{reported}: the session exists"));
+
+            assert_eq!(session.state, expected, "state {reported}");
+        }
+    }
+
+    /// A state this client does not know is a preview API that moved, and guessing which of the
+    /// four it maps to is how a caller ends up talking to a sandbox that is going away.
+    #[tokio::test]
+    async fn an_unknown_state_is_an_error_rather_than_a_guess() {
+        for reported in [Some("Hibernated"), None] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let state = reported.map(str::to_string);
+            client.expect_get_sandbox().times(1).returning(move |_, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    state: state.clone(),
+                })
+            });
+
+            let error = sandbox_with(client)
+                .get("s1")
+                .await
+                .expect_err("an unreadable state must not become a session");
+
+            assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
+        }
+    }
+
+    /// The variables the caller declared have to reach the create body: a sandbox inherits none
+    /// of them, and the data plane accepts a create that omits them.
+    #[tokio::test]
+    async fn the_declared_variables_reach_the_create_call() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .withf(|_, request| request.environment.get("TOKEN").map(String::as_str) == Some("t"))
+            .times(1)
+            .returning(|_, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    state: Some("Creating".to_string()),
+                })
+            });
+
+        let session = sandbox_with(client)
+            .create(CreateSessionRequest {
+                session_id: None,
+                tenant_key: None,
+                env: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
+            })
+            .await
+            .expect("the create should succeed");
+
+        assert_eq!(
+            session.state,
+            SandboxSessionState::Starting,
+            "a sandbox still being created is not one a command can reach"
         );
     }
 }
