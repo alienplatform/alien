@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@apiture/openapi-down-convert": "^0.14.2",
-    "@biomejs/biome": "2.5.9",
+    "@biomejs/biome": "2.5.10",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.29.7",
     "turbo": "^2.5.8"
