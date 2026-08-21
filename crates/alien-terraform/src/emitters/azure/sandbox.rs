@@ -11,7 +11,8 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
-use alien_core::{import::EmitContext, Result, Sandbox};
+use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxCode};
+use alien_error::AlienError;
 use hcl::expr::Expression;
 
 /// Emits the Azure sandbox group's identity for the runtime to address.
@@ -27,6 +28,34 @@ pub struct AzureSandboxEmitter;
 /// the management grant is scoped to the real one.
 fn sandbox_group(ctx: &EmitContext<'_>) -> Expression {
     resource_prefix_template(&ctx.resource_id)
+}
+
+/// The catalog image name a declaration asks for, or a refusal.
+///
+/// The create body names a public catalog image, so a registry reference has nowhere to go.
+/// Refusing at plan time follows the AWS emitter: a reference the backend cannot honour is
+/// rejected rather than quietly replaced, which is what happened before this existed — every
+/// Azure session ran a stock image whatever the declaration said, with no error anywhere.
+fn catalog_disk_image(sandbox: &Sandbox) -> Result<String> {
+    let unsupported = |reason: String| {
+        AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+            reason,
+        })
+    };
+
+    match &sandbox.code {
+        SandboxCode::Image { image } if image.contains('/') => Err(unsupported(format!(
+            "Azure creates a sandbox from a public catalog disk image, so code.image must be a \
+             catalog name such as 'ubuntu', not the registry reference '{image}'"
+        ))),
+        SandboxCode::Image { image } => Ok(image.clone()),
+        SandboxCode::Source { .. } => Err(unsupported(
+            "Azure creates a sandbox from a prebuilt catalog disk image and cannot build one \
+             from source"
+                .to_string(),
+        )),
+    }
 }
 
 impl TfEmitter for AzureSandboxEmitter {
@@ -47,8 +76,9 @@ impl TfEmitter for AzureSandboxEmitter {
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
-        let _ = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
+        let disk_image = catalog_disk_image(sandbox)?;
         Ok(Some(expr::object([
             ("service", Expression::String("sandbox-azure".to_string())),
             ("sandboxGroup", sandbox_group(ctx)),
@@ -60,6 +90,7 @@ impl TfEmitter for AzureSandboxEmitter {
             ),
             ("region", expr::raw("var.azure_location")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
+            ("diskImage", Expression::String(disk_image)),
         ])))
     }
 }

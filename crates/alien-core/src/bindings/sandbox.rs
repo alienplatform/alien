@@ -91,6 +91,12 @@ pub struct AzureSandboxBinding {
     /// Resource group the sandbox group sits in. The data-plane path is scoped by it, and the
     /// Azure client config does not carry one.
     pub resource_group: BindingValue<String>,
+    /// Catalog disk image every session is created from, taken from the declaration's `code`.
+    ///
+    /// Carried rather than hardcoded in the provider because the declaration is the only place
+    /// that knows it, and a sandbox running an image its author did not choose is the one Azure
+    /// gap that fails without an error.
+    pub disk_image: BindingValue<String>,
 }
 
 /// GCP sandbox binding configuration.
@@ -168,12 +174,14 @@ impl SandboxBinding {
         data_plane_endpoint: impl Into<BindingValue<String>>,
         region: impl Into<BindingValue<String>>,
         resource_group: impl Into<BindingValue<String>>,
+        disk_image: impl Into<BindingValue<String>>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
             sandbox_group: sandbox_group.into(),
             data_plane_endpoint: data_plane_endpoint.into(),
             region: region.into(),
             resource_group: resource_group.into(),
+            disk_image: disk_image.into(),
         })
     }
 
@@ -239,6 +247,7 @@ mod tests {
                 "https://management.swedencentral.azuredevcompute.io",
                 "swedencentral",
                 "rg",
+                "ubuntu",
             ),
             SandboxBinding::gcp("/usr/local/gcp/bin/sandbox", false),
             SandboxBinding::kubernetes(
@@ -267,7 +276,7 @@ mod tests {
     fn service_tags_are_prefixed_and_distinct() {
         let tags: Vec<String> = vec![
             SandboxBinding::aws("a", "1", "r"),
-            SandboxBinding::azure("g", "e", "r", "rg"),
+            SandboxBinding::azure("g", "e", "r", "rg", "ubuntu"),
             SandboxBinding::gcp("p", true),
             SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
             SandboxBinding::local("u", "k", "t"),

@@ -25,8 +25,8 @@ use alien_error::AlienError;
 pub struct AzureSandbox {
     client: std::sync::Arc<dyn SandboxDataPlaneApi>,
     sandbox_group: String,
-    /// Disk image every session is created from.
-    disk: String,
+    /// Catalog disk image every session is created from, from the declaration.
+    disk_image: String,
     /// Session ceilings, in the data plane's own units.
     cpu: String,
     memory: String,
@@ -37,17 +37,23 @@ impl AzureSandbox {
     pub fn new(
         client: std::sync::Arc<dyn SandboxDataPlaneApi>,
         sandbox_group: String,
-        disk: String,
+        disk_image: String,
         cpu: String,
         memory: String,
     ) -> Self {
         Self {
             client,
             sandbox_group,
-            disk,
+            disk_image,
             cpu,
             memory,
         }
+    }
+
+    /// The catalog image sessions are created from. Exists so a test can prove the declaration
+    /// reached the provider — the failure it guards is silent, so nothing else would show it.
+    pub(crate) fn disk_image(&self) -> &str {
+        &self.disk_image
     }
 
     fn unsupported(&self, capability: &str) -> AlienError<ErrorData> {
@@ -76,7 +82,7 @@ impl Sandbox for AzureSandbox {
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         let sandbox = self
             .client
-            .create_sandbox(&self.sandbox_group, &self.disk, &self.cpu, &self.memory)
+            .create_sandbox(&self.sandbox_group, &self.disk_image, &self.cpu, &self.memory)
             .await
             .map_err(|error| Self::failed("sandbox.create", error))?;
 
@@ -389,6 +395,39 @@ mod tests {
             "1000m".to_string(),
             "2048Mi".to_string(),
         )
+    }
+
+    /// The declared image has to reach the create call, not a default chosen here.
+    ///
+    /// Asserted on the argument the client receives, because the failure this pins is silent:
+    /// a sandbox started from the wrong image returns a healthy session and only diverges once
+    /// the caller's code is missing from it.
+    #[tokio::test]
+    async fn the_declared_image_reaches_the_create_call() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .withf(|_, disk_image, _, _| disk_image == "my-toolchain")
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                    id: "s1".to_string(),
+                    status: Some("Running".to_string()),
+                })
+            });
+
+        let sandbox = AzureSandbox::new(
+            std::sync::Arc::new(client),
+            "grp".to_string(),
+            "my-toolchain".to_string(),
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+        );
+
+        sandbox
+            .create(CreateSessionRequest::default())
+            .await
+            .expect("create succeeds");
     }
 
     /// Azure accepts a delete and completes it later, so returning on the accepted call would
