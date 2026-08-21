@@ -124,6 +124,8 @@ fn profiles_differ_outside_gates(
 }
 
 fn management_differs_outside_gates(
+    old_stack: &Stack,
+    new_stack: &Stack,
     old_management: &ManagementPermissions,
     new_management: &ManagementPermissions,
     gated: &GatedContributions,
@@ -133,13 +135,65 @@ fn management_differs_outside_gates(
         (
             ManagementPermissions::Extend(old_profile),
             ManagementPermissions::Extend(new_profile),
-        )
-        | (
+        ) => {
+            profiles_differ_outside_gates(old_profile, new_profile, gated)
+                && !is_email_heartbeat_registration_migration(
+                    old_stack,
+                    new_stack,
+                    old_profile,
+                    new_profile,
+                    gated,
+                )
+        }
+        (
             ManagementPermissions::Override(old_profile),
             ManagementPermissions::Override(new_profile),
         ) => profiles_differ_outside_gates(old_profile, new_profile, gated),
         _ => true,
     }
+}
+
+/// Accepts the one-way profile migration caused by registering the formerly
+/// unresolved built-in Email heartbeat permission. Existing prepared stacks
+/// omitted this reference because unresolved built-ins are skipped. The first
+/// update after registration therefore adds it even when application code did
+/// not change.
+///
+/// This is deliberately narrow: both stack versions must contain Email, the
+/// old profile must lack the reference, the new profile must contain the
+/// canonical named reference, and removing only that reference must make the
+/// profiles otherwise identical. Removal and inline substitutions still fail.
+fn is_email_heartbeat_registration_migration(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    old_profile: &PermissionProfile,
+    new_profile: &PermissionProfile,
+    gated: &GatedContributions,
+) -> bool {
+    const PERMISSION_ID: &str = "email/heartbeat";
+    let contains_email = |stack: &Stack| {
+        stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type().as_ref() == "email")
+    };
+    if !contains_email(old_stack) || !contains_email(new_stack) {
+        return false;
+    }
+
+    let canonical = PermissionSetReference::from_name(PERMISSION_ID);
+    let old_global = old_profile.0.get("*");
+    let new_global = new_profile.0.get("*");
+    if old_global.is_some_and(|grants| grants.iter().any(|grant| grant.id() == PERMISSION_ID))
+        || !new_global.is_some_and(|grants| grants.iter().any(|grant| grant == &canonical))
+    {
+        return false;
+    }
+
+    let mut migrated_profile = new_profile.clone();
+    if let Some(grants) = migrated_profile.0.get_mut("*") {
+        grants.retain(|grant| grant != &canonical);
+    }
+    !profiles_differ_outside_gates(old_profile, &migrated_profile, gated)
 }
 
 #[async_trait::async_trait]
@@ -188,8 +242,13 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
         }
 
         // Check management permissions
-        if management_differs_outside_gates(old_stack.management(), new_stack.management(), &gated)
-        {
+        if management_differs_outside_gates(
+            old_stack,
+            new_stack,
+            old_stack.management(),
+            new_stack.management(),
+            &gated,
+        ) {
             errors.push("Management permissions configuration was modified".to_string());
         }
 
@@ -209,7 +268,7 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
 mod tests {
     use super::*;
     use alien_core::permissions::PermissionsConfig;
-    use alien_core::{Kv, ResourceLifecycle};
+    use alien_core::{Email, Kv, ResourceLifecycle};
     use indexmap::IndexMap;
 
     /// The deployer said no to a gated live resource: its scoped management
@@ -458,6 +517,35 @@ mod tests {
             .expect("check should run");
         assert!(!result.success);
         assert!(result.errors[0].contains("Management permissions"));
+    }
+
+    #[tokio::test]
+    async fn newly_registered_email_heartbeat_permission_migrates_existing_stacks() {
+        let stack_with_management = |grants: &[&str]| {
+            Stack::new("s".to_string())
+                .management(ManagementPermissions::Extend(
+                    PermissionProfile::new().global(grants.iter().copied()),
+                ))
+                .add(
+                    Email::new("mail".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        let old_stack = stack_with_management(&["storage/heartbeat"]);
+        let new_stack = stack_with_management(&["email/heartbeat", "storage/heartbeat"]);
+
+        let migration = PermissionProfilesUnchangedCheck
+            .check(&old_stack, &new_stack)
+            .await
+            .expect("check should run");
+        assert!(migration.success, "{:?}", migration.errors);
+
+        let removal = PermissionProfilesUnchangedCheck
+            .check(&new_stack, &old_stack)
+            .await
+            .expect("check should run");
+        assert!(!removal.success);
     }
 
     #[tokio::test]
