@@ -58,6 +58,19 @@ impl HelmEmitter for SandboxEmitter {
                 })
             })?;
 
+        // A hostname list has no NetworkPolicy to render into — it matches CIDRs — so it is
+        // refused rather than widened to the `allow` rule, which would open every address the
+        // declaration meant to exclude.
+        if let SandboxEgress::AllowDomains { .. } = sandbox.egress {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("helm emit sandbox '{}'", ctx.resource_id),
+                reason: "a Kubernetes NetworkPolicy matches addresses, not names, so a hostname \
+                         list has nothing to render into. Declare egress: deny, or deploy to \
+                         Azure, whose egress proxy matches on host pattern"
+                    .to_string(),
+            }));
+        }
+
         let mut fragment = HelmFragment::empty();
         fragment.extra_templates.insert(
             format!("sandbox-{}-networkpolicy.yaml", sandbox.id()),
@@ -81,8 +94,8 @@ impl HelmEmitter for SandboxEmitter {
 fn network_policy(sandbox: &Sandbox) -> String {
     let egress = match sandbox.egress {
         SandboxEgress::Deny => String::new(),
-        // A hostname allowlist is not expressible here — NetworkPolicy matches CIDRs — which is
-        // why Kubernetes publishes `domainEgressRules: false` rather than approximating one.
+        // `AllowDomains` never reaches here: the emitter refuses it rather than render it as the
+        // `allow` rule below, which permits every address the list meant to exclude.
         SandboxEgress::Allow | SandboxEgress::AllowDomains { .. } => {
             let excepts: String = ALWAYS_DENIED_CIDRS
                 .iter()

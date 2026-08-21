@@ -631,8 +631,8 @@ fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
             reason: format!(
                 "AWS sandboxes reach the network through a VPC egress connector, which this \
                  module builds to deny outbound traffic; egress '{mode}' has no connector \
-                 configuration to render into. Declare egress: deny, or use a platform that \
-                 supports it"
+                 configuration to render into. Declare egress: deny, or deploy to Azure, whose \
+                 egress proxy matches on host pattern"
             ),
         }))
     };

@@ -2,7 +2,7 @@
 //! artifact-registry contributions land under
 //! `infrastructure.<resource_id>` in the chart's `values.yaml`.
 
-use super::helpers::{assert_helm_valid, render, snapshot_chart};
+use super::helpers::{assert_helm_valid, render, snapshot_chart, try_render};
 use alien_core::{
     ArtifactRegistry, Kv, Queue, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
     SandboxSessionPolicy, Stack, StackSettings, Storage, Vault,
@@ -166,11 +166,11 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
     assert_helm_valid(&chart, "sandbox_layer_allow");
 }
 
-/// NetworkPolicy matches addresses, not names, so a hostname allowlist cannot be honoured here.
-/// It degrades to `allow` rather than being approximated, and the capability set declares
-/// `domainEgressRules: false` so a caller learns that at plan time instead of believing it held.
+/// NetworkPolicy matches addresses, not names, so a hostname allowlist has nothing to render
+/// into. It is refused: rendering it as `allow` would open every address the list excluded, and
+/// the chart would look like the policy applied.
 #[test]
-fn a_hostname_allowlist_is_not_silently_approximated() {
+fn a_hostname_allowlist_is_refused_rather_than_widened() {
     let stack = Stack::new("sandbox-domains-chart".to_string())
         .add(
             Sandbox::new("agent".to_string())
@@ -188,14 +188,11 @@ fn a_hostname_allowlist_is_not_silently_approximated() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let chart = render(&stack, StackSettings::default());
+    let error = try_render(&stack, StackSettings::default())
+        .expect_err("a hostname list must be refused rather than approximated");
 
-    let policy = chart
-        .files
-        .get("templates/sandbox-agent-networkpolicy.yaml")
-        .expect("the sandbox NetworkPolicy must render");
     assert!(
-        policy.contains("cidr: 0.0.0.0/0") && !policy.contains("example.com"),
-        "domains are not expressible and must not appear as though they were:\n{policy}"
+        error.to_string().contains("matches addresses, not names"),
+        "the refusal must name why: {error}"
     );
 }
