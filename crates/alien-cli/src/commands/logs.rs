@@ -259,10 +259,12 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         deployment_group_name: target.deployment_group_name.clone(),
         database_id: database_id.clone(),
     };
+    let deployment_filter =
+        deployment_filter_for_source(args.source, target.deployment_id.as_deref());
     let query = build_logs_query(
         &args.query,
         &args.level,
-        target.deployment_id.as_deref(),
+        deployment_filter,
         args.system || args.source.is_some(),
         args.source,
     )?;
@@ -939,6 +941,17 @@ fn build_logs_query(
     }
 }
 
+fn deployment_filter_for_source(
+    source: Option<LogSource>,
+    deployment_id: Option<&str>,
+) -> Option<&str> {
+    if source.is_some() {
+        None
+    } else {
+        deployment_id
+    }
+}
+
 fn severity_range(level: LogLevel) -> (u8, u8) {
     match level {
         LogLevel::Trace => (1, 4),
@@ -1094,6 +1107,18 @@ mod tests {
                 .expect_err("gateway diagnostics are not deployment-scoped");
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn gateway_source_ignores_a_deployment_inferred_from_local_context() {
+        assert_eq!(
+            deployment_filter_for_source(Some(LogSource::AiGateway), Some("dep_linked")),
+            None
+        );
+        assert_eq!(
+            deployment_filter_for_source(None, Some("dep_linked")),
+            Some("dep_linked")
+        );
     }
 
     #[test]

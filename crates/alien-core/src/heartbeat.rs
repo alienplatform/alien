@@ -1707,7 +1707,7 @@ impl AiAvailabilityObservation {
                 .into_iter()
                 .map(|model| AiModelAvailabilityObservation {
                     public_model_id: model.public_id.to_string(),
-                    client_apis: model.client_apis.to_vec(),
+                    client_apis: ClientApi::ALL.to_vec(),
                     availability: AiModelAvailability::Unknown,
                     blockers: vec![AiAvailabilityBlocker::ObservationFailed],
                     access_test: AiAccessTest::NotChecked,
