@@ -202,6 +202,7 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
+                public_endpoints: None,
             }))
             .api_server_port(8080)
             .build();
@@ -258,6 +259,7 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
+                public_endpoints: None,
             }))
             .build();
 
@@ -281,6 +283,7 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
+                public_endpoints: None,
             }))
             .build();
 
@@ -304,6 +307,7 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
+                public_endpoints: None,
             }))
             .build();
 

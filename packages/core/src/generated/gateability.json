@@ -31,6 +31,10 @@
     "frozen": true,
     "live": true
   },
+  "sandbox": {
+    "frozen": true,
+    "live": false
+  },
   "storage": {
     "frozen": true,
     "live": true

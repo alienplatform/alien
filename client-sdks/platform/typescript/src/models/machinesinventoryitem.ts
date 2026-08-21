@@ -4,6 +4,7 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
@@ -18,12 +19,23 @@ import {
   MachinesLocalOverrideObservation,
   MachinesLocalOverrideObservation$inboundSchema,
 } from "./machineslocaloverrideobservation.js";
+import {
+  MachinesWireGuardMeshObservation,
+  MachinesWireGuardMeshObservation$inboundSchema,
+} from "./machineswireguardmeshobservation.js";
 
 export type Storage = {
   allocated: number;
   systemReserve: number;
   total: number;
 };
+
+export const NetworkHealth = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+} as const;
+export type NetworkHealth = ClosedEnum<typeof NetworkHealth>;
 
 export type MachinesInventoryItem = {
   machineId: string;
@@ -42,6 +54,9 @@ export type MachinesInventoryItem = {
   overlayIp?: string | null | undefined;
   lastHeartbeat: string;
   horizondVersion?: string | null | undefined;
+  networkHealth?: NetworkHealth | undefined;
+  wireguardMesh?: MachinesWireGuardMeshObservation | null | undefined;
+  wireguardMeshObservedAt?: string | null | undefined;
   localOverrides: Array<MachinesLocalOverrideObservation>;
   localOverridesObservedAt?: string | null | undefined;
   replicaCount: number;
@@ -65,6 +80,10 @@ export function storageFromJSON(
 }
 
 /** @internal */
+export const NetworkHealth$inboundSchema: z.ZodEnum<typeof NetworkHealth> = z
+  .enum(NetworkHealth);
+
+/** @internal */
 export const MachinesInventoryItem$inboundSchema: z.ZodType<
   MachinesInventoryItem,
   unknown
@@ -85,6 +104,10 @@ export const MachinesInventoryItem$inboundSchema: z.ZodType<
   overlayIp: z.nullable(z.string()).optional(),
   lastHeartbeat: z.string(),
   horizondVersion: z.nullable(z.string()).optional(),
+  networkHealth: NetworkHealth$inboundSchema.optional(),
+  wireguardMesh: z.nullable(MachinesWireGuardMeshObservation$inboundSchema)
+    .optional(),
+  wireguardMeshObservedAt: z.nullable(z.string()).optional(),
   localOverrides: z.array(MachinesLocalOverrideObservation$inboundSchema),
   localOverridesObservedAt: z.nullable(z.string()).optional(),
   replicaCount: z.int(),

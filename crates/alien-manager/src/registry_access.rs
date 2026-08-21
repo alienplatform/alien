@@ -807,6 +807,13 @@ mod tests {
         ) -> BindingResult<Arc<dyn alien_bindings::traits::ServiceAccount>> {
             Err(missing_binding(binding_name))
         }
+
+        async fn load_sandbox(
+            &self,
+            binding_name: &str,
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Sandbox>> {
+            Err(missing_binding(binding_name))
+        }
     }
 
     fn aws_state_with_stack(stack: Stack) -> DeploymentState {

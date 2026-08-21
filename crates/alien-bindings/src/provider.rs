@@ -499,6 +499,11 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
             .load_service_account(binding_name)
             .await
     }
+
+    async fn load_sandbox(&self, binding_name: &str) -> Result<Arc<dyn crate::traits::Sandbox>> {
+        self.ensure_binding_present(binding_name)?;
+        self.provider().await?.load_sandbox(binding_name).await
+    }
 }
 
 #[async_trait]
@@ -1809,6 +1814,221 @@ impl BindingsProviderApi for BindingsProvider {
             }
         }
     }
+
+    async fn load_sandbox(&self, binding_name: &str) -> Result<Arc<dyn crate::traits::Sandbox>> {
+        use alien_core::bindings::SandboxBinding;
+
+        // Parsed before dispatch so a malformed binding fails as a config error rather than as
+        // a missing backend, which would send a reader looking in the wrong place.
+        let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
+
+        match binding {
+            #[cfg(feature = "local")]
+            SandboxBinding::Local(local_binding) => {
+                use crate::providers::sandbox::local::LocalSandbox;
+
+                let sandbox: Arc<dyn crate::traits::Sandbox> =
+                    Arc::new(LocalSandbox::new(binding_name, &local_binding).await?);
+                Ok(sandbox)
+            }
+            #[cfg(feature = "kubernetes")]
+            SandboxBinding::Kubernetes(kubernetes_binding) => {
+                use crate::providers::sandbox::kubernetes::KubernetesSandbox;
+
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(KubernetesSandbox::new(
+                    binding_name,
+                    &kubernetes_binding,
+                    binding_name,
+                )?);
+                Ok(sandbox)
+            }
+            #[cfg(feature = "gcp")]
+            SandboxBinding::Gcp(gcp_binding) => {
+                use crate::providers::sandbox::gcp::GcpSandbox;
+
+                let sandbox: Arc<dyn crate::traits::Sandbox> =
+                    Arc::new(GcpSandbox::new(binding_name, &gcp_binding)?);
+                Ok(sandbox)
+            }
+            #[cfg(feature = "azure")]
+            SandboxBinding::Azure(azure_binding) => {
+                use crate::providers::sandbox::azure::AzureSandbox;
+                use alien_azure_clients::azure::sandbox_data_plane::AzureSandboxDataPlaneClient;
+                use alien_azure_clients::azure::token_cache::AzureTokenCache;
+
+                let azure_config = self.client_config.azure_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Azure,
+                        message: "Azure config not available".to_string(),
+                    })
+                })?;
+
+                let invalid = |field: &str| {
+                    AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason: format!("sandbox binding field '{field}' is not a concrete value"),
+                    })
+                };
+
+                let group = azure_binding
+                    .sandbox_group
+                    .into_value(binding_name, "sandboxGroup")
+                    .map_err(|_| invalid("sandboxGroup"))?;
+                let region = azure_binding
+                    .region
+                    .into_value(binding_name, "region")
+                    .map_err(|_| invalid("region"))?;
+                let resource_group = azure_binding
+                    .resource_group
+                    .into_value(binding_name, "resourceGroup")
+                    .map_err(|_| invalid("resourceGroup"))?;
+
+                let client = AzureSandboxDataPlaneClient::new(
+                    reqwest::Client::new(),
+                    &region,
+                    &resource_group,
+                    AzureTokenCache::new(azure_config.clone()),
+                );
+
+                // Session ceilings come from the resource, not the caller — an application must
+                // not be able to raise its own by asking.
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AzureSandbox::new(
+                    Arc::new(client),
+                    group,
+                    "ubuntu".to_string(),
+                    "1000m".to_string(),
+                    "2048Mi".to_string(),
+                ));
+                Ok(sandbox)
+            }
+            #[cfg(feature = "aws")]
+            SandboxBinding::Aws(aws_binding) => {
+                use crate::providers::sandbox::aws::AwsSandbox;
+                use alien_aws_clients::aws::lambda_microvms::LambdaMicrovmsClient;
+
+                let aws_config = self.client_config.aws_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Aws,
+                        message: "AWS config not available".to_string(),
+                    })
+                })?;
+
+                let invalid = |field: &str| {
+                    AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason: format!("sandbox binding field '{field}' is not a concrete value"),
+                    })
+                };
+
+                let image_arn = aws_binding
+                    .image_arn
+                    .into_value(binding_name, "imageArn")
+                    .map_err(|_| invalid("imageArn"))?;
+                let image_version = aws_binding
+                    .image_version
+                    .into_value(binding_name, "imageVersion")
+                    .map_err(|_| invalid("imageVersion"))?;
+                let region = aws_binding
+                    .region
+                    .into_value(binding_name, "region")
+                    .map_err(|_| invalid("region"))?;
+                if aws_binding.execution_role_arn.is_some() {
+                    // A MicroVM started with an execution role serves that role's live
+                    // credentials to the session over link-local instance metadata, which no
+                    // egress connector governs — measured under `deny` and `allow` alike. A
+                    // sandbox runs untrusted code, so the role is refused rather than attached.
+                    return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason: "sandbox binding field 'executionRoleArn' is set; a session can \
+                                 read that role's credentials from instance metadata, which the \
+                                 egress connector does not reach"
+                            .to_string(),
+                    }));
+                }
+
+                // The sandbox lives where its image was built, which is not necessarily where
+                // the workload runs; signing against the workload's region would 404.
+                let mut config = aws_config.clone();
+                config.region = region;
+
+                let credentials = alien_aws_clients::AwsCredentialProvider::from_config(config)
+                    .await
+                    .context(ErrorData::BindingSetupFailed {
+                        binding_type: "AWS sandbox".to_string(),
+                        reason: "Failed to create credential provider".to_string(),
+                    })?;
+
+                let client = LambdaMicrovmsClient::new(reqwest::Client::new(), credentials);
+
+                let egress_connector_arns = aws_binding
+                    .egress_connector_arns
+                    .into_iter()
+                    .map(|value| {
+                        value
+                            .into_value(binding_name, "egressConnectorArns")
+                            .map_err(|_| invalid("egressConnectorArns"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                // A MicroVM started with no connector reaches the internet, so the two fields have
+                // to agree: under `deny` setup always emits a connector, and an empty list is a
+                // binding that did not come from a generated module rather than an open sandbox.
+                if egress_connector_arns.is_empty() != aws_binding.allow_egress {
+                    let reason = if aws_binding.allow_egress {
+                        "sandbox binding declares open egress and also names egress connectors; \
+                         a session cannot be both open and routed through a denying connector"
+                    } else {
+                        "sandbox binding field 'egressConnectorArns' is empty; a MicroVM started \
+                         with no egress connector reaches the public internet"
+                    };
+                    return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                        binding_name: binding_name.to_string(),
+                        env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                        reason: reason.to_string(),
+                    }));
+                }
+
+                let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AwsSandbox::new(
+                    Arc::new(client),
+                    image_arn,
+                    image_version,
+                    egress_connector_arns,
+                    aws_binding.preview_ports,
+                    aws_binding.idle_suspend_seconds,
+                    aws_binding.max_lifetime_seconds,
+                ));
+                Ok(sandbox)
+            }
+            // A backend whose feature is off reports which one, rather than a bare
+            // "unsupported" that sends a reader looking at the platform instead of the build.
+            #[cfg(not(feature = "aws"))]
+            SandboxBinding::Aws(_) => Err(not_built("aws")),
+            #[cfg(not(feature = "azure"))]
+            SandboxBinding::Azure(_) => Err(not_built("azure")),
+            #[cfg(not(feature = "gcp"))]
+            SandboxBinding::Gcp(_) => Err(not_built("gcp")),
+            #[cfg(not(feature = "kubernetes"))]
+            SandboxBinding::Kubernetes(_) => Err(not_built("kubernetes")),
+            #[cfg(not(feature = "local"))]
+            SandboxBinding::Local(_) => Err(not_built("local")),
+        }
+    }
+}
+
+/// A binding whose backend was compiled out.
+///
+/// Unused when every backend feature is on, which is the build that ships.
+#[allow(dead_code)]
+///
+/// Names the backend rather than reporting a bare "unsupported", which would send a reader
+/// looking at the platform instead of at the build.
+fn not_built(backend: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::OperationNotSupported {
+        operation: format!("load_sandbox({backend})"),
+        reason: "this build does not include the sandbox backend for that platform".to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -1993,6 +2213,110 @@ mod tests {
         assert!(
             error.to_string().contains("ALIEN_FILES_BINDING"),
             "message should name the derived env var, got: {error}"
+        );
+    }
+
+    /// A MicroVM with no egress connector reaches the internet, so the binding's two egress
+    /// fields have to agree: an empty list is how `allow` travels, and it is a fail-open default
+    /// unless `allowEgress` says so. Both disagreements are refused, and `deny` still loads.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_sandbox_binding_whose_egress_fields_disagree_is_refused() {
+        const CONNECTOR: &str = "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-1";
+
+        async fn load(connectors: &str, allow_egress: bool) -> Result<()> {
+            let env = HashMap::from([
+                (
+                    ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                    Platform::Aws.as_str().to_string(),
+                ),
+                ("AWS_REGION".to_string(), "us-east-1".to_string()),
+                ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+                ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+                ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+                (
+                    "ALIEN_BOX_BINDING".to_string(),
+                    format!(
+                        r#"{{"service":"sandbox-aws",
+                            "imageArn":"arn:aws:lambda:us-east-1:123456789012:microvm-image:box",
+                            "imageVersion":"1.0",
+                            "region":"us-east-1",
+                            "allowEgress":{allow_egress},
+                            "egressConnectorArns":[{connectors}]}}"#
+                    ),
+                ),
+            ]);
+            BindingsProvider::from_env(env)
+                .await
+                .expect("the binding JSON parses")
+                .load_sandbox("box")
+                .await
+                .map(|_| ())
+        }
+
+        let fail_open = load("", false)
+            .await
+            .expect_err("an empty connector list with allowEgress false is a fail-open default");
+        assert_eq!(fail_open.code, "BINDING_CONFIG_INVALID");
+        assert!(
+            fail_open.to_string().contains("egressConnectorArns"),
+            "the message should name the field that was refused, got: {fail_open}"
+        );
+
+        let contradiction = load(&format!(r#""{CONNECTOR}""#), true)
+            .await
+            .expect_err("open egress and a denying connector cannot both be declared");
+        assert_eq!(contradiction.code, "BINDING_CONFIG_INVALID");
+
+        // The control: without it the two assertions above would pass against a `load_sandbox`
+        // that refused every AWS sandbox binding.
+        load(&format!(r#""{CONNECTOR}""#), false)
+            .await
+            .expect("a deny binding names a connector and must load");
+        load("", true)
+            .await
+            .expect("an allow binding names none and must load");
+    }
+
+    /// A sandbox binding naming an execution role is refused rather than honoured — see the
+    /// `execution_role_arn` check in `load_sandbox` for why. Nothing emits the field today, so
+    /// this is what keeps it that way.
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn a_sandbox_binding_naming_an_execution_role_is_refused() {
+        let env = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            ("AWS_REGION".to_string(), "us-east-1".to_string()),
+            ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+            ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+            (
+                "ALIEN_BOX_BINDING".to_string(),
+                r#"{"service":"sandbox-aws",
+                    "imageArn":"arn:aws:lambda:us-east-1:123456789012:microvm-image:box",
+                    "imageVersion":"1.0",
+                    "region":"us-east-1",
+                    "executionRoleArn":"arn:aws:iam::123456789012:role/box",
+                    "egressConnectorArns":["arn:aws:lambda:us-east-1:123456789012:network-connector:nc-1"]}"#
+                    .to_string(),
+            ),
+        ]);
+        let provider = BindingsProvider::from_env(env)
+            .await
+            .expect("provider construction only validates that the binding JSON parses");
+
+        let error = provider
+            .load_sandbox("box")
+            .await
+            .expect_err("a sandbox binding naming an execution role should be refused");
+
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+        assert!(
+            error.to_string().contains("executionRoleArn"),
+            "the message should name the field that was refused, got: {error}"
         );
     }
 

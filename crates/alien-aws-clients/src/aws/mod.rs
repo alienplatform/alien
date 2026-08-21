@@ -63,6 +63,7 @@ pub mod eventbridge;
 pub mod iam;
 pub mod kms;
 pub mod lambda;
+pub mod lambda_microvms;
 pub mod rds;
 pub mod resourcegroupstagging;
 pub mod s3;

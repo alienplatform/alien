@@ -276,4 +276,165 @@ mod tests {
             .expect("imported network should have controller state");
         assert_eq!(internal["isByoVpc"], true);
     }
+
+    /// The `use-default` import hands off half-finished on purpose: status
+    /// `Provisioning`, state `CreateStart`, no VPC id, leaving the controller to
+    /// discover the account default VPC. Nothing covered that the two halves
+    /// compose, so this pins that stepping the imported state actually reaches
+    /// discovery. If it ever stops, every resource depending on the network
+    /// stalls behind it and initial setup never completes.
+    #[tokio::test]
+    async fn imported_use_default_network_reaches_default_vpc_discovery() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        use alien_aws_clients::ec2::MockEc2Api;
+        use alien_core::{Platform, ResourceStatus};
+
+        use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+
+        let settings = StackSettings {
+            network: Some(NetworkSettings::UseDefault),
+            ..StackSettings::default()
+        };
+        let entry = network_entry();
+        let imported = AwsNetworkImporter
+            .import(
+                empty_default_import_data(),
+                &import_context(&settings, &entry),
+            )
+            .expect("network import should succeed");
+        assert_eq!(imported.status, ResourceStatus::Provisioning);
+
+        let controller: AwsNetworkController =
+            serde_json::from_value(imported.internal_state.expect("controller state"))
+                .expect("controller should deserialize from its imported state");
+
+        let discovered = Arc::new(AtomicBool::new(false));
+        let flag = discovered.clone();
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs().returning(move |_| {
+            flag.store(true, Ordering::SeqCst);
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "stop after the lookup; provisioning itself is covered elsewhere"
+                        .to_string(),
+                },
+            ))
+        });
+        let ec2 = Arc::new(ec2);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+
+        let network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::UseDefault)
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(network)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .stack_settings(settings)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor should build");
+
+        let _ = executor.step().await;
+        assert!(
+            discovered.load(Ordering::SeqCst),
+            "stepping the imported use-default network must reach default-VPC discovery"
+        );
+    }
+
+    /// The production initial-setup path, not the controller in isolation:
+    /// `continue_imported` with the Frozen filter, exactly as `initial_setup.rs`
+    /// builds it. A `use-default` network arrives here unfinished by design, so
+    /// this run is the only thing that can finish it.
+    #[tokio::test]
+    async fn initial_setup_drives_the_imported_use_default_network() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        use alien_aws_clients::ec2::MockEc2Api;
+        use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+        use alien_core::{
+            ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings,
+            InitialSetupAuthority, Platform, Stack, StackState,
+        };
+
+        use crate::core::{MockPlatformServiceProvider, StackExecutor};
+
+        let settings = StackSettings {
+            network: Some(NetworkSettings::UseDefault),
+            ..StackSettings::default()
+        };
+        let entry = network_entry();
+        let imported = AwsNetworkImporter
+            .import(
+                empty_default_import_data(),
+                &import_context(&settings, &entry),
+            )
+            .expect("network import should succeed");
+
+        let network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::UseDefault)
+            .build();
+        let stack = Stack::new("use-default-handoff".to_string())
+            .add(network, ResourceLifecycle::Frozen)
+            .build();
+        let mut state = StackState::new(Platform::Aws);
+        state
+            .resources
+            .insert("default-network".to_string(), imported);
+
+        let discovered = Arc::new(AtomicBool::new(false));
+        let flag = discovered.clone();
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_vpcs().returning(move |_| {
+            flag.store(true, Ordering::SeqCst);
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "stop after the lookup".to_string(),
+                },
+            ))
+        });
+        let ec2 = Arc::new(ec2);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+
+        let config = DeploymentConfig::builder()
+            .stack_settings(settings)
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+
+        let executor = StackExecutor::builder(
+            &stack,
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+        )
+        .deployment_config(&config)
+        .service_provider(Arc::new(provider))
+        .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+        .step_running_resources(false)
+        .build()
+        .expect("executor should build");
+
+        let _ = executor.continue_imported(state).await;
+        assert!(
+            discovered.load(Ordering::SeqCst),
+            "initial setup must drive the imported use-default network to default-VPC \
+             discovery; without it the network stays Provisioning forever and every \
+             resource depending on it stalls behind it"
+        );
+    }
 }

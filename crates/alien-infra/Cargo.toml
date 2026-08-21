@@ -12,7 +12,7 @@ all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Conven
 aws = ["dep:alien-aws-clients", "dep:alien-preflights", "alien-client-config/aws"]  # TODO: Remove preflights from here, necessary because of CF
 gcp = ["dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
-kubernetes = ["dep:alien-k8s-clients", "dep:base64", "dep:dirs", "alien-client-config/kubernetes"]
+kubernetes = ["dep:alien-k8s-clients", "dep:axum", "dep:base64", "dep:dirs", "dep:ed25519-compact", "alien-core/sandbox-capability", "alien-client-config/kubernetes"]
 local = ["dep:alien-local"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
@@ -67,7 +67,9 @@ pem = { workspace = true }
 p12 = "0.6"
 
 # Kubeconfig dependencies
+axum = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
+ed25519-compact = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

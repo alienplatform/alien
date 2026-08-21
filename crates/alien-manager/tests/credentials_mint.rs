@@ -184,6 +184,13 @@ impl BindingsProviderApi for FakeServiceAccountProvider {
         }
     }
 
+    async fn load_sandbox(
+        &self,
+        binding_name: &str,
+    ) -> BindingResult<Arc<dyn alien_bindings::traits::Sandbox>> {
+        Err(missing_binding(binding_name))
+    }
+
     async fn load_storage(
         &self,
         binding_name: &str,

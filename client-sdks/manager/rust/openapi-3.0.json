@@ -1552,6 +1552,63 @@
           "target": {}
         }
       },
+      "AiAccessTest": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "failed",
+          "not-checked"
+        ]
+      },
+      "AiAvailabilityBlocker": {
+        "type": "string",
+        "enum": [
+          "agreement-required",
+          "entitlement-required",
+          "model-activation-required",
+          "deployment-required",
+          "quota-configuration-required",
+          "region-unavailable",
+          "access-denied",
+          "observation-failed"
+        ]
+      },
+      "AiAvailabilityObservation": {
+        "type": "object",
+        "required": [
+          "source",
+          "catalogRevision",
+          "models"
+        ],
+        "properties": {
+          "catalogRevision": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiModelAvailabilityObservation"
+            }
+          },
+          "source": {
+            "$ref": "#/components/schemas/AiAvailabilitySource"
+          }
+        }
+      },
+      "AiAvailabilitySource": {
+        "type": "string",
+        "description": "Provider control plane used to observe model availability without invoking\na model, spending customer quota, or accepting provider terms.",
+        "enum": [
+          "aws-bedrock",
+          "gcp-vertex",
+          "azure-foundry",
+          "anthropic"
+        ]
+      },
       "AiHeartbeatData": {
         "oneOf": [
           {
@@ -1671,6 +1728,56 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "AiModelAvailability": {
+        "type": "string",
+        "enum": [
+          "available",
+          "blocked",
+          "unknown"
+        ]
+      },
+      "AiModelAvailabilityObservation": {
+        "type": "object",
+        "required": [
+          "publicModelId",
+          "clientApis",
+          "availability",
+          "blockers",
+          "accessTest"
+        ],
+        "properties": {
+          "accessTest": {
+            "$ref": "#/components/schemas/AiAccessTest"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/AiModelAvailability"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiAvailabilityBlocker"
+            }
+          },
+          "clientApis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientApi"
+            }
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "publicModelId": {
+            "type": "string"
+          },
+          "testedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           }
         }
       },
@@ -1886,9 +1993,13 @@
         "type": "object",
         "required": [
           "status",
-          "region"
+          "region",
+          "availability"
         ],
         "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation"
+          },
           "region": {
             "type": "string"
           },
@@ -4002,11 +4113,15 @@
         "type": "object",
         "required": [
           "status",
-          "accountName"
+          "accountName",
+          "availability"
         ],
         "properties": {
           "accountName": {
             "type": "string"
+          },
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation"
           },
           "endpoint": {
             "type": "string",
@@ -5121,6 +5236,15 @@
             "type": "boolean"
           }
         }
+      },
+      "ClientApi": {
+        "type": "string",
+        "description": "A public API accepted from an application client.",
+        "enum": [
+          "open-ai-chat-completions",
+          "open-ai-responses",
+          "anthropic-messages"
+        ]
       },
       "ClientConfig": {
         "oneOf": [
@@ -6602,6 +6726,10 @@
           "provider"
         ],
         "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation",
+            "nullable": true
+          },
           "provider": {
             "type": "string",
             "description": "The BYO-key provider serving this binding (e.g. \"openai\"). Used on the Local\nplatform, where the app brings its own provider key instead of an ambient cloud."
@@ -7821,9 +7949,13 @@
         "required": [
           "status",
           "project",
-          "location"
+          "location",
+          "availability"
         ],
         "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/AiAvailabilityObservation"
+          },
           "location": {
             "type": "string"
           },
@@ -13819,6 +13951,17 @@
           "network": {
             "$ref": "#/components/schemas/NetworkSettings",
             "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
+            "nullable": true
+          },
+          "publicEndpoints": {
+            "type": "object",
+            "description": "Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.\n\nThis is intended for adopted Machines deployments whose DNS and certificates remain\ncustomer-owned. The platform passes these URLs to the runtime without creating or\nreplacing DNS records or certificates.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
             "nullable": true
           },
           "telemetry": {

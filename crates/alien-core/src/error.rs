@@ -186,6 +186,66 @@ pub enum ErrorData {
     )]
     FeatureNotEnabled { feature: String },
 
+    /// A sandbox capability is unavailable on the target platform.
+    #[error(
+        code = "SANDBOX_CAPABILITY_UNSUPPORTED",
+        message = "Sandbox capability '{capability}' is not supported on {platform}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxCapabilityUnsupported {
+        /// The capability that was requested
+        capability: String,
+        /// The platform that does not offer it
+        platform: String,
+    },
+
+    /// The target platform has no sandbox backend at all.
+    #[error(
+        code = "SANDBOX_PLATFORM_UNSUPPORTED",
+        message = "Sandbox is not available on {platform}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxPlatformUnsupported {
+        /// The platform with no sandbox backend
+        platform: String,
+    },
+
+    /// A sandbox session capability was refused.
+    #[error(
+        code = "SANDBOX_CAPABILITY_REFUSED",
+        message = "Sandbox capability refused: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    SandboxCapabilityRefused {
+        /// Why it was refused. Deliberately coarse — it must not reveal which sessions exist.
+        reason: String,
+    },
+
+    /// A sandbox limit is missing or not a valid quantity.
+    #[error(
+        code = "SANDBOX_LIMIT_INVALID",
+        message = "Sandbox '{resource_id}' has an invalid {field} limit '{value}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxLimitInvalid {
+        /// The sandbox whose limit failed validation
+        resource_id: String,
+        /// Which limit (cpu, memory, disk, maxProcesses)
+        field: String,
+        /// The rejected value
+        value: String,
+        /// Why it was rejected
+        reason: String,
+    },
+
     // Commands protocol errors
     /// Invalid Commands envelope.
     #[error(

@@ -204,6 +204,15 @@ pub struct Worker {
     /// None means platform default applies.
     pub concurrency_limit: Option<u32>,
 
+    /// Whether this worker hosts sandbox sessions.
+    ///
+    /// Set by preflight, not by an application: on GCP a sandbox is a subprocess of the Cloud Run
+    /// instance running the app, and the instance can only launch one if its container declares
+    /// it. Declaring it by hand would be a permission the workload does not need.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sandbox_launcher: bool,
+
     /// Optional readiness probe configuration.
     /// Only applicable for workers with Public ingress.
     /// When configured, the probe will be executed after provisioning/update to verify the worker is ready.

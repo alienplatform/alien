@@ -103,6 +103,14 @@ use utoipa::OpenApi;
     AiOutputs,
     Queue,
     QueueOutputs,
+    Sandbox,
+    SandboxOutputs,
+    SandboxCode,
+    SandboxLimits,
+    SandboxEgress,
+    SandboxSessionPolicy,
+    SandboxCapabilities,
+    SandboxCapability,
     Email,
     EmailInbound,
     EmailEvents,
@@ -188,6 +196,7 @@ use utoipa::OpenApi;
     AwsArtifactRegistryImportData,
     AwsComputeClusterImportData,
     AwsPostgresImportData,
+    AwsSandboxImportData,
     GcpStorageImportData,
     GcpWorkerImportData,
     GcpQueueImportData,
@@ -203,6 +212,7 @@ use utoipa::OpenApi;
     GcpArtifactRegistryImportData,
     GcpComputeClusterImportData,
     GcpPostgresImportData,
+    GcpSandboxImportData,
     AzureStorageImportData,
     AzureWorkerImportData,
     AzureQueueImportData,
@@ -222,6 +232,7 @@ use utoipa::OpenApi;
     AzureServiceBusNamespaceImportData,
     AzureStorageAccountImportData,
     AzureFlexibleServerPostgresImportData,
+    AzureSandboxImportData,
 )))]
 struct ApiDoc;
 

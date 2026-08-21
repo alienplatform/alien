@@ -269,6 +269,7 @@ fn aws_email_import_ref_carries_dkim_tokens_and_rule_set() {
         resource: entry,
         resource_id: "mailer",
         platform: Platform::Aws,
+        targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
     };
@@ -343,6 +344,7 @@ fn aws_email_rejects_live_linked_queue() {
         resource: entry,
         resource_id: "mailer",
         platform: Platform::Aws,
+        targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
     };
@@ -389,6 +391,7 @@ fn aws_email_rejects_multiple_inbound_rule_sets() {
         resource: entry,
         resource_id: "first-mailer",
         platform: Platform::Aws,
+        targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
     };
@@ -432,6 +435,7 @@ fn aws_email_import_ref_matches_import_data_contract() {
         resource: entry,
         resource_id: "mailer",
         platform: Platform::Aws,
+        targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
     };

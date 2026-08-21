@@ -25,6 +25,9 @@ function addonReporting(version: string): NativeAddon {
     postgres(): never {
       throw new Error("not used by version validation")
     }
+    sandbox(): never {
+      throw new Error("not used by version validation")
+    }
   }
 
   const RemoteBindingsHandle: NativeAddon["RemoteBindingsHandle"] = {

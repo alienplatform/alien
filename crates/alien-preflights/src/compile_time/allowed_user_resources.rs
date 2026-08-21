@@ -42,6 +42,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "postgres",
             "ai",
             "email",
+            "sandbox",
             "experimental/aws-opensearch",
         ]);
         let mut errors = Vec::new();

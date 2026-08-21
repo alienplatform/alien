@@ -17,11 +17,14 @@ import {
   AlienError,
   InvalidPostgresTlsConfigError,
   UnknownPostgresSslModeError,
+  UnknownSandboxValueError,
   unwrapNapiError,
 } from "./errors.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
+  RawCommandFrame,
+  RawCommandStreamHandle,
   RawContainerHandle,
   RawKeyHandle,
   RawKvHandle,
@@ -30,10 +33,13 @@ import type {
   RawQueueHandle,
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
+  RawSandboxHandle,
+  RawSandboxSession,
   RawStorageHandle,
   RawVaultHandle,
 } from "./loader.js"
 import type {
+  CommandFrame,
   Container,
   Key,
   KeyOptions,
@@ -48,6 +54,8 @@ import type {
   Queue,
   QueueMessage,
   RemoteStorage,
+  Sandbox,
+  SandboxSession,
   SignedUrlOptions,
   Storage,
   StoragePutOptions,
@@ -130,6 +138,200 @@ function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): Remot
     delete: path => guard(handle, raw => raw.delete(path)),
     list: prefix => guard(handle, raw => raw.list(prefix ?? null)),
     head: path => guard(handle, raw => raw.head(path)),
+  }
+}
+
+/** The session states the addon and this wrapper agree on. */
+const SANDBOX_SESSION_STATES = ["starting", "running", "suspended", "terminated"] as const
+
+/** The output frame kinds that carry data; `exit` is handled separately. */
+const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const
+
+/**
+ * Narrows a value the addon produced into a declared union, or throws.
+ *
+ * Casting would put a value outside the union behind a type claiming otherwise, and a caller's
+ * `switch` over the union would then fall through with no error. This is the same version-skew
+ * argument `toPostgresConnection` makes for `sslmode`.
+ */
+function narrow<T extends string>(field: string, value: string, expected: readonly T[]): T {
+  if ((expected as readonly string[]).includes(value)) {
+    return value as T
+  }
+  throw new AlienError(
+    UnknownSandboxValueError.create({ field, value, expected: [...expected] }).toOptions(),
+  )
+}
+
+function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
+  const session = (raw: RawSandboxSession): SandboxSession => ({
+    sessionId: raw.sessionId,
+    state: narrow("session state", raw.state, SANDBOX_SESSION_STATES),
+    generation: raw.generation,
+  })
+
+  const frame = (raw: RawCommandFrame): CommandFrame =>
+    raw.kind === "exit"
+      ? { kind: "exit", exitCode: raw.exitCode ?? -1, truncated: raw.truncated ?? false }
+      : {
+          kind: narrow("frame kind", raw.kind, SANDBOX_STREAM_KINDS),
+          seq: raw.seq ?? 0,
+          data: raw.data ?? Buffer.alloc(0),
+        }
+
+  return {
+    capabilities: () => guard(handle, async raw => raw.capabilities()),
+    create: options =>
+      guard(handle, async raw =>
+        session(
+          await raw.create(
+            options?.sessionId ?? null,
+            options?.tenantKey ?? null,
+            options?.env ?? null,
+          ),
+        ),
+      ),
+    get: sessionId =>
+      guard(handle, async raw => {
+        const found = await raw.get(sessionId)
+        return found === null ? null : session(found)
+      }),
+    getOrCreate: options =>
+      guard(handle, async raw =>
+        session(
+          await raw.getOrCreate(
+            options?.sessionId ?? null,
+            options?.tenantKey ?? null,
+            options?.env ?? null,
+          ),
+        ),
+      ),
+    list: () => guard(handle, async raw => (await raw.list()).map(session)),
+    runCommand: (sessionId, command, options) => ({
+      [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
+        let stream: RawCommandStreamHandle | null = null
+        let starting: Promise<RawCommandStreamHandle> | null = null
+        let tail: Promise<unknown> = Promise.resolve()
+        let finished = false
+
+        // A cancel that lands during setup has no handle yet, so it waits for the one being made:
+        // resolving sooner would report a command stopped that is about to start.
+        let closing: Promise<void> | null = null
+        const close = () => {
+          closing ??= (async () => {
+            const open = stream ?? (await starting?.catch(() => null)) ?? null
+            if (open === null) return
+            try {
+              await open.close()
+            } catch (err) {
+              throw unwrapNapiError(err)
+            }
+          })()
+          return closing
+        }
+
+        // Cancellation bypasses the pull queue so it can release a native read waiting for output.
+        const finish = async () => {
+          finished = true
+          await close()
+        }
+
+        // The fault iteration ended on is what the caller must see; a close that also fails is
+        // reported only when it is the sole failure, from `return()`.
+        const fail = async (err: unknown): Promise<never> => {
+          await finish().catch(() => undefined)
+          throw err
+        }
+
+        // A pull that observes a cancel only reports `done`: the `return()` or `throw()` that
+        // cancelled is where a failed close is reported, and it must not be reported twice.
+        const cancelled = async (): Promise<IteratorResult<CommandFrame, undefined>> => {
+          await finish().catch(() => undefined)
+          return { done: true, value: undefined }
+        }
+
+        return {
+          next() {
+            const pull = tail.then(async (): Promise<IteratorResult<CommandFrame, undefined>> => {
+              if (finished) {
+                return { done: true, value: undefined }
+              }
+              let open = stream
+              if (open === null) {
+                starting = guard(handle, raw =>
+                  raw.runCommand(
+                    sessionId,
+                    command,
+                    options.deadlineMs,
+                    options.workingDirectory ?? null,
+                    options.env ?? null,
+                  ),
+                )
+                try {
+                  open = await starting
+                  stream = open
+                } catch (err) {
+                  finished = true
+                  throw err
+                }
+              }
+
+              // A return during setup cannot close a handle until this pull receives it.
+              if (finished) {
+                return cancelled()
+              }
+
+              let next: RawCommandFrame | null
+              try {
+                next = await open.next()
+              } catch (err) {
+                return fail(unwrapNapiError(err))
+              }
+
+              if (finished) {
+                return cancelled()
+              }
+              if (next === null) {
+                await finish()
+                return { done: true, value: undefined }
+              }
+
+              let value: CommandFrame
+              try {
+                value = frame(next)
+              } catch (err) {
+                return fail(unwrapNapiError(err))
+              }
+              return { done: false, value }
+            })
+
+            // A rejected pull must not poison the queue behind it.
+            tail = pull.catch(() => undefined)
+            return pull
+          },
+          async return() {
+            await finish()
+            return { done: true, value: undefined }
+          },
+          throw: (err: unknown) => fail(err),
+        }
+      },
+    }),
+    readFile: (sessionId, path) => guard(handle, raw => raw.readFile(sessionId, path)),
+    writeFiles: (sessionId, files) =>
+      guard(handle, async raw => {
+        for (const [path, contents] of Object.entries(files)) {
+          await raw.writeFile(
+            sessionId,
+            path,
+            typeof contents === "string" ? Buffer.from(contents, "utf8") : contents,
+          )
+        }
+      }),
+    mkdir: (sessionId, path) => guard(handle, raw => raw.mkdir(sessionId, path)),
+    suspend: sessionId => guard(handle, raw => raw.suspend(sessionId)),
+    resume: sessionId => guard(handle, raw => raw.resume(sessionId)),
+    terminate: sessionId => guard(handle, raw => raw.terminate(sessionId)),
   }
 }
 
@@ -348,6 +550,7 @@ export interface Factories {
   vault(name: string): Vault
   container(name: string): Container
   postgres(name: string): Postgres
+  sandbox(name: string): Sandbox
 }
 
 /** Build the factories bound to a given addon provider. */
@@ -361,6 +564,7 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
     vault: name => makeVault(lazyHandle(async () => (await getBindings()).vault(name))),
     container: name => makeContainer(lazyHandle(async () => (await getBindings()).container(name))),
     postgres: name => makePostgres(lazyHandle(async () => (await getBindings()).postgres(name))),
+    sandbox: name => makeSandbox(lazyHandle(async () => (await getBindings()).sandbox(name))),
   }
 }
 

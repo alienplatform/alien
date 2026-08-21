@@ -213,6 +213,20 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A sandbox session operation failed.
+    #[error(
+        code = "SANDBOX_SESSION_FAILED",
+        message = "Sandbox session '{session_id}' failed during {operation}",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxSessionFailed {
+        /// Session the operation targeted
+        session_id: String,
+        /// What was being attempted
+        operation: String,
+    },
+
     /// Failed to create or manage Docker network.
     #[error(
         code = "DOCKER_NETWORK_ERROR",
